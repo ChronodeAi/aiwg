@@ -54,6 +54,7 @@ export * from './issue-triage/index.js';
 export * from './routing/index.js';
 export * from './interop.js';
 export * from './ask.js';
+export * from './ledger.js';
 export * from './jev-credentials.js';
 export { collectHeldoutStudy, scoreHeldoutStudy } from './heldout/collector.js';
 export { heldoutDigest, heldoutExecutionDigest, planHeldoutCollection, validateHeldoutBundle, heldoutRowsInScope } from './heldout/contract.js';

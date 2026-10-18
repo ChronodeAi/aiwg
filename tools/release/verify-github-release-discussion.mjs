@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Verify that exactly one GitHub Announcements discussion exists for a stable release and links every required surface.
 
-import { execFileSync } from 'node:child_process';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { pathToFileURL } from 'node:url';
 
 export const VERSION_PATTERN = /^v?\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
@@ -59,9 +59,9 @@ export function verifyDiscussion(nodes, { version, repo }) {
 export function fetchAnnouncementDiscussions({ repo, category }) {
   const [owner, name] = repo.split('/');
   const query = 'query($owner:String!,$name:String!){repository(owner:$owner,name:$name){discussions(first:100,orderBy:{field:CREATED_AT,direction:DESC}){nodes{title body url category{name}}}}}';
-  const output = execFileSync('gh', [
+  const output = boundedExecFileSync('gh', [
     'api', 'graphql', '-f', `query=${query}`, '-f', `owner=${owner}`, '-f', `name=${name}`,
-  ], { encoding: 'utf8' });
+  ], 'network', { encoding: 'utf8' });
   const nodes = JSON.parse(output)?.data?.repository?.discussions?.nodes;
   if (!Array.isArray(nodes)) throw new Error(`Could not read GitHub discussions for ${repo}.`);
   return nodes.filter((node) => node.category?.name === category);

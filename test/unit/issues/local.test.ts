@@ -1,8 +1,9 @@
 import { existsSync } from 'fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'fs/promises';
+import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LocalIssueLockError,
   LocalIssueLockManager,
@@ -13,6 +14,11 @@ import {
   serializeIssueMarkdown,
 } from '../../../src/issues/index.js';
 import type { LocalIssueRecord } from '../../../src/issues/index.js';
+
+vi.mock('fs/promises', async importOriginal => {
+  const original = await importOriginal<typeof import('fs/promises')>();
+  return { ...original, readFile: vi.fn(original.readFile), readdir: vi.fn(original.readdir) };
+});
 
 describe('local issue provider core', () => {
   let projectRoot: string;
@@ -26,6 +32,7 @@ describe('local issue provider core', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await rm(projectRoot, { recursive: true, force: true });
   });
 
@@ -172,6 +179,71 @@ Body
 
     const filtered = await provider.listIssues({ filter: { type: 'bug', labels: ['bug'] } });
     expect(filtered.issues.map((entry) => entry.title)).toEqual(['Second']);
+  });
+
+  it('skips unchanged issue inputs across instances without parsing issues or rewriting the index', async () => {
+    await provider.init();
+    await provider.createIssue({ title: 'Unchanged' });
+    const indexPath = join(issuesRoot, 'index', 'issues.index.json');
+    const before = await readFile(indexPath, 'utf8');
+    const metadata = await stat(indexPath);
+    const reader = vi.spyOn(fsPromises, 'readFile').mockClear();
+
+    const cached = await new LocalIssueProviderCore(issuesRoot).rebuildIssueIndex();
+
+    expect(cached).toEqual(JSON.parse(before));
+    expect(reader.mock.calls.some(([file]) => String(file).includes('/items/'))).toBe(false);
+    expect(await readFile(indexPath, 'utf8')).toBe(before);
+    expect((await stat(indexPath)).ino).toBe(metadata.ino);
+  });
+
+  it('invalidates the issue fingerprint after edits, additions, renames, and deletions', async () => {
+    await provider.init();
+    const issue = await provider.createIssue({ title: 'Original' });
+    const initial = await provider.rebuildIssueIndex();
+    const itemPath = join(issuesRoot, 'items', `${issue.fields.id}.md`);
+    issue.fields.title = 'Edited outside the provider';
+    await writeFile(itemPath, serializeIssueMarkdown(issue));
+    const edited = await provider.rebuildIssueIndex();
+    expect(edited.inputFingerprint).not.toBe(initial.inputFingerprint);
+    expect(edited.issues[0].title).toBe('Edited outside the provider');
+
+    const added = await provider.createIssue({ title: 'Added' });
+    expect((await provider.rebuildIssueIndex()).issues).toHaveLength(2);
+    await rename(itemPath, join(issuesRoot, 'items', 'renamed.md'));
+    expect((await provider.rebuildIssueIndex()).issues[0].path).toBe('items/renamed.md');
+    await rm(join(issuesRoot, 'items', `${added.fields.id}.md`));
+    expect((await provider.rebuildIssueIndex()).issues.map(entry => entry.id)).toEqual([issue.fields.id]);
+  });
+
+  it('rebuilds legacy, malformed, or missing issue caches and supports forced refreshes', async () => {
+    await provider.init();
+    await provider.createIssue({ title: 'Cached' });
+    const indexPath = join(issuesRoot, 'index', 'issues.index.json');
+    const initial = await provider.rebuildIssueIndex();
+    const legacy = { ...initial };
+    delete legacy.inputFingerprint;
+    await writeFile(indexPath, JSON.stringify(legacy));
+    expect((await provider.rebuildIssueIndex()).inputFingerprint).toBe(initial.inputFingerprint);
+    for (const raw of ['{', 'null']) {
+      await writeFile(indexPath, raw);
+      expect((await provider.rebuildIssueIndex()).issues).toHaveLength(1);
+    }
+    await rm(indexPath);
+    expect((await provider.rebuildIssueIndex()).issues).toHaveLength(1);
+    const metadata = await stat(indexPath);
+    await provider.rebuildIssueIndex({ force: true });
+    expect((await stat(indexPath)).ino).not.toBe(metadata.ino);
+  });
+
+  it('preserves the issue index when its canonical directory cannot be read', async () => {
+    await provider.init();
+    await provider.createIssue({ title: 'Preserved' });
+    const indexPath = join(issuesRoot, 'index', 'issues.index.json');
+    const before = await readFile(indexPath, 'utf8');
+    vi.mocked(fsPromises.readdir).mockRejectedValueOnce(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+    await expect(provider.rebuildIssueIndex()).rejects.toThrow('permission denied');
+    expect(await readFile(indexPath, 'utf8')).toBe(before);
   });
 
   it('reports existing locks instead of overwriting them', async () => {

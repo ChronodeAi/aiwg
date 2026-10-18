@@ -12,6 +12,7 @@ export const packagingFiles = [
   'test/integration/sessions-muse-package.test.ts',
   'test/integration/sessions-coverage-package.test.ts',
   'test/integration/decision-engine-clean-install.test.ts',
+  'test/integration/tools-packed-relative-imports.test.ts',
 ];
 export const artifactIndexFiles = [
   'test/integration/artifacts/dependency-graph.test.ts',

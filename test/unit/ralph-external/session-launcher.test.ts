@@ -5,12 +5,23 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 
 // Import the module under test
 // @ts-ignore - ESM import
-import { SessionLauncher } from '../../../tools/ralph-external/session-launcher.mjs';
+import { SessionLauncher, isClaudeAvailable, getClaudeVersion } from '../../../tools/ralph-external/session-launcher.mjs';
+// @ts-ignore - ESM imports
+import { ClaudeAdapter } from '../../../tools/ralph-external/lib/claude-adapter.mjs';
+// @ts-ignore - ESM imports
+import { CodexAdapter } from '../../../tools/ralph-external/lib/codex-adapter.mjs';
+// @ts-ignore - ESM imports
+import { PiAdapter } from '../../../tools/ralph-external/lib/pi-adapter.mjs';
+// @ts-ignore - ESM imports
+import { MuseAdapter } from '../../../tools/ralph-external/lib/muse-adapter.mjs';
+// @ts-ignore - ESM imports
+import { buildSessionEnvironment } from '../../../tools/ralph-external/lib/session-environment.mjs';
 
 describe('SessionLauncher', () => {
   let launcher: InstanceType<typeof SessionLauncher>;
@@ -18,14 +29,87 @@ describe('SessionLauncher', () => {
 
   beforeEach(() => {
     launcher = new SessionLauncher();
-    testDir = join('/tmp', `ralph-test-${Date.now()}`);
+    testDir = mkdtempSync(join(tmpdir(), 'ralph-test-'));
     mkdirSync(testDir, { recursive: true });
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (existsSync(testDir)) {
       rmSync(testDir, { recursive: true, force: true });
     }
+  });
+
+  describe('session environment', () => {
+    it.each([
+      { provider: 'legacy claude', Adapter: null, providerVariable: 'ANTHROPIC_API_KEY', deniedAuth: 'OPENAI_API_KEY' },
+      { provider: 'claude', Adapter: ClaudeAdapter, providerVariable: 'ANTHROPIC_API_KEY', deniedAuth: 'OPENAI_API_KEY' },
+      { provider: 'codex', Adapter: CodexAdapter, providerVariable: 'OPENAI_API_KEY', deniedAuth: 'ANTHROPIC_API_KEY' },
+      { provider: 'pi', Adapter: PiAdapter, providerVariable: 'OPENROUTER_API_KEY', deniedAuth: 'FACTORY_API_KEY' },
+      { provider: 'muse', Adapter: MuseAdapter, providerVariable: 'AIWG_MUSE_STUB_SCENARIO', deniedAuth: 'OPENAI_API_KEY' },
+    ])('filters the real $provider child environment', async ({ Adapter, providerVariable, deniedAuth }) => {
+      const allowed = {
+        SSH_AUTH_SOCK: '/fixture/ssh-agent', LANG: 'C.UTF-8', LC_MESSAGES: 'C',
+        TMPDIR: testDir, XDG_CONFIG_HOME: testDir, https_proxy: 'http://fixture.invalid',
+        GIT_SSH_COMMAND: 'fixture-ssh', NODE_OPTIONS: '--no-warnings',
+        [providerVariable]: 'synthetic-provider-value',
+      };
+      const denied = {
+        AIWG_AUDIT_SENTINEL: 'synthetic-denied', AIWG_GITEA_TOKEN: 'synthetic-gitea',
+        AIWG_LEDGER_SIGNING_KEY: 'synthetic-ledger', OPENBAO_TOKEN: 'synthetic-bao',
+        VAULT_TOKEN: 'synthetic-vault', [deniedAuth]: 'synthetic-other-provider',
+        UAT_STUB_OUTPUT: 'synthetic-output', UAT_STUB_USAGE: '500:0.25', UAT_LOG_FILE: '/fixture/log',
+      };
+      for (const [name, value] of Object.entries({ ...allowed, ...denied })) vi.stubEnv(name, value);
+      vi.stubEnv('PATH', `${testDir}:${process.env.PATH}`);
+      vi.stubEnv('CI', 'false');
+      const fakeCli = join(testDir, 'claude');
+      writeFileSync(fakeCli, `#!${process.execPath}\nconsole.log(JSON.stringify(process.env));`, { mode: 0o755 });
+      if (Adapter) {
+        const adapter = new Adapter();
+        vi.spyOn(adapter, 'getBinary').mockReturnValue(fakeCli);
+        launcher.setProviderAdapter(adapter);
+      }
+      const stdoutPath = join(testDir, 'session-env.json');
+      const result = await launcher.launch({ prompt: 'fixture', workingDir: testDir,
+        stdoutPath, stderrPath: join(testDir, 'stderr.log'), timeoutMs: 5000 });
+      expect(result.exitCode).toBe(0);
+      const observed = JSON.parse(readFileSync(stdoutPath, 'utf8'));
+      expect(observed).toMatchObject({ ...allowed, PATH: process.env.PATH, CI: 'true' });
+      for (const name of Object.keys(denied)) expect(observed).not.toHaveProperty(name);
+    });
+
+    it('keeps Windows names, provider config and explicit overrides without widening inheritance', () => {
+      const environment = {
+        Path: 'fixture-path', SystemRoot: 'fixture-windows', PATHEXT: '.EXE;.CMD',
+        USERPROFILE: 'fixture-user', APPDATA: 'fixture-appdata', ComSpec: 'fixture-cmd',
+        PI_CODING_AGENT_SESSION_DIR: '/fixture/pi', AIWG_PI_STUB_RECEIPT: '/fixture/receipt',
+        CODEX_HOME: '/fixture/codex', AIWG_UNLISTED: 'denied',
+      };
+      expect(buildSessionEnvironment('pi', {}, environment)).toEqual({
+        Path: 'fixture-path', SystemRoot: 'fixture-windows', PATHEXT: '.EXE;.CMD',
+        USERPROFILE: 'fixture-user', APPDATA: 'fixture-appdata', ComSpec: 'fixture-cmd',
+        PI_CODING_AGENT_SESSION_DIR: '/fixture/pi', AIWG_PI_STUB_RECEIPT: '/fixture/receipt',
+      });
+      expect(buildSessionEnvironment('codex', { Path: 'override', EXPLICIT_CONFIG: 'set' }, environment))
+        .toMatchObject({ Path: 'override', CODEX_HOME: '/fixture/codex', EXPLICIT_CONFIG: 'set' });
+      expect(buildSessionEnvironment('unknown-provider', {}, { OPENAI_API_KEY: 'denied' })).toEqual({});
+    });
+  });
+
+  describe('legacy version probes', () => {
+    it.each([
+      { name: 'availability', probe: isClaudeAvailable, expected: true },
+      { name: 'version', probe: getClaudeVersion, expected: 'fixture-version' },
+    ])('clears unrelated variables and credentials for $name', async ({ probe, expected }) => {
+      vi.stubEnv('AIWG_AUDIT_SENTINEL', 'synthetic-unlisted');
+      vi.stubEnv('ANTHROPIC_API_KEY', 'synthetic-auth');
+      vi.stubEnv('PATH', `${testDir}:${process.env.PATH}`);
+      writeFileSync(join(testDir, 'claude'), `#!${process.execPath}
+        if (!process.env.PATH || process.env.AIWG_AUDIT_SENTINEL || process.env.ANTHROPIC_API_KEY) process.exitCode = 17;
+        else console.log('fixture-version');`, { mode: 0o755 });
+      expect(await probe()).toBe(expected);
+    });
   });
 
   describe('constructor', () => {
@@ -340,7 +424,7 @@ describe('SessionLauncher', () => {
 
       const killMock = vi.fn();
       // @ts-ignore - mock
-      launcher.currentProcess = { killed: false, kill: killMock };
+      launcher.currentProcess = { pid: 54321, killed: false, kill: killMock };
 
       launcher.kill();
       expect(killMock).toHaveBeenCalledWith('SIGTERM');

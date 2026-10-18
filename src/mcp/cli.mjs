@@ -7,11 +7,12 @@
  */
 
 import { startServer, createServer } from './server.mjs';
-import { assertConfigDestination, assertConfigObject, assertProjectCredentials, classifyMcpDestination, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
+import { assertConfigDestination, assertConfigObject, assertProjectCredentials, isPathInsideDir, classifyMcpDestination, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { fileURLToPath } from 'url';
+import { existsSync as nodeExistsSync, readFileSync as nodeReadFileSync } from 'fs';
+import { fileURLToPath, pathToFileURL } from 'url';
 import {
   McpServerRegistry,
   buildServerConfig,
@@ -27,10 +28,124 @@ import {
   prepareClaudePermissions,
   resolveToolFilters,
 } from './tool-filters.mjs';
-import { assertCredentialPolicy, CREDENTIAL_POLICIES, installPolicyCheckedServer, redactCredentialArgs, resolveCredentialPolicy } from './credentials.mjs';
+import { assertCredentialPolicy, CREDENTIAL_POLICIES, installPolicyCheckedServer, redactCredentialArgs, redactCredentialText, redactCredentialRecord, resolveCredentialPolicy } from './credentials.mjs';
 import { getMcpInjectionDefinition } from '../providers/provider-definitions.mjs';
 import { manageOmpMcp } from './omp-config.mjs';
+import { claudeDesktopConfigPath, resolveClaudeInstallTarget, legacyClaudeMigration } from './claude-install.mjs';
 import { unmanageGrokBuildMcp } from './grok-build-config.mjs';
+
+/**
+ * Thrown when a recognized flag is present but has no usable value
+ * following it (#3062 review item 11). Mirrors `src/cli/flag-parsing.ts`'s
+ * `MissingFlagValueError`/`requireFlagValue`, duplicated in plain JS rather
+ * than imported: this file is exercised both compiled (`dist/src/mcp/
+ * cli.mjs`, where a `../cli/flag-parsing.js` sibling import would resolve)
+ * and directly from source in tests (`src/mcp/cli.mjs`, where it would
+ * not — there is no compiled `.js` sibling under `src/` itself).
+ */
+class MissingFlagValueError extends Error {
+  constructor(flagName) {
+    super(`${flagName} requires a value`);
+    this.name = 'MissingFlagValueError';
+    this.flagName = flagName;
+  }
+}
+
+/**
+ * Single-pass, every-occurrence-validated flag lookup (#3062 second
+ * review, finding 4 — mirrors `src/cli/flag-parsing.ts`'s
+ * `scanFlagOccurrences`/`requireFlagValue`, duplicated here for the same
+ * source/dist reason as the class above): stops at a bare `--`
+ * terminator; accepts `--flag value` and `--flag=value`; a space-
+ * separated value starting with `--` is treated as missing (use `=` for a
+ * value that must start with `--`); every occurrence is checked, not just
+ * the first; `options.rejectEmpty` additionally rejects an empty-string
+ * value. `options.precedence` picks which occurrence wins when the flag
+ * repeats — `'first'` (default) here matches this file's own pre-existing
+ * `parseFlag()` convention (first match wins).
+ */
+function requireFlagValue(args, options, ...names) {
+  const occurrences = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === undefined) continue;
+    if (token === '--') break;
+
+    if (token.startsWith('--')) {
+      const eq = token.indexOf('=');
+      if (eq !== -1) {
+        const flag = token.slice(0, eq);
+        const value = token.slice(eq + 1);
+        if (names.includes(flag)) {
+          if (options.rejectEmpty && value === '') throw new MissingFlagValueError(flag);
+          occurrences.push(value);
+          continue;
+        }
+      }
+    }
+
+    if (names.includes(token)) {
+      const next = args[i + 1];
+      if (next === undefined || next.startsWith('--')) throw new MissingFlagValueError(token);
+      if (options.rejectEmpty && next === '') throw new MissingFlagValueError(token);
+      occurrences.push(next);
+      i += 1;
+    }
+  }
+  if (occurrences.length === 0) return undefined;
+  return options.precedence === 'last' ? occurrences[occurrences.length - 1] : occurrences[0];
+}
+
+/**
+ * Find the AIWG package root by walking up from THIS file's own location
+ * (never from `AIWG_ROOT`/`process.cwd()`, which name the *served project*,
+ * not necessarily where this module's own package lives). Depth-independent
+ * on purpose: this file ships at `src/mcp/cli.mjs` in a dev checkout and at
+ * `dist/src/mcp/cli.mjs` in the published package. Mirrors
+ * `src/mcp/tools/worker-invoke.mjs`'s own `findOwnPackageRoot` (and
+ * `tools/_resolve-impl.mjs`'s `findPackageRoot`).
+ */
+function findOwnPackageRoot() {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 12; i += 1) {
+    const pkgPath = path.join(dir, 'package.json');
+    if (nodeExistsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(nodeReadFileSync(pkgPath, 'utf8'));
+        if (pkg.name === 'aiwg' || pkg.name === '@aiwg/cli') return dir;
+      } catch { /* keep walking */ }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error('Could not locate the AIWG package root from mcp/cli.mjs');
+}
+
+/**
+ * Load the compiled `loginInProfile()` adapter (#3062 second review,
+ * finding 3). The first round routed this through `tools/_resolve-impl.mjs`,
+ * which falls back to importing the TypeScript *source* when no compiled
+ * `dist/src/` exists — but that source module's own internal imports
+ * (e.g. `../../cli/env.js`) have no `.js` sibling under `src/` either, so
+ * the fallback itself fails deep inside the adapter with an unrelated-
+ * looking `ERR_MODULE_NOT_FOUND`, on every Node version, not just ones
+ * without native TypeScript support. This loads the compiled module
+ * directly — never TypeScript source — and fails fast with one actionable
+ * line when it is missing, instead of attempting (and failing inside) a
+ * source fallback.
+ */
+async function loadCodexRuntimeAdapter() {
+  const root = findOwnPackageRoot();
+  const compiledPath = path.join(root, 'dist', 'src', 'mcp', 'adapters', 'codex-runtime.js');
+  if (!nodeExistsSync(compiledPath)) {
+    throw new Error(
+      'aiwg mcp profile login requires the built CLI (missing dist/src/mcp/adapters/codex-runtime.js). ' +
+      'Use an installed `aiwg` for this command; a source checkout must be built first (see docs/contributing).',
+    );
+  }
+  return import(pathToFileURL(compiledPath).href);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -83,6 +198,9 @@ Inject Options:
 Serve Options:
   --transport <type>   Transport type: stdio (default), http
   --port <number>      Port for HTTP transport (default: 3100)
+  --toolsets <csv>     Opt-in toolsets: flows, missions, memory, kb, research,
+                       activity-log, index, ralph, mc, ops, sandbox, decision, workers
+                       all excludes workers; enable explicitly with --toolsets all,workers
 
 Examples:
   # Define MCP servers
@@ -108,7 +226,8 @@ Examples:
   aiwg mcp remove fortemi
 
   # Install AIWG's own MCP server
-  aiwg mcp install claude
+  aiwg mcp install claude-code
+  aiwg mcp install claude-desktop
   aiwg mcp serve
   aiwg mcp info
 `);
@@ -121,7 +240,11 @@ async function generateConfig(target, projectDir = '.', scope = 'project') {
   const homeDir = process.env.HOME || process.env.USERPROFILE;
 
   const configs = {
-    claude: {
+    'claude-desktop': {
+      path: claudeDesktopConfigPath(),
+      content: { mcpServers: { aiwg: { command: 'aiwg', args: ['mcp', 'serve'] } } },
+    },
+    'claude-code': {
       path: scope === 'user' ? path.join(homeDir, '.claude.json') : path.join(projectDir, '.mcp.json'),
       userScope: scope === 'user',
       content: {
@@ -438,7 +561,7 @@ enabled_tools = [
   // other target's `configs[...]` entry above is a fixed `aiwg mcp serve`
   // stdio/TOML stanza with no env/headers field, so there is nothing further
   // for assertProjectCredentials to check there.
-  if (target === 'claude' && scope !== 'user') {
+  if (target === 'claude-code' && scope !== 'user') {
     assertProjectCredentials(Object.entries(config.content.mcpServers).map(([name, server]) => ({ name, ...server })), config.path);
   }
 
@@ -454,7 +577,13 @@ enabled_tools = [
         }
       };
 
-  await writeConfigAtomic(config.path, JSON.stringify(merged, null, 2), { userScope, projectRoot });
+  const migration = ['claude-code', 'claude-desktop'].includes(target)
+    ? await legacyClaudeMigration(projectDir) : [];
+  await writeConfigTransaction([
+    { file: config.path, content: JSON.stringify(merged, null, 2), options: { userScope, projectRoot } },
+    ...migration,
+  ]);
+  if (migration.length) console.log('Removed legacy AIWG MCP entry from .claude/settings.local.json');
   console.log(`MCP configuration written to: ${config.path}`);
   console.log(`\nTo use AIWG MCP server with ${target}:`);
   console.log(`  1. Restart ${target}`);
@@ -475,7 +604,7 @@ POSITIONING:
   MCP is optional and provider-agnostic. Baseline AIWG reachability is file
   deployment plus CLI discovery: aiwg discover / aiwg show <type> <name>.
 
-CORE TOOLS (15, always registered):
+CORE TOOLS (16, always registered):
   discover                         Cross-type ranked catalog search
   skill-list / skill-show           Skill catalog and SKILL.md body fetch
   command-list / command-show       CLI command catalog and command spec fetch
@@ -485,10 +614,11 @@ CORE TOOLS (15, always registered):
   template-render                   Render AIWG template with variables
   command-run                       Allow-listed CLI dispatch; confirmation-gated when needed
   artifact-read / artifact-write    Project .aiwg/ artifact IO
+  ask-user                         Structured user question via elicitation or Markdown
 
-OPT-IN TOOLSETS (60 additional tools):
+OPT-IN TOOLSETS (71 additional tools, including explicit workers):
   flows          flow-list / flow-show / flow-run
-  missions       mission-guide / mission-dispatch / mission-status
+  missions       mission-guide / mission-dispatch / mission-status / worker-resolve
   memory         memory-* and reflections-* storage operations
   kb             kb-* storage operations
   research       provenance-* and research-store-* storage operations
@@ -498,10 +628,13 @@ OPT-IN TOOLSETS (60 additional tools):
   mc             start / dispatch / status / stop / list
   ops            status / list / use / push
   sandbox        fleet inventory / mutation / reconciliation and governed activity
+  decision       validation / evaluation / rules / features / calibration
+  workers        worker-invoke (explicit opt-in; all excludes workers)
 
 Enable opt-in tools:
   AIWG_MCP_TOOLSETS=flows,missions,memory,kb,ralph,sandbox aiwg mcp serve
-  aiwg mcp serve --toolsets=all
+  aiwg mcp serve --toolsets all
+  aiwg mcp serve --toolsets all,workers  # explicitly enable worker-invoke
 
 RESOURCES:
   aiwg://prompts/catalog              List of prompt templates
@@ -522,7 +655,7 @@ TRANSPORTS:
 
 ENVIRONMENT:
   AIWG_ROOT          Path to AIWG installation (default: ~/.local/share/ai-writing-guide)
-  AIWG_MCP_TOOLSETS  Comma-separated opt-in toolsets; use all for every toolset
+  AIWG_MCP_TOOLSETS  Comma-separated opt-in toolsets; all excludes workers
   AIWG_SANDBOX_MANAGEMENT_URL         Sandbox management API origin (HTTPS except loopback)
   AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE  Mode-0600 management bearer file for sandbox tools
 
@@ -614,7 +747,7 @@ async function handleAdd(args) {
 
   console.log(`Added MCP server: ${name}`);
   if (url) console.log(`  URL: ${redactUrlUserinfo(url)}`);
-  if (command) console.log(`  Command: ${command}`);
+  if (command) console.log(`  Command: ${redactCredentialText(command)}`);
   console.log(`  Type: ${type}`);
   for (const [key, values] of [['env', parseKVPairs(envStr)], ['headers', parseKVPairs(headersStr)]]) {
     if (values) console.log(`  ${key}: ${Object.keys(values).join(', ')}`);
@@ -683,50 +816,21 @@ async function handleUpdate(args) {
     const display = key === 'url' ? redactUrlUserinfo(value)
       : key === 'args' ? JSON.stringify(redactCredentialArgs(value))
       : ['env', 'headers', 'headerEnv', 'envFrom'].includes(key) ? Object.keys(value || {}).join(', ')
-      : typeof value === 'object' ? JSON.stringify(value) : value;
+      : typeof value === 'object' ? JSON.stringify(redactCredentialRecord(value)) : redactCredentialText(value);
     console.log(`  ${key}: ${display}`);
   }
   console.log(`\nRe-run "aiwg mcp inject --all" to propagate changes to provider configs.`);
 }
 
-/** Mask every URL query value, keeping keys so the shape stays debuggable. */
-function redactUrlQuery(value) {
-  if (typeof value !== 'string') return value;
-  const query = value.indexOf('?');
-  if (query < 0) return value;
-  const end = value.indexOf('#', query);
-  const tail = end < 0 ? '' : value.slice(end);
-  const redacted = value.slice(query + 1, end < 0 ? value.length : end).split('&').map(pair => {
-    const equals = pair.indexOf('=');
-    return equals < 0 ? pair : `${pair.slice(0, equals)}=***`;
-  }).join('&');
-  return `${value.slice(0, query + 1)}${redacted}${tail}`;
-}
-
-function redactUrlUserinfo(value) {
-  try {
-    const url = new URL(value);
-    if (url.username || url.password) {
-      url.username = '***';
-      url.password = '';
-      return redactUrlQuery(url.toString());
-    }
-  } catch {
-    // Malformed hosts may still carry credentials in the authority.
-    return redactUrlQuery(value.replace(/^(\s*[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#]*)/, (_, scheme, authority) => {
-      const at = authority.lastIndexOf('@');
-      return scheme + (at < 0 ? authority : '***@' + authority.slice(at + 1));
-    }));
-  }
-  return redactUrlQuery(value);
-}
+// Refusal and all display paths share the scanner in credentials.mjs.
+const redactUrlUserinfo = redactCredentialText;
 
 /**
  * Handle `aiwg mcp list` (managed servers from registry)
  */
 async function handleList() {
   const registry = new McpServerRegistry();
-  const servers = await registry.list();
+  const servers = redactCredentialRecord(await registry.list());
 
   if (servers.length === 0) {
     console.log('No MCP servers registered.');
@@ -749,7 +853,7 @@ async function handleList() {
       const refs = Object.entries(server.envFrom).map(([key, envName]) => `${key}←${envName}`);
       console.log(`    Env refs: ${refs.join(', ')}`);
     }
-    if (server.description) console.log(`    Description: ${server.description}`);
+    if (server.description) console.log(`    Description: ${redactCredentialText(server.description)}`);
     if (server.injectedProviders && server.injectedProviders.length > 0) {
       console.log(`    Injected into: ${server.injectedProviders.join(', ')}`);
     }
@@ -926,6 +1030,13 @@ async function handleInject(args) {
       // the filesystem root so neither destination can traverse a symlink.
       const outputRoot = path.parse(path.resolve(targetPath)).root;
       await assertConfigDestination(targetPath, outputRoot);
+      const realProject = await fs.realpath(path.resolve(projectDir)).catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+        return path.resolve(projectDir);
+      });
+      if (isPathInsideDir(targetPath, projectDir) || isPathInsideDir(targetPath, realProject)) {
+        assertProjectCredentials(servers, targetPath, projectCredentialRemedy(p, projectDir));
+      }
       const preparedPermissions = settingsPath
         ? await prepareClaudePermissions(settingsPath, toolPlan.claudePermissions, {
           projectRoot: outputRoot,
@@ -1005,7 +1116,7 @@ Usage:
   aiwg mcp profile add <name> --servers a,b,c [--extends base,...] [--description "..."]
                           [--provider <p|*>] [--tool-deny s__t,...] [--tool-allow s__t,...]
   aiwg mcp profile list
-  aiwg mcp profile show <name>
+  aiwg mcp profile show <name> [--json]
   aiwg mcp profile edit <name> [--add-server x] [--remove-server y] [--description "..."]
                           [--provider <p|*>] [--tool-deny s__t,...] [--tool-allow s__t,...]
                           [--clear-tool-filters]
@@ -1013,6 +1124,7 @@ Usage:
   aiwg mcp profile import <file>
   aiwg mcp profile export <name> [--out <file>]
   aiwg mcp profile init-presets
+  aiwg mcp profile login <name> [--api-key-stdin | --api-key-file <path> | --api-key-env <ENV_VAR_NAME>]
 
 Profiles let you define named subsets of your registered MCP servers:
   aiwg mcp profile add dev --servers git-gitea,memory-fortemi --description "Dev work"
@@ -1036,6 +1148,24 @@ provider's own setting and warns about any filter the provider cannot express:
 
 Preset profiles (minimal, dev, ops, research, incident, full):
   aiwg mcp profile init-presets
+
+Logging in to a Codex profile's isolated runtime home (#3062):
+  aiwg mcp profile login ops                        interactive (requires a terminal)
+  vault read -field=key secret/openai |
+    aiwg mcp profile login ops --api-key-stdin      headless, most preferred — key never
+                                                     touches an environment variable or argv
+  aiwg mcp profile login ops --api-key-file ~/.openai-key
+                                                     headless — file must be owned by you,
+                                                     mode 600, not a symlink
+  aiwg mcp profile login ops --api-key-env OPENAI_KEY
+                                                     headless, least preferred — reads
+                                                     $OPENAI_KEY; visible to every other
+                                                     child process this shell starts
+  In every case the key reaches codex over stdin only; it never appears on
+  argv, in logs, or in error messages. Exactly one of the three may be
+  given. Without a terminal and without any of the three, this errors
+  naming all three. See "Supplying credentials safely" in the docs:
+  docs/mcp/codex-profiles.md#supplying-credentials-safely
 `);
 }
 
@@ -1101,7 +1231,7 @@ async function handleProfileAdd(args) {
  */
 async function handleProfileList() {
   const profiles = new McpProfileRegistry();
-  const all = await profiles.list();
+  const all = redactCredentialRecord(await profiles.list());
 
   if (all.length === 0) {
     console.log('No profiles defined.');
@@ -1131,7 +1261,7 @@ async function handleProfileShow(args) {
   }
 
   const profiles = new McpProfileRegistry();
-  const profile = await profiles.get(name);
+  const profile = redactCredentialRecord(await profiles.get(name));
 
   if (!profile) {
     const all = await profiles.list();
@@ -1140,6 +1270,11 @@ async function handleProfileShow(args) {
       console.error(`Available profiles: ${all.map(p => p.name).join(', ')}`);
     }
     process.exit(1);
+  }
+
+  if (args.includes('--json')) {
+    console.log(JSON.stringify(redactCredentialRecord(profile), null, 2));
+    return;
   }
 
   console.log(`Profile: ${profile.name}`);
@@ -1159,10 +1294,10 @@ async function handleProfileShow(args) {
     // Resolve server configs
     const registry = new McpServerRegistry();
     for (const serverName of profile.servers) {
-      const server = await registry.get(serverName);
+      const server = redactCredentialRecord(await registry.get(serverName));
       if (server) {
         const detail = server.type === 'stdio'
-          ? `stdio  ${server.command}${server.args ? ' ' + server.args.join(' ') : ''}`
+          ? `stdio  ${server.command}${server.args ? ' ' + redactCredentialArgs(server.args).join(' ') : ''}`
           : `${server.type}  ${redactUrlUserinfo(server.url)}`;
         console.log(`  ${serverName.padEnd(24)} ${detail}`);
         if (server.description) console.log(`  ${''.padEnd(24)} ${server.description}`);
@@ -1285,6 +1420,135 @@ async function handleProfileInitPresets() {
 }
 
 /**
+ * Read all of stdin and return it as one trimmed string (go/no-go review,
+ * blocker 1C's `--api-key-stdin`). Mirrors `src/cli/handlers/decision.ts`'s
+ * own private `readStdin()` + `.trim()` for `--token-stdin` — duplicated
+ * rather than imported for the same source/dist reason documented on
+ * `requireFlagValue` above (this file runs both compiled and directly from
+ * source). Input is expected to be a single line; a value containing
+ * additional lines is not specially rejected, matching that precedent.
+ */
+async function readStdinAll() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/**
+ * Handle `aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME> |
+ * --api-key-stdin | --api-key-file <path>]` (#3062, #3069, go/no-go review
+ * blocker 1C).
+ *
+ * Wires `loginInProfile()` (src/mcp/adapters/codex-runtime.ts), which
+ * already implements the full headless-safe behavior this command needs:
+ * with a terminal attached and none of the three given, it runs the
+ * interactive `codex login` OAuth flow. Exactly one credential source may
+ * be given; more than one is a usage error naming the flags given. In
+ * every case the key reaches `loginInProfile()` only as an in-memory value
+ * (or, for `--api-key-env`, a variable *name*) — never on argv, in logs, or
+ * in an error message — and travels to `codex` only on its stdin (see
+ * `spawnCodexLoginWithApiKey()`'s own doc comment). Without a terminal and
+ * without any of the three, `loginInProfile()` itself refuses, naming all
+ * three flags.
+ *
+ * `--api-key-env` reads the key from that named environment variable, as
+ * before. `--api-key-stdin` reads one line from this process's own stdin
+ * (refusing if stdin is a terminal, or if it is empty) — the least
+ * observable source, since the key then never exists in any environment or
+ * on any command line. `--api-key-file <path>` reads the key from a file
+ * that `readApiKeyFromFile()` requires to be a non-symlink, single-hard-
+ * link, regular file owned by the current user with no group/other
+ * permission bits on POSIX — refused otherwise, without ever printing the
+ * path's contents. `--api-key-env` remains the least preferred of the
+ * three (see "Supplying credentials safely" in the docs): the named
+ * variable is visible to every other child process this shell starts.
+ */
+async function handleProfileLogin(args) {
+  let apiKeyEnv;
+  let apiKeyFilePath;
+  try {
+    // rejectEmpty: an explicitly-given-but-empty variable name/path can
+    // never name a real environment variable or file (#3062 second review,
+    // finding 4; go/no-go review blocker 1C).
+    apiKeyEnv = requireFlagValue(args, { rejectEmpty: true }, '--api-key-env');
+    apiKeyFilePath = requireFlagValue(args, { rejectEmpty: true }, '--api-key-file');
+  } catch (err) {
+    if (err instanceof MissingFlagValueError) {
+      console.error(`${err.message}.`);
+      process.exit(2);
+    }
+    throw err;
+  }
+  const useStdin = args.includes('--api-key-stdin');
+
+  const sourcesGiven = [
+    apiKeyEnv !== undefined ? '--api-key-env' : null,
+    useStdin ? '--api-key-stdin' : null,
+    apiKeyFilePath !== undefined ? '--api-key-file' : null,
+  ].filter(Boolean);
+  if (sourcesGiven.length > 1) {
+    console.error(`Only one credential source may be given; got ${sourcesGiven.join(', ')}.`);
+    process.exit(2);
+  }
+
+  // Skip --api-key-env's/--api-key-file's own value when hunting for the
+  // positional profile name, so e.g. `login --api-key-env FOO` (missing
+  // name) never misreads FOO as the name (mirrors this file's own
+  // `serverName()` helper). Stops at a bare `--` the same way
+  // requireFlagValue() does.
+  const positional = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === '--') break;
+    if (token === '--api-key-env' || token === '--api-key-file') { i += 1; continue; }
+    if (!token.startsWith('--')) positional.push(token);
+  }
+  const name = positional[0];
+  if (!name) {
+    console.error('Usage: aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME> | --api-key-stdin | --api-key-file <path>]');
+    process.exit(1);
+  }
+
+  let apiKey;
+  if (useStdin) {
+    if (process.stdin.isTTY) {
+      console.error(
+        '--api-key-stdin requires piped input, not a terminal; run ' +
+        `\`aiwg mcp profile login ${name}\` with no credential flag for the interactive login instead.`,
+      );
+      process.exit(2);
+    }
+    apiKey = (await readStdinAll()).trim();
+    if (!apiKey) {
+      console.error('--api-key-stdin received no key (stdin was empty).');
+      process.exit(2);
+    }
+  } else if (apiKeyFilePath !== undefined) {
+    const { readApiKeyFromFile } = await loadCodexRuntimeAdapter();
+    try {
+      apiKey = await readApiKeyFromFile(apiKeyFilePath);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(2);
+    }
+    if (!apiKey) {
+      console.error(`--api-key-file "${apiKeyFilePath}" is empty.`);
+      process.exit(2);
+    }
+  }
+
+  try {
+    const { loginInProfile } = await loadCodexRuntimeAdapter();
+    const loginOptions = apiKey !== undefined ? { apiKey } : apiKeyEnv ? { apiKeyEnv } : {};
+    await loginInProfile(name, loginOptions);
+    console.log(`\nLogged in to profile "${name}".`);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
+
+/**
  * Route `aiwg mcp profile <subcommand>`
  */
 async function handleProfile(args) {
@@ -1308,6 +1572,9 @@ async function handleProfile(args) {
     case 'remove':
     case 'rm':
       await handleProfileRemove(subArgs);
+      break;
+    case 'login':
+      await handleProfileLogin(subArgs);
       break;
     case 'import':
       await handleProfileImport(subArgs);
@@ -1379,7 +1646,11 @@ export async function main(args = process.argv.slice(2)) {
       const scope = parseFlag(args, '--scope') || 'project';
       if (!['project', 'user'].includes(scope)) throw new Error('Scope must be project or user');
       const installArgs = args.slice(1).filter((a, index, rest) => !a.startsWith('--') && !['--scope', '--project'].includes(rest[index - 1]));
-      const target = installArgs[0] || 'claude';
+      const requestedTarget = installArgs[0] || 'claude';
+      const target = resolveClaudeInstallTarget(requestedTarget, scope);
+      if (requestedTarget === 'claude') {
+        console.warn(`Deprecated MCP install target "claude" selected ${target}; use "aiwg mcp install ${target}" explicitly.`);
+      }
       const projectDir = parseFlag(args, '--project') || installArgs[1] || '.';
 
       // Check for --dry-run flag
@@ -1388,7 +1659,8 @@ export async function main(args = process.argv.slice(2)) {
         console.log(`[DRY RUN] Would generate MCP config for: ${target}`);
         console.log(`[DRY RUN] Target directory: ${projectDir}`);
         const configPaths = {
-          claude: scope === 'user' ? path.join(homeDir, '.claude.json') : path.join(projectDir, '.mcp.json'),
+          'claude-desktop': claudeDesktopConfigPath(),
+          'claude-code': scope === 'user' ? path.join(homeDir, '.claude.json') : path.join(projectDir, '.mcp.json'),
           cursor: '.cursor/mcp.json',
           factory: (projectDir === '.' || projectDir === 'global')
             ? path.join(homeDir, '.factory/mcp.json')

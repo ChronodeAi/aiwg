@@ -106,6 +106,31 @@ The research corpus now lives on the secondary drive. Same access pattern from A
 
 ---
 
+## Filesystem access boundary
+
+The `fs` backend pins each configured subsystem root when its adapter is created.
+Existing external stores and root aliases remain supported. Missing configured
+roots are created on the first write or append through a pinned existing ancestor;
+a replacement installed at that missing root is refused. Missing reads return
+`null`, missing deletes are no-ops, and missing-root listings are empty.
+
+Read, write, append, delete, and list share the artifact containment implementation.
+Absolute paths, parent traversal, escaping/dangling symlinks, unverifiable identities,
+and root replacement are refused. Linux allows contained read symlinks; writes,
+appends, and deletes refuse final symlinks. macOS and Windows refuse all symlink
+components. Storage refuses hardlinked files for read/write/append/delete; listing
+omits hardlinks and never emits or descends through symlinks. Deleting a directory
+is refused. Ordinary nested paths and `.aiwg-location` storage metadata remain
+supported, as do POSIX names ending in a dot or space.
+
+Overwrites preserve file modes and use atomic replacement. Appends use `O_APPEND`;
+new files retain normal umask permissions. Linux anchors operations with directory
+descriptors; macOS and Windows perform static path and identity checks. Concurrent
+tree changes by the same user after final verification are outside this guarantee.
+Failed overwrites may leave private `0o600` `.aiwg-write-*.tmp` files.
+
+---
+
 ## Subsystems you can route
 
 | Subsystem          | What lives here                                     | Default location                       |

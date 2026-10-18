@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { DaemonSupervisor } from '../../../tools/ralph-external/daemon-supervisor.mjs';
 import { CircuitState } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
+import { sampleWorkerIdentity } from '../../../tools/ralph-external/process-monitor.mjs';
 
 /**
  * Stub AgentSupervisor for isolated testing.
@@ -353,6 +354,15 @@ describe('DaemonSupervisor', () => {
   });
 
   describe('process group kill', () => {
+    it.each([0, 1, -1, 1.5, NaN, undefined, process.pid, sampleWorkerIdentity(process.pid)?.pgid])('refuses unsafe group %s', pid => {
+      const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true);
+      try {
+        daemon.submit({ loopId: 'loop-1', prompt: 'test' });
+        daemon._running.get('loop-1').pid = pid;
+        expect(daemon.killProcessGroup('loop-1')).toBe(false);
+        expect(killSpy).not.toHaveBeenCalled();
+      } finally { killSpy.mockRestore(); }
+    });
     it('should send signal to negative PID', () => {
       const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {});
 

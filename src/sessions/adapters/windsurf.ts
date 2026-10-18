@@ -1,6 +1,8 @@
 import { basename } from 'node:path';
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
@@ -12,7 +14,7 @@ import {
   type SourceProbe,
 } from '../contracts.js';
 import {
-  readBoundedJsonLines, streamBoundedJsonLines, type ReaderLimits,
+  streamBoundedJsonLines, type ReaderLimits,
 } from '../readers.js';
 
 export const DEVIN_DESKTOP_ADAPTER_VERSION = '1.1.0';
@@ -55,20 +57,14 @@ export class DevinDesktopSessionAdapter implements SessionSourceAdapter {
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
-    const parsed = await this.readSource(source);
-    return {
-      sourceSchemaVersion: parsed.schemaVersion,
-      consistency: 'provisional',
-      operationalState: 'available',
-    };
+    const records = this.stream(source);
+    let result = await records.next();
+    while (!result.done) result = await records.next();
+    return result.value;
   }
 
-  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
-    if (!isCurrentHookLocator(source.locatorClass)) {
-      // Preserve the precise unsupported-operation diagnostics.
-      await this.readSource(source);
-      return;
-    }
+  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncGenerator<ProviderRecord, SourceProbe> {
+    this.assertSupportedLocator(source);
     const start = parseCursor(cursor?.value);
     const input = await streamBoundedJsonLines({
       selectedPath: source.locator,
@@ -80,12 +76,12 @@ export class DevinDesktopSessionAdapter implements SessionSourceAdapter {
     for await (const line of input) {
       const parsed = StepSchema.safeParse(line.value);
       if (!parsed.success) {
-        throw new SessionContractError('MALFORMED_SOURCE', 'Windsurf transcript step is malformed');
+        throw new SessionContractError('MALFORMED_SOURCE', 'Windsurf transcript step is malformed', schemaRejectionDetail(parsed.error));
       }
       const step = parsed.data;
       const currentVersion = step.schema_version ?? DEVIN_DESKTOP_TRANSCRIPT_SCHEMA_VERSION;
       if (schemaVersion && schemaVersion !== currentVersion) {
-        throw new SessionContractError('SCHEMA_DRIFT', 'mixed Windsurf transcript schemas');
+        throw new SessionContractError('SCHEMA_DRIFT', 'mixed Windsurf transcript schemas', schemaIssueDetail('schema_version'));
       }
       schemaVersion = currentVersion;
       assertSupportedSchemaMajor(schemaVersion);
@@ -93,7 +89,7 @@ export class DevinDesktopSessionAdapter implements SessionSourceAdapter {
         ?? nativeSessionId
         ?? basename(source.locator, '.jsonl');
       if (step.trajectory_id && nativeSessionId && step.trajectory_id !== nativeSessionId) {
-        throw new SessionContractError('SCHEMA_DRIFT', 'mixed Windsurf trajectory identities');
+        throw new SessionContractError('SCHEMA_DRIFT', 'mixed Windsurf trajectory identities', schemaIssueDetail('trajectory_id'));
       }
       nativeSessionId = currentSession;
       if (seen++ < start) continue;
@@ -107,14 +103,16 @@ export class DevinDesktopSessionAdapter implements SessionSourceAdapter {
       );
     }
     if (seen === 0) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Windsurf transcript is empty or malformed');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Windsurf transcript is empty or malformed', schemaIssueDetail('<root>'));
     }
+    return {
+      sourceSchemaVersion: schemaVersion!,
+      consistency: 'provisional',
+      operationalState: 'available',
+    };
   }
 
-  private async readSource(source: SelectedSource): Promise<{
-    schemaVersion: string;
-    records: ProviderRecord[];
-  }> {
+  private assertSupportedLocator(source: SelectedSource): void {
     if (isLegacyLocator(source.locatorClass)) {
       throw new SessionContractError(
         'UNSUPPORTED_OPERATION',
@@ -127,45 +125,6 @@ export class DevinDesktopSessionAdapter implements SessionSourceAdapter {
         'Devin Desktop (Windsurf compatibility) requires an explicitly selected post_cascade_response_with_transcript JSONL file',
       );
     }
-    const input = await readBoundedJsonLines({
-      selectedPath: source.locator,
-      allowedRoots: source.authorizedScope.allowedRoots,
-    }, { consistency: 'provisional', limits: this.limits });
-    if (input.records.length === 0) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Windsurf transcript is empty or malformed');
-    }
-    const steps = input.records.map((record) => {
-      const parsed = StepSchema.safeParse(record.value);
-      if (!parsed.success) {
-        throw new SessionContractError('MALFORMED_SOURCE', 'Windsurf transcript step is malformed');
-      }
-      return { ...record, value: parsed.data };
-    });
-    const versions = new Set(steps.map(({ value }) =>
-      value.schema_version ?? DEVIN_DESKTOP_TRANSCRIPT_SCHEMA_VERSION));
-    if (versions.size !== 1) {
-      throw new SessionContractError('SCHEMA_DRIFT', 'mixed Windsurf transcript schemas');
-    }
-    const schemaVersion = [...versions][0];
-    assertSupportedSchemaMajor(schemaVersion);
-    const trajectoryIds = new Set(steps.flatMap(({ value }) =>
-      value.trajectory_id ? [value.trajectory_id] : []));
-    if (trajectoryIds.size > 1) {
-      throw new SessionContractError('SCHEMA_DRIFT', 'mixed Windsurf trajectory identities');
-    }
-    const nativeSessionId = [...trajectoryIds][0] ?? basename(source.locator, '.jsonl');
-    return {
-      schemaVersion,
-      records: steps.map(({ value, sequence, byteOffset }) =>
-        normalizeStep(
-          value,
-          nativeSessionId,
-          sequence,
-          byteOffset,
-          canonicalLocatorClass(source.locatorClass),
-          schemaVersion,
-        )),
-    };
   }
 }
 
@@ -261,6 +220,6 @@ function timestamp(value?: string): string | undefined {
 
 function parseCursor(value?: string): number {
   if (!value) return 0;
-  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid Windsurf cursor');
+  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid Windsurf cursor', schemaIssueDetail('cursor'));
   return Number(value);
 }

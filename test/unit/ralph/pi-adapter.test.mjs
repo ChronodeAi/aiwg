@@ -38,13 +38,14 @@ class StdinAbortAdapter extends PiAdapter {
   getAbortInput() { return `${JSON.stringify({ type: 'abort', id: 'aiwg-abort' })}\n`; }
 }
 
-async function launch(scenario, options = {}, adapter = new PiAdapter()) {
+async function launch(scenario, options = {}, adapter = new PiAdapter(), configure = () => {}) {
   const { dir, cleanup } = scratch('pi-adapter-launch-');
   const receipt = join(dir, 'receipt.json');
   const launcher = new SessionLauncher();
   launcher.setProviderAdapter(adapter);
   let started = null; let child = null;
   launcher.on('started', info => { started = info; child = launcher.currentProcess; });
+  configure(launcher);
   const env = { AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: scenario || undefined, AIWG_PI_STUB_RECEIPT: receipt,
     PI_CODING_AGENT_SESSION_DIR: options.sessionDir, CI: undefined, NO_COLOR: undefined };
   const result = await withEnv(env, () => launcher.launch({
@@ -104,21 +105,18 @@ test('Pi adapter resolves transcripts inside the isolated session directory only
   assert.equal(manifest.sessionEnvironment, 'PI_CODING_AGENT_SESSION_DIR', 'adapter honors the fixture-pinned isolation variable');
 });
 
-test('Pi adapter availability fails closed on incompatible Node or a failing pi --version', async () => {
+test('Pi adapter availability fails closed on a failing or unqualified pi --version', async () => {
   const adapter = new PiAdapter();
   const { dir, cleanup } = scratch('pi-adapter-node-');
   try {
-    const fakeNode = join(dir, 'fake-node');
-    writeExecutableSync(fakeNode, `#!/bin/sh\nprintf '20.19.0\\n'\n`);
-    const execPath = process.execPath;
-    Object.defineProperty(process, 'execPath', { value: fakeNode, configurable: true, writable: true });
-    try { assert.equal(await withEnv({ AIWG_PI_BIN: stub }, () => adapter.isAvailable()), false, 'Node < 22.19 is rejected before pi is probed'); }
-    finally { Object.defineProperty(process, 'execPath', { value: execPath, configurable: true, writable: true }); }
     assert.equal(await withEnv({ AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: 'version-failure' }, () => adapter.isAvailable()), false, 'non-zero pi --version is unavailable');
     assert.equal(await withEnv({ AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: 'version-drift' }, () => adapter.isAvailable()), false, 'a Pi outside the qualified range is unavailable even though --version exits 0 (#2550)');
     assert.equal(await withEnv({ AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: 'version-drift' }, () => adapter.getVersion()), '0.86.0', 'the drifted version is still observable for diagnostics');
     assert.equal(await withEnv({ AIWG_PI_BIN: join(dir, 'missing-pi') }, () => adapter.isAvailable()), false, 'missing binary is unavailable');
-    assert.equal(await withEnv({ AIWG_PI_BIN: stub }, () => adapter.isAvailable()), true);
+    const execPath = process.execPath;
+    Object.defineProperty(process, 'execPath', { value: join(dir, 'missing-node'), configurable: true, writable: true });
+    try { assert.equal(await withEnv({ AIWG_PI_BIN: stub }, () => adapter.isAvailable()), true, 'availability probes Pi directly without a separate Node preflight'); }
+    finally { Object.defineProperty(process, 'execPath', { value: execPath, configurable: true, writable: true }); }
     assert.equal(await withEnv({ AIWG_PI_BIN: stub }, () => adapter.getVersion()), manifest.upstreamVersion, 'observed version matches the pinned fixture contract');
     assert.equal(await withEnv({ AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: 'version-failure' }, () => adapter.getVersion()), null);
   } finally { cleanup(); }
@@ -218,19 +216,26 @@ test('launcher propagates the abort command on timeout and the child exits witho
   } finally { run.cleanup(); }
 });
 
-test('launcher tears down a Pi child that ignores the abort command', { timeout: 15000 }, async () => {
-  const run = await launch('ignore-stdin', { timeoutMs: 100 }, new StdinAbortAdapter());
-  try {
-    assert.equal(run.result.timedOut, true);
-    assert.equal(run.receipt.abort, undefined);
-    assert.equal(run.child.signalCode, 'SIGTERM', 'bounded escalation terminated the unresponsive child');
-    assert.equal(run.child.exitCode, null);
-    assert.equal(run.result.exitCode, 1, 'signal exits surface as failure');
-    assert.ok(run.result.duration >= 2000 && run.result.duration < 7000, `SIGTERM after the 2s abort grace window (${run.result.duration}ms)`);
-    assert.equal(new PiAdapter().parseOutput(run.stdout).settled, false);
-    assert.equal(run.launcher.currentProcess, null);
-    assert.equal(run.launcher.pendingEscalationTimers.size, 0, 'the SIGKILL timer is cleared after SIGTERM reaped the child');
-  } finally { run.cleanup(); }
+test('launcher tears down a Pi child that ignores the abort command', { timeout: 15000 }, async t => {
+  for (const publishReceipt of [true, false]) {
+    await t.test(publishReceipt ? 'with a receipt' : 'without a receipt', async () => {
+      const adapter = new StdinAbortAdapter();
+      if (!publishReceipt) adapter.getEnvOverrides = () => ({ CI: 'true', NO_COLOR: '1', AIWG_PI_STUB_RECEIPT: '' });
+      const run = await launch('ignore-stdin', { timeoutMs: 100 }, adapter);
+      try {
+        assert.equal(run.result.timedOut, true);
+        assert.equal(run.receipt?.abort, undefined);
+        if (!publishReceipt) assert.equal(run.receipt, null);
+        assert.equal(run.child.signalCode, 'SIGTERM', 'bounded escalation terminated the unresponsive child');
+        assert.equal(run.child.exitCode, null);
+        assert.equal(run.result.exitCode, 1, 'signal exits surface as failure');
+        assert.ok(run.result.duration >= 2000 && run.result.duration < 7000, `SIGTERM after the 2s abort grace window (${run.result.duration}ms)`);
+        assert.equal(new PiAdapter().parseOutput(run.stdout).settled, false);
+        assert.equal(run.launcher.currentProcess, null);
+        assert.equal(run.launcher.pendingEscalationTimers.size, 0, 'the SIGKILL timer is cleared after SIGTERM reaped the child');
+      } finally { run.cleanup(); }
+    });
+  }
 });
 
 test('launcher tears down a production Pi child on timeout without an abort grace window', { timeout: 15000 }, async () => {
@@ -241,6 +246,56 @@ test('launcher tears down a production Pi child on timeout without an abort grac
     assert.ok(run.result.duration < 2000, `SIGTERM is immediate when no abort frame exists (${run.result.duration}ms)`);
     assert.equal(run.launcher.pendingEscalationTimers.size, 0);
   } finally { run.cleanup(); }
+});
+
+async function checkReceiptWriteTimeout(t, fireOnStderr) {
+  // Fire the real launcher timeout callback after the child confirms it
+  // opened the receipt, with a bounded fallback if the signal is not handled.
+  const timeoutMs = 100;
+  const setTimeout = globalThis.setTimeout;
+  const escalationDelays = [];
+  let fireTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
+    if (delay === timeoutMs) {
+      fireTimeout = callback;
+      return setTimeout(() => {
+        const expire = fireTimeout; fireTimeout = null;
+        expire?.();
+      }, 5000);
+    }
+    escalationDelays.push(delay);
+    return setTimeout(callback, delay, ...args);
+  });
+  const run = await launch('hang-during-receipt', { timeoutMs }, new PiAdapter(), launcher => {
+    let stderr = '';
+    launcher.on('stderr', chunk => {
+      stderr += chunk.toString();
+      if (fireOnStderr && stderr.includes('receipt write pending\n') && fireTimeout) {
+        const expire = fireTimeout; fireTimeout = null;
+        expire();
+      }
+    });
+  });
+  try {
+    assert.equal(readFileSync(join(run.dir, 'receipt.json.pending'), 'utf8'), '', 'the child was killed inside the receipt write');
+    assert.equal(run.receipt, null, 'an unfinished receipt is never published for JSON parsing');
+    assert.equal(run.stdout, '');
+    assert.equal(run.result.stdoutBuffer, '');
+    assert.equal(run.result.timedOut, true);
+    assert.equal(run.result.exitCode, 1);
+    assert.equal(run.child.signalCode, 'SIGTERM');
+    assert.deepEqual(escalationDelays, [0, 5000], 'production Pi has no abort grace window');
+    assert.equal(run.launcher.currentProcess, null);
+    assert.equal(run.launcher.pendingEscalationTimers.size, 0);
+  } finally { run.cleanup(); }
+}
+
+test('timeout during a Pi receipt write returns a failure with empty stdout and no partial JSON receipt', { timeout: 15000 }, async t => {
+  await checkReceiptWriteTimeout(t, true);
+});
+
+test('receipt write timeout fallback kills the child when the stderr trigger is not handled', { timeout: 15000 }, async t => {
+  await checkReceiptWriteTimeout(t, false);
 });
 
 test('launcher captures the Pi transcript from the isolated session directory', async () => {

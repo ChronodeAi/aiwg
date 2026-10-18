@@ -9,24 +9,59 @@
  * - Live droid CLI validation (when available)
  */
 
-import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'fs/promises';
+import { mkdtempSync } from 'fs';
 import path from 'path';
 import os from 'os';
-import { execSync, spawnSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
+import { cliCommand } from '../helpers/cli-command.js';
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
+
+function deployHomeDroids() {
+  return execFileSync(process.execPath, [path.join(REPO_ROOT, 'tools/agents/deploy-agents.mjs'), '--provider', 'factory', '--mode', 'sdlc', '--force'], {
+    timeout: 60_000, encoding: 'utf-8', stdio: 'pipe',
+  });
+}
+
+describe('Factory literal command arguments', () => {
+  it('preserves script arguments and an isolated cwd', () => {
+    const execute = vi.mocked(execFileSync);
+    execute.mockReturnValueOnce('literal output');
+    const args = ['--target', 'path with spaces;$(echo expanded)'];
+    expect(runScript('tools/agents/deploy-agents.mjs', args)).toBe('literal output');
+    expect(execute).toHaveBeenLastCalledWith(process.execPath,
+      [path.join(REPO_ROOT, 'tools/agents/deploy-agents.mjs'), ...args, '--copy-all'], expect.objectContaining({ cwd: TEST_PROJECT_DIR }));
+  });
+  it('passes home deployment flags without a shell', () => {
+    const execute = vi.mocked(execFileSync);
+    execute.mockReturnValueOnce('literal output');
+    expect(deployHomeDroids()).toBe('literal output');
+    expect(execute).toHaveBeenLastCalledWith(process.execPath,
+      [path.join(REPO_ROOT, 'tools/agents/deploy-agents.mjs'), '--provider', 'factory', '--mode', 'sdlc', '--force'],
+      { timeout: 60_000, encoding: 'utf-8', stdio: 'pipe' });
+  });
+});
 
 // Test directories
-const TEST_PROJECT_DIR = path.join(os.tmpdir(), 'aiwg-factory-test-project');
-const TEST_HOME_DIR = path.join(os.tmpdir(), 'aiwg-factory-test-home');
+const TEST_ROOT = mkdtempSync(path.join(os.tmpdir(), 'aiwg factory;$literal-'));
+const TEST_PROJECT_DIR = path.join(TEST_ROOT, 'project');
+const TEST_HOME_DIR = path.join(TEST_ROOT, 'home');
+afterAll(async () => { await fs.rm(TEST_ROOT, { recursive: true, force: true }); });
 const TEST_FACTORY_DIR = path.join(TEST_PROJECT_DIR, '.factory');
 const REPO_ROOT = path.resolve(__dirname, '../..');
 
 // Check if droid CLI is available
 function isDroidAvailable(): boolean {
   try {
-    const result = spawnSync('droid', ['--version'], { encoding: 'utf-8', timeout: 5000 });
+    const result = spawnSync(...cliCommand('droid', ['--version']), { encoding: 'utf-8', timeout: 5000 });
     return result.status === 0;
-  } catch {
+  } catch (error) {
+    console.warn(`droid CLI probe failed: ${String(error)}`);
     return false;
   }
 }
@@ -50,7 +85,7 @@ function runScript(scriptPath: string, args: string[] = []): string {
     USERPROFILE: TEST_HOME_DIR,
   };
 
-  return execSync(`node ${path.join(REPO_ROOT, scriptPath)} ${args.join(' ')}`, { timeout: 60_000,
+  return execFileSync(process.execPath, [path.join(REPO_ROOT, scriptPath), ...args], { timeout: 60_000,
     cwd: TEST_PROJECT_DIR,
     env,
     encoding: 'utf-8',
@@ -60,12 +95,11 @@ function runScript(scriptPath: string, args: string[] = []): string {
 // Helper to run droid CLI commands
 function runDroid(args: string[], options: { cwd?: string; timeout?: number } = {}): { stdout: string; stderr: string; status: number | null } {
   try {
-    const result = spawnSync('droid', args, {
+    const result = spawnSync(...cliCommand('droid', args), {
       encoding: 'utf-8',
       timeout: options.timeout || 30000,
       cwd: options.cwd || process.cwd(),
       env: process.env,
-      shell: true,
     });
     return {
       stdout: result.stdout || '',
@@ -95,7 +129,7 @@ describe('Factory AI Integration', () => {
     );
 
     // Initialize as git repo
-    execSync('git init', { timeout: 60_000, cwd: TEST_PROJECT_DIR, stdio: 'pipe' });
+    execFileSync('git', ['init'], { timeout: 60_000, cwd: TEST_PROJECT_DIR, stdio: 'pipe' });
   });
 
   afterEach(async () => {
@@ -636,10 +670,7 @@ describe('Factory CLI Integration', () => {
       const homeDir = process.env.HOME || process.env.USERPROFILE || '';
       const droidsDir = path.join(homeDir, '.factory', 'droids');
 
-      execSync(`node ${path.join(REPO_ROOT, 'tools/agents/deploy-agents.mjs')} --provider factory --mode sdlc --force`, { timeout: 60_000,
-        encoding: 'utf-8',
-        stdio: 'pipe',
-      });
+      deployHomeDroids();
 
       // Verify droid file exists
       const techResearcher = path.join(droidsDir, 'technical-researcher.md');

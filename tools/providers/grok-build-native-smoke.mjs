@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 /** Credential-gated live Grok Build smoke. No secret values enter output. */
+import { importImpl } from '../_resolve-impl.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { observeProviderHealthEvent } from '../ralph-external/lib/worker-health.mjs';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 const skipped = (reason) => {
   process.stdout.write(`${JSON.stringify({ provider: 'grok-build', status: 'skipped', reason })}\n`);
@@ -33,7 +35,7 @@ if (actualHash.toLowerCase() !== expectedHash.toLowerCase()) {
   process.stderr.write('Grok Build binary SHA-256 mismatch\n');
   process.exit(1);
 }
-const version = spawnSync(binary, ['--version'], { encoding: 'utf8', timeout: 5_000, shell: false });
+const version = spawnSync(binary, ['--version'], { encoding: 'utf8', timeout: 5_000, shell: false, killSignal: 'SIGKILL' });
 if (version.status !== 0) {
   process.stderr.write('Grok Build binary version check failed\n');
   process.exit(1);
@@ -55,6 +57,8 @@ let stderrBytes = 0;
 const acceptEvent = event => {
   const observation = observeProviderHealthEvent('grok-build', event, { kind: 'stdout' }, {});
   events++;
+  // Unknown/legacy frames must not be repaired by a later clean ACP end.
+  if (!observation) errorEvent = true;
   if (terminal) errorEvent = true; // ACP end must be last.
   if (observation?.kind === 'terminal') {
     terminal = true;
@@ -63,10 +67,10 @@ const acceptEvent = event => {
   if (observation?.kind === 'error' && observation.fatal) { terminal = true; errorEvent = true; }
 };
 const stop = () => {
-  if (child.pid && process.platform !== 'win32') {
+  if (Number.isSafeInteger(child.pid) && child.pid > 0 && process.platform !== 'win32') {
     try { process.kill(-child.pid, 'SIGTERM'); return; } catch { /* already exited */ }
   }
-  child.kill('SIGTERM');
+  signalChild(child, 'SIGTERM');
 };
 const timeout = setTimeout(() => {
   stop();

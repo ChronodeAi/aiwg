@@ -31,7 +31,7 @@ description: >
   error once a corpus is clean if you want it to gate.
 severity: warn
 applies-to:
-  glob: "documentation/references/**/*.md"
+  glob: "{findings,documentation/references}/**/*.md"
 checks:
   - type: unregistered-uncertainty
     obstacleWithinLines: 2

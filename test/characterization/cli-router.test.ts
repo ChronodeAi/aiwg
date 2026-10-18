@@ -12,10 +12,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { execSync, spawn, ChildProcess } from 'child_process';
+import { execFileSync, spawn, ChildProcess } from 'child_process';
 import { resolve, join } from 'path';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
 
 const PROJECT_ROOT = resolve(__dirname, '../..');
 const BIN_PATH = join(PROJECT_ROOT, 'bin/aiwg.mjs');
@@ -35,7 +40,7 @@ function runCli(args: string[], options: { cwd?: string; timeout?: number } = {}
   const timeout = options.timeout || 30000;
 
   try {
-    const stdout = execSync(`node ${BIN_PATH} ${args.join(' ')}`, {
+    const stdout = execFileSync(process.execPath, [BIN_PATH, ...args], {
       encoding: 'utf-8',
       cwd,
       timeout,
@@ -58,6 +63,14 @@ function runCli(args: string[], options: { cwd?: string; timeout?: number } = {}
 }
 
 describe('CLI Router Characterization Tests', () => {
+  it('passes spaces and shell metacharacters as a single literal argument', () => {
+    const command = 'unknown command; echo WP6_SHELL_EXECUTED';
+    const execute = vi.mocked(execFileSync);
+    execute.mockReturnValueOnce('literal output');
+    expect(runCli([command]).stdout).toBe('literal output');
+    expect(execute).toHaveBeenLastCalledWith(process.execPath, [BIN_PATH, command], expect.any(Object));
+  });
+
   describe('Command Alias Mapping', () => {
     /**
      * Captures the exact alias mappings from COMMAND_ALIASES constant.

@@ -120,7 +120,7 @@ Add:
 - Pi rows in provider overview, capability, skill-path, and setup-guide matrices;
 - troubleshooting for missing project resources in non-interactive mode;
 - an explicit statement that Pi has no built-in MCP and that AIWG does not auto-install an MCP extension;
-- an explicit Node compatibility note: AIWG supports Node 20, while the audited Pi release requires Node 22.19 or newer.
+- an explicit Node compatibility note: AIWG requires Node 24, which also satisfies the audited Pi release runtime requirement.
 
 Avoid recommending global `defaultProjectTrust: "always"`. For CI fixtures, show `--approve` only with a warning that the repository is trusted.
 

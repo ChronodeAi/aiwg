@@ -15,7 +15,7 @@
  *   3 - Validation error
  */
 
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -50,7 +50,7 @@ function parseArgs(args) {
  */
 function checkBranch(expectedBranch) {
   try {
-    const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', {
+    const currentBranch = boundedExecSync('git rev-parse --abbrev-ref HEAD', 'quick', {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe']
     }).trim();
@@ -74,7 +74,7 @@ function checkBranch(expectedBranch) {
  */
 function getUsername() {
   try {
-    const username = execSync('git config user.name', {
+    const username = boundedExecSync('git config user.name', 'quick', {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe']
     }).trim();

@@ -1,17 +1,17 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { open, readFile } from 'node:fs/promises';
-import { createInterface } from 'node:readline';
-import { SessionContractError, type ConsistencyStateSchema } from './contracts.js';
+import { assertSessionResourceLimit, schemaIssueDetail, SessionContractError, type ConsistencyStateSchema } from './contracts.js';
+import { assertImportByteLimit, DEFAULT_IMPORT_BYTE_LIMITS, type ImportByteLimits } from './import-limits.js';
 import { authorizeSourceFile, type SourceAuthorization } from './policy.js';
 import type { z } from 'zod';
 
-export interface ReaderLimits {
+export interface ReaderLimits extends ImportByteLimits {
   maxRecords: number;
-  maxRecordBytes: number;
-  maxTotalBytes: number;
   maxNestingDepth: number;
 }
+export type ReaderLimitName = Exclude<keyof ReaderLimits, 'limitOrigins'>;
+
 export interface BoundedJsonRecord {
   value: unknown;
   sequence: number;
@@ -36,10 +36,54 @@ export interface BoundedJsonLineStream extends AsyncIterable<BoundedJsonRecord> 
 
 export const DEFAULT_READER_LIMITS: ReaderLimits = Object.freeze({
   maxRecords: 1_000_000,
-  maxRecordBytes: 8 * 1024 * 1024,
-  maxTotalBytes: 1024 * 1024 * 1024,
+  ...DEFAULT_IMPORT_BYTE_LIMITS,
   maxNestingDepth: 64,
 });
+
+export async function* streamJsonLines(
+  path: string,
+  options: {
+    start?: number;
+    end?: number;
+    limits?: ImportByteLimits;
+  } = {},
+): AsyncGenerator<{ line: string; byteLength: number }> {
+  const input = createReadStream(path, { start: options.start, end: options.end });
+  let parts: Buffer[] = [];
+  let length = 0;
+  let total = 0;
+  try {
+    for await (const chunk of input) {
+      const buffer = chunk as Buffer;
+      let start = 0;
+      while (start < buffer.length) {
+        const newline = buffer.indexOf(10, start);
+        const end = newline === -1 ? buffer.length : newline + 1;
+        const segment = buffer.subarray(start, end);
+        if (options.limits) {
+          assertImportByteLimit('maxRecordBytes', options.limits, length + segment.length);
+          assertImportByteLimit('maxTotalBytes', options.limits, (options.start ?? 0) + total + segment.length);
+        }
+        // Bound the raw bytes before copying or decoding a record. Only LF
+        // separates records; CRLF and Unicode separators remain JSON input.
+        parts.push(segment);
+        length += segment.length;
+        total += segment.length;
+        start = end;
+        if (newline !== -1) {
+          const line = Buffer.concat(parts, length).toString('utf8');
+          const byteLength = length;
+          parts = [];
+          length = 0;
+          yield { line, byteLength };
+        }
+      }
+    }
+    if (length > 0) yield { line: Buffer.concat(parts, length).toString('utf8'), byteLength: length };
+  } finally {
+    input.destroy();
+  }
+}
 
 export async function readBoundedJsonLines(
   authorization: SourceAuthorization,
@@ -72,49 +116,44 @@ export async function streamBoundedJsonLines(
   const allowed = await authorizeSourceFile(authorization);
   const limits = { ...DEFAULT_READER_LIMITS, ...options.limits };
   const start = parseCursor(options.cursor);
-  if (start > allowed.size) throw new SessionContractError('SCHEMA_DRIFT', 'reader cursor is beyond source size');
+  if (start > allowed.size) throw new SessionContractError(
+    'SCHEMA_DRIFT',
+    'reader cursor is beyond source size',
+    schemaIssueDetail('cursor'),
+  );
 
   let offset = start;
   let total = 0;
   let count = 0;
   let incompleteTail = false;
   const iterate = async function* (): AsyncGenerator<BoundedJsonRecord> {
-    const input = createReadStream(allowed.canonicalPath, { start, encoding: 'utf8' });
-    const lines = createInterface({ input, crlfDelay: Infinity });
-    try {
-      for await (const line of lines) {
-        const bytes = Buffer.byteLength(line) + 1;
-        if (bytes > limits.maxRecordBytes || total + bytes > limits.maxTotalBytes
-          || count + 1 > limits.maxRecords) {
-          throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'bounded session reader limit exceeded');
-        }
-        if (line.trim() === '') {
-          offset += bytes;
-          total += bytes;
-          continue;
-        }
-        let value: unknown;
-        try {
-          value = JSON.parse(line);
-        } catch {
-          if (options.consistency === 'provisional') {
-            incompleteTail = true;
-            break;
-          }
-          throw new SessionContractError('SCHEMA_DRIFT', 'malformed JSONL record in consistent source');
-        }
-        if (jsonDepth(value) > limits.maxNestingDepth) {
-          throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'JSON nesting depth exceeds reader limit');
-        }
-        const record = { value, sequence: count, byteOffset: offset, byteLength: bytes };
-        count += 1;
+    for await (const { line, byteLength: bytes } of streamJsonLines(allowed.canonicalPath, { start, limits })) {
+      assertSessionResourceLimit('maxRecords', limits.maxRecords, count + 1);
+      if (line.trim() === '') {
         offset += bytes;
         total += bytes;
-        yield record;
+        continue;
       }
-    } finally {
-      lines.close();
-      input.destroy();
+      let value: unknown;
+      try {
+        value = JSON.parse(line);
+      } catch {
+        if (options.consistency === 'provisional') {
+          incompleteTail = true;
+          break;
+        }
+        throw new SessionContractError(
+          'SCHEMA_DRIFT',
+          'malformed JSONL record in consistent source',
+          schemaIssueDetail('<root>', 'invalid_json'),
+        );
+      }
+      assertSessionResourceLimit('maxNestingDepth', limits.maxNestingDepth, jsonDepth(value));
+      const record = { value, sequence: count, byteOffset: offset, byteLength: bytes };
+      count += 1;
+      offset += bytes;
+      total += bytes;
+      yield record;
     }
   };
   return {
@@ -127,24 +166,25 @@ export async function streamBoundedJsonLines(
   };
 }
 
+// Single-document JSON and text exports cannot be incrementally normalized.
+export const MAX_BUFFERED_SOURCE_BYTES = 64 * 1024 * 1024;
+
 export async function readBoundedJson(
   authorization: SourceAuthorization,
   limitsInput?: Partial<ReaderLimits>,
 ): Promise<{ value: unknown; bytesRead: number }> {
   const allowed = await authorizeSourceFile(authorization);
   const limits = { ...DEFAULT_READER_LIMITS, ...limitsInput };
-  if (allowed.size > limits.maxTotalBytes || allowed.size > limits.maxRecordBytes) {
-    throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'bounded JSON source limit exceeded');
-  }
+  assertImportByteLimit('maxTotalBytes', limits, allowed.size);
+  assertImportByteLimit('maxRecordBytes', limits, allowed.size);
+  assertSessionResourceLimit('maxBufferedSourceBytes', MAX_BUFFERED_SOURCE_BYTES, allowed.size);
   let value: unknown;
   try {
     value = JSON.parse(await readFile(allowed.canonicalPath, 'utf8'));
   } catch {
-    throw new SessionContractError('SCHEMA_DRIFT', 'malformed JSON source');
+    throw new SessionContractError('SCHEMA_DRIFT', 'malformed JSON source', schemaIssueDetail('<root>', 'invalid_json'));
   }
-  if (jsonDepth(value) > limits.maxNestingDepth) {
-    throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'JSON nesting depth exceeds reader limit');
-  }
+  assertSessionResourceLimit('maxNestingDepth', limits.maxNestingDepth, jsonDepth(value));
   return { value, bytesRead: allowed.size };
 }
 
@@ -154,9 +194,9 @@ export async function readBoundedText(
 ): Promise<{ value: string; bytesRead: number }> {
   const allowed = await authorizeSourceFile(authorization);
   const limits = { ...DEFAULT_READER_LIMITS, ...limitsInput };
-  if (allowed.size > limits.maxTotalBytes || allowed.size > limits.maxRecordBytes) {
-    throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'bounded text source limit exceeded');
-  }
+  assertImportByteLimit('maxTotalBytes', limits, allowed.size);
+  assertImportByteLimit('maxRecordBytes', limits, allowed.size);
+  assertSessionResourceLimit('maxBufferedSourceBytes', MAX_BUFFERED_SOURCE_BYTES, allowed.size);
   return {
     value: await readFile(allowed.canonicalPath, 'utf8'),
     bytesRead: allowed.size,
@@ -195,6 +235,7 @@ export async function fingerprintSourcePrefix(
     throw new SessionContractError(
       'SCHEMA_DRIFT',
       'checkpoint source position is beyond the current source size',
+      schemaIssueDetail('cursor'),
     );
   }
   const handle = await open(allowed.canonicalPath, 'r');
@@ -226,7 +267,7 @@ export async function fingerprintSourcePrefix(
 
 function parseCursor(cursor?: string): number {
   if (cursor === undefined || cursor === '') return 0;
-  if (!/^\d+$/.test(cursor)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid reader cursor');
+  if (!/^\d+$/.test(cursor)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid reader cursor', schemaIssueDetail('cursor'));
   return Number(cursor);
 }
 

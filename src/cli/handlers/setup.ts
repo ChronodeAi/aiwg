@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
 import { existsSync } from 'fs';
 import type { Interface as ReadlineInterface } from 'readline';
 import type {
@@ -20,11 +20,21 @@ import {
   writeAiwgConfig,
 } from '../../config/aiwg-config.js';
 import { AiwgError, EXIT_CODES } from '../errors.js';
-import { askChoice, askString, askYesNo, createPromptInterface } from '../prompt-utils.js';
+import { askChoice, askConsent, askString, askYesNo, createPromptInterface } from '../prompt-utils.js';
 import * as ui from '../ui.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
 import { normalizeProviderDefinitionId } from '../../providers/provider-definitions.js';
+import { isInteractive } from '../env.js';
+import { requireFlagValue as strictFlagValue, MissingFlagValueError } from '../flag-parsing.js';
+import {
+  detectInstalledWorkerClis,
+  evaluateWorkerDispatchOffer,
+  workerDispatchOfferHintWithArg,
+  workerDispatchOfferQuestion,
+  WORKER_DISPATCH_ARG_VALUES,
+  type WorkerDispatchOfferDecision,
+} from '../../models/worker-dispatch-offer.js';
 
 type IssueProvider = IssueProviderConfig;
 type DeliveryMode = 'direct' | 'feature-branch' | 'pr-required';
@@ -70,6 +80,14 @@ export interface SetupProjectOptions {
   customerTrackerActorVia?: TrackerVia;
   providers?: string[];
   confirm?: boolean;
+  /**
+   * Set by the interactive wizard when the worker-dispatch opt-in question
+   * was asked and answered (#3050), or directly by `--worker-dispatch
+   * enable|decline` (#3062) — either way, applying it to the plan clears
+   * `workerDispatchOffer.shouldOffer`, which is also how the explicit flag
+   * suppresses the interactive question (see `applyInteractivePrompts`).
+   */
+  workerDispatchChoice?: 'enable' | 'decline';
 }
 
 export interface SetupProjectPlan {
@@ -81,6 +99,8 @@ export interface SetupProjectPlan {
   issueProvider: IssueProvider;
   warnings: string[];
   diff: string;
+  /** Whether to offer/hint turning `parallelism.worker_dispatch` on (#3050). */
+  workerDispatchOffer: WorkerDispatchOfferDecision;
 }
 
 const DELIVERY_MODES: DeliveryMode[] = ['pr-required', 'feature-branch', 'direct'];
@@ -89,15 +109,28 @@ const ISSUE_PROVIDERS: IssueProvider[] = ['gitea', 'github', 'local'];
 const SIGNING_FORMATS: SigningFormat[] = ['openpgp', 'ssh', 'x509'];
 const TRACKER_VIA: TrackerVia[] = ['tea', 'gh', 'mcp', 'api'];
 
+/**
+ * A value-taking flag present without a usable value is a usage error, not
+ * "not given" (#3062 review item 11) — delegates to the shared strict
+ * parser, translating its `MissingFlagValueError` into this file's own
+ * `AiwgError`/`EXIT_CODES.USAGE` convention. `precedence: 'first'` matches
+ * this command's own pre-#3062 behavior (a hand-rolled loop that returned
+ * on the first match) — unchanged by the shared parser's second-round fix
+ * (#3062 second review, finding 4).
+ */
 function flagValue(args: readonly string[], ...names: string[]): string | undefined {
-  for (let i = 0; i < args.length; i += 1) {
-    if (names.includes(args[i] ?? '')) {
-      const value = args[i + 1];
-      if (!value || value.startsWith('--')) return undefined;
-      return value;
+  try {
+    return strictFlagValue(args, {}, ...names);
+  } catch (err) {
+    if (err instanceof MissingFlagValueError) {
+      throw new AiwgError({
+        code: 'ERR_USAGE_MISSING_FLAG_VALUE',
+        message: `${err.message}.`,
+        exitCode: EXIT_CODES.USAGE,
+      });
     }
+    throw err;
   }
-  return undefined;
 }
 
 function boolFlag(args: readonly string[], name: string): boolean {
@@ -170,6 +203,10 @@ export function parseSetupProjectOptions(ctx: HandlerContext): SetupProjectOptio
     trackerActorVia: parseEnum(flagValue(args, '--tracker-actor-via'), TRACKER_VIA, '--tracker-actor-via'),
     customerTrackerActorLogin: flagValue(args, '--customer-tracker-actor-login'),
     customerTrackerActorVia: parseEnum(flagValue(args, '--customer-tracker-actor-via'), TRACKER_VIA, '--customer-tracker-actor-via'),
+    // #3062: answers the worker-dispatch question directly, with or without
+    // a terminal, and suppresses the interactive question below (see
+    // `SetupProjectOptions.workerDispatchChoice`'s doc comment).
+    workerDispatchChoice: parseEnum(flagValue(args, '--worker-dispatch'), WORKER_DISPATCH_ARG_VALUES, '--worker-dispatch'),
     providers: (() => {
       const providers = parseStringList(flagValue(args, '--providers'));
       return providers ? normalizeProviders(providers) : undefined;
@@ -178,7 +215,7 @@ export function parseSetupProjectOptions(ctx: HandlerContext): SetupProjectOptio
 }
 
 export function detectGitRemotes(projectDir: string): GitRemoteInfo[] {
-  const result = spawnSync('git', ['-C', projectDir, 'remote', '-v'], {
+  const result = boundedSpawnSync('git', ['-C', projectDir, 'remote', '-v'], 'quick', {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -199,14 +236,14 @@ export function detectGitRemotes(projectDir: string): GitRemoteInfo[] {
 }
 
 function detectDefaultBranch(projectDir: string): string {
-  const symbolic = spawnSync('git', ['-C', projectDir, 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], {
+  const symbolic = boundedSpawnSync('git', ['-C', projectDir, 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], 'quick', {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   const fromOrigin = symbolic.stdout.trim().replace(/^origin\//, '');
   if (symbolic.status === 0 && fromOrigin) return fromOrigin;
 
-  const branch = spawnSync('git', ['-C', projectDir, 'branch', '--show-current'], {
+  const branch = boundedSpawnSync('git', ['-C', projectDir, 'branch', '--show-current'], 'quick', {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -214,7 +251,7 @@ function detectDefaultBranch(projectDir: string): string {
 }
 
 function gitConfig(projectDir: string, key: string): string | undefined {
-  const result = spawnSync('git', ['-C', projectDir, 'config', '--get', key], {
+  const result = boundedSpawnSync('git', ['-C', projectDir, 'config', '--get', key], 'quick', {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -413,6 +450,19 @@ export async function buildSetupProjectPlan(options: SetupProjectOptions): Promi
   base.remotes = remotesConfig;
   base.delivery = delivery;
 
+  // #3050: apply an already-made worker-dispatch opt-in choice (from the
+  // interactive wizard), then recompute whether any surface should still
+  // offer/hint it — a choice just applied here always clears the offer.
+  // The decline is a setup/onboarding preference, not worker policy, so it
+  // lives in `setup`, not in the frozen `parallelism` contract fragment
+  // (B-OG-29).
+  if (options.workerDispatchChoice === 'enable') {
+    base.parallelism = { ...base.parallelism, worker_dispatch: true };
+  } else if (options.workerDispatchChoice === 'decline') {
+    base.setup = { ...base.setup, worker_dispatch_offer: 'declined' };
+  }
+  const workerDispatchOffer = evaluateWorkerDispatchOffer(base.parallelism, base.setup, detectInstalledWorkerClis());
+
   if (primaryRemote?.provider === 'unknown' && issueProvider !== 'local') {
     warnings.push(`Remote '${primary}' is self-hosted or unknown; provider '${issueProvider}' was selected explicitly/defaulted.`);
   }
@@ -441,13 +491,15 @@ export async function buildSetupProjectPlan(options: SetupProjectOptions): Promi
     issueProvider,
     warnings,
     diff: formatPreviewDiff(existing, base),
+    workerDispatchOffer,
   };
 }
 
-async function applyInteractivePrompts(
+export async function applyInteractivePrompts(
   plan: SetupProjectPlan,
   rl: ReadlineInterface,
   signal?: AbortSignal,
+  supplied: Partial<SetupProjectOptions> = {},
 ): Promise<SetupProjectOptions> {
   const remoteNames = plan.remotes.map(r => r.name);
   const current = plan.next;
@@ -459,29 +511,60 @@ async function applyInteractivePrompts(
   }
   if (plan.remotes.length === 0) console.log('  (none)');
 
-  const primary = remoteNames.length > 0
+  // #3062 review item 10: a value already supplied by flag is never
+  // re-asked — only the fields `supplied` leaves `undefined` prompt here.
+  // `??`'s right-hand side is only evaluated when the left is nullish, so
+  // a supplied value skips the corresponding `ask*` call entirely.
+  const primary = supplied.primary ?? (remoteNames.length > 0
     ? await askChoice(rl, `Primary remote [${current.remotes?.primary}]: `, remoteNames, current.remotes?.primary, signal)
-    : await askString(rl, `Primary remote [${current.remotes?.primary}]: `, current.remotes?.primary ?? 'origin', signal);
-  const issueProvider = await askChoice(rl, `Issue provider (${ISSUE_PROVIDERS.join('/')}): `, ISSUE_PROVIDERS, plan.issueProvider, signal);
+    : await askString(rl, `Primary remote [${current.remotes?.primary}]: `, current.remotes?.primary ?? 'origin', signal));
+  const issueProvider = supplied.issueProvider
+    ?? await askChoice(rl, `Issue provider (${ISSUE_PROVIDERS.join('/')}): `, ISSUE_PROVIDERS, plan.issueProvider, signal);
   const issueTracker = issueProvider === 'local'
     ? 'local'
-    : remoteNames.length > 0
+    : supplied.issueTracker ?? (remoteNames.length > 0
       ? await askChoice(rl, `Issue tracker remote [${current.remotes?.issue_tracker}]: `, remoteNames, current.remotes?.issue_tracker, signal)
-      : await askString(rl, `Issue tracker remote [${current.remotes?.issue_tracker}]: `, current.remotes?.issue_tracker ?? primary, signal);
-  const ci = remoteNames.length > 0
+      : await askString(rl, `Issue tracker remote [${current.remotes?.issue_tracker}]: `, current.remotes?.issue_tracker ?? primary, signal));
+  const ci = supplied.ci ?? (remoteNames.length > 0
     ? await askChoice(rl, `CI remote [${current.remotes?.ci}]: `, remoteNames, current.remotes?.ci, signal)
-    : await askString(rl, `CI remote [${current.remotes?.ci}]: `, current.remotes?.ci ?? primary, signal);
-  const deliveryMode = await askChoice(rl, `Delivery mode (${DELIVERY_MODES.join('/')}): `, DELIVERY_MODES, current.delivery?.mode as DeliveryMode, signal);
-  const defaultBranch = await askString(rl, `Default branch [${current.delivery?.default_branch}]: `, current.delivery?.default_branch ?? 'main', signal);
-  const requireCiGreen = await askYesNo(rl, 'Require CI green before done? [Y/n]: ', current.delivery?.require_ci_green ?? true, signal);
-  const autoCloseIssues = await askYesNo(rl, 'Auto-close linked issues from delivery? [Y/n]: ', current.delivery?.auto_close_issues ?? true, signal);
-  const forcePushPolicy = await askChoice(rl, `Force-push policy (${FORCE_PUSH_POLICIES.join('/')}): `, FORCE_PUSH_POLICIES, current.delivery?.force_push_policy as ForcePushPolicy, signal);
-  const requireSignedCommits = await askYesNo(rl, 'Require signed delivery commits? [y/N]: ', current.delivery?.require_signed_commits ?? false, signal);
-  const providersRaw = await askString(rl, `Providers [${current.providers.join(',')}]: `, current.providers.join(','), signal);
+    : await askString(rl, `CI remote [${current.remotes?.ci}]: `, current.remotes?.ci ?? primary, signal));
+  const deliveryMode = supplied.deliveryMode
+    ?? await askChoice(rl, `Delivery mode (${DELIVERY_MODES.join('/')}): `, DELIVERY_MODES, current.delivery?.mode as DeliveryMode, signal);
+  const defaultBranch = supplied.defaultBranch
+    ?? await askString(rl, `Default branch [${current.delivery?.default_branch}]: `, current.delivery?.default_branch ?? 'main', signal);
+  const requireCiGreen = supplied.requireCiGreen
+    ?? await askYesNo(rl, 'Require CI green before done? [Y/n]: ', current.delivery?.require_ci_green ?? true, signal);
+  const autoCloseIssues = supplied.autoCloseIssues
+    ?? await askYesNo(rl, 'Auto-close linked issues from delivery? [Y/n]: ', current.delivery?.auto_close_issues ?? true, signal);
+  const forcePushPolicy = supplied.forcePushPolicy
+    ?? await askChoice(rl, `Force-push policy (${FORCE_PUSH_POLICIES.join('/')}): `, FORCE_PUSH_POLICIES, current.delivery?.force_push_policy as ForcePushPolicy, signal);
+  const requireSignedCommits = supplied.requireSignedCommits
+    ?? await askYesNo(rl, 'Require signed delivery commits? [y/N]: ', current.delivery?.require_signed_commits ?? false, signal);
+  const providers = supplied.providers
+    ?? parseProviders(await askString(rl, `Providers [${current.providers.join(',')}]: `, current.providers.join(','), signal), current.providers);
+
+  // #3050: offer direct worker dispatch, only when there is something to
+  // offer (two or more worker CLIs detected, dispatch not already on or
+  // declined), and only in a context where the answer could actually be
+  // acted on: CI and dry-run never prompt (review item 5) — an unattended
+  // CI run could otherwise stall on a prompt timeout, and a dry-run would
+  // ask a question whose answer is never written. Both cases fall back to
+  // the informational hint at the end of `execute()` instead (via
+  // `plan.workerDispatchOffer.shouldOffer` staying true on the rebuilt plan).
+  // Strict/distinguishable consent (review items 2 and 4): only an actually
+  // answered "no" is recorded as a persistent decline. An explicit
+  // `--worker-dispatch` already answers this directly (#3062) — skip the
+  // question the same way as every other supplied field.
+  let workerDispatchChoice: 'enable' | 'decline' | undefined = supplied.workerDispatchChoice;
+  if (!workerDispatchChoice && plan.workerDispatchOffer.shouldOffer && process.env.CI !== 'true' && !supplied.dryRun) {
+    console.log('');
+    const outcome = await askConsent(rl, workerDispatchOfferQuestion(plan.workerDispatchOffer.detected), undefined, signal);
+    if (outcome.kind === 'answered') workerDispatchChoice = outcome.value ? 'enable' : 'decline';
+  }
 
   return {
     projectDir: plan.projectDir,
-    providers: parseProviders(providersRaw, current.providers),
+    providers,
     primary,
     issueProvider,
     issueTracker,
@@ -492,6 +575,7 @@ async function applyInteractivePrompts(
     autoCloseIssues,
     forcePushPolicy,
     requireSignedCommits,
+    ...(workerDispatchChoice ? { workerDispatchChoice } : {}),
   };
 }
 
@@ -512,6 +596,46 @@ export const setupHandler: CommandHandler = {
   category: 'project',
   aliases: [],
 
+  async help(): Promise<HandlerResult> {
+    return {
+      exitCode: 0,
+      rawOutput: true,
+      message: `Usage: aiwg setup project [options]
+
+Options:
+  --target <dir>                  Project directory
+  --yes                           Confirm writes without prompting
+  --dry-run                       Preview the setup plan
+  --non-interactive               Disable prompts
+  --json                          Emit the plan as JSON
+  --primary <remote>              Primary repository remote
+  --issue-tracker <remote>        Internal issue tracker remote
+  --customer-issue-tracker <remote>  Customer issue tracker remote
+  --ci <remote>                   CI remote
+  --issue-provider <provider>     Internal tracker provider
+  --customer-issue-provider <provider>  Customer tracker provider
+  --delivery-mode <mode>          Delivery policy
+  --default-branch <branch>        Default branch
+  --require-ci-green <boolean>    Require passing CI
+  --auto-close-issues <boolean>   Close delivered issues
+  --issue-comment-on-cycle <boolean>  Report issue cycles
+  --force-push-policy <policy>    Force-push policy
+  --require-signed-commits <boolean>  Require signed commits
+  --committer-name <name>         Committer identity
+  --committer-email <email>       Committer email
+  --signing-format <format>       Signing format
+  --signing-key <key>             Signing key
+  --signing-enforce <commits|tags|all>  Signing enforcement
+  --tracker-actor-login <login>   Internal tracker actor
+  --tracker-actor-via <via>       Internal tracker access method
+  --customer-tracker-actor-login <login>  Customer tracker actor
+  --customer-tracker-actor-via <via>  Customer tracker access method
+  --worker-dispatch <choice>      Worker dispatch policy
+  --providers <ids>               Comma-separated provider IDs
+`,
+    };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const [subcommand] = ctx.args;
     if (subcommand && subcommand !== 'project' && !subcommand.startsWith('--')) {
@@ -523,13 +647,36 @@ export const setupHandler: CommandHandler = {
 
     const args = subcommand === 'project' ? ctx.args.slice(1) : ctx.args;
     const options = parseSetupProjectOptions({ ...ctx, args });
+
+    // #3062 review item 12: the one shared interactive decision (TTY, TERM,
+    // CI, DEBIAN_FRONTEND) — this used to check only `process.stdin.isTTY &&
+    // process.stdout.isTTY`, so a CI job with a pseudo-terminal could still
+    // reach these prompts.
+    const canPrompt = isInteractive(options.nonInteractive);
+
+    // #3062 second review, finding 6: refuse before any child process runs
+    // — `buildSetupProjectPlan()` below makes four `git` calls on its own,
+    // and this exact refusal used to happen only after building (and
+    // printing) the full plan. A write that can never be confirmed (no
+    // `--yes`, no terminal, not a dry run) is known from `options` alone.
+    if (!options.dryRun && !options.yes && !canPrompt) {
+      throw new AiwgError({
+        code: 'ERR_NON_INTERACTIVE_CONFIRMATION_REQUIRED',
+        message: 'Refusing to write project setup in a non-interactive context without --yes.',
+        hint: 'Re-run with `aiwg setup project --yes` or use `--dry-run` to preview only.',
+        exitCode: EXIT_CODES.USAGE,
+      });
+    }
+
     let plan = await buildSetupProjectPlan(options);
 
-    const canPrompt = !options.nonInteractive && process.stdin.isTTY && process.stdout.isTTY;
     if (!options.yes && canPrompt) {
       const rl = createPromptInterface();
       try {
-        const prompted = await applyInteractivePrompts(plan, rl, ctx.signal);
+        // #3062 review item 10: every field already supplied by flag is
+        // passed straight through so it is never re-asked — only genuinely
+        // missing ones prompt.
+        const prompted = await applyInteractivePrompts(plan, rl, ctx.signal, options);
         plan = await buildSetupProjectPlan({ ...options, ...prompted });
       } finally {
         rl.close();
@@ -552,6 +699,19 @@ export const setupHandler: CommandHandler = {
       });
     }
 
+    // #3050: non-interactive/--yes/CI/dry-run runs never prompt — the
+    // question above already applied a choice when it was asked (which
+    // clears `shouldOffer` on the rebuilt plan), so `shouldOffer` is only
+    // ever still true here when nothing asked. In `--json` mode the offer
+    // is structured data on the JSON object, never a separate
+    // human-readable line — a stray print after the JSON would make
+    // `setup project --json` unparseable (review item 6).
+    // #3062: an explicit `--worker-dispatch` argument clears `shouldOffer`
+    // the same way an answered prompt does, so `applied_choice` (alongside
+    // the top-level `dry_run` flag) is how `--json --dry-run` reports what
+    // the argument would have written — `previewBlocks()` deliberately
+    // excludes `parallelism`/`setup` (an unrelated, pre-existing contract),
+    // so this field carries that information instead of widening it.
     if (options.json) {
       console.log(JSON.stringify({
         project_dir: plan.projectDir,
@@ -560,21 +720,23 @@ export const setupHandler: CommandHandler = {
         issue_provider: plan.issueProvider,
         warnings: plan.warnings,
         config: previewBlocks(plan.next),
+        worker_dispatch_offer: plan.workerDispatchOffer.shouldOffer
+          ? { should_offer: true, detected: plan.workerDispatchOffer.detected,
+              hint: workerDispatchOfferHintWithArg(plan.workerDispatchOffer.detected) }
+          : { should_offer: false, ...(options.workerDispatchChoice ? { applied_choice: options.workerDispatchChoice } : {}) },
       }, null, 2));
     } else {
       printPlan(plan);
+      if (options.workerDispatchChoice === 'enable') ui.info('Next: aiwg doctor --probe-workers --qualify.');
+      if (plan.workerDispatchOffer.shouldOffer) {
+        ui.info(workerDispatchOfferHintWithArg(plan.workerDispatchOffer.detected));
+      }
     }
 
     if (options.dryRun) return { exitCode: 0 };
 
-    if (!options.yes && !canPrompt) {
-      throw new AiwgError({
-        code: 'ERR_NON_INTERACTIVE_CONFIRMATION_REQUIRED',
-        message: 'Refusing to write project setup in a non-interactive context without --yes.',
-        hint: 'Re-run with `aiwg setup project --yes` or use `--dry-run` to preview only.',
-        exitCode: EXIT_CODES.USAGE,
-      });
-    }
+    // The `!options.yes && !canPrompt` refusal above (review finding 6)
+    // already covers this exact condition before any git call ran.
 
     if (!options.yes && canPrompt) {
       const rl = createPromptInterface();

@@ -119,16 +119,18 @@ Use the template at [`.gitea/pull_request_template.md`](https://git.integrolabs.
 
 The body should be **agent-readable**: clear sections, specific paths, no marketing speak.
 
-### 9. CI green before done
+### 9. Verify locally, then CI after merge
 
-A commit isn't done until CI is green. After push, wait for the run on `origin` (Gitea). AIWG CI takes ~2 minutes.
+Pull requests do not run CI. Build and test on your workstation before opening and merging the PR (typecheck, `npm run build:cli`, and the touched vitest files plus neighbours with `--config config/vitest.config.js`), and list the commands and counts in the PR's Verification section.
+
+CI runs on `origin` (Gitea) after the merge, on the push to `main`. Work isn't done until that run is green.
 
 If it fails:
 
 1. Diagnose the failure
 2. **Fix the underlying issue** — no `|| true`, no `continue-on-error: true`, no test deletion. See [`anti-laziness`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md) and [`dev-pipeline-safety`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/dev-pipeline-safety.md) rules.
-3. Commit the fix and wait again
-4. Don't declare the work done until green
+3. Open a fix PR, verify it locally, merge it, and wait for the next `main` run
+4. Don't declare the work done until `main` is green
 
 **Never leave `main` in a red state.**
 

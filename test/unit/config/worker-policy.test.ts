@@ -17,7 +17,11 @@ import {
 } from '../../../src/models/provider-policy.js';
 import { fixtureJson } from '../../conformance/mission-v1/worker-contract-fixtures.js';
 
-const faults = vi.hoisted(() => ({ readPath: '', accessPath: '' }));
+const faults = vi.hoisted(() => ({ readPath: '', accessPath: '', home: '' }));
+vi.mock('os', async importOriginal => {
+  const actual = await importOriginal<typeof import('os')>();
+  return { ...actual, homedir: () => faults.home || actual.homedir() };
+});
 vi.mock('fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof fs>();
   return {
@@ -57,12 +61,71 @@ async function setup() {
 afterEach(async () => {
   faults.readPath = '';
   faults.accessPath = '';
+  faults.home = '';
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const root of roots.splice(0)) {
     await fs.rm(root, { recursive: true, force: true });
     expect(existsSync(root), 'fixture cleanup').toBe(false);
   }
+});
+
+describe('worker-model default home resolution (#3170)', () => {
+  async function isolatedHome() {
+    const root = await fs.mkdtemp(join(tmpdir(), 'aiwg-models-home-'));
+    roots.push(root);
+    vi.stubEnv('HOME', root);
+    // Vitest's thread-local env does not update native os.homedir().
+    faults.home = root;
+    vi.stubEnv('AIWG_HOME', undefined);
+    vi.stubEnv('AIWG_CONFIG', undefined);
+    vi.stubEnv('AIWG_ARTIFACTS_PATH', join(root, 'artifacts'));
+    const project = join(root, 'project');
+    await fs.mkdir(project);
+    return { root, project };
+  }
+
+  it('loads bundled defaults without a home install or AIWG_HOME', async () => {
+    const { root, project } = await isolatedHome();
+    const loader = new ConfigLoader(project);
+    const builtinFile = fileURLToPath(new URL('../../../agentic/code/frameworks/sdlc-complete/config/models-v2.json', import.meta.url));
+    expect(loader.getLocations()).toEqual({
+      aiwgDefault: builtinFile,
+      userConfig: join(root, '.config/aiwg/models.json'),
+      projectConfig: join(project, 'models.json'),
+    });
+    await expect(loader.load({ worker_dispatch: true })).resolves.toMatchObject({
+      defaults: { workerSelection: DEFAULT_WORKER_SELECTION },
+    });
+    expect(existsSync(join(root, '.local/share/ai-writing-guide'))).toBe(false);
+    expect(process.env.AIWG_HOME).toBeUndefined();
+  });
+
+  it('enables dispatch through the config CLI and reads and writes it without an explicit home', async () => {
+    const { project } = await isolatedHome();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    await main(['set', '--target', project, '--project', 'parallelism.clis.codex',
+      JSON.stringify({ adapter: 'providers:codex', accountScope: 'local-account', quotaScope: 'q' })]);
+    await main(['set', '--target', project, '--project', 'parallelism.worker_dispatch', 'true']);
+    const config = await readAiwgConfig(project);
+    expect(config?.parallelism.worker_dispatch).toBe(true);
+    await expect(writeAiwgConfig(project, config!)).resolves.toBeUndefined();
+  });
+
+  it('keeps explicit home above AIWG_HOME and does not silently ignore a missing override', async () => {
+    const { root, project } = await isolatedHome();
+    const envHome = join(root, 'env-install');
+    const explicitHome = join(root, 'explicit-install');
+    vi.stubEnv('AIWG_HOME', envHome);
+    const suffix = 'agentic/code/frameworks/sdlc-complete/config/models-v2.json';
+    const envLoader = new ConfigLoader(project);
+    expect(envLoader.getLocations().aiwgDefault).toBe(join(envHome, suffix));
+    await expect(envLoader.load()).rejects.toThrow(join(envHome, suffix));
+    const explicitLoader = new ConfigLoader(project, { aiwgHome: explicitHome });
+    expect(explicitLoader.getLocations().aiwgDefault).toBe(join(explicitHome, suffix));
+    await expect(explicitLoader.load()).rejects.toThrow(join(explicitHome, suffix));
+    expect(process.env.AIWG_HOME).toBe(envHome);
+  });
 });
 
 describe('T-OG-01 S1 complete candidate and restriction origins', () => {
@@ -243,6 +306,19 @@ describe('T-OG-01/15 S1 config editing, input digests and read failures', () => 
     // model policy. No failed read is translated into a default enabled policy.
     await writeAiwgConfig(fixture.root, { ...emptyConfig(), parallelism: { worker_dispatch: false } });
     expect((await readAiwgConfig(fixture.root))?.parallelism?.worker_dispatch).toBe(false);
+  });
+
+  // #3050 fix-first: the decline is a setup/onboarding preference, not
+  // worker policy — it lives in `setup`, never in `parallelism` (the
+  // frozen B-OG-29 contract fragment asserted in
+  // test/conformance/mission-v1/worker-policy.test.ts).
+  it('round-trips setup.worker_dispatch_offer (#3050) without touching parallelism at all', async () => {
+    const fixture = await setup();
+    await writeAiwgConfig(fixture.root, { ...emptyConfig(), setup: { worker_dispatch_offer: 'declined' } });
+    const cfg = await readAiwgConfig(fixture.root);
+    expect(cfg?.setup?.worker_dispatch_offer).toBe('declined');
+    expect(cfg?.parallelism?.worker_dispatch).toBeUndefined();
+    expect(validateParallelismConfig(cfg?.parallelism)).toEqual([]);
   });
 
   it.each(['userFile', 'projectFile'] as const)('S1-C10 treats only ENOENT as optional absence (%s)', async key => {

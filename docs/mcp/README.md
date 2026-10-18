@@ -17,7 +17,10 @@ The AIWG MCP Daemon is listed in the
 aiwg mcp serve
 
 # Install config for Claude Code (CLI and Claude Desktop's Code tab share this config)
-aiwg mcp install claude
+aiwg mcp install claude-code
+
+# Install config for Claude Desktop chat (restart Desktop afterward)
+aiwg mcp install claude-desktop
 
 # Install config for Cursor
 aiwg mcp install cursor
@@ -40,6 +43,10 @@ aiwg mcp info
 | `artifact-read` | Read artifacts from .aiwg/ directory |
 | `artifact-write` | Write artifacts to .aiwg/ directory |
 
+Artifact containment holds against any path the caller supplies; it does not hold against concurrent modification of the artifact tree by another local process. Leftover temporary files after a failed write are possible.
+
+Artifact stores configured by `.aiwg-location` or the artifact-root environment override are resolved and pinned at server start for the default project, and on first use for other `project_dir` selections. The default artifact project is the server launch directory; callers launched in a subdirectory should select `project_dir` explicitly. Linux uses descriptor-anchored I/O; macOS and Windows use static containment, symlink, and link-count checks. `artifact-write` refuses location pointer filenames.
+
 Opt-in toolsets add Flow, Mission, memory, knowledge-base, research,
 activity-log, index, Ralph, Mission Control, ops, and Agentic Sandbox tools:
 
@@ -48,6 +55,16 @@ aiwg mcp serve --toolsets=flows,missions
 aiwg mcp serve --toolsets=sandbox
 aiwg mcp serve --toolsets=all
 ```
+
+The explicit `workers` toolset (`--toolsets=workers`, excluded from `all`)
+exposes `worker-invoke` operations `run`, `status`, `cancel`,
+`reconcile_stopped`, and `reset_recovery_scope`. A `status` request without
+`invocation_id` lists unresolved reservations and intervention scopes, including
+their reasons and reset instructions. After restoring the qualified recovery
+probe, use `reset_recovery_scope` with the listed `scope_id`. Reset is
+idempotent, refuses scopes with active or unresolved executions, and preserves
+the cumulative task allowance. Use `reconcile_stopped` with `invocation_id`
+only after independently establishing that the worker stopped.
 
 The `sandbox` toolset exposes revisioned fleet inventory/admission/observation/
 reconciliation and governed activity coverage/timeline/export. Configure it with
@@ -75,7 +92,7 @@ These prompts are auto-integrated and available in compatible tools.
 
 ### Claude Code
 
-`aiwg mcp install claude` configures **Claude Code** — the CLI and Claude
+`aiwg mcp install claude-code` configures **Claude Code** — the CLI and Claude
 Desktop's Code tab — using project-scoped `.mcp.json`. The generated `aiwg`
 entry has no `env` block and inherits the user's environment. With `--scope
 user`, install writes `AIWG_ROOT` only when it is set in the environment.
@@ -90,7 +107,7 @@ narrow exemption from that check - `INSTALL_POLICY_EXEMPT_ENV` in
 `src/mcp/credentials.mjs` - scoped to exactly this key on the built-in
 `aiwg` server entry. It does not exempt any other env/header field, nor any
 other server name.
-`aiwg mcp inject --provider claude --scope user` (or `aiwg mcp install claude
+`aiwg mcp inject --provider claude --scope user` (or `aiwg mcp install claude-code
 --scope user`) writes the top-level `mcpServers` of private `~/.claude.json`.
 User config writes always set mode `0600`, including existing files.
 Project-scope inject refuses literal `env`/`headers` values, populated
@@ -119,18 +136,42 @@ Writes use atomic replacement; existing files keep their mode while newly
 created registry files start at `0600`. Parent-directory checks are repeated
 before the final rename, but when a parent directory is attacker-writable a
 swap between that last check and the rename can still redirect the write.
-Claude Code does not read `mcpServers` from `.claude/settings.json` or
-`.claude/settings.local.json`; entries that earlier AIWG releases wrote there
-were never loaded and can be deleted.
+### Claude Desktop and legacy migration
 
-This is distinct from the Claude Desktop **chat app** (the Cowork surface),
-which reads MCP servers from its own `claude_desktop_config.json`
-(`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS,
-`~/.config/Claude/claude_desktop_config.json` on Linux,
-`%APPDATA%\Claude\claude_desktop_config.json` on Windows). `aiwg mcp
-install` does not write that file today; see
-[roctinam/aiwg#2632](https://git.integrolabs.net/roctinam/aiwg/issues/2632)
-for that work.
+`aiwg mcp install claude-desktop` merges the `aiwg` server into Desktop's
+user config, preserving preferences and other servers. Restart Desktop afterward.
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json` (falls back to
+  `~/AppData/Roaming/Claude/claude_desktop_config.json` if APPDATA is unset)
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+
+Bare `aiwg mcp install claude` (also the default target) is deprecated and warns.
+It selects `claude-code` when `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, or
+`CLAUDE_CODE_DESKTOP_APP_VERSION` is set, or with `--scope user`; otherwise it
+selects `claude-desktop`. Use explicit targets for predictable scripts.
+`inject --provider claude` remains the Claude Code provider alias.
+`--project <dir>` or the positional project directory selects the Code project
+and the legacy migration source. `--dry-run` reports the destination without writes.
+Desktop always uses its platform user config, regardless of scope.
+
+Both explicit install targets migrate the recognizable legacy built-in `aiwg`
+entry from project `.claude/settings.local.json`: command `aiwg`, arguments
+`["mcp", "serve"]`, and optionally an env block containing only `AIWG_ROOT`.
+Other servers, custom AIWG entries, permissions, and preferences are preserved;
+the empty `mcpServers` map is removed. Destination and migration writes are
+transactional; malformed or symlinked legacy files are refused before writing.
+Run `aiwg mcp install claude-code --project <dir>` for each older project.
+
+Verification record (2026-10-17, #2625): offline review of the issue's cited
+upstream locations and
+the local provider assessment (`docs/planning/claude-desktop-provider/assessment-and-issue-plan.md`, not published on the docs site)
+agrees on `.mcp.json` / `~/.claude.json` for Code and the Desktop paths above.
+Settings files document MCP approval flags, not server definitions. AIWG therefore
+uses those documented locations. A live Claude Code loading check was not run
+(no network or model calls permitted); whether undocumented settings entries
+are honored remains unverified. Contract tests verify generated files and migration,
+not live client loading.
 
 ### Cursor
 

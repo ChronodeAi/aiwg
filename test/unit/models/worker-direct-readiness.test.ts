@@ -9,7 +9,7 @@ import {
 } from '../../../src/models/worker-direct-readiness.js';
 import { loadProviderModelCapabilities } from '../../../src/models/provider-policy.js';
 import type { ParallelismConfig } from '../../../src/config/aiwg-config.js';
-import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
+import { unqualifiedWorkerRolesFixture, workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 
 // T-OG-12 / #2894 S1: synthetic offline inputs plus fake local CLIs created
 // under os.tmpdir() with a temp HOME. No paid calls, no credentials, no real
@@ -75,10 +75,11 @@ describe('T-OG-12 direct worker onboarding/readiness (#2894)', () => {
     const install = report.findings.filter(finding => finding.kind === 'install');
     expect(install).toContainEqual(expect.objectContaining({ cli: 'codex',
       code: 'WORKER_DIRECT_READY', status: 'ok', installedVersion: '0.161.0',
-      readiness: 'ready', eligibility: null, nextAction: 'run-authenticated-smoke-run' }));
+      readiness: 'ready', eligibility: null, nextAction: 'qualify-installed-cli' }));
     for (const finding of report.findings) {
       expect(finding.message).toMatch(/unqualified/i);
       expect(finding.message).toContain('#3005');
+      expect(finding.message).toContain('aiwg doctor --probe-workers --qualify');
       expect(finding.message).not.toMatch(/is qualified|now qualified|fully qualified/i);
       expect(finding.configFile).toBe('.aiwg/aiwg.config');
       expect(finding.configKey).toContain('/parallelism/clis/codex');
@@ -94,6 +95,42 @@ describe('T-OG-12 direct worker onboarding/readiness (#2894)', () => {
     expect(report.findings).toContainEqual(expect.objectContaining({ cli: 'codex', kind: 'install',
       code: 'WORKER_DIRECT_VERSION_OUT_OF_RANGE', status: 'warn',
       installedVersion: '0.999.0', readiness: 'not-ready', nextAction: 'upgrade-or-pin-cli' }));
+  });
+
+  it.each([
+    ['codex', 'codex-cli 0.161.1', '0.161.1'],
+    ['codex', 'codex-cli 0.163.0', '0.163.0'],
+    ['codex', 'codex-cli 0.199.9+build.1', '0.199.9+build.1'],
+    ['muse', 'Muse Code 1.4.4 (1.4.4-R5419.1)', '1.4.4'],
+    ['muse', 'Muse Code 1.4.5 (1.4.5-R5500.1)', '1.4.5'],
+    ['muse', 'Muse Code 1.4.10 (1.4.10-R6427.1)', '1.4.10'],
+    ['muse', 'Muse Code 1.5.0 (1.5.0-R7000.1)', '1.5.0'],
+  ])('#3171 keeps %s installation ready after compatible updates: %s', async (cli, banner, version) => {
+    const report = await diagnoseDirectWorkerReadiness({
+      parallelism: parallelismWith({ [cli]: { ...codexCli(await fakeCli(banner)), adapter: `providers:${cli}` } }),
+      registry: registry(), probe: probeDirectWorkerVersion, probeCwd: await scratchDir('aiwg-direct-cwd-'),
+    });
+    expect(report.ready).toBe(true);
+    expect(report.findings).toContainEqual(expect.objectContaining({ cli, kind: 'install',
+      code: 'WORKER_DIRECT_READY', status: 'ok', installedVersion: version, readiness: 'ready' }));
+  });
+
+  it.each([
+    ['codex', 'codex-cli 0.160.9'],
+    ['codex', 'codex-cli 0.200.0'],
+    ['codex', 'codex-cli 0.201.0'],
+    ['codex', 'codex-cli 0.163.0-rc.1'],
+    ['muse', 'Muse Code 1.4.3 (1.4.3-R5018.1)'],
+    ['muse', 'Muse Code 2.0.0 (2.0.0-R8000.1)'],
+    ['muse', 'Muse Code 2.1.0 (2.1.0-R9000.1)'],
+  ])('#3171 preserves blocking range failures for %s: %s', async (cli, banner) => {
+    const report = await diagnoseDirectWorkerReadiness({
+      parallelism: parallelismWith({ [cli]: { ...codexCli(await fakeCli(banner)), adapter: `providers:${cli}` } }),
+      registry: registry(), probe: probeDirectWorkerVersion, probeCwd: await scratchDir('aiwg-direct-cwd-'),
+    });
+    expect(report.ready).toBe(false);
+    expect(report.findings).toContainEqual(expect.objectContaining({ cli, kind: 'install',
+      code: 'WORKER_DIRECT_VERSION_OUT_OF_RANGE', readiness: 'not-ready', nextAction: 'upgrade-or-pin-cli' }));
   });
 
   it('T-OG-12-direct-03 reports a banner that misses the version pattern, advisory while unreferenced', async () => {
@@ -320,9 +357,37 @@ describe('T-OG-12 direct worker onboarding/readiness (#2894)', () => {
     // binding-only caveat, must be what is reported, named per member.
     expect(dispatch?.eligibilityDetail).toMatch(/OG_ADAPTER_UNQUALIFIED/);
     expect(dispatch?.eligibilityDetail).toMatch(/installation evidence/i);
-    expect(dispatch?.eligibilityDetail).toContain("group 'workers' member 'primary'");
-    expect(dispatch?.eligibilityDetail).toContain("group 'workers' member 'alternate'");
+    expect(dispatch?.eligibilityDetail).toContain('workers/primary');
+    expect(dispatch?.eligibilityDetail).toContain('workers/alternate');
     expect(dispatch?.eligibilityDetail).toContain('#3005');
+    const missingEvidence = dispatch?.diagnostics?.filter(row => row.message.includes('installation evidence'));
+    expect(missingEvidence).toHaveLength(1);
+    expect(missingEvidence![0]).toMatchObject({ pointer: '/parallelism/groups/workers/members',
+      members: ['workers/alternate', 'workers/primary'], roles: ['coding'] });
+  });
+
+  it('#3173 deduplicates group qualification diagnostics across three members in text and JSON', async () => {
+    const f = unqualifiedWorkerRolesFixture();
+    const input = { parallelism: f.snapshot.config.parallelism!, registry: f.snapshot.registry,
+      resolverSnapshot: { config: f.snapshot.config, models: f.snapshot.models,
+        modelDigests: f.snapshot.modelDigests, catalog: f.snapshot.catalog, now: f.request.now } };
+    const report = await diagnoseDirectWorkerReadiness(input);
+    const dispatch = JSON.parse(JSON.stringify(report)).findings.find((row: any) => row.kind === 'dispatch');
+    expect(dispatch.eligibility).toBe('blocked');
+    expect(dispatch.diagnostics).toHaveLength(3);
+    for (const role of ['efficiency', 'coding', 'reasoning']) {
+      expect(dispatch.diagnostics.filter((row: any) => row.roles.includes(role))).toEqual([
+        expect.objectContaining({ code: 'OG_ADAPTER_UNQUALIFIED', roles: [role],
+          members: ['workers/coding', 'workers/efficiency', 'workers/reasoning'] }),
+      ]);
+    }
+    const section = await buildDirectWorkerDoctorSection({ ...input, probeWorkers: false });
+    const text = section.lines.find(line => line.name === 'Direct Worker Dispatch (codex)')!.message;
+    expect(text.match(/OG_ADAPTER_UNQUALIFIED/g)).toHaveLength(3);
+    for (const role of ['efficiency', 'coding', 'reasoning']) {
+      expect(text.split(`No qualified route covers ${role}`)).toHaveLength(2);
+    }
+    expect(await diagnoseDirectWorkerReadiness(input)).toEqual(report);
   });
 
   it('T-OG-12-direct-10c falls back to a binding-only caveat without a resolverSnapshot', async () => {
@@ -429,5 +494,35 @@ describe('direct worker doctor section (#2894)', () => {
     });
     expect(section.lines.length).toBeGreaterThan(0);
     for (const line of section.lines) expect(line.status).not.toBe('error');
+  });
+
+  it('returns one untruncated install finding per cli for machine-readable surfaces (#3066)', async () => {
+    const probeCwd = await scratchDir('aiwg-direct-cwd-');
+    const section = await buildDirectWorkerDoctorSection({
+      parallelism: parallelismWith({ codex: codexCli(await fakeCli('codex-cli 0.161.0')) }),
+      registry: registry(), probeWorkers: true,
+      probe: (executable, argv, options) => probeDirectWorkerVersion(executable, argv, { ...options, cwd: probeCwd }),
+    });
+    expect(section.workersConfigured).toBe(true);
+    expect(section.installFindings).toHaveLength(1);
+    expect(section.installFindings[0]).toMatchObject({ cli: 'codex', kind: 'install',
+      code: 'WORKER_DIRECT_READY', installedVersion: '0.161.0', readiness: 'ready' });
+    const disabled = await buildDirectWorkerDoctorSection({
+      parallelism: { ...parallelismWith({ codex: codexCli('never-run') }), worker_dispatch: false },
+      registry: registry(), probeWorkers: true,
+      probe: () => { throw new Error('no probe when dispatch is disabled'); },
+    });
+    expect(disabled.installFindings).toHaveLength(1);
+    expect(disabled.installFindings[0]).toMatchObject({ cli: 'codex', kind: 'install',
+      code: 'WORKER_DIRECT_DISABLED', installedVersion: null, readiness: 'skipped',
+      eligibility: null, eligibilityDetail: null });
+  });
+
+  it('returns no install findings when no workers are configured (#3066)', async () => {
+    const section = await buildDirectWorkerDoctorSection({
+      parallelism: { worker_dispatch: true }, registry: registry(), probeWorkers: true,
+      probe: () => { throw new Error('no probe without workers'); },
+    });
+    expect(section).toMatchObject({ lines: [], probed: false, workersConfigured: false, installFindings: [] });
   });
 });

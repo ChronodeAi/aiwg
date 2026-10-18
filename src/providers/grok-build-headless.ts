@@ -1,4 +1,5 @@
 /** Bounded Grok Build headless transport. The caller owns task authorization. */
+import { signalChild } from '../process/signal-child.mjs';
 import { spawn } from 'node:child_process';
 
 export type GrokOutputFormat = 'plain' | 'json' | 'streaming-json';
@@ -28,6 +29,10 @@ export interface GrokHeadlessResult {
 const MAX_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_TIMEOUT_MS = 2 * 60_000;
 const DEFAULT_MAX_OUTPUT = 8 * 1024 * 1024;
+// grok 1.0.50 --output-format streaming-json: ACP session updates.
+// See docs/providers/grok-build-cli-evidence.md; json is a separate result object.
+const STREAM_EVENT_TYPES = new Set(['text', 'thought', 'tool_call', 'tool_call_update',
+  'usage', 'plan', 'available_commands', 'end', 'error']);
 
 export function redactGrokOutput(value: string, env: NodeJS.ProcessEnv = process.env): string {
   let redacted = value
@@ -57,10 +62,10 @@ function isError(event: Record<string, unknown>): boolean {
 }
 
 function stopProcess(child: ReturnType<typeof spawn>): void {
-  if (child.pid && process.platform !== 'win32') {
-    try { process.kill(-child.pid, 'SIGTERM'); return; } catch { /* process already exited */ }
+  if (Number.isSafeInteger(child.pid) && child.pid! > 0 && process.platform !== 'win32') {
+    try { process.kill(-child.pid!, 'SIGTERM'); return; } catch { /* process already exited */ }
   }
-  child.kill('SIGTERM');
+  signalChild(child, 'SIGTERM');
 }
 
 export async function runGrokHeadless(options: GrokHeadlessOptions): Promise<GrokHeadlessResult> {
@@ -108,7 +113,9 @@ export async function runGrokHeadless(options: GrokHeadlessOptions): Promise<Gro
       if (format === 'json') {
         try {
           const parsed = JSON.parse(cleanStdout) as Record<string, unknown>;
-          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || isError(parsed) || parsed.stopReason !== 'end_turn') throw new Error('Grok Build returned a JSON error result');
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+            || typeof parsed.text !== 'string' || isError(parsed)
+            || parsed.stopReason !== 'end_turn') throw new Error('Grok Build returned a JSON error result');
           events.push(parsed);
         } catch (cause) {
           reject(cause instanceof Error ? cause : new Error('Invalid Grok Build JSON result'));
@@ -124,7 +131,8 @@ export async function runGrokHeadless(options: GrokHeadlessOptions): Promise<Gro
     child.on('error', error => finish(new Error(`Grok Build headless launch failed: ${error.message}`)));
     const acceptEvent = (event: Record<string, unknown>): void => {
       if (settled) return;
-      if (!event || typeof event !== 'object' || Array.isArray(event)) {
+      if (!event || typeof event !== 'object' || Array.isArray(event)
+        || typeof event.type !== 'string' || !STREAM_EVENT_TYPES.has(event.type)) {
         finish(new Error('Invalid Grok Build streaming-json event')); return;
       }
       // ACP end is always last. Failure is latched across the whole stream.

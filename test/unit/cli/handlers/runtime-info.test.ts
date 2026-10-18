@@ -8,7 +8,7 @@
  * @issue #33
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { HandlerContext, HandlerResult } from '../../../../src/cli/handlers/types.js';
 
 // Mock RuntimeDiscovery
@@ -103,6 +103,15 @@ describe('Runtime Info Command Handler', () => {
   });
 
   describe('--discover flag', () => {
+    it('passes --force through to discovery', async () => {
+      const { runtimeInfoHandler } = await import('../../../../src/cli/handlers/runtime-info.js');
+      mockContext.args = ['--discover', '--force', '--json'];
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const result = await runtimeInfoHandler.execute(mockContext);
+      expect(result.exitCode).toBe(0);
+      expect(mockDiscovery.discover).toHaveBeenCalledWith({ force: true });
+      consoleSpy.mockRestore();
+    });
     it('should perform full discovery and display results', async () => {
       const { runtimeInfoHandler } = await import('../../../../src/cli/handlers/runtime-info.js');
 
@@ -384,6 +393,79 @@ describe('Runtime Info Command Handler', () => {
     } finally {
       output.mockRestore();
     }
+  });
+
+  describe('scheduler backend detection (#2623 / #2627)', () => {
+    // Detection now goes through the shared `resolveActiveProvider` path
+    // instead of an ad-hoc CLAUDE_CODE_VERSION/ANTHROPIC_API_KEY check, so
+    // this must be hermetic against whatever Claude-Code-shaped env vars
+    // the host running this test suite happens to have set (this suite
+    // may itself be invoked from inside a live Claude Code session).
+    const PROVIDER_ENV_KEYS = [
+      'CLAUDE_CODE_VERSION',
+      'ANTHROPIC_API_KEY',
+      'CLAUDECODE',
+      'CLAUDE_CODE_ENTRYPOINT',
+      'CLAUDE_CODE_DESKTOP_APP_VERSION',
+    ];
+    const saved = new Map<string, string | undefined>();
+
+    beforeEach(() => {
+      for (const key of PROVIDER_ENV_KEYS) {
+        saved.set(key, process.env[key]);
+        delete process.env[key];
+      }
+      // Deterministic: don't let process ancestry (which may genuinely be
+      // Claude Code, since that's what's running this test) decide.
+      process.env.AIWG_DISABLE_PROCESS_PROVIDER_DETECTION = '1';
+    });
+
+    afterEach(() => {
+      for (const key of PROVIDER_ENV_KEYS) {
+        const value = saved.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      saved.clear();
+      delete process.env.AIWG_DISABLE_PROCESS_PROVIDER_DETECTION;
+    });
+
+    async function runDefaultSummary(): Promise<string> {
+      const { runtimeInfoHandler } = await import('../../../../src/cli/handlers/runtime-info.js');
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await runtimeInfoHandler.execute(mockContext);
+        return consoleSpy.mock.calls.map(([line]) => String(line)).join('\n');
+      } finally {
+        consoleSpy.mockRestore();
+      }
+    }
+
+    it('reports native-cron when current Claude Code markers are present', async () => {
+      process.env.CLAUDECODE = '1';
+      process.env.CLAUDE_CODE_ENTRYPOINT = 'cli';
+
+      const output = await runDefaultSummary();
+
+      expect(output).toContain('Backend:  native-cron (CronCreate); external trigger outside agent sessions');
+      expect(output).toContain('Backend:  native (Claude Code agent teams)');
+    });
+
+    it('does not report native-cron from ANTHROPIC_API_KEY alone (false-positive fix)', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-ant-not-actually-claude-code';
+
+      const output = await runDefaultSummary();
+
+      expect(output).toContain('Backend:  external trigger required (system cron/systemd/CI)');
+      expect(output).toContain('Backend:  aiwg mc emulation');
+    });
+
+    it('reports external trigger when neither stale nor current markers are present', async () => {
+      const output = await runDefaultSummary();
+
+      expect(output).toContain('Backend:  external trigger required (system cron/systemd/CI)');
+      expect(output).toContain('Backend:  aiwg mc emulation');
+    });
   });
 
   describe('error handling', () => {

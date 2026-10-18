@@ -58,11 +58,14 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     path.join(repoRoot, 'agentic', 'code', 'providers', 'capability-matrix.yaml'),
     path.join(repoRoot, 'agentic', 'code', 'providers', 'model-capabilities.v1.json'),
     path.join(repoRoot, 'agentic', 'code', 'providers', 'model-catalog.v1.json'),
+    path.join(repoRoot, 'dist', 'src', 'process', 'bounded-child-process.mjs'),
+    path.join(repoRoot, 'dist', 'src', 'process', 'signal-child.mjs'),
     path.join(repoRoot, 'tools', '_resolve-impl.mjs'),
     path.join(repoRoot, 'tools', 'agents', 'deploy-agents.mjs'),
     path.join(repoRoot, 'tools', 'providers', 'antigravity-transport.mjs'),
     path.join(repoRoot, 'tools', 'commands', 'deploy-prompts-codex.mjs'),
     path.join(repoRoot, 'tools', 'plugin', 'package-plugins.mjs'),
+    path.join(repoRoot, 'tools', 'plugin', 'plugin-links.mjs'),
     path.join(repoRoot, 'tools', 'skills', 'deploy-skills-codex.mjs'),
   ];
   for (const filename of required) await readFile(filename);
@@ -90,8 +93,19 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
   await mkdir(path.join(outputDir, 'schemas'), { recursive: true });
   await cp(path.join(repoRoot, 'schemas', 'mission-v1.schema.json'), path.join(outputDir, 'schemas', 'mission-v1.schema.json'));
   await cp(path.join(repoRoot, 'schemas', 'models'), path.join(outputDir, 'schemas', 'models'), { recursive: true });
-  // Include the installed loader's imports, not the Ralph runners and fixtures.
+  // Installed adapters and the worker-invoke runtime closure. The packaged
+  // import-graph regression test guards this list without shipping Ralph fixtures.
   const workerAdapterFiles = [
+    'tools/ralph-external/session-launcher.mjs',
+    'tools/ralph-external/process-monitor.mjs',
+    'tools/ralph-external/lib/session-environment.mjs',
+    'tools/ralph-external/lib/worker-isolation.mjs',
+    'tools/ralph-external/lib/systemd-client.mjs',
+    'tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs',
+    'tools/ralph-external/lib/launcher-recovery-evidence.mjs',
+    'tools/ralph-external/lib/recovery-probe.mjs',
+    'tools/ralph-external/lib/worker-overflow.mjs',
+    'tools/scripts/resource-preflight.mjs',
     'tools/ralph-external/lib/provider-adapter.mjs',
     'tools/ralph-external/lib/worker-health.mjs',
     'tools/ralph-external/lib/claude-adapter.mjs',
@@ -141,7 +155,9 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     { recursive: true },
   );
   await cp(path.join(repoRoot, 'tools', 'commands', 'deploy-prompts-codex.mjs'), path.join(outputDir, 'tools', 'commands', 'deploy-prompts-codex.mjs'));
-  await cp(path.join(repoRoot, 'tools', 'plugin', 'package-plugins.mjs'), path.join(outputDir, 'tools', 'plugin', 'package-plugins.mjs'));
+  for (const filename of ['package-plugins.mjs', 'plugin-links.mjs']) {
+    await cp(path.join(repoRoot, 'tools', 'plugin', filename), path.join(outputDir, 'tools', 'plugin', filename));
+  }
   await cp(path.join(repoRoot, 'tools', 'providers', 'antigravity-transport.mjs'), path.join(outputDir, 'tools', 'providers', 'antigravity-transport.mjs'));
   await cp(path.join(repoRoot, 'tools', 'skills', 'deploy-skills-codex.mjs'), path.join(outputDir, 'tools', 'skills', 'deploy-skills-codex.mjs'));
   await cp(path.join(repoRoot, 'bin', 'aiwg.mjs'), path.join(outputDir, 'bin', 'aiwg.mjs'));

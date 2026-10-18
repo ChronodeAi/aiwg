@@ -3,7 +3,7 @@ name: Date format compliance
 description: Dates in frontmatter should follow ISO 8601 (YYYY-MM-DD)
 severity: warn
 applies-to:
-  glob: findings/REF-*.md
+  glob: "{findings,documentation/references}/REF-*.md"
 checks:
   - type: frontmatter-format
     field: documented_date

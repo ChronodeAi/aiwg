@@ -8,8 +8,10 @@
  * @tests @test/unit/messaging/chat-handler.test.js
  */
 
+import { importImpl } from '../_resolve-impl.mjs';
 import { spawn } from 'node:child_process';
 import path from 'path';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 /**
  * @typedef {Object} ChatHandlerOptions
@@ -244,7 +246,7 @@ export class ChatHandler {
 
       const timeout = setTimeout(() => {
         try {
-          proc.kill('SIGTERM');
+          signalChild(proc, 'SIGTERM');
         } catch {
           // Process may have already exited
         }

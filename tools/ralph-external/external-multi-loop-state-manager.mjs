@@ -266,6 +266,7 @@ export class ExternalMultiLoopStateManager {
    * @returns {boolean}
    */
   processExists(pid) {
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
     try {
       process.kill(pid, 0); // Signal 0 = check existence
       return true;

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -124,6 +124,8 @@ describe('OMP native deployment', () => {
 it('public remove omp route preserves operator files and supports dry-run', async () => {
   const { removeHandler } = await import('../../../src/cli/handlers/subcommands.ts');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-omp-remove-'));
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-omp-remove-config-'));
+  vi.stubEnv('AIWG_CONFIG', configDir);
   try {
     const source = path.join(root, 'agent.md'); fs.writeFileSync(source, '---\nname: agent\ndescription: agent\n---\nWork.');
     deployAgents([source], root);
@@ -133,5 +135,5 @@ it('public remove omp route preserves operator files and supports dry-run', asyn
     expect(result.exitCode).toBe(0); expect(fs.existsSync(deployed)).toBe(true);
     result = await removeHandler.execute({ args: ['omp', '--provider', 'omp'], cwd: root });
     expect(result.exitCode).toBe(0); expect(fs.existsSync(deployed)).toBe(false); expect(fs.readFileSync(operator, 'utf8')).toBe('operator');
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  } finally { vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(configDir, { recursive: true, force: true }); }
 });

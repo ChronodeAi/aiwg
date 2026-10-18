@@ -1,4 +1,5 @@
-import { access, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp } from '../../helpers/temp-dir.js';
+import { access, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -260,6 +261,47 @@ describe('context/memory firewall', () => {
         rootDir: root,
         packageRoot: root,
         providers: ['muse'],
+        contentScan: false,
+      })).resolves.toBeTruthy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('scans Grok Build agents/skills and the AGENTS.md bridge (#2640)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-context-firewall-grok-build-'));
+    try {
+      await write(root, 'AGENTS.md', '# Grok Build bridge\n');
+      await mkdir(join(root, '.grok', 'agents'), { recursive: true });
+      await write(root, '.grok/agents/aiwg-model-coding-worker.md', '# worker\n');
+      await mkdir(join(root, '.grok', 'skills', 'aiwg-regenerate'), { recursive: true });
+      await write(root, '.grok/skills/aiwg-regenerate/SKILL.md', '# AIWG Regenerate\n');
+      const result = await scanContextMemoryFirewall({
+        rootDir: root,
+        packageRoot: root,
+        providers: ['grok-build'],
+        contentScan: false,
+      });
+      expect(() => result).not.toThrow();
+      const paths = result.records.map((record) => record.path);
+      expect(paths).toEqual(expect.arrayContaining([
+        'AGENTS.md',
+        '.grok/agents/aiwg-model-coding-worker.md',
+        '.grok/skills/aiwg-regenerate/SKILL.md',
+      ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not throw Unknown provider for grok-build (#2640)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-context-firewall-grok-build-unknown-'));
+    try {
+      await write(root, 'AGENTS.md', '# bridge\n');
+      await expect(scanContextMemoryFirewall({
+        rootDir: root,
+        packageRoot: root,
+        providers: ['grok-build'],
         contentScan: false,
       })).resolves.toBeTruthy();
     } finally {

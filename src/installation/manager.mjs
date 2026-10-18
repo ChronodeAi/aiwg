@@ -1,16 +1,18 @@
-import { execFileSync } from 'node:child_process';
+import { boundedExecFileSync } from '../process/bounded-child-process.mjs';
 import {
   accessSync,
   constants,
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { resolveUserConfigDir } from '../config/user-config-dir.mjs';
 import { executeManagerCommand } from './manager-command.mjs';
 
@@ -50,7 +52,22 @@ function resolveExecutable(name, options = {}) {
   if (existsSync(besideNode)) return canonicalPath(besideNode);
   try {
     const finder = process.platform === 'win32' ? 'where.exe' : 'which';
-    const found = execFileSync(finder, [name], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    // Go/no-go review, blocker 1B: this runs unconditionally on first
+    // launch (creating the installation identity) for *every* command,
+    // including a credential-handling one — before `bin/aiwg.mjs` even
+    // knows which command that is. `which`/`where.exe` only need `PATH`
+    // (and, on Windows, `PATHEXT`/`SystemRoot` for its own resolution), so
+    // this never inherits the whole parent environment the way an absent
+    // `env` option otherwise would.
+    const lookupEnv = {
+      PATH: env.PATH ?? '',
+      ...(process.platform === 'win32' ? { PATHEXT: env.PATHEXT ?? '', SystemRoot: env.SystemRoot ?? '' } : {}),
+    };
+    const found = boundedExecFileSync(finder, [name], 'quick', {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: lookupEnv,
+    })
       .split(/\r?\n/, 1)[0]?.trim();
     return found ? canonicalPath(found) : null;
   } catch {
@@ -254,13 +271,86 @@ export function inspectInstallation(options = {}) {
   };
 }
 
-export function formatInstallationDiagnostic(status) {
+/** Inspect executable copies without launching them or changing installation identity. */
+export function inspectInstallationCopies(options = {}) {
+  const env = options.env ?? process.env;
+  const home = options.homeDir ?? os.homedir();
+  const identity = options.identity ?? loadInstallationIdentity({ ...options, createIfMissing: false });
+  const copies = new Map();
+  const names = process.platform === 'win32' ? ['aiwg', 'aiwg.cmd', 'aiwg.exe'] : ['aiwg'];
+
+  function addDirectory(directory, onPath) {
+    for (const name of names) {
+      const executable = path.resolve(directory, name);
+      if (!executableIsUsable(executable)) continue;
+      let root = path.dirname(canonicalPath(executable));
+      while (!['aiwg', '@aiwg/cli'].includes(packageName(root))) {
+        const parent = path.dirname(root);
+        if (parent === root) { root = null; break; }
+        root = parent;
+      }
+      // npm's Windows command shims are files rather than symlinks.
+      if (!root && process.platform === 'win32') {
+        const candidate = path.join(directory, 'node_modules', 'aiwg');
+        if (packageName(candidate) === 'aiwg') root = canonicalPath(candidate);
+      }
+      if (!root) continue;
+      let copy = copies.get(root);
+      if (!copy) {
+        const status = identity ? inspectInstallation({ actualRoot: root, identity, createIfMissing: false }) : null;
+        copy = {
+          root,
+          executables: [],
+          onPath: false,
+          registered: Boolean(status && status.frameworkRoot === status.canonicalRoot),
+        };
+        copies.set(root, copy);
+      }
+      if (!copy.executables.includes(executable)) copy.executables.push(executable);
+      copy.onPath ||= onPath;
+    }
+  }
+
+  const pathDirectories = (env.PATH ?? '').split(path.delimiter);
+  for (const directory of new Set(pathDirectories)) addDirectory(directory, true);
+
+  const nvmRoots = new Set([path.join(home, '.nvm'), env.NVM_DIR].filter(Boolean));
+  // A running/registered nvm copy or NVM_BIN also identifies custom nvm homes.
+  for (const location of [options.actualRoot, identity?.root, env.NVM_BIN, ...pathDirectories]) {
+    if (!location) continue;
+    let directory = path.resolve(location);
+    while (path.dirname(directory) !== directory) {
+      if (path.basename(directory) === 'node' && path.basename(path.dirname(directory)) === 'versions') {
+        nvmRoots.add(path.dirname(path.dirname(directory)));
+        break;
+      }
+      directory = path.dirname(directory);
+    }
+  }
+  for (const nvmRoot of nvmRoots) {
+    const versions = path.join(nvmRoot, 'versions', 'node');
+    try {
+      for (const version of readdirSync(versions, { withFileTypes: true })) {
+        if (version.isDirectory()) addDirectory(path.join(versions, version.name, 'bin'), false);
+      }
+    } catch { /* nvm is optional and may no longer be installed. */ }
+  }
+  return [...copies.values()];
+}
+
+export function formatInstallationDiagnostic(status, options = {}) {
   if (status.state === 'aligned') return 'Canonical installation is aligned.';
   return [
-    'AIWG installation identity drift detected; update and refresh are blocked.',
+    options.readOnlyCommand
+      ? `installation identity drift detected; \`${options.readOnlyCommand}\` is read-only and continues, but update, refresh, and deployment stay blocked until the identity is repaired.`
+      : 'AIWG installation identity drift detected; update and refresh are blocked.',
+    `Running installation: ${status.actualMethod} at ${status.actualRoot}`,
+    `Registered installation: ${status.identity?.method ?? 'unrecorded'} at ${status.identity?.root ?? '(none)'}`,
     ...status.drift.map((item) => `- ${item}`),
+    'Diagnose PATH and nvm copies: aiwg doctor',
     'Inspect: aiwg installation show',
-    'Adopt this installation: aiwg installation adopt',
+    `Register this running copy deliberately: aiwg installation adopt --method ${status.actualMethod} --yes`,
+    'To keep the registered install, put its executable first on PATH; remove unwanted npm copies using npm from their Node prefix (npm uninstall -g aiwg).',
     'Switch deliberately: aiwg installation switch --root <path> --method <npm|web|source> [--manager <absolute-path>]',
   ].join('\n');
 }

@@ -27,14 +27,23 @@ aiwg corpus vision-extract --slug tufte-1983-visual-display --provider codex
 # Rasterize a PDF to page PNGs first (poppler pdftoppm), then transcribe
 aiwg corpus vision-extract --slug my-book --rasterize sources/pdfs/my-book.pdf --dpi 200 --provider codex
 
-# Provider-neutral: any vision CLI via a command template
+# Provider-neutral: any vision CLI via a wrapper script (see below)
+chmod +x ./vision.sh
 aiwg corpus vision-extract --slug my-book \
   --provider command \
-  --command 'claude -p "$(cat {prompt_file})" --image {image} > {out}'
+  --command './vision.sh {image} {prompt_file} {out}'
 
 # Resume (skips pages already marked complete); --force re-does them
 aiwg corpus vision-extract --slug my-book --start 20 --end 40
 aiwg corpus vision-extract --slug my-book --force
+```
+
+Save this wrapper as `vision.sh`; it receives the image, prompt file, and output
+paths as separate arguments:
+
+```sh
+#!/bin/sh
+claude -p "$(cat "$2")" --image "$1" > "$3"
 ```
 
 Outputs to `.aiwg/research/sources/text/<slug>-vision/`: per-page
@@ -48,6 +57,23 @@ Outputs to `.aiwg/research/sources/text/<slug>-vision/`: per-page
 | `command` | a shell template (`--command` or `AIWG_VISION_COMMAND`) with `{image}` / `{prompt_file}` / `{out}` placeholders — wire any vision CLI (Claude, a custom script). The command writes the transcription to `{out}` (or stdout). |
 
 Both require a vision-capable model to be reachable; `needs-infrastructure`.
+
+Command templates must use unquoted, unescaped placeholders: `{image}` → `"$1"`,
+`{prompt_file}` → `"$2"`, `{out}` → `"$3"`. Paths are passed as separate shell
+arguments; `AIWG_VISION_IMAGE`, `AIWG_VISION_PROMPT_FILE`, and `AIWG_VISION_OUT`
+are also exported. For example: `vision-cli --image {image} --prompt-file {prompt_file} > {out}`.
+Templates may expand only `$1`, `$2`, `$3`, `$AIWG_VISION_IMAGE`,
+`$AIWG_VISION_PROMPT_FILE`, and `$AIWG_VISION_OUT`, also in braced form
+(`${1}`, `${AIWG_VISION_OUT}`, etc.). All other `$` parameter/variable expansions are rejected,
+including shell names (`$SHELL`), `$IFS`, special parameters, arithmetic, and braced
+operators such as `${1:-fallback}`. A `$` inside single quotes is literal text and allowed.
+Keep the provided references quoted when using them as data arguments.
+Command substitution (`$(`), backticks, `eval`, nested shell invocations with `-c`
+(including redirections and `env … sh -c`), here-documents and here-strings (`<<`),
+`#` outside single quotes, and backslash-newline line continuations (anywhere, regardless of quoting) are rejected. Put complex logic in a wrapper script
+that receives the paths as data arguments. Templates are trusted executable code
+and must not re-parse path values as shell source. Validation is defense in depth;
+keep path arguments quoted in the wrapper, as in the example above.
 
 ## Contract preserved from the source script
 

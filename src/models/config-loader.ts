@@ -7,9 +7,11 @@
  */
 
 import { readFile } from 'fs/promises';
-import { resolve } from 'path';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
+import { findPackageRoot } from '../cli/find-package-root.js';
 import { workerConfigDigest, validateWorkerGroupReferences, type ParallelismConfig, type WorkerActivation } from '../config/aiwg-config.js';
 import { DEFAULT_WORKER_SELECTION, mergeWorkerSelection, WorkerSelectionPolicySchema, validateUserProjectModelConfig } from './provider-policy.js';
 import type {
@@ -51,7 +53,9 @@ export class ConfigLoader {
   private readonly locations: ConfigLocations;
 
   constructor(projectPath?: string, options?: ConfigLoaderOptions) {
-    const aiwgHome = options?.aiwgHome || process.env.AIWG_HOME || resolve(homedir(), '.local/share/ai-writing-guide');
+    const aiwgHome = options?.aiwgHome || process.env.AIWG_HOME
+      || findPackageRoot(dirname(fileURLToPath(import.meta.url)));
+    if (!aiwgHome) throw new Error('Failed to load AIWG default config: could not locate the running AIWG package root');
     const userConfigDir = process.env.AIWG_CONFIG || resolve(homedir(), '.config/aiwg');
 
     this.locations = {

@@ -1,5 +1,6 @@
 import { constants } from 'fs';
-import { mkdir, open, readFile, readdir, rename, unlink, writeFile } from 'fs/promises';
+import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from 'fs/promises';
+import { createHash } from 'node:crypto';
 import { basename, dirname, join, relative, resolve, sep } from 'path';
 import { hostname } from 'os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -375,14 +376,30 @@ export class LocalIssueProviderCore implements LocalIssueProvider {
     return idx >= 0 ? events.slice(idx + 1) : events;
   }
 
-  async rebuildIssueIndex(): Promise<LocalIssueIndex> {
+  async rebuildIssueIndex(options: { force?: boolean } = {}): Promise<LocalIssueIndex> {
     await this.ensureLayout();
     return this.lockManager.withIndexLock('rebuild issue index', async () => {
       const itemDir = this.path('items');
-      const entries = await readdir(itemDir, { withFileTypes: true }).catch(() => []);
+      const entries = (await readdir(itemDir, { withFileTypes: true }))
+        .filter(entry => entry.isFile() && entry.name.endsWith('.md'))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const inputs = await Promise.all(entries.map(async entry => {
+        const metadata = await stat(join(itemDir, entry.name));
+        return [entry.name, metadata.mtimeMs, metadata.ctimeMs, metadata.size];
+      }));
+      const inputFingerprint = createHash('sha256').update(JSON.stringify([1, inputs])).digest('hex');
+      if (!options.force) {
+        try {
+          const cached = JSON.parse(await readFile(this.path('index/issues.index.json'), 'utf-8')) as LocalIssueIndex;
+          if (cached?.provider === 'local' && Array.isArray(cached.issues) && cached.inputFingerprint === inputFingerprint) {
+            return cached;
+          }
+        } catch (error: unknown) {
+          if (!(error instanceof SyntaxError) && !(isNodeError(error) && error.code === 'ENOENT')) throw error;
+        }
+      }
       const issues: LocalIssueIndexEntry[] = [];
       for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
         const record = parseIssueMarkdown(await readFile(join(itemDir, entry.name), 'utf-8'));
         issues.push({
           id: record.fields.id,
@@ -401,6 +418,7 @@ export class LocalIssueProviderCore implements LocalIssueProvider {
       const index: LocalIssueIndex = {
         provider: 'local',
         rebuilt_at: new Date().toISOString(),
+        inputFingerprint,
         issues,
       };
       await atomicWrite(this.path('index/issues.index.json'), `${JSON.stringify(index, null, 2)}\n`);

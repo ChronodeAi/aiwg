@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { acquireDirectoryLock } from '../../src/artifacts/prebuilt-build-lock.js';
 
@@ -463,13 +464,20 @@ describe('decision-engine clean install from the packed tarball', () => {
     expect(evidence.authorization.deniedAttempts).toHaveLength(11);
   }, 180_000);
 
-  it('resolves the runtime through AIWG_ROOT when the script is outside any install', async () => {
+  it('resolves a detached script through AIWG_ROOT and rejects uninstalled search locations', async () => {
     const detached = path.join(tempRoot, 'detached');
     await cp(path.join(consumer, SKILL), detached, { recursive: true });
     const script = path.join(detached, 'scripts', 'decision-evaluate.mjs');
     const request = path.join(consumer, EXAMPLES, 'dispatcher-request-llm.json');
 
-    const missing = dispatch(script, request, tempRoot, { AIWG_DECISION_ENABLED: '1' });
+    // Virtual search roots keep the negative case independent of ancestors of TMPDIR.
+    const locator = pathToFileURL(path.join(detached, 'scripts', 'runtime-root.mjs')).href;
+    const missing = run(process.execPath, ['--input-type=module', '-e', `
+      const { resolveDecisionRuntime } = await import(${JSON.stringify(locator)});
+      try { resolveDecisionRuntime(new URL('file:///aiwg-uninstalled-fixture/script.mjs'),
+        { env: {}, cwd: '/aiwg-uninstalled-fixture' }); }
+      catch (error) { process.stderr.write(error.message); process.exitCode = 2; }
+    `], { cwd: tempRoot, env: isolatedEnv() });
     expect(missing.status).toBe(2);
     expect(missing.stderr).toContain('Cannot locate the aiwg decision runtime');
 

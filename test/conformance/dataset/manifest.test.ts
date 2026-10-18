@@ -52,7 +52,11 @@ describe('dataset conformance manifest', () => {
 
   it('triggers on both runner modules and pins the released Core source', async () => {
     const workflow = await readFile('.gitea/workflows/dataset-intelligence-conformance.yml', 'utf8')
-    expect(workflow.match(/tools\/qualification\/dataset-local-cells\.ts/gu)).toHaveLength(2)
+    // CI runs after merge only, so the push trigger is the single trigger to check.
+    const push = workflow.slice(workflow.indexOf('  push:'), workflow.indexOf('  workflow_dispatch:'))
+    expect(push).toContain("- 'tools/qualification/dataset-conformance.ts'")
+    expect(push).toContain("- 'tools/qualification/dataset-local-cells.ts'")
+    expect(workflow).not.toMatch(/^  pull_request:/mu)
     expect(workflow).toContain('FORTEMI_COMMIT: 2a4e80d4a827ad4db53ece6bf28e91cece678f23')
   })
 

@@ -1,6 +1,7 @@
+import * as sessionReaders from '../../../src/sessions/readers.js';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   IncrementalSessionImporter,
   OPENCODE_ADAPTER_VERSION,
@@ -28,6 +29,25 @@ function selected(name: string, locatorClass = 'opencode-export-json'): Selected
 }
 
 describe('OpenCode session adapter', () => {
+
+  it('inspects and streams JSONL without collecting the source', async () => {
+    const buffered = vi.spyOn(sessionReaders, 'readBoundedJsonLines')
+      .mockRejectedValue(new Error('JSONL import must stream'));
+    try {
+      const adapter = new OpenCodeSessionAdapter();
+      const selection = selected('events.jsonl', 'opencode-sse-jsonl');
+      await expect(adapter.inspect(selection)).resolves.toMatchObject({ operationalState: 'available' });
+      let records = 0;
+      for await (const record of adapter.stream(selection)) {
+        expect(record.nativeSessionId).toBeTruthy();
+        records += 1;
+      }
+      expect(records).toBeGreaterThan(0);
+      expect(buffered).not.toHaveBeenCalled();
+    } finally {
+      buffered.mockRestore();
+    }
+  });
   const adapter = new OpenCodeSessionAdapter();
 
   it('reports explicit export and negotiated API/SSE capabilities', () => {

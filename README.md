@@ -88,7 +88,7 @@ Agents and stewards setting up AIWG end-to-end should use the
 [![npm downloads](https://img.shields.io/npm/dm/aiwg?color=CB3837&logo=npm&style=flat-square)](https://www.npmjs.com/package/aiwg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/jmagly/aiwg?style=flat-square)](https://github.com/jmagly/aiwg/stargazers)
-[![Node Version](https://img.shields.io/badge/node-%E2%89%A520.0.0-brightgreen?style=flat-square&logo=node.js)](https://nodejs.org)
+[![Node Version](https://img.shields.io/badge/node-%E2%89%A524-brightgreen?style=flat-square&logo=node.js)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?style=flat-square&logo=typescript)](https://www.typescriptlang.org)
 [![18 Providers](https://img.shields.io/badge/Providers-18-purple?style=flat-square)](#platform-support)
 [![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/docs-aiwg-io)
@@ -670,7 +670,7 @@ reference](docs/cli/reference.md).
 
 ## Quick Start
 
-> **Prerequisites:** Node.js >=20.0.0 and an AI platform (Claude Code, GitHub Copilot, Cursor, Warp Terminal, or others). New installs should prefer Node 24. See [Prerequisites Guide](docs/getting-started/prerequisites.md) for details.
+> **Prerequisites:** Node.js >=24 and an AI platform (Claude Code, GitHub Copilot, Cursor, Warp Terminal, or others). See [Prerequisites Guide](docs/getting-started/prerequisites.md) for details.
 
 > **Release verification:** Inspect the provenance and signature material for the release you install. The
 [verification guide](docs/releases/verifying.md) describes the available artifacts and commands.

@@ -43,9 +43,13 @@
 import { opendir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import { matchSessionWorkspace, WORKSPACE_MATCH_KINDS } from '../workspace-matching.js';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   SessionErrorCodeSchema,
+  SessionRejectionDetailSchema,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
   type ImportCursor,
@@ -57,12 +61,14 @@ import {
 } from '../contracts.js';
 import {
   readBoundedJson,
-  readBoundedJsonLines,
+  streamBoundedJsonLines,
   type BoundedJsonRecord,
   type ReaderLimits,
 } from '../readers.js';
 import {
   MUSE_WORKSPACE_SCAN_LIMITS,
+  MUSE_WORKSPACE_TAIL_BYTES,
+  MuseWorkspaceLimitError,
   museWorkspaceScanLines,
   parseMuseScanJson,
 } from './muse-workspace-scan.js';
@@ -238,6 +244,7 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
           throw new SessionContractError(
             'RESOURCE_LIMIT_EXCEEDED',
             'Muse native session discovery exceeded the authorized file limit',
+            { limit: 'maxFiles', configured: this.maxFiles, observed: count },
           );
         }
         yield { provider: 'muse', locator, locatorClass: MUSE_NATIVE_LOCATOR_CLASS };
@@ -272,7 +279,7 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
       const native = await this.readNative(source);
       const start = parseEventCursor(cursor?.value);
       let outputIndex = 0;
-      for (const record of native.records) {
+      for await (const record of this.readNativeRecords(source)) {
         const position = outputIndex;
         outputIndex += 1;
         if (position < start) continue;
@@ -328,7 +335,7 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
       ));
     } catch (error) {
       if (error instanceof SessionContractError && error.code === 'SCHEMA_DRIFT') {
-        throw new SessionContractError('MALFORMED_SOURCE', 'muse export document is not valid JSON');
+        throw new SessionContractError('MALFORMED_SOURCE', 'muse export document is not valid JSON', error.detail);
       }
       throw error;
     }
@@ -337,6 +344,7 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
       throw new SessionContractError(
         'MALFORMED_SOURCE',
         'input is not a declared muse export trajectory document',
+        schemaRejectionDetail(parsed.error),
       );
     }
     assertSupportedSchemaMajor(`${parsed.data.export_schema_version}.0.0`, MUSE_EXPORT_SCHEMA_MAJOR);
@@ -418,85 +426,112 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
   }
 
   private async readNative(source: SelectedSource): Promise<{
-    records: MuseNativeRecord[];
     complete: boolean;
     context: MuseRecordContext;
   }> {
-    this.assertSupportedLocator(source);
-    let input;
+    const records = this.readNativeRecords(source);
+    let result = await records.next();
+    while (!result.done) result = await records.next();
+    return result.value;
+  }
+
+  private async *readNativeRecords(source: SelectedSource): AsyncGenerator<MuseNativeRecord, {
+    complete: boolean;
+    context: MuseRecordContext;
+  }> {
     try {
-      input = await readBoundedJsonLines(
+      this.assertSupportedLocator(source);
+      const input = await streamBoundedJsonLines(
         { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots },
         { consistency: 'complete', limits: this.limits },
       );
+      const diagnostics: MuseDiagnostics = {};
+      let records = 0;
+      let fallbackSessionId = nativeSessionIdFromLocator(source.locator) ?? source.sourceId;
+      let complete = false;
+      for await (const line of input) {
+        const value = line.value;
+        if (isOmissionMarker(value)) {
+          diagnostics.omitted_records = (diagnostics.omitted_records ?? 0) + 1;
+          if (asObject(value).retained_marker === 'omitted_live_only') {
+            diagnostics.omitted_live_only = (diagnostics.omitted_live_only ?? 0) + 1;
+          }
+          continue;
+        }
+        const retained = MuseRetainedFrameSchema.safeParse(value);
+        if (retained.success) {
+          diagnostics.retained_frames = (diagnostics.retained_frames ?? 0) + 1;
+          for (const child of retained.data.children) {
+            let decoded: unknown;
+            try {
+              decoded = JSON.parse(child.record_json);
+            } catch {
+              throw new SessionContractError(
+                'MALFORMED_SOURCE',
+                'Muse retained frame child record is malformed JSON',
+                schemaIssueDetail('children.record_json', 'invalid_json'),
+              );
+            }
+            const envelope = MuseEnvelopeSchema.safeParse(decoded);
+            if (!envelope.success) {
+              throw new SessionContractError(
+                'MALFORMED_SOURCE',
+                'Muse retained frame child record is malformed',
+                schemaRejectionDetail(envelope.error),
+              );
+            }
+            const event: MuseRecordEvent = { kind: 'record', envelope: envelope.data };
+            fallbackSessionId = streamSessionIdOf(event.envelope) ?? fallbackSessionId;
+            complete ||= event.envelope.payload_type === 'session.end';
+            diagnostics.retained_frame_children = (diagnostics.retained_frame_children ?? 0) + 1;
+            records += 1;
+            yield {
+              event,
+              line,
+              retainedFrame: retained.data.retained_frame,
+              retainedChildIndex: child.child_index,
+            };
+          }
+          continue;
+        }
+        const envelope = MuseEnvelopeSchema.safeParse(value);
+        if (!envelope.success) {
+          throw new SessionContractError(
+            'MALFORMED_SOURCE',
+            'Muse native session log line is not a supported record shape',
+            schemaRejectionDetail('retained_frame' in asObject(value) ? retained.error : envelope.error),
+          );
+        }
+        const event: MuseRecordEvent = { kind: 'record', envelope: envelope.data };
+        fallbackSessionId = streamSessionIdOf(event.envelope) ?? fallbackSessionId;
+        complete ||= event.envelope.payload_type === 'session.end';
+        records += 1;
+        yield { event, line };
+      }
+      if (records === 0) {
+        throw new SessionContractError(
+          'MALFORMED_SOURCE',
+          'Muse native session log contains no record envelopes',
+          schemaIssueDetail('<root>'),
+        );
+      }
+      return {
+        complete,
+        context: {
+          locatorClass: MUSE_NATIVE_LOCATOR_CLASS,
+          sourceLabel: 'muse native session log',
+          bytesRead: input.bytesRead,
+          fallbackSessionId,
+          spawns: new Map(),
+          diagnostics,
+        },
+      };
     } catch (error) {
       if (error instanceof SessionContractError && error.code === 'SCHEMA_DRIFT') {
-        throw new SessionContractError('MALFORMED_SOURCE', 'Muse native session log contains malformed JSONL');
+        throw new SessionContractError('MALFORMED_SOURCE', 'Muse native session log contains malformed JSONL', error.detail);
       }
       throw error;
     }
-    const diagnostics: MuseDiagnostics = {};
-    const records: MuseNativeRecord[] = [];
-    let fallbackSessionId = nativeSessionIdFromLocator(source.locator) ?? source.sourceId;
-    let complete = false;
-    for (const line of input.records) {
-      const value = line.value;
-      if (isOmissionMarker(value)) {
-        diagnostics.omitted_records = (diagnostics.omitted_records ?? 0) + 1;
-        if (asObject(value).retained_marker === 'omitted_live_only') {
-          diagnostics.omitted_live_only = (diagnostics.omitted_live_only ?? 0) + 1;
-        }
-        continue;
-      }
-      const retained = MuseRetainedFrameSchema.safeParse(value);
-      if (retained.success) {
-        diagnostics.retained_frames = (diagnostics.retained_frames ?? 0) + 1;
-        for (const child of retained.data.children) {
-          let decoded: unknown;
-          try {
-            decoded = JSON.parse(child.record_json);
-          } catch {
-            throw new SessionContractError('MALFORMED_SOURCE', 'Muse retained frame child record is malformed JSON');
-          }
-          const event = recordEventFromEnvelope(decoded);
-          if (!event) {
-            throw new SessionContractError('MALFORMED_SOURCE', 'Muse retained frame child record is malformed');
-          }
-          fallbackSessionId = streamSessionIdOf(event.envelope) ?? fallbackSessionId;
-          complete ||= event.envelope.payload_type === 'session.end';
-          diagnostics.retained_frame_children = (diagnostics.retained_frame_children ?? 0) + 1;
-          records.push({
-            event,
-            line,
-            retainedFrame: retained.data.retained_frame,
-            retainedChildIndex: child.child_index,
-          });
-        }
-        continue;
-      }
-      const event = recordEventFromEnvelope(value);
-      if (!event) {
-        throw new SessionContractError('MALFORMED_SOURCE', 'Muse native session log line is not a supported record shape');
-      }
-      fallbackSessionId = streamSessionIdOf(event.envelope) ?? fallbackSessionId;
-      complete ||= event.envelope.payload_type === 'session.end';
-      records.push({ event, line });
-    }
-    if (records.length === 0) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Muse native session log contains no record envelopes');
-    }
-    return {
-      records,
-      complete,
-      context: {
-        locatorClass: MUSE_NATIVE_LOCATOR_CLASS,
-        sourceLabel: 'muse native session log',
-        bytesRead: input.bytesRead,
-        fallbackSessionId,
-        spawns: new Map(),
-        diagnostics,
-      },
-    };
   }
 
   private assertSupportedLocator(source: SelectedSource): void {
@@ -592,10 +627,18 @@ async function* museNativeSessionLogs(root: string): AsyncGenerator<string> {
 
 export const MuseWorkspaceInspectionSchema = z.object({
   outcome: z.enum(['matched', 'mismatch', 'inconclusive']),
+  attribution: z.enum(['matched', 'mismatch', 'unattributed']),
+  matchKind: z.enum(WORKSPACE_MATCH_KINDS).optional(),
   reasonCode: z.string().nullable(),
   recordsInspected: z.number().int().nonnegative(),
   bytesInspected: z.number().int().nonnegative(),
   completeInspection: z.boolean(),
+  limit: z.object({
+    name: z.enum(['maxRecords', 'maxRecordBytes', 'maxTotalBytes', 'maxNestingDepth']),
+    value: z.number().int().positive(),
+  }).optional(),
+  fallback: z.literal('bounded-tail').optional(),
+  detail: SessionRejectionDetailSchema.optional(),
 });
 
 export type MuseWorkspaceInspection = z.infer<typeof MuseWorkspaceInspectionSchema>;
@@ -610,39 +653,78 @@ export async function inspectMuseNativeWorkspace(
   const progress = { recordsInspected: 0, bytesInspected: 0 };
   let sawWorkspaceEvidence = false;
   let retainedChildren = 0;
+  let limit: MuseWorkspaceInspection['limit'];
+  let fallback: MuseWorkspaceInspection['fallback'];
+  const authorization = { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots };
   const receipt = (
     outcome: MuseWorkspaceInspection['outcome'],
     reasonCode: string | null,
     completeInspection = false,
-  ): MuseWorkspaceInspection => ({ outcome, reasonCode, ...progress, completeInspection });
+  ): MuseWorkspaceInspection => ({
+    outcome, attribution: outcome === 'inconclusive' ? 'unattributed' : outcome,
+    reasonCode, ...progress, completeInspection,
+    ...(limit ? { limit } : {}), ...(fallback ? { fallback } : {}),
+  });
+  const envelopesFromLine = (value: unknown) => nativeEnvelopesFromLine(value, limits, (count) => {
+    retainedChildren += count;
+    if (retainedChildren > limits.maxRecords) {
+      throw new MuseWorkspaceLimitError('maxRecords', limits.maxRecords, retainedChildren);
+    }
+  });
   try {
-    if (Object.values(limits).some((limit) => !Number.isSafeInteger(limit) || limit <= 0)) {
+    if ([limits.maxRecords, limits.maxRecordBytes, limits.maxTotalBytes, limits.maxNestingDepth]
+      .some((limit) => !Number.isSafeInteger(limit) || limit <= 0)) {
       throw new SessionContractError('INVALID_ARGUMENT', 'Muse inspection limits must be positive safe integers');
     }
     for await (const value of museWorkspaceScanLines(
-      { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots },
+      authorization,
       limits,
       progress,
     )) {
-      const envelopes = nativeEnvelopesFromLine(value, limits, (count) => {
-        retainedChildren += count;
-        if (retainedChildren > limits.maxRecords) {
-          throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'Muse retained child inspection limit exceeded');
-        }
-      });
+      const envelopes = envelopesFromLine(value);
       for (const envelope of envelopes) {
         const candidate = workspaceEvidenceOf(envelope);
         if (!candidate) continue;
         sawWorkspaceEvidence = true;
-        if (workspacePathEquals(candidate, workspacePath)) return receipt('matched', null);
+        const matchKind = await matchSessionWorkspace(candidate, workspacePath);
+        if (matchKind) return { ...receipt('matched', null), matchKind };
       }
     }
     return sawWorkspaceEvidence
       ? receipt('mismatch', 'MUSE_WORKSPACE_MISMATCH', true)
       : receipt('inconclusive', 'MUSE_WORKSPACE_EVIDENCE_ABSENT', true);
   } catch (error) {
-    return receipt('inconclusive', error instanceof SessionContractError
-      ? error.code : 'MUSE_SOURCE_UNREADABLE');
+    if (error instanceof MuseWorkspaceLimitError) {
+      limit = { name: error.limitName, value: error.limitValue };
+      fallback = 'bounded-tail';
+      const tailProgress = { recordsInspected: 0, bytesInspected: 0 };
+      const tailBytes = Math.min(MUSE_WORKSPACE_TAIL_BYTES, limits.maxTotalBytes);
+      retainedChildren = 0;
+      let matchKind: MuseWorkspaceInspection['matchKind'] | null;
+      try {
+        for await (const value of museWorkspaceScanLines(
+          authorization, { ...limits, maxTotalBytes: tailBytes }, tailProgress, tailBytes,
+        )) {
+          for (const envelope of envelopesFromLine(value)) {
+            const candidate = workspaceEvidenceOf(envelope);
+            if (!candidate) continue;
+            matchKind = await matchSessionWorkspace(candidate, workspacePath);
+            if (matchKind) break;
+          }
+          if (matchKind) break;
+        }
+      } catch {
+        // Preserve the original limit receipt when the fallback cannot attribute.
+      }
+      progress.recordsInspected += tailProgress.recordsInspected;
+      progress.bytesInspected += tailProgress.bytesInspected;
+      if (matchKind) return { ...receipt('matched', null), matchKind };
+    }
+    return {
+      ...receipt('inconclusive', error instanceof SessionContractError
+        ? error.code : 'MUSE_SOURCE_UNREADABLE'),
+      ...(error instanceof SessionContractError && error.detail ? { detail: error.detail } : {}),
+    };
   }
 }
 
@@ -653,8 +735,11 @@ export async function museNativeSourceMatchesWorkspace(
   const result = await inspectMuseNativeWorkspace(source, workspacePath);
   if (result.outcome === 'inconclusive') {
     const code = SessionErrorCodeSchema.safeParse(result.reasonCode);
-    throw new SessionContractError(code.success ? code.data : 'SCHEMA_DRIFT',
-      `Muse workspace inspection inconclusive: ${result.reasonCode}`);
+    throw new SessionContractError(
+      code.success ? code.data : 'SCHEMA_DRIFT',
+      `Muse workspace inspection inconclusive: ${result.reasonCode}`,
+      result.detail,
+    );
   }
   return result.outcome === 'matched';
 }
@@ -668,7 +753,11 @@ function nativeEnvelopesFromLine(
   const retained = MuseRetainedFrameSchema.safeParse(value);
   if (!retained.success) {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Muse inspection encountered a non-object native record');
+      throw new SessionContractError(
+        'MALFORMED_SOURCE',
+        'Muse inspection encountered a non-object native record',
+        schemaIssueDetail('<root>'),
+      );
     }
     // Native logs carry record kinds the envelope schema does not model (for
     // example runtime.session mode changes without payload.event.kind). They
@@ -680,7 +769,9 @@ function nativeEnvelopesFromLine(
   const envelopes: MuseEnvelope[] = [];
   for (const child of retained.data.children) {
     if (Buffer.byteLength(child.record_json) > limits.maxRecordBytes) {
-      throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'Muse retained child inspection byte limit exceeded');
+      throw new MuseWorkspaceLimitError(
+        'maxRecordBytes', limits.maxRecordBytes, Buffer.byteLength(child.record_json),
+      );
     }
     const childEvent = recordEventFromEnvelope(parseMuseScanJson(child.record_json, limits.maxNestingDepth));
     if (childEvent) envelopes.push(childEvent.envelope);
@@ -706,10 +797,6 @@ function workspaceEvidenceOf(envelope: MuseEnvelope): string | null {
     if (typeof candidate === 'string' && candidate.length > 0) return candidate;
   }
   return null;
-}
-
-function workspacePathEquals(candidate: string, workspacePath: string): boolean {
-  return resolve(candidate) === workspacePath;
 }
 
 function nativeSessionIdFromLocator(locator: string): string | null {
@@ -879,6 +966,6 @@ function compactObject(value: Record<string, unknown>): Record<string, unknown> 
 
 function parseEventCursor(value?: string): number {
   if (value === undefined || value === '') return 0;
-  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'muse event cursor is invalid');
+  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'muse event cursor is invalid', schemaIssueDetail('cursor'));
   return Number(value);
 }

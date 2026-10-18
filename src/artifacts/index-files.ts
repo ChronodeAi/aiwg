@@ -19,6 +19,7 @@ import {
   DEFAULT_PROJECT_AIWG_DIR,
   resolveProjectAiwgDir,
 } from '../config/project-artifacts.js';
+import { dropGitignored } from '../config/gitignore.js';
 import { workspaceLinkedFiles } from '../smiths/context-pipeline/workspace-context.js';
 import { discoverProjectLocalBundles } from '../extensions/project-local-discovery.js';
 
@@ -47,8 +48,9 @@ export function indexPathFor(cwd: string, fullPath: string, graph?: GraphType): 
 export function findArtifactFiles(
   dir: string,
   extensions: readonly string[] = DEFAULT_INDEX_EXTENSIONS,
+  acceptPath: (file: string) => boolean = () => true,
 ): string[] {
-  return walkArtifactFiles(dir, extensions, new Set());
+  return walkArtifactFiles(dir, extensions, new Set(), acceptPath);
 }
 
 /** Recursively find indexable files, excluding hidden directories such as .index. */
@@ -56,13 +58,14 @@ function walkArtifactFiles(
   dir: string,
   extensions: readonly string[],
   seenRealDirs: Set<string>,
-  boundary?: string,
+  acceptPath: (file: string) => boolean,
 ): string[] {
   const results: string[] = [];
-  if (!fs.existsSync(dir)) return results;
+  if (!fs.existsSync(dir) || !acceptPath(dir)) return results;
 
   let realDir: string;
   try {
+    if (fs.lstatSync(dir).isSymbolicLink()) return results;
     realDir = fs.realpathSync(dir);
   } catch {
     return results;
@@ -75,14 +78,14 @@ function walkArtifactFiles(
     const fullPath = path.join(dir, entry.name);
     let stat: fs.Stats;
     try {
-      stat = fs.statSync(fullPath);
-      if (boundary && !pathContains(boundary, fs.realpathSync(fullPath))) continue;
+      stat = fs.lstatSync(fullPath);
+      if (stat.isSymbolicLink() || !acceptPath(fullPath)) continue;
     } catch {
       continue;
     }
     if (stat.isDirectory()) {
       if (entry.name.startsWith('.')) continue;
-      results.push(...walkArtifactFiles(fullPath, extensions, seenRealDirs, boundary));
+      results.push(...walkArtifactFiles(fullPath, extensions, seenRealDirs, acceptPath));
     } else if (stat.isFile() && extensions.some(extension => entry.name.endsWith(extension))) {
       results.push(fullPath);
     }
@@ -90,31 +93,68 @@ function walkArtifactFiles(
   return results;
 }
 
+/** Runtime and acquisition scratch beneath either the local or relocated artifact root. */
+export const INDEX_SCRATCH_DIRS = [
+  'working', 'sessions', 'scratch', 'tmp', 'temp', 'cache', '.index', '.cache', '.storage-cache',
+] as const;
+
+export interface ArtifactDiscoveryOptions {
+  scope?: string;
+  includeIgnored?: boolean;
+}
+
 /** Return the exact current source-file set used by a standard graph build. */
-export async function collectGraphIndexFiles(cwd: string, graph?: GraphType): Promise<string[]> {
+export async function collectGraphIndexFiles(
+  cwd: string,
+  graph?: GraphType,
+  options: ArtifactDiscoveryOptions = {},
+): Promise<string[]> {
   const config = graph ? GRAPH_CONFIGS[graph] : undefined;
   if (graph && !config) {
     throw new Error(`Unknown graph: ${graph}`);
   }
-  const scanDirs = config
-    ? config.scanDirs.map(directory => resolveGraphScanDir(cwd, directory))
-    : [resolveProjectAiwgDir(cwd)];
-  const extensions = config?.extensions ?? [...DEFAULT_INDEX_EXTENSIONS];
+  const artifactRoot = resolveProjectAiwgDir(cwd);
+  const excludedDirs = [path.join(cwd, DEFAULT_PROJECT_AIWG_DIR), artifactRoot]
+    .flatMap(root => INDEX_SCRATCH_DIRS.map(name => path.resolve(root, name)));
+  const acceptPath = (file: string): boolean => {
+    if (excludedDirs.some(dir => pathContains(dir, file))) return false;
+    // Explicit scopes and workspace links can start below a symlink. Check
+    // their ancestors too, stopping at the authorized root (which may be external).
+    const root = pathContains(artifactRoot, file) ? artifactRoot : cwd;
+    let current = file;
+    while (pathContains(root, current)) {
+      try {
+        if (fs.lstatSync(current).isSymbolicLink()) return false;
+      } catch {
+        return false;
+      }
+      if (current === root) break;
+      current = path.dirname(current);
+    }
+    return true;
+  };
+  const scanDirs = options.scope
+    ? [path.resolve(cwd, options.scope)]
+    : config
+      ? config.scanDirs.map(directory => resolveGraphScanDir(cwd, directory))
+      : [artifactRoot];
+  const extensions = options.scope ? DEFAULT_INDEX_EXTENSIONS : config?.extensions ?? DEFAULT_INDEX_EXTENSIONS;
   const files = new Set<string>();
+  const ignoreRoots = new Set([cwd, ...scanDirs.filter(dir => !pathContains(cwd, dir))]);
 
   for (const scanDir of scanDirs) {
-    for (const file of findArtifactFiles(scanDir, extensions)) files.add(file);
+    for (const file of findArtifactFiles(scanDir, extensions, acceptPath)) files.add(file);
   }
 
-  if (!graph || graph === 'project') {
+  if (!options.scope && (!graph || graph === 'project')) {
     // Additional search roots authorize bundle payloads, not the surrounding
     // external corpus. Reuse deployment's validated source resolution, including
     // plugin payloads, and prevent payload symlinks from escaping that boundary.
     const { bundles } = await discoverProjectLocalBundles(cwd);
     for (const bundle of bundles) {
       if (scanDirs.some(scanDir => pathContains(scanDir, bundle.artifactPath))) continue;
-      const boundary = fs.realpathSync(bundle.artifactPath);
-      for (const file of walkArtifactFiles(bundle.artifactPath, extensions, new Set(), boundary)) {
+      if (!pathContains(cwd, bundle.artifactPath)) ignoreRoots.add(bundle.artifactPath);
+      for (const file of findArtifactFiles(bundle.artifactPath, extensions, acceptPath)) {
         files.add(file);
       }
     }
@@ -125,9 +165,25 @@ export async function collectGraphIndexFiles(cwd: string, graph?: GraphType): Pr
       ...await workspaceLinkedFiles(cwd),
     ];
     for (const contextFile of contextFiles) {
-      if (extensions.some(extension => contextFile.endsWith(extension))) files.add(contextFile);
+      if (acceptPath(contextFile) && extensions.some(extension => contextFile.endsWith(extension))) files.add(contextFile);
     }
   }
 
-  return [...files];
+  let sources = [...files];
+  if (!options.includeIgnored) {
+    // Many projects ignore the whole artifact root (`.aiwg/`). Honoring that
+    // would empty the index, so ignore rules apply only beneath a scan root
+    // that is not itself ignored; runtime directories are excluded regardless.
+    const exemptRoots = options.scope ? [] : scanDirs.filter(dir =>
+      fs.existsSync(dir) && dropGitignored(path.dirname(dir), [dir]).length === 0);
+    const isExempt = (file: string): boolean => exemptRoots.some(dir => pathContains(dir, file));
+    // Git rejects paths outside its worktree. Filter authorized external roots
+    // separately so they cannot disable ignore filtering for local sources.
+    for (const root of ignoreRoots) {
+      const candidates = sources.filter(file => pathContains(root, file) && !isExempt(file));
+      const kept = new Set(dropGitignored(root, candidates));
+      sources = sources.filter(file => !pathContains(root, file) || isExempt(file) || kept.has(file));
+    }
+  }
+  return sources;
 }

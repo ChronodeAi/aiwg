@@ -320,7 +320,7 @@ describe('T-OG-15 Grok Build direct command contract', () => {
   });
 
   it.each([
-    ['bundled unqualified profile', { qualify: false }, /Exact model or child\/fallback control is unqualified/],
+    ['bundled unqualified profile', { qualify: false }, /Exact model or fallback control is unqualified|Child-agent control is unqualified/],
     ['unsupported CLI version', { cliVersion: '1.0.41' }, /Worker CLI version is outside qualified profile/],
   ])('GB04 %s produces no launch command', async (_name, options, reason) => {
     const { plan } = await grokPlan(options as any);

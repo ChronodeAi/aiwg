@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
@@ -12,7 +14,6 @@ import {
 } from '../contracts.js';
 import {
   readBoundedJson,
-  readBoundedJsonLines,
   streamBoundedJsonLines,
   type BoundedJsonRecord,
   type ReaderLimits,
@@ -116,6 +117,12 @@ export class OpenCodeSessionAdapter implements SessionSourceAdapter {
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
+    if (source.locatorClass === 'opencode-sse-jsonl') {
+      const records = this.stream(source);
+      let result = await records.next();
+      while (!result.done) result = await records.next();
+      if (result.value) return result.value;
+    }
     const parsed = await this.readSource(source);
     return {
       sourceSchemaVersion: parsed.schemaVersion,
@@ -124,7 +131,7 @@ export class OpenCodeSessionAdapter implements SessionSourceAdapter {
     };
   }
 
-  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
+  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncGenerator<ProviderRecord, SourceProbe | undefined> {
     if (source.locatorClass === 'opencode-sse-jsonl') {
       const input = await streamBoundedJsonLines({
         selectedPath: source.locator,
@@ -140,12 +147,12 @@ export class OpenCodeSessionAdapter implements SessionSourceAdapter {
       for await (const line of input) {
         const parsed = EventSchema.safeParse(line.value);
         if (!parsed.success) {
-          throw new SessionContractError('MALFORMED_SOURCE', 'OpenCode SSE event is malformed');
+          throw new SessionContractError('MALFORMED_SOURCE', 'OpenCode SSE event is malformed', schemaRejectionDetail(parsed.error));
         }
         const event = parsed.data;
         const currentSchema = event.schemaVersion ?? OPENCODE_EXPORT_SCHEMA_VERSION;
         if (schemaVersion && schemaVersion !== currentSchema) {
-          throw new SessionContractError('SCHEMA_DRIFT', 'mixed OpenCode event schemas');
+          throw new SessionContractError('SCHEMA_DRIFT', 'mixed OpenCode event schemas', schemaIssueDetail('schemaVersion'));
         }
         schemaVersion = currentSchema;
         assertSupportedSchemaMajor(schemaVersion);
@@ -172,6 +179,7 @@ export class OpenCodeSessionAdapter implements SessionSourceAdapter {
               throw new SessionContractError(
                 'MALFORMED_SOURCE',
                 'OpenCode message event precedes its session identity',
+                schemaIssueDetail('properties.info.sessionID'),
               );
             }
             const common = sessionExtensions({
@@ -194,6 +202,7 @@ export class OpenCodeSessionAdapter implements SessionSourceAdapter {
               throw new SessionContractError(
                 'MALFORMED_SOURCE',
                 'OpenCode part event precedes its message or session identity',
+                schemaIssueDetail(!message ? 'properties.part.messageID' : 'properties.part.sessionID'),
               );
             }
             const common = sessionExtensions({
@@ -213,6 +222,7 @@ export class OpenCodeSessionAdapter implements SessionSourceAdapter {
           throw new SessionContractError(
             'RESOURCE_LIMIT_EXCEEDED',
             'OpenCode SSE join state exceeds the bounded streaming limit',
+            { limit: 'maxJoinStates', configured: maxJoinStates, observed: sessions.size + messages.size },
           );
         }
         for (const record of emitted) {
@@ -220,13 +230,18 @@ export class OpenCodeSessionAdapter implements SessionSourceAdapter {
         }
       }
       if (!sawSession) {
-        throw new SessionContractError('MALFORMED_SOURCE', 'OpenCode SSE stream lacks a session identity');
+        throw new SessionContractError('MALFORMED_SOURCE', 'OpenCode SSE stream lacks a session identity', schemaIssueDetail('properties.info.id'));
       }
-      return;
+      return {
+        sourceSchemaVersion: schemaVersion ?? OPENCODE_EXPORT_SCHEMA_VERSION,
+        consistency: 'provisional',
+        operationalState: 'available',
+      };
     }
     const parsed = await this.readSource(source);
     const start = parseCursor(cursor?.value);
     for (const record of parsed.records.slice(start)) yield record;
+    return undefined;
   }
 
   private async readSource(source: SelectedSource): Promise<{
@@ -246,16 +261,6 @@ export class OpenCodeSessionAdapter implements SessionSourceAdapter {
         allowedRoots: source.authorizedScope.allowedRoots,
       }, this.limits);
       return normalizeExport(value, source.locatorClass);
-    }
-    if (source.locatorClass === 'opencode-sse-jsonl') {
-      const result = await readBoundedJsonLines({
-        selectedPath: source.locator,
-        allowedRoots: source.authorizedScope.allowedRoots,
-      }, { consistency: 'provisional', limits: this.limits });
-      if (result.records.length === 0) {
-        throw new SessionContractError('MALFORMED_SOURCE', 'OpenCode SSE source is empty');
-      }
-      return normalizeEvents(result.records, source.locatorClass);
     }
     const kind = source.locatorClass === 'opencode-local-api'
       ? 'api'
@@ -285,7 +290,11 @@ function normalizeExport(
   provisional = false,
 ): { schemaVersion: string; consistency: 'provisional' | 'complete'; records: ProviderRecord[] } {
   const parsed = ExportSchema.safeParse(input);
-  if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'OpenCode export is malformed');
+  if (!parsed.success) throw new SessionContractError(
+    'MALFORMED_SOURCE',
+    'OpenCode export is malformed',
+    schemaRejectionDetail(parsed.error),
+  );
   const value = parsed.data;
   const schema = value.schemaVersion ?? OPENCODE_EXPORT_SCHEMA_VERSION;
   assertSupportedSchemaMajor(schema);
@@ -318,11 +327,19 @@ function normalizeEvents(
 ): { schemaVersion: string; consistency: 'provisional'; records: ProviderRecord[] } {
   const parsed = input.map(({ value, ...line }) => {
     const result = EventSchema.safeParse(value);
-    if (!result.success) throw new SessionContractError('MALFORMED_SOURCE', 'OpenCode SSE event is malformed');
+    if (!result.success) throw new SessionContractError(
+      'MALFORMED_SOURCE',
+      'OpenCode SSE event is malformed',
+      schemaRejectionDetail(result.error),
+    );
     return { value: result.data, ...line };
   });
   const versions = new Set(parsed.map((item) => item.value.schemaVersion ?? OPENCODE_EXPORT_SCHEMA_VERSION));
-  if (versions.size !== 1) throw new SessionContractError('SCHEMA_DRIFT', 'mixed OpenCode event schemas');
+  if (versions.size !== 1) throw new SessionContractError(
+    'SCHEMA_DRIFT',
+    'mixed OpenCode event schemas',
+    schemaIssueDetail('schemaVersion'),
+  );
   assertSupportedSchemaMajor([...versions][0]);
   const sessions = new Map<string, z.infer<typeof SessionInfoSchema>>();
   const messages = new Map<string, z.infer<typeof MessageInfoSchema>>();
@@ -341,7 +358,7 @@ function normalizeEvents(
     }
   }
   if (sessions.size === 0) {
-    throw new SessionContractError('MALFORMED_SOURCE', 'OpenCode SSE stream lacks a session identity');
+    throw new SessionContractError('MALFORMED_SOURCE', 'OpenCode SSE stream lacks a session identity', schemaIssueDetail('properties.info.id'));
   }
   const records: ProviderRecord[] = [];
   for (const session of sessions.values()) {
@@ -518,7 +535,7 @@ function unknownFields(value: Record<string, unknown>, keys: ReadonlySet<string>
 
 function parseCursor(value?: string): number {
   if (!value) return 0;
-  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid OpenCode cursor');
+  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid OpenCode cursor', schemaIssueDetail('cursor'));
   return Number(value);
 }
 

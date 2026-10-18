@@ -17,9 +17,8 @@ import { load as loadYaml } from 'js-yaml';
 import { validateDecisionDocument } from '../decision/validate.js';
 import { parseDecisionJson, parseDecisionYaml } from '../decision/entry.js';
 import { validateGateDocument } from '../gates/schema.js';
-import type { MetadataEntry, ArtifactIndex, TagIndex, DependencyGraph, GraphType, TypedEdge, MetadataSupplementConfig } from './types.js';
+import type { MetadataEntry, ArtifactIndex, IndexStats, TagIndex, DependencyGraph, GraphType, TypedEdge, MetadataSupplementConfig } from './types.js';
 import {
-  DEFAULT_INDEX_EXTENSIONS,
   INDEX_EXTRACTOR_VERSION,
   INDEX_VERSION,
   INDEX_DIR,
@@ -30,6 +29,7 @@ import {
   resolveGraphScanDir,
   loadUserGraphConfigs,
   loadGlobalGraphConfigs,
+  resolveGraphBackendType,
 } from './types.js';
 import { parseCitationSidecar, citationResultToEdges, buildRefToPathMap } from './citation-parser.js';
 import { writeIndexFile, resolveIndexDir, loadGraphIndexFile } from './index-reader.js';
@@ -44,8 +44,10 @@ import { collectGraphIndexFiles, findArtifactFiles, indexPathFor } from './index
 
 export interface BuildOptions {
   force?: boolean;
+  quiet?: boolean;
   verbose?: boolean;
   scope?: string;
+  includeIgnored?: boolean; // Include gitignored sources; runtime directories remain excluded
   outputDir?: string; // Override index output directory (default: <cwd>/.aiwg/.index/)
   graph?: GraphType;  // Target a specific graph (default: project for backward compat)
   explicit?: boolean; // true when graph was requested via --graph flag; false for auto-selected defaultBuild graphs
@@ -906,8 +908,9 @@ export async function buildIndex(
   cwd: string,
   options: BuildOptions = {}
 ): Promise<void> {
-  const { force = false, verbose = false, scope, outputDir, graph, explicit = true } = options;
+  const { force = false, verbose = false, scope, includeIgnored = false, outputDir, graph, explicit = true } = options;
   const startTime = Date.now();
+  const log = options.quiet ? (..._args: unknown[]) => {} : console.log;
 
   // Ensure user-defined graphs are loaded
   loadUserGraphConfigs(cwd);
@@ -916,19 +919,15 @@ export async function buildIndex(
   // Determine scan directories based on graph type
   const graphConfig = graph ? GRAPH_CONFIGS[graph] : undefined;
   let scanDirs: string[];
-  let fileExtensions: string[];
 
   if (scope) {
     // Explicit scope overrides graph config
     scanDirs = [path.join(cwd, scope)];
-    fileExtensions = [...DEFAULT_INDEX_EXTENSIONS];
   } else if (graphConfig) {
     scanDirs = graphConfig.scanDirs.map(d => resolveGraphScanDir(cwd, d));
-    fileExtensions = graphConfig.extensions;
   } else {
     // Default: scan .aiwg/ (backward compatible)
     scanDirs = [resolveProjectAiwgDir(cwd)];
-    fileExtensions = [...DEFAULT_INDEX_EXTENSIONS];
   }
 
   // Verify at least one scan directory exists
@@ -948,15 +947,15 @@ export async function buildIndex(
     // required directories" sends the operator looking in the wrong place (#2530).
     if (graph === 'framework') {
       const installRoot = resolveInstallRootHint();
-      console.log('The framework graph indexes the AIWG corpus and can only be built at the');
-      console.log('install root, not in a consumer project. Build it there, then sync here:');
-      console.log('');
-      console.log(`  cd ${installRoot} && aiwg index build --graph framework --force`);
-      console.log(`  cd ${cwd} && aiwg index sync --backend fortemi-core --graph framework`);
-      console.log('');
-      console.log("As an immediate workaround, discovery also works with '--backend local'.");
+      log('The framework graph indexes the AIWG corpus and can only be built at the');
+      log('install root, not in a consumer project. Build it there, then sync here:');
+      log('');
+      log(`  cd ${installRoot} && aiwg index build --graph framework --force`);
+      log(`  cd ${cwd} && aiwg index sync --backend fortemi-core --graph framework`);
+      log('');
+      log("As an immediate workaround, discovery also works with '--backend local'.");
     } else {
-      console.log('Run this command from a project with the required directories.');
+      log('Run this command from a project with the required directories.');
     }
     process.exit(1);
   }
@@ -986,19 +985,24 @@ export async function buildIndex(
       verbose,
     });
     const buildTimeMs = Date.now() - startTime;
-    console.log(`Source graph built in ${buildTimeMs}ms`);
-    console.log(`  Output: ${INDEX_DIR}/source/`);
+    log(`Source graph built in ${buildTimeMs}ms`);
+    log(`  Output: ${INDEX_DIR}/source/`);
     return;
   }
 
   // Load existing index for incremental updates
+  const backendType = resolveGraphBackendType(graph);
+  const buildConfigHash = createHash('sha256')
+    .update(JSON.stringify({ graphConfig, backendType }))
+    .digest('hex');
   const existingIndex = force
     ? null
     : outputDir
       ? loadIndexFromDir<ArtifactIndex>(indexOutputDir, 'metadata.json')
       : loadGraphIndexFile<ArtifactIndex>(effectiveOutputCwd, 'metadata.json', graph);
   const canReuseExisting = existingIndex?.version === INDEX_VERSION
-    && existingIndex.extractorVersion === INDEX_EXTRACTOR_VERSION;
+    && existingIndex.extractorVersion === INDEX_EXTRACTOR_VERSION
+    && existingIndex.buildConfigHash === buildConfigHash;
   const existingEntries = canReuseExisting ? existingIndex.entries : {};
 
   // Load checksum manifest for fast stat-based change detection (#794).
@@ -1016,9 +1020,7 @@ export async function buildIndex(
   };
 
   // Collect files from all scan directories
-  const files = scope
-    ? existingDirs.flatMap(dir => findArtifactFiles(dir, fileExtensions))
-    : await collectGraphIndexFiles(cwd, graph);
+  const files = await collectGraphIndexFiles(cwd, graph, { scope, includeIgnored });
   const entries: Record<string, MetadataEntry> = {};
   const tagIndex: TagIndex = {};
   const depGraph: DependencyGraph = {};
@@ -1028,6 +1030,22 @@ export async function buildIndex(
   let unchangedCount = 0;
 
   const useFilenameMetadata = graphConfig?.nodeStrategy === 'filename-metadata';
+
+  const reportBuild = (buildTimeMs: number, total: number): void => {
+    log(`Artifact index built in ${buildTimeMs}ms`);
+    log(`  Indexed ${newCount} new, updated ${updatedCount}, unchanged ${unchangedCount}`);
+    log(`  Total: ${total} artifacts`);
+    if (!force && manifestStats.checked > 0) {
+      const fastPath = manifestStats.statSkipped;
+      const slowPath = manifestStats.checked - manifestStats.statSkipped;
+      log(`  Change detection: ${manifestStats.checked} checked, ${fastPath} skipped via stat, ${slowPath} content-read, ${manifestStats.reindexed} re-indexed`);
+      if (manifestStats.pruned > 0) {
+        log(`  Pruned ${manifestStats.pruned} stale manifest entries (files no longer on disk)`);
+      }
+    }
+    const displayDir = graph ? indexOutputDir : `${INDEX_DIR}/`;
+    log(`  Output: ${displayDir}`);
+  };
 
   for (const fullPath of files) {
     const relativePath = indexPathFor(cwd, fullPath, graph);
@@ -1048,7 +1066,7 @@ export async function buildIndex(
       if (!force && existingEntries[relativePath]?.checksum === checksum) {
         entries[relativePath] = existingEntries[relativePath];
         unchangedCount++;
-        if (verbose) console.log(`  unchanged: ${relativePath}`);
+        if (verbose) log(`  unchanged: ${relativePath}`);
         continue;
       }
 
@@ -1065,7 +1083,7 @@ export async function buildIndex(
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           manifestStats.pruned++;
-          if (verbose) console.log(`  skipped missing: ${relativePath}`);
+          if (verbose) log(`  skipped missing: ${relativePath}`);
           continue;
         }
         throw err;
@@ -1079,7 +1097,7 @@ export async function buildIndex(
         nextManifestEntries[relativePath] = manifestEntry!;
         unchangedCount++;
         manifestStats.statSkipped++;
-        if (verbose) console.log(`  unchanged (stat): ${relativePath}`);
+        if (verbose) log(`  unchanged (stat): ${relativePath}`);
         continue;
       }
 
@@ -1094,7 +1112,7 @@ export async function buildIndex(
         nextManifestEntries[relativePath] = makeEntry(checksum, stat);
         unchangedCount++;
         manifestStats.checksumSkipped++;
-        if (verbose) console.log(`  unchanged (checksum): ${relativePath}`);
+        if (verbose) log(`  unchanged (checksum): ${relativePath}`);
         continue;
       }
 
@@ -1173,10 +1191,47 @@ export async function buildIndex(
 
     if (existingEntries[relativePath]) {
       updatedCount++;
-      if (verbose) console.log(`  updated: ${relativePath}`);
+      if (verbose) log(`  updated: ${relativePath}`);
     } else {
       newCount++;
-      if (verbose) console.log(`  new: ${relativePath}`);
+      if (verbose) log(`  new: ${relativePath}`);
+    }
+  }
+
+  // Reuse derived indexes only when their complete input set is unchanged.
+  // Supplements can live outside the scanned files, so they must still be read.
+  // Configured edge extractors must run to discard stale cached edges even
+  // when source checksums match.
+  const total = Object.keys(entries).length;
+  if (canReuseExisting && !useFilenameMetadata && !graphConfig?.metadataSupplements?.length
+    && !graphConfig?.edgeExtraction
+    && newCount === 0 && updatedCount === 0
+    && total === Object.keys(existingEntries).length
+    && manifest.generated && total === Object.keys(manifest.entries).length
+    && manifestStats.pruned === 0) {
+    const stats = loadIndexFromDir<IndexStats>(indexOutputDir, 'stats.json');
+    const requiredFiles = ['tags.json', 'dependencies.json'];
+    if (backendType === 'sqlite') requiredFiles.push('graph.db');
+    if (stats?.version === INDEX_VERSION && stats.extractorVersion === INDEX_EXTRACTOR_VERSION
+      && stats.totalArtifacts === total
+      && requiredFiles.every(filename => fs.existsSync(path.join(indexOutputDir, filename)))) {
+      // A timestamp-only source change needs a manifest refresh, but does not
+      // invalidate metadata, tags, dependencies, or the persistent backend.
+      if (manifestStats.checksumSkipped > 0) {
+        writeManifest(indexOutputDir, {
+          version: 1,
+          generated: new Date().toISOString(),
+          entries: nextManifestEntries,
+        });
+      }
+      const buildTimeMs = Date.now() - startTime;
+      writeIndexFile(effectiveOutputCwd, 'stats.json', {
+        ...stats,
+        builtAt: new Date().toISOString(),
+        buildTimeMs,
+      }, indexOutputDir);
+      reportBuild(buildTimeMs, total);
+      return;
     }
   }
 
@@ -1302,7 +1357,7 @@ export async function buildIndex(
     };
 
     if (verbose && citationEdgeCount > 0) {
-      console.log(`  citation edges: ${citationEdgeCount}`);
+      log(`  citation edges: ${citationEdgeCount}`);
     }
   }
 
@@ -1317,6 +1372,7 @@ export async function buildIndex(
   const index: ArtifactIndex = {
     version: INDEX_VERSION,
     extractorVersion: INDEX_EXTRACTOR_VERSION,
+    buildConfigHash,
     builtAt: new Date().toISOString(),
     buildTimeMs,
     entries,
@@ -1329,8 +1385,6 @@ export async function buildIndex(
   // Materialize the configured backend and always retain dependencies.json as
   // the stable compatibility/export contract.
   const { createGraphBackend } = await import('./graph-backend.js');
-  const { resolveGraphBackendType } = await import('./types.js');
-  const backendType = resolveGraphBackendType(graph);
   const persistentPath = backendType === 'sqlite' ? path.join(indexOutputDir, 'graph.db') : undefined;
   let selectedBackend;
   try {
@@ -1407,20 +1461,5 @@ export async function buildIndex(
   }, indexOutputDir);
 
   // Report
-  const total = Object.keys(entries).length;
-  console.log(`Artifact index built in ${buildTimeMs}ms`);
-  console.log(`  Indexed ${newCount} new, updated ${updatedCount}, unchanged ${unchangedCount}`);
-  console.log(`  Total: ${total} artifacts`);
-  // Report manifest-driven change detection stats (only meaningful when !force
-  // and we actually went through the content-read path for at least one file)
-  if (!force && manifestStats.checked > 0) {
-    const fastPath = manifestStats.statSkipped;
-    const slowPath = manifestStats.checked - manifestStats.statSkipped;
-    console.log(`  Change detection: ${manifestStats.checked} checked, ${fastPath} skipped via stat, ${slowPath} content-read, ${manifestStats.reindexed} re-indexed`);
-    if (manifestStats.pruned > 0) {
-      console.log(`  Pruned ${manifestStats.pruned} stale manifest entries (files no longer on disk)`);
-    }
-  }
-  const displayDir = graph ? indexOutputDir : `${INDEX_DIR}/`;
-  console.log(`  Output: ${displayDir}`);
+  reportBuild(buildTimeMs, total);
 }

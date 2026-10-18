@@ -234,6 +234,16 @@ export async function main(args: string[]): Promise<void> {
   }
 
   switch (subcommand) {
+    case 'refresh': {
+      if (subcommandArgs.includes('--help') || subcommandArgs.includes('-h')) {
+        printIndexUsage();
+        break;
+      }
+      const { runIndexRefresh } = await import('./index-refresh.js');
+      await runIndexRefresh(subcommandArgs);
+      break;
+    }
+
     case 'build':
       await handleBuild(subcommandArgs);
       break;
@@ -330,16 +340,17 @@ export async function main(args: string[]): Promise<void> {
 
     default:
       console.error(`Error: Unknown index subcommand '${subcommand}'`);
-      console.log('Available: build, query, discover, show, export, sync, migrate-legacy, deps, stats, status, list, neighbors, set, embed, similar, dedup-report, eval-discovery, watch');
+      console.log('Available: build, refresh, query, discover, show, export, sync, migrate-legacy, deps, stats, status, list, neighbors, set, embed, similar, dedup-report, eval-discovery, watch');
       process.exit(1);
   }
 }
 
-function printIndexUsage(): void {
+export function printIndexUsage(): void {
   console.log('Usage: aiwg index <subcommand> [options]');
   console.log('');
   console.log('Available subcommands:');
   console.log('  build      Build/rebuild the artifact index');
+  console.log('  refresh    Safely refresh graphs, caches, sessions, runtime, models, and local issues');
   console.log('  query      Search artifacts by keyword, type, phase, tags');
   console.log('  discover   Capability search across operational asset types (#1214)');
   console.log('  show       Print the full text of a specific operational asset');
@@ -358,12 +369,22 @@ function printIndexUsage(): void {
   console.log('  watch      Start a filesystem watcher for automatic incremental index updates');
   console.log('');
   console.log('Options:');
+  console.log('  build [--force] [--verbose] [--all] [--scope <dir>] [--graph <name>]');
+  console.log('  refresh [--full] [--workspace <path>]... [--root <dir>]...');
+  console.log('          [--only graphs|sessions|caches|runtime|models|issues] [--dry-run] [--json] [--lock-wait-ms <n>]');
+  console.log('          [--max-record-bytes <n>] [--max-source-bytes <n>]');
+  console.log('  Session import defaults: 67108864 bytes per record, 1073741824 bytes (1 GiB) per source; source 0 is unlimited.');
+  console.log('  --exclude <id-or-glob> (repeatable): skip session IDs or absolute path globs; adds to sessions.import.exclude and AIWG_SESSIONS_IMPORT_EXCLUDE (comma-separated).');
+  console.log('  Import limits: CLI flag > AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES / AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES > workspace config > default.');
+  console.log('  sync [--backend fortemi-core] [--graph <name> | --all] [--repo <name>]');
+  console.log('       [--privacy private|sanitized|public] [--generated-at <iso>] [--json]');
   console.log('  --graph <name>  Target a specific graph (framework, project, codebase, source, user, or user-defined)');
   console.log('  --all           Build all known graphs (including user-defined)');
   console.log('');
   console.log('Examples:');
   console.log('  aiwg index build');
   console.log('  aiwg index build --all');
+  console.log('  aiwg index refresh --root ~/dev --json');
   console.log('  aiwg index build --graph codebase --force');
   console.log('  aiwg index discover "create intake"');
   console.log('  aiwg index discover "deploy production" --limit 5 --json');
@@ -536,6 +557,8 @@ async function handleBuild(args: string[]): Promise<void> {
     console.log('  --verbose        Show detailed progress during indexing');
     console.log('  --all            Build all known graphs (including user-defined)');
     console.log('  --scope <dir>    Limit scan to a specific subdirectory');
+    console.log('  --include-ignored Include gitignored sources (runtime directories stay excluded)');
+    console.log('  Source discovery skips symlinks and .aiwg/{working,sessions,scratch,tmp,temp,cache,.index,.cache,.storage-cache}/.');
     console.log('  --graph <name>   Build a specific graph only (built-in or user-defined)');
     console.log('');
     console.log('Built-in graph names: project, codebase, source, user, framework');
@@ -568,6 +591,7 @@ async function handleBuild(args: string[]): Promise<void> {
   const force = args.includes('--force');
   const verbose = args.includes('--verbose');
   const all = args.includes('--all');
+  const includeIgnored = args.includes('--include-ignored');
   const graph = parseGraphFlag(args);
 
   let scope: string | undefined;
@@ -586,14 +610,14 @@ async function handleBuild(args: string[]): Promise<void> {
     // --graph X: build the JSON graph if X is one; otherwise X may be a
     // research-corpus markdown view, rendered below.
     if (graph in GRAPH_CONFIGS) {
-      await buildIndex(cwd, { force, verbose, scope, graph, explicit: true });
+      await buildIndex(cwd, { force, verbose, scope, includeIgnored, graph, explicit: true });
       jsonBuilt = true;
       builtGraphs.add(graph);
     }
   } else if (all) {
     // Build all known graphs — user asked for everything, but don't hard-error on missing dirs
     for (const [name] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
-      await buildIndex(cwd, { force, verbose, graph: name, explicit: false });
+      await buildIndex(cwd, { force, verbose, includeIgnored, graph: name, explicit: false });
       builtGraphs.add(name);
     }
     jsonBuilt = true;
@@ -601,7 +625,7 @@ async function handleBuild(args: string[]): Promise<void> {
     // Default: build graphs with defaultBuild=true; skip gracefully if their dirs don't exist
     for (const [name, config] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
       if (config.defaultBuild) {
-        await buildIndex(cwd, { force, verbose, scope: name === Object.keys(GRAPH_CONFIGS)[0] ? scope : undefined, graph: name, explicit: false });
+        await buildIndex(cwd, { force, verbose, includeIgnored, scope: name === Object.keys(GRAPH_CONFIGS)[0] ? scope : undefined, graph: name, explicit: false });
         builtGraphs.add(name);
       }
     }
@@ -650,16 +674,16 @@ async function syncFortemiCoreCachesAfterBuild(
   const { syncFortemiCoreIndex } = await import('./fortemi-core-sync.js');
   const { loadGraphIndexFile } = await import('./index-reader.js');
   for (const graph of graphs) {
-    // Some default-build graphs skip cleanly when their scan roots are absent.
-    // Only materialize a cache when this build left an actual source index.
-    if (!loadGraphIndexFile(cwd, 'metadata.json', graph)) continue;
     try {
+      // Some auto-selected graphs skip cleanly when their scan roots are absent.
+      if (!loadGraphIndexFile(cwd, 'metadata.json', graph)) continue;
       const manifest = syncFortemiCoreIndex(cwd, { graph });
       if (verbose) {
         console.log(`Fortemi Core ${graph} sync: ${manifest.status}, ${manifest.item_count} item(s) → ${manifest.export_path}`);
       }
     } catch (err) {
-      console.error(`Warning: Fortemi Core ${graph} sync failed: ${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 1;
+      console.error(`Error: Fortemi Core ${graph} sync failed: ${err instanceof Error ? err.message : String(err)}`);
       console.error(`Run \`aiwg index sync --graph ${graph}\` before using Fortemi-backed commands for '${graph}' artifacts.`);
     }
   }
@@ -1243,17 +1267,26 @@ async function handleSync(args: string[]): Promise<void> {
     if (all) {
       const { loadGraphIndexFile } = await import('./index-reader.js');
       const manifests = [];
+      const failures: Array<{ graph: string; status: 'failed'; error: string }> = [];
       for (const [name] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
-        if (!loadGraphIndexFile(cwd, 'metadata.json', name)) continue;
-        manifests.push(syncFortemiCoreIndex(cwd, { ...options, graph: name }));
+        try {
+          if (!loadGraphIndexFile(cwd, 'metadata.json', name)) continue;
+          manifests.push(syncFortemiCoreIndex(cwd, { ...options, graph: name }));
+        } catch (err) {
+          failures.push({ graph: name, status: 'failed', error: err instanceof Error ? err.message : String(err) });
+        }
       }
+      if (failures.length) process.exitCode = 1;
       if (json) {
-        console.log(JSON.stringify({ manifests }, null, 2));
+        console.log(JSON.stringify({ manifests, failures }, null, 2));
         return;
       }
-      console.log(`Fortemi Core sync: ${manifests.length} graph(s)`);
+      console.log(`Fortemi Core sync: ${manifests.length} graph(s) succeeded, ${failures.length} failed`);
       for (const manifest of manifests) {
         console.log(`  ${manifest.graph}: ${manifest.status}, ${manifest.item_count} item(s) → ${manifest.export_path}`);
+      }
+      for (const failure of failures) {
+        console.error(`  ${failure.graph}: failed — ${failure.error}`);
       }
       return;
     }

@@ -23,15 +23,16 @@
 
 import { z } from 'zod';
 import { runAiwgCli, mcpError, mcpJson, AIWG_ROOT } from '../helpers.mjs';
-import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pinContainedRoot, readContainedFile, listContainedFiles, validateContainedPath } from '../../utils/contained-filesystem.mjs';
 
 /**
  * Register discovery tools on the MCP server.
  *
  * @param {import('@modelcontextprotocol/sdk/server/mcp.js').McpServer} server
  */
-export function registerDiscoveryTools(server) {
+export function registerDiscoveryTools(server, { corpusStore } = {}) {
+  const store = corpusStore ? Promise.resolve(corpusStore) : pinContainedRoot(path.resolve(AIWG_ROOT));
   // ============================================================
   // discover — cross-type semantic search
   // ============================================================
@@ -207,7 +208,7 @@ export function registerDiscoveryTools(server) {
     annotations: { readOnlyHint: true },
   }, async ({ framework, filter }) => {
     try {
-      const results = await scanTemplates(AIWG_ROOT, { framework, filter });
+      const results = await scanTemplates(await store, { framework, filter });
       return mcpJson({ count: results.length, templates: results });
     } catch (err) {
       return mcpError(`template-list: ${err.message}`);
@@ -223,21 +224,27 @@ export function registerDiscoveryTools(server) {
     annotations: { readOnlyHint: true },
   }, async ({ template }) => {
     try {
-      // Allow caller to pass either a corpus-relative path or just the template filename
-      const candidates = [
-        path.join(AIWG_ROOT, 'agentic/code/frameworks', template),
-        path.join(AIWG_ROOT, 'agentic/code/frameworks/sdlc-complete/templates', template),
-        path.resolve(template),
-      ];
-      for (const c of candidates) {
+      validateContainedPath(template);
+      // Preserve corpus-relative and template-relative selection, but never
+      // try cwd/absolute candidates. Each candidate is read through one pin.
+      const root = await store;
+      const frameworks = 'agentic/code/frameworks';
+      const [framework, ...parts] = template.split('/');
+      const candidates = template.startsWith(`${frameworks}/`)
+        ? [template]
+        : [
+          `${frameworks}/${template}`,
+          `${frameworks}/${framework}/templates/${parts.join('/')}`,
+          `${frameworks}/sdlc-complete/templates/${template}`,
+        ];
+      for (const candidate of candidates) {
+        // Only template subtrees, including basename selection, are eligible.
+        if (!/^agentic\/code\/frameworks\/[^/]+\/templates\/.+/.test(candidate)) continue;
         try {
-          // Anti-traversal: ensure resolved path stays inside AIWG_ROOT
-          const resolved = path.resolve(c);
-          if (!resolved.startsWith(path.resolve(AIWG_ROOT))) continue;
-          const content = await fs.readFile(resolved, 'utf-8');
-          return mcpJson({ path: resolved, content });
+          const content = await readContainedFile(root, candidate);
+          if (content !== null) return mcpJson({ path: path.join(root.root, candidate), content });
         } catch {
-          // try next
+          // Try the next contained candidate; no alternate root is adopted.
         }
       }
       return mcpError(`template not found: ${template}`);
@@ -251,41 +258,18 @@ export function registerDiscoveryTools(server) {
  * Enumerate templates by walking the canonical corpus.
  * Restricted to the AIWG_ROOT subtree (no .aiwg/ project artifacts).
  */
-async function scanTemplates(aiwgRoot, { framework, filter } = {}) {
+async function scanTemplates(store, { framework, filter } = {}) {
+  if (framework) validateContainedPath(framework);
+  const prefix = framework ? `agentic/code/frameworks/${framework}/templates/` : 'agentic/code/frameworks/';
+  const entries = await listContainedFiles(store, prefix);
   const results = [];
-  const root = path.join(aiwgRoot, 'agentic/code/frameworks');
-  let frameworks = [];
-  try {
-    frameworks = (await fs.readdir(root, { withFileTypes: true }))
-      .filter(d => d.isDirectory())
-      .map(d => d.name);
-  } catch {
-    return results;
-  }
-  for (const fw of frameworks) {
-    if (framework && fw !== framework) continue;
-    const tplRoot = path.join(root, fw, 'templates');
-    await walkTemplates(tplRoot, tplRoot, fw, results, filter);
+  for (const entry of entries) {
+    const match = /^agentic\/code\/frameworks\/([^/]+)\/templates\/(.+\.md)$/.exec(entry.path);
+    if (!match) continue;
+    const [, fw, relativePath] = match;
+    const name = path.basename(relativePath, '.md');
+    if (filter && !name.includes(filter) && !relativePath.includes(filter)) continue;
+    results.push({ framework: fw, name, relativePath, path: path.join(store.root, entry.path) });
   }
   return results;
-}
-
-async function walkTemplates(base, dir, framework, out, filter) {
-  let entries = [];
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      await walkTemplates(base, full, framework, out, filter);
-    } else if (entry.isFile() && entry.name.endsWith('.md')) {
-      const rel = path.relative(base, full);
-      const name = entry.name.replace(/\.md$/, '');
-      if (filter && !name.includes(filter) && !rel.includes(filter)) continue;
-      out.push({ framework, name, relativePath: rel, path: full });
-    }
-  }
 }

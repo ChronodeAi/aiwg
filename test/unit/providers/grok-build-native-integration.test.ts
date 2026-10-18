@@ -26,6 +26,20 @@ afterEach(async () => {
 });
 
 describe('Grok Build native MCP adapter (#2576)', () => {
+  it.each(['\ud800', '\udfff'])(
+    'rejects lone surrogates in TOML strings: %j', (value) => {
+      for (const server of [
+        { name: value, type: 'stdio', command: 'safe' },
+        { name: 'safe', type: 'stdio', command: value },
+        { name: 'safe', type: 'stdio', command: 'safe', args: [value] },
+        { name: 'safe', type: 'stdio', command: 'safe', env: { [value]: 'safe' } },
+        { name: 'safe', type: 'http', url: value },
+      ]) {
+        expect(() => renderGrokMcpServer(server)).toThrow('valid Unicode scalar values');
+      }
+    },
+  );
+
   it('is wired through the shared MCP registry injector', async () => {
     const root = await fixture();
     const registry = new McpServerRegistry(join(root, 'registry'));

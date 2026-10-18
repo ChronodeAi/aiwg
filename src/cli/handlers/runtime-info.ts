@@ -14,6 +14,7 @@ import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { AiwgError, EXIT_CODES, handlerResultFromError } from '../errors.js';
 import { getPackageRoot } from '../../channel/manager.mjs';
 import { inspectInstallation } from '../../installation/manager.mjs';
+import { isSessionProviderResolution, resolveActiveProvider } from '../provider-resolution.js';
 
 function isMissingRuntimeCatalogError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('No catalog found');
@@ -212,8 +213,7 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
   const discovery = new RuntimeDiscovery();
 
   if (hasDiscover) {
-    // Full discovery
-    const catalog = await discovery.discover();
+    const catalog = await discovery.discover({ force: args.includes('--force') });
 
     if (hasJson) {
       console.log(JSON.stringify(catalog, null, 2));
@@ -316,23 +316,37 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
       console.log(`  State:     ${installation.state}`);
 
       // Scheduler backend detection
-      const { execSync } = await import('child_process');
+      const { boundedExecFileSync } = await import('../../process/bounded-child-process.mjs');
       let schedulerBackend = 'external trigger required (system cron/systemd/CI)';
       let chronyInstalled = false;
 
-      try {
-        execSync('which chronyc 2>/dev/null || which chronyd 2>/dev/null', { stdio: 'pipe' });
-        chronyInstalled = true;
-      } catch {
-        // chrony not found
+      for (const tool of ['chronyc', 'chronyd']) {
+        try {
+          boundedExecFileSync('which', [tool], 'quick', { stdio: ['pipe', 'pipe', 'ignore'] });
+          chronyInstalled = true;
+          break;
+        } catch {
+          // Try the next chrony binary.
+        }
       }
 
       // Native CronCreate is only available when running inside a Claude Code agent context.
       // The CLI itself cannot call agent tools, so we report based on platform heuristics.
       // When invoked from within an agent, the schedule skill performs live detection.
+      //
+      // Resolved through the same shared provider-resolution path `steward
+      // capabilities` uses (`resolveActiveProvider` -> the `claude` provider's
+      // `detection.env` markers in provider-definitions.ts) so the two never
+      // disagree about which provider the current session is running under
+      // (#2623, #2627). The ad-hoc `CLAUDE_CODE_VERSION`/`ANTHROPIC_API_KEY`
+      // check this replaced was stale (neither is set by current Claude Code)
+      // and `ANTHROPIC_API_KEY` was a false positive for any non-Claude
+      // session with that key set.
+      const activeProviderResolution = await resolveActiveProvider({ cwd });
+      // Only a session signal counts: a project merely configured or deployed
+      // for Claude is not a Claude Code agent context.
       const isClaudeCodeContext =
-        process.env.CLAUDE_CODE_VERSION !== undefined ||
-        process.env.ANTHROPIC_API_KEY !== undefined;
+        activeProviderResolution.provider === 'claude' && isSessionProviderResolution(activeProviderResolution);
 
       if (isClaudeCodeContext) {
         schedulerBackend = 'native-cron (CronCreate); external trigger outside agent sessions';

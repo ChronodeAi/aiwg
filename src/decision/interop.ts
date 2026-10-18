@@ -135,7 +135,8 @@ const FORBIDDEN_CONTROL_FIELDS = new Set([
 ]);
 
 const SENSITIVE_LOG_KEY = /(?:raw|body|secret|token|credential|private|locator|state|authorization|password|key)/iu;
-const SENSITIVE_LOG_VALUE = /(?:bearer\s+\S+|secret|token|file:\/\/|\/home\/|private|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/iu;
+const SENSITIVE_LOG_VALUE = /(?:bearer\s+\S+|secret|token|file:\/\/|\/home\/|private)/iu;
+const MAX_LOG_VALUE_LENGTH = 65_536;
 const SUPPORTED_DMN_ELEMENTS = new Set(['definitions', 'decision', 'informationRequirement', 'requiredDecision', 'decisionTable', 'input', 'inputExpression', 'output', 'rule', 'inputEntry', 'outputEntry', 'text']);
 
 interface DmnCell {
@@ -685,7 +686,11 @@ function sanitizeJson(value: JsonValue, path: string, redaction: { removed: stri
         redaction.removed.push(`${path}.${key}`);
         continue;
       }
-      result[key] = sanitizeJson(child, `${path}.${key}`, redaction);
+      // Keep ordinary objects while preserving __proto__ as an own JSON data key.
+      Object.defineProperty(result, key, {
+        value: sanitizeJson(child, `${path}.${key}`, redaction),
+        enumerable: true, writable: true, configurable: true,
+      });
     }
     return result;
   }
@@ -700,9 +705,15 @@ function projectOpaInput(input: JsonValue, allowlist: string[], redaction: { rem
   const output: Record<string, JsonValue> = {};
   for (const pointer of allowlist) {
     if (!pointer.startsWith('/')) throw new DecisionInteropError('opa-input-projection', 'OPA input projection allowlist entries must be JSON Pointers');
+    const path = pointer.slice(1).split('/').map(part => part.replace(/~1/gu, '/').replace(/~0/gu, '~'));
+    // Only __proto__ is forbidden in pointers; constructor/prototype are valid data keys.
+    // Own-property traversal and data-property writes keep ordinary projection objects safe.
+    if (path.some(segment => segment === '__proto__')) {
+      throw new DecisionInteropError('opa-input-projection', 'OPA input projection cannot contain __proto__ segments');
+    }
     const resolved = resolveJsonPointer(input, pointer);
     if (!resolved.found) continue;
-    setProjectedValue(output, pointer.slice(1).split('/').map(part => part.replace(/~1/gu, '/').replace(/~0/gu, '~')), sanitizeJson(resolved.value as JsonValue, `$.input${pointer}`, redaction));
+    setProjectedValue(output, path, sanitizeJson(resolved.value as JsonValue, `$.input${pointer}`, redaction));
   }
   return output;
 }
@@ -711,17 +722,50 @@ function setProjectedValue(target: Record<string, JsonValue>, path: string[], va
   let cursor: Record<string, JsonValue> = target;
   path.forEach((segment, index) => {
     if (index === path.length - 1) {
-      cursor[segment] = value;
+      Object.defineProperty(cursor, segment, {
+        value, enumerable: true, writable: true, configurable: true,
+      });
       return;
     }
-    const existing = cursor[segment];
-    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) cursor[segment] = {};
+    const existing = Object.hasOwn(cursor, segment) ? cursor[segment] : undefined;
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+      Object.defineProperty(cursor, segment, {
+        value: {}, enumerable: true, writable: true, configurable: true,
+      });
+    }
     cursor = cursor[segment] as Record<string, JsonValue>;
   });
 }
 
 function isSensitiveValue(value: unknown): boolean {
-  return typeof value === 'string' && SENSITIVE_LOG_VALUE.test(value);
+  if (typeof value !== 'string') return false;
+  // Redact oversized values in full so a sensitive suffix cannot escape inspection.
+  if (value.length > MAX_LOG_VALUE_LENGTH) return true;
+  if (SENSITIVE_LOG_VALUE.test(value)) return true;
+  let localLength = 0;
+  let domainLength = -1;
+  let suffixLength = -1;
+  for (const character of value) {
+    const letter = /[A-Z]/iu.test(character);
+    if (character === '@') {
+      domainLength = localLength > 0 ? 0 : -1;
+      suffixLength = -1;
+    } else if (domainLength >= 0) {
+      if (/[A-Z0-9.-]/iu.test(character)) {
+        if (character === '.') suffixLength = domainLength > 0 ? 0 : -1;
+        else if (letter && suffixLength >= 0) {
+          suffixLength++;
+          if (suffixLength >= 2) return true;
+        } else suffixLength = -1;
+        domainLength++;
+      } else {
+        domainLength = -1;
+        suffixLength = -1;
+      }
+    }
+    localLength = /[A-Z0-9._%+-]/iu.test(character) ? localLength + 1 : 0;
+  }
+  return false;
 }
 
 function assertUnique(values: string[], label: string): void {

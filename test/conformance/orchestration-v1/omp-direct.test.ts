@@ -68,6 +68,17 @@ async function installOmpPackage(bytes: Buffer) {
   const relative = path.relative(path.join(base, 'src', 'models'), target);
   await writeFile(path.join(base, 'src', 'models', 'worker-installation.mjs'),
     `export * from ${JSON.stringify(relative)};\n`);
+  // omp-transport.mjs resolves process/bounded-child-process.mjs via the
+  // same _resolve-impl bridge (#3062 B/C finding 8's positiveTimeoutMs
+  // clamp) — mirror it the same way.
+  await mkdir(path.join(base, 'src', 'process'), { recursive: true, mode: 0o755 });
+  const processTarget = path.resolve('src/process/bounded-child-process.mjs');
+  const processRelative = path.relative(path.join(base, 'src', 'process'), processTarget);
+  await writeFile(path.join(base, 'src', 'process', 'bounded-child-process.mjs'),
+    `export * from ${JSON.stringify(processRelative)};\n`);
+  // Transports signal children through process/signal-child.mjs (#3194).
+  await writeFile(path.join(base, 'src', 'process', 'signal-child.mjs'),
+    `export * from ${JSON.stringify(path.relative(path.join(base, 'src', 'process'), path.resolve('src/process/signal-child.mjs')))};\n`);
   // parseWorkerFinal's shared strict-claims path (provider-adapter.mjs)
   // resolves mission-protocol/index.js via the same _resolve-impl bridge.
   await mkdir(path.join(base, 'src', 'mission-protocol'), { recursive: true, mode: 0o755 });

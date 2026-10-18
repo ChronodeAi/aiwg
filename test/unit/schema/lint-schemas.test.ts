@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { execFile, execFileSync } from 'node:child_process'
+import { promisify } from 'node:util'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const projectRoot = resolve(import.meta.dirname, '../../..')
 const temporaryDirectories: string[] = []
+const execFileAsync = promisify(execFile)
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -18,14 +21,16 @@ describe('schema lint control-plane report', () => {
     expect(() => execFileSync(process.execPath, ['tools/scripts/build-schema-catalog.mjs', '--check'], { timeout: 60_000, cwd: projectRoot, stdio: 'pipe' })).not.toThrow()
   })
 
-  it('uses the composed catalog, denies network resolution, and emits deterministic inventory fields', () => {
+  it('uses the composed catalog, denies network resolution, and emits deterministic inventory fields', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'aiwg-schema-lint-'))
     temporaryDirectories.push(directory)
     const reportPath = join(directory, 'report.json')
 
-    execFileSync(process.execPath, ['tools/scripts/lint-schemas.mjs', '--report-json', reportPath], { timeout: 60_000,
+    // Full-catalog compilation competes with the other suite workers on CI.
+    // Keep the child bounded and let Vitest's outer deadline cover its cleanup.
+    await execFileAsync(process.execPath, ['tools/scripts/lint-schemas.mjs', '--report-json', reportPath], {
+      timeout: 120_000,
       cwd: projectRoot,
-      stdio: 'pipe',
     })
 
     const report = JSON.parse(readFileSync(reportPath, 'utf8'))
@@ -36,7 +41,37 @@ describe('schema lint control-plane report', () => {
     expect(report.resources.every((resource: { compiled: boolean }) => resource.compiled)).toBe(true)
     expect(report.discoveredResources).toEqual([...report.discoveredResources].sort())
     expect(report.diagnostics.some((item: { code: string }) => item.code === 'SCHEMA_CATALOG_MISSING')).toBe(false)
-  })
+  }, 130_000)
+
+  it('compiles the catalog when network resolution APIs are unavailable', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'aiwg-schema-lint-offline-'))
+    temporaryDirectories.push(directory)
+    const preloadPath = join(directory, 'deny-network.mjs')
+    const attemptsPath = join(directory, 'network-attempts')
+    const reportPath = join(directory, 'report.json')
+    writeFileSync(preloadPath, `
+      import http from 'node:http';
+      import https from 'node:https';
+      import net from 'node:net';
+      import { appendFileSync } from 'node:fs';
+      const deny = () => {
+        appendFileSync(${JSON.stringify(attemptsPath)}, 'attempt\\n');
+        throw new Error('Network resolution forbidden in schema fixture');
+      };
+      globalThis.fetch = deny;
+      http.request = http.get = https.request = https.get = deny;
+      net.Socket.prototype.connect = deny;
+    `)
+    await execFileAsync(process.execPath, ['--import', pathToFileURL(preloadPath).href,
+      'tools/scripts/lint-schemas.mjs', '--report-json', reportPath], {
+      timeout: 120_000,
+      cwd: projectRoot,
+    })
+    const report = JSON.parse(readFileSync(reportPath, 'utf8'))
+    expect(report.resources.length).toBeGreaterThan(0)
+    expect(report.resources.every((resource: { compiled: boolean }) => resource.compiled)).toBe(true)
+    expect(() => readFileSync(attemptsPath)).toThrow(/ENOENT/)
+  }, 130_000)
 
   it('governs exceptions and dependency resolution as security policy', () => {
     const exceptions = JSON.parse(readFileSync(join(projectRoot, 'schemas/policy/strict-exceptions.json'), 'utf8'))

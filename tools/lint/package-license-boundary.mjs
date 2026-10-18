@@ -10,7 +10,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -38,14 +38,23 @@ if (packageJson.license !== expectedLicense) {
   fail(`package.json must declare ${expectedLicense}; found ${JSON.stringify(packageJson.license)}`);
 }
 
-const pack = spawnSync('npm', ['pack', '--dry-run', '--json'], {
+// `long`, not `quick` (#3062 finding 6): runs npm's pack lifecycle
+// (prepack → tools/release/release:fortemi-index), not just a local
+// metadata read.
+const pack = boundedSpawnSync('npm', ['pack', '--dry-run', '--json'], 'long', {
   cwd: repoRoot,
   encoding: 'utf8',
   maxBuffer: 32 * 1024 * 1024,
 });
 
-if (pack.status !== 0) {
-  fail(`npm pack --dry-run --json exited with status ${pack.status}\n${pack.stderr}`);
+// pack.error ||, not just status !== 0 (#3062 B/C finding 13): a
+// surviving descendant holding the pipe can produce ETIMEDOUT with
+// status 0 — status alone would then read as success.
+if (pack.error || pack.status !== 0) {
+  // #3062 finding 17: pack.error carries the enriched `long`-tier timeout
+  // explanation that the exit code alone does not.
+  const timeoutNote = pack.error ? `${pack.error.message}\n` : '';
+  fail(`npm pack --dry-run --json exited with status ${pack.status}\n${timeoutNote}${pack.stderr}`);
 }
 
 let result;

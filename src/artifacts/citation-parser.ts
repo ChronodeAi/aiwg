@@ -24,6 +24,7 @@
 
 import type { TypedEdge } from './types.js';
 import { parseFrontmatter } from './index-builder.js';
+import { CITATION_HEADER_ALIASES, CITATION_SECTION_ALIASES } from './citation-table-schema.js';
 
 /**
  * Match a single node identifier (REF-* or PROF-*) anywhere in a string.
@@ -38,30 +39,74 @@ const NODE_ID_PATTERN = /(?:REF-\d+[a-z]?|PROF-[POFG]-[a-z0-9-]+)/g;
  */
 const NODE_ID_FULL = /^(?:REF-\d+[a-z]?|PROF-[POFG]-[a-z0-9-]+)$/;
 
-/** Explicit column aliases used by historical citation-sidecar variants. */
-const CITATION_REF_COLUMNS = [
-  'Inducted REF',
-  'REF',
-  'Corpus REF',
-  'In-corpus REF',
-] as const;
+/** An unnamed resolution cell must contain only one REF, optionally decorated. */
+function standaloneRef(value: string): string | null {
+  let text = value.trim();
+  const link = text.match(/^\[([^\]]+)\]\([^\s]+(?:\s+"[^"\n]*")?\)$/);
+  if (link) text = link[1].trim();
+  const code = text.match(/^`([^`]+)`$/);
+  if (code) text = code[1].trim();
+  return /^REF-\d+[a-z]?$/.test(text) ? text : null;
+}
 
-/**
- * Preserve the corpus snapshot's legacy edge semantics: every node ID on a
- * pipe-delimited line inside an outgoing/incoming section is a declaration.
- * Explicit column parsing remains the primary path, while this compatibility
- * scan covers malformed rows and prose continuations that historical corpus
- * snapshots already count.
- */
-function extractSectionNodeIds(section: string): string[] {
-  const refs: string[] = [];
-  for (const line of section.split('\n')) {
-    if (!line.includes('|')) continue;
-    NODE_ID_PATTERN.lastIndex = 0;
-    const matches = line.match(NODE_ID_PATTERN);
-    if (matches) refs.push(...matches);
+/** Resolution aliases are shared by every registered bibliographic form. */
+const CITATION_REF_COLUMNS = CITATION_HEADER_ALIASES.ref;
+
+const HEADER_ROLES = new Map(
+  Object.entries(CITATION_HEADER_ALIASES).flatMap(([role, aliases]) =>
+    aliases.map(alias => [alias, role] as const),
+  ),
+);
+
+function normalizeCell(value: string): string {
+  return value.toLowerCase().replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/** Direction belongs to the heading, never to a mention in its section body. */
+function citationDirection(heading: string): 'incoming' | 'outgoing' | null {
+  const text = normalizeCell(heading.replace(/[ \t]+#+[ \t]*$/, ''));
+  const segment = text.split(/[/—:(]/, 1)[0].trim();
+  // Keep the corpus's Incoming/Outgoing descriptions, with a word boundary
+  // so unrelated words such as "Incomingish" cannot declare citations.
+  if (/^incoming(?:\s|$)/.test(segment)) return 'incoming';
+  if (/^outgoing(?:\s|$)/.test(segment)) return 'outgoing';
+  for (const direction of ['incoming', 'outgoing'] as const) {
+    if (CITATION_SECTION_ALIASES[direction].some(alias => text === alias
+      || (text.startsWith(alias) && /^\s*[/—:(]/.test(text.slice(alias.length))))) return direction;
   }
-  return [...new Set(refs)];
+  return null;
+}
+
+/** Explicitly non-bibliographic or uncertain declarations must not assert citations. */
+function isNonCitation(value: string): boolean {
+  const text = normalizeCell(value);
+  // An explicit disavowal wins even when the description also says "cites".
+  if (/\b(?:topical|thematic|non[- ]citations?|methodological cousin|unverified)\b/.test(text)
+    || /\bnot (?:(?:a|an) )?(?:(?:verified|formal|directly) )?(?:citations?|cites?|cited|verified)\b/.test(text)
+    || /\bno (?:formal |verified )?citations?\b/.test(text)
+    || /\b(?:if|unless|provided that|assuming)\s+(?:ref-\d+|prof-[pofg]-|present\b)/.test(text)
+    || /\bconditional (?:on|upon)\b/.test(text)
+    || /^(?:conditional|related)(?:\s+only)?\s*(?:[(:;—-]|$)/.test(text)) return true;
+  // "Cites X in Related Work", "cites-related-version", and citations to a
+  // paper named "Conditional Memory" describe real citations, not qualifiers.
+  if (/\b(?:cites?|cited|citing)\b/.test(text)) return false;
+  return /\brelated\b/.test(text);
+}
+
+/** Table/section declarations, rather than incidental mentions in audit prose. */
+function isNonCitationContext(value: string): boolean {
+  // Candidate-specific audit prose does not disavow the surrounding tables.
+  // Keep whole-table declarations separate from notes about particular REFs.
+  const text = value.replace(/<!--[\s\S]*?-->/g, '').toLowerCase().replace(/[`*_]/g, '').split('\n')
+    .filter(line => !/\b(?:search results|external .*?candidates?|historical records)\b/.test(line))
+    .filter(line => !/(?:ref-\d+|prof-[pofg]-)/.test(line)
+      || /\b(?:rows|tables?|relationships?|connections?) (?:below|are|only)\b/.test(line))
+    .join('\n');
+  return /(?:^|\n)\s*(?:related|topical|thematic) works[^\n]*\b(?:do|does) not (?:directly )?cite\b/.test(text)
+    || /\b(?:no (?:formal|verified) citations?|not (?:(?:asserted|verified) )?citation (?:edges?|rows?)|relationship notes|related corpus nodes)\b/.test(text)
+    || /\bno citations\s*(?:[.!;]|$)/.test(text)
+    || /\b(?:topical|thematic|related|conditional|non-citation) (?:relationships?|connections?|only)\b/.test(text)
+    || /(?:^|\n)\s*(?:topical|thematic|related|conditional|non-citation)(?:\s+(?:relationships?|connections?|notes|rows|only))?\s*(?:$|\n)/.test(text);
 }
 
 /**
@@ -93,7 +138,8 @@ export interface CitationParseResult {
  * Extract node identifiers from a markdown table column.
  *
  * Scans table rows for a column matching `columnName` (case-insensitive)
- * and extracts node IDs (REF-* or PROF-*), skipping empty/dash values.
+ * and extracts node IDs (REF-* or PROF-*) only from that cell. Malformed
+ * tables/rows and explicit non-citation qualifiers are skipped.
  *
  * @param tableText - Markdown table text (header + separator + rows)
  * @param columnName - Column header to extract from (e.g., "Inducted REF")
@@ -103,77 +149,103 @@ export function extractRefsFromTable(
   tableText: string,
   columnName: string | readonly string[],
 ): string[] {
-  const aliases = (Array.isArray(columnName) ? columnName : [columnName])
-    .map(name => name.trim().toLowerCase());
-  const tableBlocks: string[][] = [];
-  let currentBlock: string[] = [];
-  for (const line of tableText.split('\n')) {
-    if (line.trim().startsWith('|')) {
-      currentBlock.push(line);
-    } else if (currentBlock.length > 0) {
-      tableBlocks.push(currentBlock);
-      currentBlock = [];
-    }
-  }
-  if (currentBlock.length > 0) tableBlocks.push(currentBlock);
+  return extractTableRefs(tableText, columnName, false);
+}
 
-  const parseRow = (line: string): string[] => {
-    let row = line.trim();
-    if (row.startsWith('|')) row = row.slice(1);
-    if (row.endsWith('|')) row = row.slice(0, -1);
-    return row.split('|').map(cell => cell.trim());
-  };
-
+function extractTableRefs(
+  tableText: string,
+  columnName: string | readonly string[],
+  bibliographicOnly: boolean,
+): string[] {
+  const aliases = (typeof columnName === 'string' ? [columnName] : columnName)
+    .map(normalizeCell);
+  const parseRow = (line: string): string[] =>
+    line.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/)
+      .map(cell => cell.replace(/\\\|/g, '|').trim());
+  const lines = tableText.split('\n');
+  const headings: { level: number; text: string }[] = [];
+  let preamble: string[] = [];
   const refs: string[] = [];
-  for (const lines of tableBlocks) {
-    const headerCells = parseRow(lines[0]);
-    const colIndex = headerCells.findIndex(
-      header => {
-        const normalized = header.toLowerCase().replace(/[`*_]/g, '').trim();
-        return aliases.some(alias =>
-          normalized === alias ||
-          normalized.startsWith(`${alias} /`) ||
-          normalized.startsWith(`${alias} (`),
-        );
-      },
-    );
-    if (lines.length < 3 || colIndex === -1) {
-      // Legacy sidecars sometimes have headerless continuation rows or a
-      // generic table whose rows were extended with a final REF cell. The
-      // corpus snapshot has always treated every in-section table REF as an
-      // outgoing/incoming declaration, so retain that compatibility fallback.
-      const dataLines = lines.length >= 3 ? lines.slice(2) : lines;
-      for (const line of dataLines) {
-        NODE_ID_PATTERN.lastIndex = 0;
-        const refMatches = line.match(NODE_ID_PATTERN);
-        if (refMatches) refs.push(...refMatches);
-      }
+
+  for (let i = 0; i < lines.length; i++) {
+    const heading = lines[i].match(/^ {0,3}(#{1,6})[ \t]+(.+)/);
+    if (heading) {
+      // A parent section's declaration also governs its nested tables.
+      const parent = headings[headings.length - 1];
+      if (parent && parent.level < heading[1].length) parent.text += `\n${preamble.join('\n')}`;
+      while (headings.length && headings[headings.length - 1].level >= heading[1].length) headings.pop();
+      headings.push({ level: heading[1].length, text: heading[2] });
+      preamble = [];
+      continue;
+    }
+    if (!lines[i].trim().startsWith('|')) {
+      preamble.push(lines[i]);
       continue;
     }
 
-    // Skip this table's header and separator, preserving all interior cells.
-    for (let i = 2; i < lines.length; i++) {
-      const cells = parseRow(lines[i]);
-      if (colIndex >= cells.length) continue;
+    const table: string[] = [];
+    while (i < lines.length && lines[i].trim().startsWith('|')) table.push(lines[i++]);
+    i--;
+    const context = [...headings.map(h => h.text), ...preamble];
+    preamble = [];
+    // A trailing note can explicitly disavow the preceding table's citations.
+    const following: string[] = [];
+    for (let j = i + 1; j < lines.length && !/^\s*[#|]/.test(lines[j]); j++) following.push(lines[j]);
+    if (/^\s*note\b/im.test(following.join('\n'))) context.push(...following);
+    if (isNonCitationContext(context.join('\n')) || table.length < 3) continue;
 
-      // Historical rows may expand the named REF cell into an issue/REF pair
-      // or append placeholder cells without extending the header. Scan from
-      // the named column through the remainder of the row; columns before the
-      // alias (title/authors/year) remain excluded.
-      const value = cells.slice(colIndex).join(' | ');
-      if (!value || value === '—' || value === '-' || value === '–') continue;
+    const headers = parseRow(table[0]).map(normalizeCell);
+    if (headers.some(isNonCitation)) continue;
+    const separator = parseRow(table[1]);
+    if (separator.length !== headers.length || !separator.every(cell => /^:?-{3,}:?$/.test(cell))) continue;
+    const roles = headers.map(header => HEADER_ROLES.get(header));
+    // Incoming/Outgoing declares the direction; the named resolution header
+    // identifies the target when present. Otherwise whole-cell REF IDs
+    // resolve rows. Additional metadata and column order do not change
+    // those semantics. Multiple resolution columns are ambiguous.
+    if (bibliographicOnly && roles.filter(role => role === 'ref').length > 1) continue;
 
-      NODE_ID_PATTERN.lastIndex = 0;
-      const refMatches = value.match(NODE_ID_PATTERN);
-      if (refMatches) refs.push(...refMatches);
+    // For graph extraction the headers register exactly one resolution
+    // column when present. The generic column helper still honors its explicit alias order.
+    const colIndex = bibliographicOnly
+      ? roles.indexOf('ref')
+      : aliases.map(alias => headers.indexOf(alias)).find(index => index !== -1) ?? -1;
+    if (colIndex === -1 && !bibliographicOnly) continue;
+
+    for (const line of table.slice(2)) {
+      const cells = parseRow(line);
+      // Extra/missing cells have no unambiguous column semantics. Never guess.
+      if (cells.length !== headers.length) continue;
+      // A resolution explicitly labelled as context/adjacency does not map
+      // the printed entry to that node (corpus Formal References variants).
+      if (colIndex !== -1
+        && /\b(?:REF-\d+[a-z]?|PROF-[POFG]-[a-z0-9-]+)\s+(?:(?:family )?context|adjacent)\b/i.test(normalizeCell(cells[colIndex]))) continue;
+      // A condition can also qualify the printed title, as in the downstream
+      // "Learning is Forgetting (if REF-828 in 6-benchmark suite)" row.
+      if (cells.some(cell => /\b(?:if|unless|provided that|assuming)\s+[`*_[\s]*(?:REF-\d+|PROF-[POFG]-)/i.test(cell))) continue;
+      const qualifiers = cells.filter((_, index) => (bibliographicOnly && colIndex === -1) || index === colIndex
+        || ['notes', 'evidence', 'context', 'kind', 'relationship', 'status'].includes(roles[index] ?? '')
+        || (!bibliographicOnly && !['#', 'title', 'work', 'authors', 'year', 'doi/url', 'doi', 'url'].includes(headers[index])));
+      if (qualifiers.some(isNonCitation)) continue;
+      // Without a named resolution column, only whole-cell REF IDs resolve.
+      // Named columns always take precedence over incidental IDs elsewhere.
+      const matches = colIndex === -1
+        ? cells.map(standaloneRef).filter((ref): ref is string => ref !== null)
+        : cells[colIndex].match(NODE_ID_PATTERN);
+      if (matches) refs.push(...matches);
     }
   }
-
   return [...new Set(refs)];
 }
 
 /**
  * Parse a citation sidecar markdown file into structured edges.
+ *
+ * Tables in recognized directional or reference sections declare citations through a unique
+ * registered resolution column, or whole-cell REF IDs when no such column
+ * exists, independent of other metadata columns.
+ * Topical, related, conditional and explicitly non-citation declarations are
+ * skipped; they do not produce citation edges or new relationship types.
  *
  * @param content - Full markdown content of the sidecar file
  * @returns Parse result with ref ID and edge arrays, or null if not a valid sidecar
@@ -185,25 +257,31 @@ export function parseCitationSidecar(content: string): CitationParseResult | nul
   const ref = typeof data.ref === 'string' ? data.ref : null;
   if (!ref || !NODE_ID_FULL.test(ref)) return null;
 
-  // Split body into sections by ## headings
-  const sections = body.split(/^## /m).filter(Boolean);
+  // ATX level-two headings allow indentation, tabs and closing hashes.
+  const sectionHeading = /^ {0,3}##[ \t]+([^\r\n]+)/m;
+  const sections = body.split(/(?=^ {0,3}##[ \t]+)/m).filter(Boolean);
+  const preamble = sectionHeading.test(sections[0] ?? '') ? '' : sections[0] ?? '';
+  if (isNonCitationContext(preamble.replace(/^#+ .*$/gm, ''))) return { ref, cites: [], citedBy: [] };
 
   let cites: string[] = [];
   let citedBy: string[] = [];
 
   for (const section of sections) {
-    const sectionLower = section.toLowerCase();
+    const heading = section.match(sectionHeading);
+    const direction = heading ? citationDirection(heading[1]) : null;
 
-    if (sectionLower.startsWith('outgoing')) {
-      cites.push(...extractRefsFromTable(section, CITATION_REF_COLUMNS));
-      cites.push(...extractSectionNodeIds(section));
-    } else if (sectionLower.startsWith('incoming')) {
-      citedBy.push(...extractRefsFromTable(section, CITATION_REF_COLUMNS));
-      citedBy.push(...extractSectionNodeIds(section));
+    if (direction === 'outgoing') {
+      cites.push(...extractTableRefs(section, CITATION_REF_COLUMNS, true));
+    } else if (direction === 'incoming') {
+      citedBy.push(...extractTableRefs(section, CITATION_REF_COLUMNS, true));
     }
   }
 
-  return { ref, cites: [...new Set(cites)], citedBy: [...new Set(citedBy)] };
+  return {
+    ref,
+    cites: [...new Set(cites)].filter(target => target !== ref),
+    citedBy: [...new Set(citedBy)].filter(source => source !== ref),
+  };
 }
 
 /**

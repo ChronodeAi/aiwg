@@ -14,7 +14,7 @@ commandHint:
 
 # Induct Research
 
-Before dispatch, apply the shared [context engineering contract](../../../../../../docs/context-engineering-contract.md) and [verification contract](../../../../../../docs/verification-contracts.md). Missing source, fixity, sidecar, GRADE, or lint evidence makes the result incomplete or blocked, never complete.
+Before dispatch, apply the shared [context engineering contract](https://github.com/jmagly/aiwg/blob/main/docs/context-engineering-contract.md) and [verification contract](https://github.com/jmagly/aiwg/blob/main/docs/verification-contracts.md). Missing source, fixity, sidecar, GRADE, or lint evidence makes the result incomplete or blocked, never complete.
 
 Process one or more research sources — an issue, a file, a directory of papers, or a URI — and file structured induction tasks into a research repository so nothing gets lost. The analogue of `address-issues` for research corpora.
 
@@ -265,12 +265,12 @@ for them unprompted:
   swap in a count source without calibrating it against a known-high-count paper first.
   Semantic Scholar throttles hard enough that misses are expected — record a miss as a miss
   rather than substituting an uncalibrated source. Per-service operating characteristics,
-  failure modes, and API-key handling: `bibliographic-services.md` in the research-complete
-  framework docs.
+  failure modes, and API-key handling:
+  [`bibliographic-services.md`](../../docs/bibliographic-services.md).
 
 **Register the residue as a check, not as prose.** Any uncertainty that survives the gate
 must be recorded as a declared check with an outcome, so it lands as `incomplete` or
-`blocked` per [`verification-contracts.md`](../../../../../../docs/verification-contracts.md)
+`blocked` per [`verification-contracts.md`](https://github.com/jmagly/aiwg/blob/main/docs/verification-contracts.md)
 instead of as narrative an automated reader cannot see.
 
 The `research/uncertainty-registered` lint rule checks this on induction output: it flags a
@@ -619,6 +619,7 @@ induct-research <target>
 - @$AIWG_ROOT/agentic/code/frameworks/research-complete/templates/citation-sidecar.md — `Confirmed by`, `Rejected Candidates`, `bibliography` and `acquisition-obstacle` fields (#2524, #2525)
 - @$AIWG_ROOT/agentic/code/frameworks/research-complete/skills/sidecar-lint/SKILL.md — Structural lint for the sidecars this skill writes
 - @$AIWG_ROOT/tools/research/bibliography-resolver.mjs — Applies the bibliography hierarchy mechanically (#2525)
+- @$AIWG_ROOT/agentic/code/frameworks/research-complete/docs/bibliographic-services.md — Per-service operating characteristics, the OpenAlex count trap, throttling budget (#2539)
 - @$AIWG_ROOT/agentic/code/frameworks/research-complete/lint/uncertainty-registered.yaml — Flags uncertainty stated without an obstacle (#2523)
 
 ## Storage Routing (#934, #968)

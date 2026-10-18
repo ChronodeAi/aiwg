@@ -1,3 +1,6 @@
+import { tomlString } from './toml-string.mjs';
+import { buildServerConfig } from './server-config.mjs';
+export { buildServerConfig } from './server-config.mjs';
 import { isLowerLayerEntry, loadLayered, lowerEntryQualified, resolveConfigLayers, saveLayerData } from './config-layers.mjs';
 import { assertConfigDestination, assertProjectCredentials, classifyMcpDestination, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
 import { manageOmpMcp } from './omp-config.mjs';
@@ -5,7 +8,7 @@ import { manageGrokBuildMcp } from './grok-build-config.mjs';
 import { replaceServer } from './toml-editor.mjs';
 import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 import { applyJsonToolFilterPlan, claudeSettingsPath, prepareClaudePermissions, planToolFilters } from './tool-filters.mjs';
-import { assertCredentialPolicy, resolveCredentialPolicy, renderCredentialMaps, validateEnvReferenceName } from './credentials.mjs';
+import { assertCredentialPolicy, resolveCredentialPolicy, validateEnvReferenceName } from './credentials.mjs';
 /**
  * MCP Server Registry (Runtime ESM)
  *
@@ -291,101 +294,6 @@ export class McpServerRegistry {
 // Provider injection logic
 // ============================================
 
-export function buildServerConfig(server, provider) {
-  const mcpDefinition = getMcpInjectionDefinition(provider);
-  // TOML providers render references through their own named keys in
-  // buildServerToml; unconditional interpolation would refuse them here even
-  // though the TOML writer handles them.
-  const { env, headers } = mcpDefinition?.serverConfigFormat === 'toml'
-    ? {}
-    : renderCredentialMaps(server, normalizeRuntimeProviderId(provider) || provider);
-
-  switch (mcpDefinition?.serverConfigFormat) {
-    case 'claude-code': {
-      if (server.type === 'stdio') {
-        return {
-          command: server.command,
-          args: server.args || [],
-          ...(env ? { env } : {}),
-        };
-      }
-      // Claude Code skips a url entry that has no type.
-      return {
-        type: server.type,
-        url: server.url,
-        ...(headers ? { headers } : {}),
-      };
-    }
-    case 'antigravity': {
-      if (server.type === 'stdio') {
-        return { command: server.command, args: server.args || [], ...(env ? { env } : {}) };
-      }
-      return { serverUrl: server.url, ...(headers ? { headers } : {}) };
-    }
-    case 'standard': {
-      if (server.type === 'stdio') {
-        return {
-          command: server.command,
-          args: server.args || [],
-          ...(env ? { env } : {}),
-        };
-      }
-      return {
-        url: server.url,
-        ...(headers ? { headers } : {}),
-      };
-    }
-
-    case 'factory': {
-      if (server.type === 'stdio') {
-        return {
-          type: 'stdio',
-          command: server.command,
-          args: server.args || [],
-          disabled: false,
-          ...(env ? { env } : {}),
-        };
-      }
-      return {
-        type: server.type,
-        url: server.url,
-        disabled: false,
-        ...(headers ? { headers } : {}),
-      };
-    }
-
-    case 'opencode': {
-      if (server.type === 'stdio') {
-        // opencode names a local server's variables `environment`.
-        return {
-          type: 'local',
-          command: [server.command, ...(server.args || [])],
-          ...(env ? { environment: env } : {}),
-        };
-      }
-      return {
-        type: 'remote',
-        url: server.url,
-        ...(headers ? { headers } : {}),
-      };
-    }
-
-    case 'toml':
-      return {};
-
-    default:
-      return {};
-  }
-}
-
-function tomlString(value) {
-  if (typeof value !== 'string' || [...value].some(char => {
-    const point = char.codePointAt(0);
-    return point >= 0xd800 && point <= 0xdfff;
-  })) throw new Error('TOML values must be strings containing valid Unicode scalar values');
-  // JSON escapes align with TOML basic strings except DEL must also be escaped.
-  return JSON.stringify(value).replace(/\u007f/g, '\\u007f');
-}
 
 function tomlKey(value) {
   return typeof value === 'string' && /^[A-Za-z0-9_-]+$/.test(value) ? value : tomlString(value);

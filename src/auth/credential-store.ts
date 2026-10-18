@@ -1,3 +1,4 @@
+import { signalChild } from '../process/signal-child.mjs';
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -14,7 +15,7 @@ export const defaultCommandRunner: CommandRunner = (command, args, stdin = "") =
   let outputBytes = 0;
   const collect = (target: Buffer[], chunk: Buffer) => {
     outputBytes += chunk.length;
-    if (outputBytes > 1024 * 1024) child.kill();
+    if (outputBytes > 1024 * 1024) signalChild(child);
     else target.push(chunk);
   };
   child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));

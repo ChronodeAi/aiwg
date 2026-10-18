@@ -9,5 +9,5 @@
     "start": "node src/server.mjs",
     "smoke": "node src/smoke.mjs"
   },
-  "engines": { "node": ">=18" }
+  "engines": { "node": ">=24" }
 }

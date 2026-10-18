@@ -1,7 +1,9 @@
+import { copyNode } from '../../../helpers/copy-node.js';
 import { createHash } from 'node:crypto';
-import { link, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { modelsHandler } from '../../../../src/cli/handlers/models.js';
 import { ConfigLoader } from '../../../../src/models/config-loader.js';
@@ -64,23 +66,25 @@ async function productionFixture(adapterFrame = false) {
   const controls = requiredWorkerControls({ policy: initial.policy, permissions, effort: 'medium' });
   binding.boundary.controls = controls;
   for (const control of Object.values(profile.controls)) Object.assign(control, { support: 'external', mapping: 'host fixture boundary' });
+  const executable = await copyNode(installed);
   const cli = path.join(installed, 'ralph-worker-cli.mjs');
   const protocol = path.join(installed, 'ralph-worker-protocol.mjs');
   for (const filename of [cli, protocol]) await writeFile(filename, await readFile(path.resolve('test/fixtures', path.basename(filename))), { mode: 0o644 });
-  adapter.invocation.versionArgv = [cli, '--qualification-version'];
+  // Resolution rechecks the version without the worker's protocol environment.
+  adapter.invocation.versionArgv = ['-e', `console.log(${JSON.stringify(binding.cliVersion)})`];
   const args = (input: any, _profile: any, permissions: any) => [cli, '--model', input.selected.model, '--effort', input.selected.effort.value,
     '--sandbox', permissions.sandbox, '--approval', permissions.approval, '--final-output', input.finalPath];
-  const frameHook = adapterFrame ? ', buildWorkerStdinFrame: brief => JSON.stringify({ message: brief.toString() })' : '';
-  const source = `export const interfaceVersion = 1; export function register(factory) { const cli = ${JSON.stringify(cli)}; factory(${JSON.stringify(id)}, () => ({ getName: () => ${JSON.stringify(id)}, buildWorkerArgs: ${args.toString()}${frameHook} })); }`;
+  const source = await readFile(path.resolve('test/fixtures/production-worker-driver.mjs'), 'utf8');
+  await writeFile(path.join(installed, 'driver-config.json'), JSON.stringify({ cli, id, adapterFrame }), { mode: 0o644 });
   await writeFile(path.join(installed, 'driver.mjs'), source, { mode: 0o644 });
   await writeFile(path.join(installed, 'package.json'), JSON.stringify({ name: id, version: '1.0.0', type: 'module' }), { mode: 0o644 });
   class Owner extends ProviderAdapter { getName() { return id; } buildWorkerArgs = args; }
   const owner = new Owner();
   const installation: any = { adapter, profile: binding.profile, cliVersion: binding.cliVersion, now: Date.parse(now),
-    policy: initial.policy, permissions, effort: 'medium', requiredControls: controls, executable: process.execPath,
+    policy: initial.policy, permissions, effort: 'medium', requiredControls: controls, executable,
     cwd: workdir, workerWritableRoots: [cwd], inputRoots: [cwd], outputRoots: [cwd], boundary: binding.boundary,
     effectiveConfigDigest: qualificationDigest(initial.policy), accountScope: binding.accountScope,
-    runtimeFiles: [cli, protocol], environment: {}, modules: [{ reference: adapter.runtimeDriver, packageRoot: installed,
+    runtimeFiles: [cli, protocol, path.join(installed, 'driver-config.json')], environment: {}, modules: [{ reference: adapter.runtimeDriver, packageRoot: installed,
       packageName: id, packageVersion: '1.0.0', modulePath: 'driver.mjs', interfaceVersion: 1,
       sha256: `sha256:${createHash('sha256').update(source).digest('hex')}`, adapterIds: [id], platforms: ['linux'] }] };
   const scope = await owner.inspectWorkerInstallation(installation);
@@ -101,6 +105,33 @@ async function productionFixture(adapterFrame = false) {
 }
 
 describe('models resolve production installation loading', () => {
+  it('qualifies its own single-link executable with trusted permissions', async () => {
+    const f = await productionFixture();
+    const executable = await stat(f.record.installation.executable);
+    expect(f.record.installation.executable).toBe(path.join(f.installed, 'node'));
+    expect(executable.mode & 0o777).toBe(0o755);
+    expect(executable.nlink).toBe(1);
+    await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [f.record] }), { mode: 0o600 });
+    expect((await f.call()).result.exitCode).toBe(0);
+  });
+
+  it.each([false, true])('loads literal fixture configuration (adapter frame: %s)', async adapterFrame => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'driver-literal-')); roots.push(root);
+    const cli = `path with spaces; '" \\ newline\n`;
+    const id = `adapter-'"; process.exit(9); //`;
+    await writeFile(path.join(root, 'driver.mjs'), await readFile(path.resolve('test/fixtures/production-worker-driver.mjs')));
+    await writeFile(path.join(root, 'driver-config.json'), JSON.stringify({ cli, id, adapterFrame }));
+    const driver = await import(pathToFileURL(path.join(root, 'driver.mjs')).href);
+    let adapter: any;
+    driver.register((name: string, factory: () => any) => { expect(name).toBe(id); adapter = factory(); });
+    expect(adapter.getName()).toBe(id);
+    expect(adapter.buildWorkerArgs({ selected: { model: 'm', effort: { value: 'medium' } }, finalPath: 'final' }, {},
+      { sandbox: 'workspace', approval: 'never' })).toEqual([cli, '--model', 'm', '--effort', 'medium',
+      '--sandbox', 'workspace', '--approval', 'never', '--final-output', 'final']);
+    if (adapterFrame) expect(JSON.parse(adapter.buildWorkerStdinFrame(Buffer.from(cli)))).toEqual({ message: cli });
+    else expect(adapter.buildWorkerStdinFrame).toBeUndefined();
+  });
+
   it('frames from the bound host store and policy despite worker cwd config changes, rejecting changed bindings', async () => {
     const f = await productionFixture(true);
     const storePath = path.join(f.configDir, 'worker-installations.json');
@@ -165,10 +196,7 @@ describe('models resolve production installation loading', () => {
     const f = await productionFixture();
     const name = 'AIWG_SYNTHETIC_WORKER_ENV';
     const value = 'synthetic-only-environment-value';
-    // The fixture CLI's fake wire protocol (test/fixtures/ralph-worker-protocol.mjs)
-    // requires AIWG_FAKE_WORKER_CONFIG to name its synthetic settings file for any
-    // invocation, including the bounded version probe this records against — it is
-    // required test plumbing, not qualification input under test.
+    // Synthetic worker settings exercise the recorded environment allowlist.
     const fakeWorkerConfig = path.join(f.installed, 'qualification-version-fixture.json');
     await writeFile(fakeWorkerConfig, JSON.stringify({ version: '1.0.0' }));
     vi.stubEnv(name, value);
@@ -203,7 +231,7 @@ describe('models resolve production installation loading', () => {
     const f = await productionFixture();
     const result = await f.call();
     expect(result.result.exitCode).toBe(2);
-    expect(result.output).toContain('recordWorkerInstallation');
+    expect(result.output).toContain('aiwg doctor --probe-workers --qualify');
     expect(result.output).toContain('OG_ADAPTER_UNQUALIFIED');
   });
 });

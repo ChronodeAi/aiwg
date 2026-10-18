@@ -42,7 +42,7 @@ commandHint:
 > aiwg show skill <name>
 > ```
 >
-> Only kernel-listed skills (`aiwg-doctor`, `aiwg-refresh`, `aiwg-status`, `aiwg-help`, `use`, `steward`) are directly invokable as slash commands. See [skill-discovery rule](../../../addons/aiwg-utils/rules/skill-discovery.md).
+> Only kernel-listed skills (`aiwg-doctor`, `aiwg-refresh`, `aiwg-status`, `aiwg-help`, `use`, `steward`) are directly invokable as slash commands. See [skill-discovery rule](https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/aiwg-utils/rules/skill-discovery.md).
 
 
 # Address Issues
@@ -191,12 +191,12 @@ For each issue, execute the 3-step cycle protocol. Throughout the cycle, offload
 
 #### Bounded decisions: Jev first, LLM fallback
 
-Before spending reasoning on any of these, call `aiwg decision ask ... --json` and use the answer when `status` is `answered`. On `fallback` (including Jev not set up), decide normally — fallback never stops the run. Never send secrets in the question or context. See the `decision-offload` skill for the exact command shape.
+Before spending reasoning on any of these, call `aiwg decision ask ... --json` with the listed `--caller` tag and use the answer when `status` is `answered`. On `fallback` (including Jev not set up), decide normally — fallback never stops the run. Never send secrets in the question or context. See the `decision-offload` skill for the exact command shape and the full caller-tag table.
 
-- **Worker/model/effort pick per dispatch** — `--choices` built from the deployed model-worker wrappers or the configured catalog; write each choice as `id=what it means` with no commas in the description.
-- **Environmental vs real failure** — `--yes-no` with the log excerpt as context when a test or CI failure lands.
-- **Review verdict follow-up** — re-review needed, yes or no.
-- **Reviewer minors** — fix now vs defer, per finding.
+- **Worker/model/effort pick per dispatch** — `--choices` built from the deployed model-worker wrappers or the configured catalog; write each choice as `id=what it means` with no commas in the description; `--caller address-issues:worker-pick`.
+- **Environmental vs real failure** — `--yes-no` with the log excerpt as context when a test or CI failure lands; `--caller address-issues:failure-triage`.
+- **Review verdict follow-up** — re-review needed, yes or no; `--caller address-issues:review-verdict`.
+- **Reviewer minors** — fix now vs defer, per finding; `--caller address-issues:minor-triage`.
 
 #### Step 1: Do Work
 

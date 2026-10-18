@@ -1,9 +1,10 @@
+import * as sessionReaders from '../../../src/sessions/readers.js';
 import {
   mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MUSE_ADAPTER_VERSION,
   MUSE_EXPORT_SCHEMA_VERSION,
@@ -42,6 +43,25 @@ async function collect<T>(values: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe('Muse Code session adapter', () => {
+
+  it('inspects and streams JSONL without collecting the source', async () => {
+    const buffered = vi.spyOn(sessionReaders, 'readBoundedJsonLines')
+      .mockRejectedValue(new Error('JSONL import must stream'));
+    try {
+      const adapter = new MuseSessionAdapter();
+      const selection = selectedPath(resolve(fixturesRoot, 'native/2026/09/25/00000000-0000-4000-8000-000000000002/session.jsonl'), 'muse-streaming', resolve(fixturesRoot, 'native'));
+      await expect(adapter.inspect(selection)).resolves.toMatchObject({ operationalState: 'available' });
+      let records = 0;
+      for await (const record of adapter.stream(selection)) {
+        expect(record.nativeSessionId).toBeTruthy();
+        records += 1;
+      }
+      expect(records).toBeGreaterThan(0);
+      expect(buffered).not.toHaveBeenCalled();
+    } finally {
+      buffered.mockRestore();
+    }
+  });
   const adapter = new MuseSessionAdapter();
   const temporaryRoots: string[] = [];
 
@@ -192,6 +212,48 @@ describe('Muse Code session adapter', () => {
     await expect(adapter.inspect(source)).rejects.toMatchObject({ code: 'MALFORMED_SOURCE' });
     await expect(collect(adapter.stream(source))).rejects.toMatchObject({ code: 'MALFORMED_SOURCE' });
   });
+
+  it.each(['complete', 'provisional'] as const)(
+    'imports raw U+2028 and U+2029 in %s native logs with byte-exact references', async (consistency) => {
+      const root = mkdtempSync(resolve(tmpdir(), 'muse-unicode-'));
+      temporaryRoots.push(root);
+      const locator = resolve(root, 'session.jsonl');
+      const first = JSON.stringify({
+        sequence: 0, payload_type: 'runtime.session', payload: { operation: 'a\u2028b\u2029c' },
+      }) + '\r\n\r\n';
+      const last = JSON.stringify({
+        sequence: 1, payload_type: consistency === 'complete' ? 'session.end' : 'runtime.session',
+      });
+      writeFileSync(locator, first + last);
+      const source = selectedPath(locator, 'muse-unicode', root);
+      await expect(adapter.inspect(source)).resolves.toMatchObject({ consistency, operationalState: 'available' });
+      const events = await collect(adapter.stream(source));
+      expect(events).toHaveLength(2);
+      expect(events.map((event) => event.rawReference.offset)).toEqual([0, Buffer.byteLength(first)]);
+      expect(events.map((event) => event.sourceCursor)).toEqual(['1', '2']);
+      expect(events.every((event) => event.sourceBytes === Buffer.byteLength(first + last))).toBe(true);
+    },
+  );
+
+  it.each(['envelope', 'retained-child', 'retained-frame'] as const)(
+    'reports content-free native schema paths for a malformed %s', async (shape) => {
+      const root = mkdtempSync(resolve(tmpdir(), 'muse-schema-detail-'));
+      temporaryRoots.push(root);
+      const locator = resolve(root, 'session.jsonl');
+      const invalid = { sequence: 'synthetic-transcript-marker' };
+      const value = shape === 'envelope' ? invalid : {
+        retained_frame: 'synthetic-frame', children: [
+          { record_json: shape === 'retained-child' ? JSON.stringify(invalid) : 42 },
+        ],
+      };
+      writeFileSync(locator, JSON.stringify(value) + '\n');
+      await expect(adapter.inspect(selectedPath(locator, 'synthetic', root))).rejects.toMatchObject({
+        code: 'MALFORMED_SOURCE', detail: { issues: [{
+          path: shape === 'retained-frame' ? 'children.0.record_json' : 'sequence', code: 'invalid_type',
+        }] },
+      });
+    },
+  );
 
   it('preserves approval, tool, and model-lifecycle events with provenance', async () => {
     const events = await collect(adapter.stream(selected('valid-v1.json', 'muse-fixture-v1')));

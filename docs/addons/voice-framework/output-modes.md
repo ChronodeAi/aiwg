@@ -98,5 +98,4 @@ The runtime replaces protected spans with opaque tokens before transformation an
 - [Author a custom syntax or house style](./custom-output-modes.md)
 - [Integrate output modes into a script or provider adapter](./output-mode-integration.md)
 - [Troubleshoot output modes](./output-mode-troubleshooting.md)
-- [Output-mode profile schema](../schemas/output-mode-profile.schema.json)
 - [Voice framework overview](./overview.md)

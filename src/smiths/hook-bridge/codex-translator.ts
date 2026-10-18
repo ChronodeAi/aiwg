@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import { homedir } from 'node:os';
 import type { HookSource, TranslateOptions, TranslateResult } from './types.js';
 import { substituteEnvVars } from './shim.js';
+import { tomlString } from '../../mcp/toml-string.mjs';
 
 /** Codex-native event names (subset; extend when verified against codex-rs). */
 const CODEX_EVENT_MAP: Record<string, string> = {
@@ -50,16 +51,16 @@ export function renderCodexHookToml(source: HookSource): string {
     const subArgs = (source.args || []).map((a) => substituteEnvVars(a, 'codex'));
 
     lines.push(`[[hooks.${codexEvent}]]`);
-    lines.push(`# AIWG-managed hook: ${source.id} — ${source.description}`);
-    lines.push(`command = "${subCommand.replace(/"/g, '\\"')}"`);
+    lines.push(`# AIWG-managed hook: ${`${source.id} — ${source.description}`.replace(/[\x00-\x1f\x7f]/g, ' ')}`);
+    lines.push(`command = ${tomlString(subCommand)}`);
     if (subArgs.length > 0) {
-      lines.push(`args = [${subArgs.map((a) => `"${a.replace(/"/g, '\\"')}"`).join(', ')}]`);
+      lines.push(`args = [${subArgs.map(tomlString).join(', ')}]`);
     }
     if (source.safetyCritical) {
       lines.push(`# safety-critical: cannot be auto-removed without --allow-unsafe-shadow`);
     }
     lines.push(`_aiwg_managed = true`);
-    lines.push(`_aiwg_id = "${source.id}"`);
+    lines.push(`_aiwg_id = ${tomlString(source.id)}`);
     lines.push('');
   }
 

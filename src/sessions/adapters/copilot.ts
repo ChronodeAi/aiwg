@@ -1,6 +1,8 @@
 import { basename, extname } from 'node:path';
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
@@ -102,7 +104,7 @@ export class CopilotSessionAdapter implements SessionSourceAdapter {
     }, this.limits);
     const parsed = ExportSchema.safeParse(value);
     if (!parsed.success) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Copilot chat export is malformed');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Copilot chat export is malformed', schemaRejectionDetail(parsed.error));
     }
     const schemaVersion = declaredSchemaVersion(parsed.data);
     assertSupportedSchemaMajor(schemaVersion);
@@ -233,7 +235,7 @@ function declaredSchemaVersion(value: CopilotExport): string {
     ? value.version
     : Number(String(value.version).split('.')[0]);
   if (!Number.isInteger(major) || major < 1) {
-    throw new SessionContractError('SCHEMA_DRIFT', 'invalid Copilot export version');
+    throw new SessionContractError('SCHEMA_DRIFT', 'invalid Copilot export version', schemaIssueDetail('version'));
   }
   return `${major}.0.0`;
 }
@@ -256,7 +258,7 @@ function unknownFields(
 function parseCursor(value?: string): number {
   if (!value) return 0;
   if (!/^\d+$/.test(value)) {
-    throw new SessionContractError('SCHEMA_DRIFT', 'invalid Copilot record cursor');
+    throw new SessionContractError('SCHEMA_DRIFT', 'invalid Copilot record cursor', schemaIssueDetail('cursor'));
   }
   return Number(value);
 }

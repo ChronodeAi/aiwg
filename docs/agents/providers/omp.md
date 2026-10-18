@@ -21,7 +21,7 @@ session ingestion.
 Install OMP from its
 [upstream instructions](https://github.com/can1357/oh-my-pi). The package route
 requires Bun 1.3.14 or newer; the standalone binary does not require Bun to
-launch. AIWG requires Node.js 20 or newer.
+launch. AIWG requires Node.js 24 or newer.
 
 ```bash
 npm install -g aiwg

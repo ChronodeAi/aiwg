@@ -2,6 +2,8 @@ import { opendir } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   assertSupportedSchemaMajor,
   sha256,
@@ -15,7 +17,7 @@ import {
 } from '../contracts.js';
 import { redactSourceLocator } from '../discovery.js';
 import {
-  readBoundedJson, readBoundedJsonLines, streamBoundedJsonLines,
+  readBoundedJson, streamBoundedJsonLines,
   type BoundedJsonRecord, type ReaderLimits,
 } from '../readers.js';
 
@@ -136,6 +138,7 @@ export class ClaudeSessionAdapter implements SessionSourceAdapter {
           throw new SessionContractError(
             'RESOURCE_LIMIT_EXCEEDED',
             'Claude source discovery exceeded the authorized file limit',
+            { limit: 'maxFiles', configured: this.discoveryLimits.maxFiles, observed: emitted },
           );
         }
         yield {
@@ -148,12 +151,18 @@ export class ClaudeSessionAdapter implements SessionSourceAdapter {
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
-    const parsed = await this.readSource(source);
-    return {
-      sourceSchemaVersion: parsed.schemaVersion,
-      consistency: parsed.consistency,
-      operationalState: 'available',
-    };
+    if (source.locatorClass === 'claude-web-export-json') {
+      const parsed = await this.readWebExportSource(source);
+      return {
+        sourceSchemaVersion: parsed.schemaVersion,
+        consistency: parsed.consistency,
+        operationalState: 'available',
+      };
+    }
+    const records = this.readSource(source);
+    let result = await records.next();
+    while (!result.done) result = await records.next();
+    return result.value;
   }
 
   async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
@@ -163,6 +172,13 @@ export class ClaudeSessionAdapter implements SessionSourceAdapter {
       for (const record of parsed.records.slice(start)) yield record;
       return;
     }
+    yield* this.readSource(source, cursor);
+  }
+
+  private async *readSource(
+    source: SelectedSource,
+    cursor?: ImportCursor,
+  ): AsyncGenerator<ProviderRecord, SourceProbe> {
     const start = parseRecordCursor(cursor?.value);
     const input = await streamBoundedJsonLines(
       {
@@ -171,61 +187,38 @@ export class ClaudeSessionAdapter implements SessionSourceAdapter {
       },
       { consistency: 'provisional', limits: this.limits },
     );
-    const hookSource = isHookLocator(source.locator);
+    let hookSource: boolean | undefined = isHookLocator(source.locator) ? true : undefined;
     let outputIndex = 0;
     let sawRecord = false;
+    let complete = false;
     let schemaVersion: string | null = null;
     for await (const line of input) {
       sawRecord = true;
-      const value = line.value as Record<string, unknown>;
+      const value = line.value && typeof line.value === 'object'
+        ? line.value as Record<string, unknown> : {};
       const currentSchema = typeof value.schemaVersion === 'string'
         ? value.schemaVersion : CLAUDE_TRANSCRIPT_SCHEMA_VERSION;
       if (schemaVersion && currentSchema !== schemaVersion) {
-        throw new SessionContractError('SCHEMA_DRIFT', 'Claude source declares mixed schema versions');
+        throw new SessionContractError('SCHEMA_DRIFT', 'Claude source declares mixed schema versions', schemaIssueDetail('schemaVersion'));
       }
       schemaVersion = currentSchema;
       assertSupportedSchemaMajor(schemaVersion);
-      const normalized = hookSource || isHookRecord(line.value)
-        ? normalizeHooks([line]).records
-        : normalizeTranscript([line], source.locator).records;
-      for (const record of normalized) {
+      hookSource ??= isHookRecord(line.value);
+      const normalized = hookSource
+        ? normalizeHooks([line])
+        : normalizeTranscript([line], source.locator);
+      complete ||= normalized.complete;
+      for (const record of normalized.records) {
         if (outputIndex++ >= start) yield record;
       }
     }
     if (!sawRecord && !input.incompleteTail) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Claude JSONL source is empty');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Claude JSONL source is empty', schemaIssueDetail('<root>'));
     }
-  }
-
-  private async readSource(source: SelectedSource): Promise<{
-    records: ProviderRecord[];
-    schemaVersion: string;
-    consistency: 'provisional' | 'complete';
-  }> {
-    if (source.locatorClass === 'claude-web-export-json') {
-      return this.readWebExportSource(source);
-    }
-    const result = await readBoundedJsonLines(
-      {
-        selectedPath: source.locator,
-        allowedRoots: source.authorizedScope.allowedRoots,
-      },
-      { consistency: 'provisional', limits: this.limits },
-    );
-    if (result.records.length === 0 && !result.incompleteTail) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Claude JSONL source is empty');
-    }
-    const hookSource = isHookLocator(source.locator)
-      || result.records.some((record) => isHookRecord(record.value));
-    const normalized = hookSource
-      ? normalizeHooks(result.records)
-      : normalizeTranscript(result.records, source.locator);
-    const schemaVersion = declaredSchemaVersion(result.records);
-    assertSupportedSchemaMajor(schemaVersion);
     return {
-      records: normalized.records,
-      schemaVersion,
-      consistency: normalized.complete ? 'complete' : 'provisional',
+      sourceSchemaVersion: schemaVersion ?? CLAUDE_TRANSCRIPT_SCHEMA_VERSION,
+      consistency: complete ? 'complete' : 'provisional',
+      operationalState: 'available',
     };
   }
 
@@ -243,10 +236,11 @@ export class ClaudeSessionAdapter implements SessionSourceAdapter {
       throw new SessionContractError(
         'MALFORMED_SOURCE',
         'Claude web/account export is not a recognized conversations.json layout',
+        schemaRejectionDetail(parsed.error),
       );
     }
     if (parsed.data.length === 0) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Claude web/account export is empty');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Claude web/account export is empty', schemaIssueDetail('<root>'));
     }
     return {
       records: normalizeWebExport(parsed.data),
@@ -340,7 +334,7 @@ function normalizeTranscript(
   for (const record of records) {
     const parsed = ClaudeRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Claude transcript record is malformed');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Claude transcript record is malformed', schemaRejectionDetail(parsed.error));
     }
     const value = parsed.data;
     const embeddedSessionId = value.sessionId ?? value.session_id;
@@ -377,7 +371,7 @@ function normalizeHooks(
   for (const record of records) {
     const parsed = ClaudeHookSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Claude lifecycle hook record is malformed');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Claude lifecycle hook record is malformed', schemaRejectionDetail(parsed.error));
     }
     const hook = parsed.data;
     complete ||= hook.hook_event_name === 'SessionEnd';
@@ -560,19 +554,9 @@ async function* discoverJsonl(root: string, maxDepth: number): AsyncIterable<str
   }
 }
 
-function declaredSchemaVersion(records: BoundedJsonRecord[]): string {
-  const declared = records
-    .map((record) => {
-      if (!record.value || typeof record.value !== 'object' || Array.isArray(record.value)) return undefined;
-      return (record.value as Record<string, unknown>).schemaVersion;
-    })
-    .find((value): value is string => typeof value === 'string');
-  return declared ?? CLAUDE_TRANSCRIPT_SCHEMA_VERSION;
-}
-
 function parseRecordCursor(value?: string): number {
   if (value === undefined || value === '') return 0;
-  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'Claude record cursor is invalid');
+  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'Claude record cursor is invalid', schemaIssueDetail('cursor'));
   return Number(value);
 }
 

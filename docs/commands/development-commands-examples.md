@@ -457,7 +457,7 @@ When analyzing a Dockerfile:
 ### Multi-stage Build Example
 
 # Build stage
-FROM node:18-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --only=production && npm cache clean --force
@@ -465,7 +465,7 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM node:18-alpine AS production
+FROM node:24-alpine AS production
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 WORKDIR /app
 COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
@@ -477,7 +477,7 @@ CMD ["node", "dist/server.js"]
 ### Security Improvements
 
 # Use specific version tags
-FROM node:18.17.0-alpine3.18
+FROM node:24-alpine
 
 # Create non-root user
 RUN addgroup -g 1001 -S appgroup && \

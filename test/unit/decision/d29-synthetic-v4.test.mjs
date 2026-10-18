@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { noteSentences } from '../../helpers/comment-text.mjs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { oracle, reviewTemplate, validateStudyArtifact } from '../../../tools/decision/studies/d29.mjs';
 import { generateHeldoutRow, d29WorldV4, D29_V4_VARIANTS, D29_V4_INJECTIONS, heldoutGeneratorDigest } from '../../../src/decision/heldout/generators.js';
@@ -84,7 +85,7 @@ describe('D29 synthetic v4', () => {
         const identifiers = text.match(/\b(?:D)?[0-9]+(?:-[0-9]+)+\b/g) ?? [];
         for (const id of identifiers) expect(id).toMatch(/^[1-9][0-9]{5}-[1-9][0-9]{5}-[1-9][0-9]{5}$/);
         const context = row.input.payload.context;
-        for (const sentence of context.replace(/<!--|-->|[>()[\]]/g, '').split(/(?<=[.!?])\s+/).map(part => part.trim()).filter(Boolean)) expect(text).not.toContain(sentence);
+        for (const sentence of noteSentences(context)) expect(text).not.toContain(sentence);
         expect(gold).toEqual({ support: slice.startsWith('citation') ? slice === 'citation-injection' ? 'supports' : slice.slice(9) : null,
           ready: ['citation-supports', 'criterion-ready'].includes(slice) });
         expect(oracle({ ...world, decoy: !world.decoy })).toEqual(gold);

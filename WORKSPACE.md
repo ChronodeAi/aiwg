@@ -72,17 +72,31 @@ gh run list --repo jmagly/aiwg --limit 5
 gh run view <run-id> --repo jmagly/aiwg
 ```
 
-The GitHub job also owns everything after publication — stable `latest`
-dist-tag publication, cosign signing, SBOM generation, and uploading `SHA256SUMS`,
-`aiwg-*.tgz`, and `install.sh` to the GitHub release. A failure anywhere in
-that job leaves the packages on npm but the release without assets, which is
-what `publication_verify` in the release config checks for.
+The GitHub job creates or updates a normal release immediately after tag-identity
+and signed-tag verification, before build/test/publish; only stable versions are
+marked latest. Tests and package/security checks block npm publication. After all
+three npm publishes, it signs the locally packed tarball, generates and signs a
+CycloneDX SBOM of the built tree, and uploads the signed assets, `SHA256SUMS`, `aiwg-*.tgz`, and
+`install.sh`, independently of npm registry visibility.
 
-Recovery for a partial publish is `workflow_dispatch` on the GitHub workflow
-with `--ref <tag> -f tag_to_publish=<tag>`; the publish steps treat an
-already-published version as success and continue into the skipped work.
+npm visibility/provenance and stable dist-tag checks run last with short, bounded
+waits and are advisory: failures emit warnings and job-summary recovery commands
+without failing the job or preventing the subsequent Socket audit. Real npm
+publish failures still block; already-published versions count as success.
+Recovery for a partial publish or advisory failure uses the same tag:
+`gh workflow run npm-publish.yml --repo jmagly/aiwg --ref <tag> -f tag_to_publish=<tag>`.
 
 Source of record: `docs/contributing/versioning.md` ("Publication surfaces").
+
+### CI policy: verify locally, CI after merge
+
+Pull requests do not run CI; no `.gitea/workflows/` file triggers on
+`pull_request`. Before opening or merging a PR, build and test on the
+workstation (typecheck, `npm run build:cli`, and the touched vitest files plus
+neighbours with `--config config/vitest.config.js`) and list the commands and
+counts in the PR. Merge without waiting for a PR status. `delivery.require_ci_green`
+applies to the post-merge run on `main`: work is done when that run is green;
+a red `main` is fixed forward right away on a new branch.
 
 
 <!-- AIWG:project-extraction:start -->
@@ -95,7 +109,7 @@ Source of record: `docs/contributing/versioning.md` ("Publication surfaces").
 
 - Name: `aiwg`
 - Description: Reusable project context and specialist workflows for the AI tools you already use. AIWG places agents, skills, commands, and rules in provider-readable locations, with optional utilities for artifact memory, workflow orchestration, recovery, and discovery.
-- Runtime: `node >=20.0.0`
+- Runtime: `node >=24`
 
 ### Common Commands (source: [`package.json`](./package.json))
 
@@ -140,7 +154,6 @@ Reusable project context and specialist workflows for the AI tools you already u
 - [`.gitea/workflows/npm-publish.yml`](./.gitea/workflows/npm-publish.yml)
 - [`.gitea/workflows/omp-conformance.yml`](./.gitea/workflows/omp-conformance.yml)
 - [`.gitea/workflows/scheduled-docs-release.yml`](./.gitea/workflows/scheduled-docs-release.yml)
-- [`.gitea/workflows/skill-lint-pr.yml`](./.gitea/workflows/skill-lint-pr.yml)
 - [`.gitea/workflows/storage-server-conformance.yml`](./.gitea/workflows/storage-server-conformance.yml)
 - [`.gitea/workflows/upload-release-sigs.yml`](./.gitea/workflows/upload-release-sigs.yml)
 - [`.github/workflows/npm-publish.yml`](./.github/workflows/npm-publish.yml)

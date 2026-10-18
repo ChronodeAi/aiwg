@@ -9,22 +9,32 @@
  * graceful error handling in the contributor workflow.
  */
 
-import { execSync } from 'child_process';
+import { boundedSpawnSync } from '../../../src/process/bounded-child-process.mjs';
 
 /**
  * Execute gh command and return structured result
- * @param {string} command - The gh command to execute
+ * @param {string[]} args - Arguments for the gh CLI
  * @param {Object} options - Execution options
  * @returns {Object} { success: boolean, stdout: string, stderr: string, error: Error|null }
  */
-function execGh(command, options = {}) {
+function execGh(args, options = {}) {
   try {
-    const stdout = execSync(command, {
+    const tier = options.tier ?? 'network';
+    const result = boundedSpawnSync('gh', args, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options
     });
-    return { success: true, stdout: stdout.trim(), stderr: '', error: null };
+    const stdout = result.stdout?.toString() || '';
+    const stderr = result.stderr?.toString() || '';
+    const success = result.status === 0 && !result.error;
+    const error = success ? null : (result.error || new Error(stderr || `gh exited with code ${result.status}`));
+    return {
+      success,
+      stdout: success ? stdout.trim() : stdout,
+      stderr: stderr || error?.message || '',
+      error
+    };
   } catch (err) {
     return {
       success: false,
@@ -35,12 +45,21 @@ function execGh(command, options = {}) {
   }
 }
 
+function validPRNumber(prNumber) {
+  return (typeof prNumber === 'number' || typeof prNumber === 'string')
+    && /^\d+$/.test(String(prNumber)) && Number(prNumber) > 0 && Number.isSafeInteger(Number(prNumber));
+}
+
+function validRepository(upstream) {
+  return typeof upstream === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.][A-Za-z0-9_.-]*$/.test(upstream);
+}
+
 /**
  * Check if gh CLI is authenticated
  * @returns {Object} { authenticated: boolean, username: string|null, error: string|null }
  */
 export function checkGhAuth() {
-  const result = execGh('gh auth status 2>&1');
+  const result = execGh(['auth', 'status']);
 
   if (!result.success) {
     return {
@@ -52,7 +71,7 @@ export function checkGhAuth() {
 
   // Extract username from gh auth status output
   // Format: "✓ Logged in to github.com account USERNAME ..."
-  const output = result.stdout || result.stderr;
+  const output = `${result.stdout}\n${result.stderr}`;
   const match = output.match(/Logged in to github\.com account ([^\s]+)/);
   const username = match ? match[1] : null;
 
@@ -90,6 +109,9 @@ export function getUsername() {
  * @returns {Object} { success: boolean, fork: string|null, alreadyExists: boolean, error: string|null }
  */
 export function forkRepo(upstream) {
+  if (!validRepository(upstream)) {
+    return { success: false, fork: null, alreadyExists: false, error: 'Repository must be in owner/repo format' };
+  }
   const authCheck = checkGhAuth();
   if (!authCheck.authenticated) {
     return {
@@ -101,7 +123,7 @@ export function forkRepo(upstream) {
   }
 
   // Check if fork already exists
-  const checkResult = execGh(`gh repo view ${authCheck.username}/${upstream.split('/')[1]} 2>&1`);
+  const checkResult = execGh(['repo', 'view', `${authCheck.username}/${upstream.split('/')[1]}`]);
   if (checkResult.success) {
     return {
       success: true,
@@ -112,7 +134,7 @@ export function forkRepo(upstream) {
   }
 
   // Create fork
-  const forkResult = execGh(`gh repo fork ${upstream} --remote=false`);
+  const forkResult = execGh(['repo', 'fork', upstream, '--remote=false']);
   if (!forkResult.success) {
     return {
       success: false,
@@ -149,17 +171,11 @@ export function createPR(title, body, labels = [], draft = false) {
     };
   }
 
-  let command = `gh pr create --title "${title.replace(/"/g, '\\"')}" --body "${body.replace(/"/g, '\\"')}"`;
+  const args = ['pr', 'create', '--title', title, '--body-file', '-'];
+  if (draft) args.push('--draft');
+  if (labels.length > 0) args.push('--label', labels.join(','));
 
-  if (draft) {
-    command += ' --draft';
-  }
-
-  if (labels.length > 0) {
-    command += ` --label "${labels.join(',')}"`;
-  }
-
-  const result = execGh(command);
+  const result = execGh(args, { input: body });
   if (!result.success) {
     return {
       success: false,
@@ -188,6 +204,9 @@ export function createPR(title, body, labels = [], draft = false) {
  * @returns {Object} { success: boolean, status: Object|null, error: string|null }
  */
 export function getPRStatus(prNumber) {
+  if (!validPRNumber(prNumber)) {
+    return { success: false, status: null, error: 'PR number must be a positive integer' };
+  }
   const authCheck = checkGhAuth();
   if (!authCheck.authenticated) {
     return {
@@ -197,7 +216,7 @@ export function getPRStatus(prNumber) {
     };
   }
 
-  const result = execGh(`gh pr view ${prNumber} --json state,title,statusCheckRollup,reviews,comments`);
+  const result = execGh(['pr', 'view', String(prNumber), '--json', 'state,title,statusCheckRollup,reviews,comments']);
   if (!result.success) {
     return {
       success: false,
@@ -229,6 +248,9 @@ export function getPRStatus(prNumber) {
  * @returns {Object} { success: boolean, error: string|null }
  */
 export function commentOnPR(prNumber, comment) {
+  if (!validPRNumber(prNumber)) {
+    return { success: false, error: 'PR number must be a positive integer' };
+  }
   const authCheck = checkGhAuth();
   if (!authCheck.authenticated) {
     return {
@@ -237,7 +259,7 @@ export function commentOnPR(prNumber, comment) {
     };
   }
 
-  const result = execGh(`gh pr comment ${prNumber} --body "${comment.replace(/"/g, '\\"')}"`);
+  const result = execGh(['pr', 'comment', String(prNumber), '--body-file', '-'], { input: comment });
   if (!result.success) {
     return {
       success: false,
@@ -257,6 +279,9 @@ export function commentOnPR(prNumber, comment) {
  * @returns {Object} { success: boolean, hasPR: boolean, pr: Object|null, error: string|null }
  */
 export function checkPRExists(upstream) {
+  if (!validRepository(upstream)) {
+    return { success: false, hasPR: false, pr: null, error: 'Repository must be in owner/repo format' };
+  }
   const authCheck = checkGhAuth();
   if (!authCheck.authenticated) {
     return {
@@ -267,7 +292,7 @@ export function checkPRExists(upstream) {
     };
   }
 
-  const result = execGh(`gh pr list --repo ${upstream} --author ${authCheck.username} --json number,title,state,headRefName`);
+  const result = execGh(['pr', 'list', '--repo', upstream, '--author', authCheck.username, '--json', 'number,title,state,headRefName']);
   if (!result.success) {
     return {
       success: false,
@@ -302,7 +327,7 @@ export function checkPRExists(upstream) {
  * @returns {Object} { success: boolean, limit: number|null, remaining: number|null, reset: string|null, error: string|null }
  */
 export function checkRateLimit() {
-  const result = execGh('gh api rate_limit');
+  const result = execGh(['api', 'rate_limit']);
   if (!result.success) {
     return {
       success: false,
@@ -341,6 +366,9 @@ export function checkRateLimit() {
  * @returns {Object} { success: boolean, reviews: Array|null, error: string|null }
  */
 export function getPRReviews(prNumber) {
+  if (!validPRNumber(prNumber)) {
+    return { success: false, reviews: null, error: 'PR number must be a positive integer' };
+  }
   const authCheck = checkGhAuth();
   if (!authCheck.authenticated) {
     return {
@@ -350,7 +378,7 @@ export function getPRReviews(prNumber) {
     };
   }
 
-  const result = execGh(`gh pr view ${prNumber} --json reviews`);
+  const result = execGh(['pr', 'view', String(prNumber), '--json', 'reviews']);
   if (!result.success) {
     return {
       success: false,
@@ -381,6 +409,9 @@ export function getPRReviews(prNumber) {
  * @returns {Object} { success: boolean, comments: Array|null, error: string|null }
  */
 export function getPRReviewComments(prNumber) {
+  if (!validPRNumber(prNumber)) {
+    return { success: false, comments: null, error: 'PR number must be a positive integer' };
+  }
   const authCheck = checkGhAuth();
   if (!authCheck.authenticated) {
     return {
@@ -391,7 +422,7 @@ export function getPRReviewComments(prNumber) {
   }
 
   // Use GitHub API to get review comments
-  const result = execGh(`gh api repos/{owner}/{repo}/pulls/${prNumber}/comments`);
+  const result = execGh(['api', `repos/{owner}/{repo}/pulls/${prNumber}/comments`]);
   if (!result.success) {
     return {
       success: false,

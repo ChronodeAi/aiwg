@@ -9,7 +9,7 @@ import { inspectDshVersion } from '../../../tools/providers/deepseek-harness-tra
 function childProcess() {
   const child = Object.assign(new EventEmitter(), {
     stdout: new PassThrough(), stderr: new PassThrough(),
-    exitCode: null as number | null, signalCode: null,
+    pid: 424242, exitCode: null as number | null, signalCode: null,
     kill: vi.fn(() => true),
   });
   spawnMock.mockReturnValue(child);

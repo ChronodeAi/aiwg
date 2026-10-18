@@ -210,7 +210,8 @@ describe('AIWG artifact root tracking and distribution (integration)', () => {
       const managerPath = path.join(REPO_ROOT, 'src', 'channel', 'manager.mjs');
       const content = fs.readFileSync(managerPath, 'utf-8');
       // Should have sparse checkout in the clone path
-      const hasCloneSparse = content.includes('sparse-checkout init') && content.includes('!/.aiwg');
+      // git is invoked with an argv array, so match the argument sequence rather than a shell string
+      const hasCloneSparse = /'sparse-checkout',\s*'init'/.test(content) && content.includes('!/.aiwg');
       expect(hasCloneSparse, 'clone path should configure sparse checkout excluding .aiwg').toBe(true);
     });
 

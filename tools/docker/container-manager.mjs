@@ -8,12 +8,15 @@
  * @implements Plan: Daemon Starter — Docker Containerization
  */
 
-import { execSync, spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
+import { importImpl } from '../_resolve-impl.mjs';
 import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONTAINER_ID_FILE = '.aiwg/daemon/container-id';
@@ -67,7 +70,7 @@ export class ContainerManager {
    */
   isDockerAvailable() {
     try {
-      execSync('docker info', { stdio: 'ignore' });
+      boundedExecFileSync('docker', ['info'], 'quick', { stdio: 'ignore' });
       return true;
     } catch {
       return false;
@@ -87,7 +90,7 @@ export class ContainerManager {
 
     // Check if image exists
     try {
-      execSync(`docker image inspect ${fullImage}`, { stdio: 'ignore' });
+      boundedExecFileSync('docker', ['image', 'inspect', fullImage], 'quick', { stdio: 'ignore' });
       console.log(`[docker] Image ${fullImage} exists`);
       return;
     } catch {
@@ -97,8 +100,9 @@ export class ContainerManager {
     console.log(`[docker] Building image ${fullImage}...`);
     const buildContext = this.#dockerConfig.buildContext || this.#projectDir;
 
-    execSync(
-      `docker build -f ${dockerfile} -t ${fullImage} ${buildContext}`,
+    boundedExecFileSync(
+      'docker', ['build', '-f', dockerfile, '-t', fullImage, buildContext],
+      'long',
       { stdio: 'inherit' }
     );
 
@@ -171,7 +175,9 @@ export class ContainerManager {
 
     args.push(fullImage);
 
-    const result = execSync(`docker ${args.join(' ')}`, { encoding: 'utf8' }).trim();
+    // `long`, not `quick` (#3062 finding 6): `docker run` can implicitly
+    // pull the image if the local build cache was invalidated.
+    const result = boundedExecFileSync('docker', args, 'long', { encoding: 'utf8' }).trim();
     const containerId = result.slice(0, 12);
 
     // Store container ID
@@ -190,13 +196,13 @@ export class ContainerManager {
    */
   stop() {
     try {
-      execSync(`docker stop ${this.#containerName}`, { stdio: 'ignore', timeout: 15000 });
+      execFileSync('docker', ['stop', this.#containerName], { stdio: 'ignore', timeout: 15000, killSignal: 'SIGKILL' });
     } catch {
       // Container may not be running
     }
 
     try {
-      execSync(`docker rm ${this.#containerName}`, { stdio: 'ignore' });
+      boundedExecFileSync('docker', ['rm', this.#containerName], 'quick', { stdio: 'ignore' });
     } catch {
       // Container may not exist
     }
@@ -216,8 +222,9 @@ export class ContainerManager {
    */
   status() {
     try {
-      const output = execSync(
-        `docker inspect --format '{{.State.Running}} {{.State.Health.Status}}' ${this.#containerName}`,
+      const output = boundedExecFileSync(
+        'docker', ['inspect', '--format', '{{.State.Running}} {{.State.Health.Status}}', this.#containerName],
+        'quick',
         { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] }
       ).trim();
 
@@ -252,8 +259,9 @@ export class ContainerManager {
    */
   #stopExisting() {
     try {
-      const output = execSync(
-        `docker ps -q -f name=${this.#containerName}`,
+      const output = boundedExecFileSync(
+        'docker', ['ps', '-q', '-f', `name=${this.#containerName}`],
+        'quick',
         { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] }
       ).trim();
 

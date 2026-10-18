@@ -7,9 +7,10 @@
  * @architecture @.aiwg/architecture/toolsmith-implementation-spec.md
  */
 
-import { execSync } from 'child_process';
-import { readFile, writeFile, mkdir, access } from 'fs/promises';
+import { boundedExecFileSync, boundedExecSync } from '../../process/bounded-child-process.mjs';
+import { readFile, writeFile, mkdir, access, stat } from 'fs/promises';
 import { existsSync, constants } from 'fs';
+import { createHash } from 'node:crypto';
 import { resolve, join, dirname } from 'path';
 import { platform, arch, homedir, tmpdir, cpus, totalmem, freemem } from 'os';
 import { fileURLToPath } from 'url';
@@ -22,26 +23,59 @@ const __dirname = dirname(__filename);
  * RuntimeDiscovery - Discovers and catalogs installed system tools
  */
 export class RuntimeDiscovery {
-  constructor(basePath = null) {
-    this.basePath = basePath || projectAiwgPath(process.cwd(), 'smiths', 'toolsmith');
+  constructor(basePath = null, { cwd = process.cwd(), quiet = false } = {}) {
+    this.cwd = cwd;
+    this.quiet = quiet;
+    this.basePath = basePath || projectAiwgPath(this.cwd, 'smiths', 'toolsmith');
     this.knownTools = this.#loadKnownTools();
   }
 
   /**
-   * Perform full discovery scan
+   * Refresh discovery, skipping version probes when inputs are unchanged.
    * @returns {Promise<Object>} RuntimeCatalog
    */
-  async discover() {
-    console.log('Starting runtime discovery...');
+  async discover({ force = false } = {}) {
+    if (!this.quiet) console.log('Starting runtime discovery...');
+
+    const loaded = await this.#loadCatalog().catch(error => {
+      if (error instanceof SyntaxError) return null;
+      throw error;
+    });
+    const previous = Array.isArray(loaded?.tools) ? loaded : null;
+    const paths = new Map();
+    const inputs = [];
+    for (const name of this.#safeTools()) {
+      const toolPath = await this.#findToolPath(name);
+      paths.set(name, toolPath);
+      const metadata = toolPath ? await stat(toolPath).catch(() => null) : null;
+      inputs.push([name, toolPath, metadata && [metadata.mtimeMs, metadata.ctimeMs, metadata.size, metadata.mode]]);
+    }
+    const inputFingerprint = createHash('sha256').update(JSON.stringify([
+      1, this.knownTools, inputs, platform(), arch(), homedir(), this.cwd,
+      process.env.PATH, process.env.PATHEXT, process.env.SHELL, process.env.ComSpec,
+    ])).digest('hex');
+    if (!force && previous?.inputFingerprint === inputFingerprint
+      && existsSync(join(this.basePath, 'runtime-info.md'))) {
+      if (!this.quiet) console.log(`Discovery skipped: unchanged (${previous.tools.length} tools)`);
+      return previous;
+    }
 
     const environment = await this.getEnvironment();
     const resources = await this.getResources();
-    const tools = await this.#discoverTools();
+    const tools = await this.#discoverTools(paths);
+    const previousIds = new Set((previous?.tools || []).map(tool => tool.id));
+    const currentIds = new Set(tools.available.map(tool => tool.id));
+    const delta = {
+      added: [...currentIds].filter(id => !previousIds.has(id)),
+      removed: [...previousIds].filter(id => !currentIds.has(id)),
+    };
 
     const catalog = {
       $schema: 'https://aiwg.io/schemas/toolsmith/runtime-catalog-v1.json',
       version: '1.0',
       generated: new Date().toISOString(),
+      inputFingerprint,
+      delta,
       environment,
       resources,
       tools: tools.available,
@@ -52,7 +86,11 @@ export class RuntimeDiscovery {
     await this.#writeCatalog(catalog);
     await this.#writeRuntimeInfo(catalog);
 
-    console.log(`Discovery complete: ${catalog.tools.length} tools found`);
+    if (!this.quiet) console.log(`Discovery complete: ${catalog.tools.length} tools found`);
+    if (!this.quiet) console.log(`Tool delta: +${delta.added.length} added, -${delta.removed.length} removed`);
+    if (delta.removed.length) {
+      if (!this.quiet) console.warn(`Previously cataloged tools no longer available: ${delta.removed.join(', ')}`);
+    }
     return catalog;
   }
 
@@ -140,13 +178,13 @@ export class RuntimeDiscovery {
           }
         }
       } else if (os === 'darwin') {
-        const version = execSync('sw_vers -productVersion', { encoding: 'utf-8' }).trim();
+        const version = boundedExecFileSync('sw_vers', ['-productVersion'], 'quick', { encoding: 'utf-8' }).trim();
         osVersion = `macOS ${version}`;
       } else if (os === 'win32') {
-        osVersion = execSync('ver', { encoding: 'utf-8' }).trim();
+        osVersion = boundedExecSync('ver', 'quick', { encoding: 'utf-8' }).trim();
       }
     } catch (error) {
-      console.warn('Could not detect OS version:', error.message);
+      if (!this.quiet) console.warn('Could not detect OS version:', error.message);
     }
 
     return {
@@ -155,7 +193,7 @@ export class RuntimeDiscovery {
       arch: arch(),
       shell: process.env.SHELL || process.env.ComSpec || '/bin/sh',
       homeDir: homedir(),
-      workingDir: process.cwd()
+      workingDir: this.cwd
     };
   }
 
@@ -172,7 +210,7 @@ export class RuntimeDiscovery {
       // Disk space
       if (platform() === 'win32') {
         // Windows: use wmic
-        const output = execSync('wmic logicaldisk get size,freespace', { encoding: 'utf-8' });
+        const output = boundedExecFileSync('wmic', ['logicaldisk', 'get', 'size,freespace'], 'quick', { encoding: 'utf-8' });
         const lines = output.trim().split('\n').slice(1);
         let totalFree = 0;
         for (const line of lines) {
@@ -184,7 +222,7 @@ export class RuntimeDiscovery {
         diskFreeGb = Math.round((totalFree / (1024 ** 3)) * 10) / 10;
       } else {
         // Unix: use df
-        const output = execSync('df -k .', { encoding: 'utf-8' });
+        const output = boundedExecFileSync('df', ['-k', '.'], 'quick', { encoding: 'utf-8', cwd: this.cwd });
         const lines = output.trim().split('\n');
         if (lines.length > 1) {
           const parts = lines[1].trim().split(/\s+/);
@@ -199,7 +237,7 @@ export class RuntimeDiscovery {
       memoryTotalGb = Math.round((totalMem / (1024 ** 3)) * 10) / 10;
       memoryAvailableGb = Math.round((freeMem / (1024 ** 3)) * 10) / 10;
     } catch (error) {
-      console.warn('Could not get resource info:', error.message);
+      if (!this.quiet) console.warn('Could not get resource info:', error.message);
     }
 
     return {
@@ -298,9 +336,9 @@ export class RuntimeDiscovery {
    * @see https://git.integrolabs.net/roctinam/aiwg/issues/820
    * @private
    */
-  async #discoverTools() {
+  #safeTools() {
     // Curated list: knownTools database + common dev tools safe to probe
-    const safeToProbe = new Set([
+    return new Set([
       // From knownTools database
       ...Object.keys(this.knownTools),
       // Aliases from knownTools
@@ -328,12 +366,13 @@ export class RuntimeDiscovery {
       'yq', 'fx', 'miller',
       'htop', 'ncdu', 'dust', 'procs', 'tokei',
     ]);
+  }
 
+  async #discoverTools(paths) {
     const available = [];
     const unavailable = [];
 
-    for (const name of safeToProbe) {
-      const toolPath = await this.#findToolPath(name);
+    for (const [name, toolPath] of paths) {
       if (!toolPath) {
         // Not installed — skip silently (not an error)
         continue;
@@ -359,19 +398,38 @@ export class RuntimeDiscovery {
   }
 
   /**
-   * Find tool path using which/where
+   * Search PATH first, then common user installation directories on Unix.
    * @private
    */
   async #findToolPath(toolName) {
     try {
       const cmd = platform() === 'win32' ? 'where' : 'which';
-      const path = execSync(`${cmd} ${toolName}`, { encoding: 'utf-8' })
+      const path = boundedExecFileSync(cmd, [toolName], 'quick', { encoding: 'utf-8' })
         .trim()
         .split('\n')[0];
       return path;
     } catch {
-      return null;
+      // Scheduled jobs often omit user installation directories from PATH.
     }
+    if (platform() !== 'win32' && !toolName.includes('/') && !toolName.includes('\\')) {
+      const home = homedir();
+      const directories = new Set([
+        join(process.env.CARGO_HOME || join(home, '.cargo'), 'bin'),
+        join(home, '.local', 'bin'), join(home, 'bin'),
+        join(home, '.npm-global', 'bin'), join(home, 'go', 'bin'),
+        join(home, '.bun', 'bin'), join(home, '.deno', 'bin'),
+      ]);
+      for (const directory of directories) {
+        const candidate = join(directory, toolName);
+        try {
+          await access(candidate, constants.X_OK);
+          if ((await stat(candidate)).isFile()) return candidate;
+        } catch {
+          // Continue to the next user directory.
+        }
+      }
+    }
+    return null;
   }
 
   /**
@@ -393,15 +451,11 @@ export class RuntimeDiscovery {
     // Bare `version` (positional) is intentionally excluded: it caused
     // BPF tools to attach tracepoints, input-leapc to connect to
     // hostname "version", and cs2cs to open a file named "version".
-    const versionCommands = [
-      `${toolPath} --version`,
-      `${toolPath} -v`,
-      `${toolPath} -V`
-    ];
+    const versionArgs = ['--version', '-v', '-V'];
 
-    for (const cmd of versionCommands) {
+    for (const arg of versionArgs) {
       try {
-        const output = execSync(cmd, {
+        const output = boundedExecFileSync(toolPath, [arg], 'quick', {
           encoding: 'utf-8',
           timeout: 3000,
           killSignal: 'SIGKILL',
@@ -503,7 +557,7 @@ export class RuntimeDiscovery {
     if (platform() === 'win32') return undefined;
 
     try {
-      const manPath = execSync(`man -w ${toolName}`, {
+      const manPath = boundedExecFileSync('man', ['-w', toolName], 'quick', {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
       }).trim();

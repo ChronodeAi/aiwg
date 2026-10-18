@@ -46,6 +46,48 @@ function envelope(): OpaInteropEnvelope {
   return { profileVersion: PROFILE, bundle: { name: 'authz', revision: 'rev-1', digest: pin.digest },
     decisionId: 'decision-1', policyPath: 'authz/allow', input: {}, result: false };
 }
+
+describe('OPA sensitive value detection', () => {
+  it.each(['a'.repeat(50_000), `a@b${'.'.repeat(50_000)}`])('scans large nonmatching email tokens within five seconds (alert 2): %#', value => {
+    const data = envelope();
+    data.input = { message: value };
+    data.inputProjectionAllowlist = ['/message'];
+    const start = performance.now();
+    expect(exportOpaDecisionLog(storedResult(), data).input).toEqual({ message: value });
+    expect(performance.now() - start).toBeLessThan(5_000);
+  });
+
+  it('redacts oversized strings in full, including sensitive suffixes beyond the inspection bound', () => {
+    for (const value of ['a'.repeat(65_536), 'a'.repeat(65_537), `${'a'.repeat(1_000_000)} person@example.test`]) {
+      const data = envelope();
+      data.input = { message: value };
+      data.inputProjectionAllowlist = ['/message'];
+      const start = performance.now();
+      const exported = exportOpaDecisionLog(storedResult(), data);
+      expect(exported.input).toEqual({ message: value.length > 65_536 ? '[redacted]' : value });
+      expect(performance.now() - start).toBeLessThan(5_000);
+      const stored = storedResult();
+      stored.spec.outcome = value;
+      data.result = value;
+      expect(exportOpaDecisionLog(stored, data).result).toBe(value.length > 65_536 ? '[redacted]' : value);
+    }
+  });
+
+  it.each([
+    ['ordinary narrative', false], ['Bearer abc', true], ['bearer   ', false],
+    ['SECRET', true], ['a token value', true], ['file:///note', true], ['/home/user/note', true], ['private note', true],
+    ['Contact a.b+tag@example.test!', true], ['(A%name@sub.example.CO)', true],
+    ['a@b.c', false], ['a@b..co', true], ['a@b.co1', true], ['@example.test', false],
+    ['a@.co', false], ['a@b.c@d.test', true], ['x@y.invalid/path', true], ['x@bücher.test', false],
+  ])('preserves redaction for %j', (value, sensitive) => {
+    const data = envelope();
+    data.input = { message: value };
+    data.inputProjectionAllowlist = ['/message'];
+    const exported = exportOpaDecisionLog(storedResult(), data);
+    expect(exported.input).toEqual({ message: sensitive ? '[redacted]' : value });
+    expect(exported.redaction.removed).toEqual(sensitive ? ['$.input/message'] : []);
+  });
+});
 function reviewEvidence(): DecisionResult {
   return {
     apiVersion: 'decision.aiwg.io/v1alpha2', kind: 'DecisionResult',
@@ -318,6 +360,40 @@ describe('INTOP review regressions: sanitized and truthful OPA logs', () => {
     data.input = { provider: 'evil' };
     data.inputProjectionAllowlist = ['/provider'];
     expect(() => exportOpaDecisionLog(storedResult(), data)).toThrow(/control|provider/i);
+  });
+
+  it.each(['__proto__'])('rejects intermediate %s projection segments without changing Object.prototype', (segment) => {
+    const prototypeBefore = Object.getOwnPropertyDescriptors(Object.prototype);
+    for (const pointer of [`/${segment}/polluted`, `/safe/${segment}/polluted`]) {
+      const data = envelope();
+      data.input = JSON.parse(`{"${segment}":{"polluted":true},"safe":{"${segment}":{"polluted":true}}}`);
+      data.inputProjectionAllowlist = [pointer];
+      expect(() => exportOpaDecisionLog(storedResult(), data)).toThrow('OPA input projection cannot contain __proto__ segments');
+      expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototypeBefore);
+    }
+  });
+
+  it.each(['__proto__'])('rejects final %s projection segments even when input is missing', (segment) => {
+    const prototypeBefore = Object.getOwnPropertyDescriptors(Object.prototype);
+    for (const input of [JSON.parse(`{"${segment}":true,"safe":{"${segment}":true}}`), {}]) {
+      for (const pointer of [`/${segment}`, `/safe/${segment}`]) {
+        const data = envelope();
+        data.input = input;
+        data.inputProjectionAllowlist = [pointer];
+        expect(() => exportOpaDecisionLog(storedResult(), data)).toThrow('OPA input projection cannot contain __proto__ segments');
+        expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototypeBefore);
+      }
+    }
+  });
+
+  it('preserves normal projected JSON including nested and escaped pointer segments', () => {
+    const data = envelope();
+    data.input = { subject: 'operator', evidence: { value: 'docs', score: 3 }, 'a/b': { '~key': true }, ignored: 'omit' };
+    data.inputProjectionAllowlist = ['/subject', '/evidence/value', '/evidence/score', '/a~1b/~0key'];
+    const projected = exportOpaDecisionLog(storedResult(), data).input;
+    expect(JSON.stringify(projected)).toBe('{"subject":"operator","evidence":{"value":"docs","score":3},"a/b":{"~key":true}}');
+    expect(Object.getPrototypeOf(projected)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf((projected as Record<string, unknown>).evidence)).toBe(Object.prototype);
   });
 
   it('serializes bundles as the OPA object keyed by bundle name', () => {

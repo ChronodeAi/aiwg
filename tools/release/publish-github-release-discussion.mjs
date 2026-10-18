@@ -5,7 +5,7 @@
 // post-release action in the release config. The release flow must run it and
 // treat a non-zero exit as a hard stop; the discussion is not optional prose.
 
-import { execFileSync } from 'node:child_process';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -119,7 +119,7 @@ export function planAction({ existing, body, update, version, repo }) {
 }
 
 function gh(args, input) {
-  return execFileSync('gh', args, { encoding: 'utf8', input });
+  return boundedExecFileSync('gh', args, 'network', { encoding: 'utf8', input });
 }
 
 export function preflight({ repo, category }) {

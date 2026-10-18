@@ -7,6 +7,8 @@ import { constants, openSync, closeSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import Ajv2020 from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
 import {
   discoverMuseCatalogModels,
   discoverCodexDebugModels,
@@ -17,6 +19,7 @@ import {
   type NormalizeDiscoveryOptions,
   type ModelDiscoveryOptions,
   classifyDiscoveryError,
+  redactModelDiscoveryText,
   diffModelCatalog,
   discoverOpenClawModels,
   discoverOpenCodeModels,
@@ -211,6 +214,109 @@ describe('dynamic model catalog', () => {
       models: [],
       errorKind: 'rate-limit',
     });
+  });
+
+  it.each([
+    'EROFS: read-only file system, mkdir /home/synthetic/.pi/agent/settings.json.lock',
+    'EACCES: permission denied, FileSystem.open /home/synthetic/.local/share/opencode/log/401.log',
+    'EPERM: operation not permitted, mkdir /home/synthetic/.pi/agent/settings.json.lock',
+    'FileSystem.open: /home/synthetic/.local/share/opencode/log/synthetic.log',
+    'read-only file system, mkdir /home/synthetic/.pi/agent/settings.json.lock',
+    'permission denied, open /home/synthetic/.local/share/opencode/log/synthetic.log',
+    'operation not permitted, mkdir /home/synthetic/.pi/agent/settings.json.lock',
+  ])('classifies local filesystem failures as environment: %s', message => {
+    expect(classifyDiscoveryError(`\u001b[31m${message}\u001b[0m`)).toBe('environment');
+  });
+
+  it.each([
+    ['HTTP 403 forbidden', 'authentication'],
+    ['HTTP 403 permission denied', 'authentication'],
+    ['HTTP 429 rate limit exceeded', 'rate-limit'],
+    ['models timed out', 'timeout'],
+    ['spawn fake ENOENT', 'command'],
+    ['unknown option --pure', 'command'],
+    ['FileSystem.open: /tmp/unrelated-file', 'command'],
+  ])('preserves discovery classification for %s', (message, expected) => {
+    expect(classifyDiscoveryError(message)).toBe(expected);
+  });
+
+  it('strips terminal controls before redaction and diagnostic truncation', () => {
+    const diagnostic = '\u001b[31m'.repeat(900)
+      + '\u001b]8;;https://example.invalid\u0007failure\u001b]8;;\u001b\\ '
+      + 'to\u001b[1mken=synthetic-value\u001b[0m';
+    expect(redactModelDiscoveryText(diagnostic)).toBe('failure token=[REDACTED]');
+    expect(redactModelDiscoveryText('x'.repeat(5000))).toHaveLength(4096);
+  });
+
+  it('accepts environment discovery errors in the catalog schema', async () => {
+    const schema = JSON.parse(await readFile(new URL('../../../schemas/models/model-catalog.v1.schema.json', import.meta.url), 'utf8'));
+    const ajv = addFormats(new Ajv2020({ strict: true }));
+    ajv.addSchema(schema);
+    const validate = ajv.compile({ $ref: `${schema.$id}#/$defs/providerDiscovery` });
+    const result = await discoverPiModels('fake', async () => ({ stdout: '', exitCode: 1,
+      stderr: 'EROFS: read-only file system, mkdir /home/synthetic/.pi/agent/settings.json.lock' }));
+    expect(validate(result), JSON.stringify(validate.errors)).toBe(true);
+    expect(validate({ ...result, errorKind: 'unknown-kind' })).toBe(false);
+  });
+
+  it.each(['returned', 'thrown'])('sanitizes %s native errors before storing diagnostics', async mode => {
+    const { root, cacheFile, inventory } = await fixture();
+    const message = 'EROFS: read-only file system, mkdir /home/synthetic/.pi/agent/settings.json.lock';
+    const resolved = await resolveDynamicModelCatalog({ aiwgRoot: root, cacheFile, inventory, forceRefresh: true,
+      nativeDiscoverers: { codex: async () => {
+        const error = `\u001b[31m${message}\u001b[0m`;
+        if (mode === 'thrown') throw new Error(error);
+        return { provider: 'codex', source: 'native', observedAt: new Date(0).toISOString(),
+          accountScope: 'local-account', models: [], errorKind: 'environment', error };
+      } },
+    });
+    expect(resolved.discovery!.providers.codex).toMatchObject({ errorKind: 'environment', error: message, models: [] });
+    const cached = JSON.parse(await readFile(cacheFile, 'utf8'));
+    expect(cached.discovery.providers.codex.error).toBe(message);
+  });
+
+  it.each([
+    ['opencode', discoverOpenCodeModels, 'synthetic/code\n',
+      'EACCES: permission denied, FileSystem.open /home/synthetic/.local/share/opencode/log/synthetic.log'],
+    ['pi', discoverPiModels, 'provider  model\nsynthetic  code\n',
+      'EROFS: read-only file system, mkdir /home/synthetic/.pi/agent/settings.json.lock'],
+  ] as const)('preserves the last good %s catalog through environment failures and recovery', async (provider, discover, stdout, message) => {
+    const { root, cacheFile, inventory, catalog } = await fixture();
+    inventory.providers = [{ ...inventory.providers[0], id: provider }];
+    const staticFile = join(root, 'agentic/code/providers/model-catalog.v1.json');
+    await writeFile(staticFile, JSON.stringify({ ...catalog, providers: {
+      [provider]: { roles: { coding: { id: 'synthetic/static-code' } } },
+    } }));
+    let failed = false;
+    let now = new Date('2026-10-17T12:00:00.000Z');
+    const runner = async (_command: string, args: string[]) => args.includes('--version')
+      ? { stdout: 'fixture', stderr: '', exitCode: 0 }
+      : failed ? { stdout: '', stderr: `\u001b[31m${message}\u001b[0m`, exitCode: 1 }
+        : { stdout, stderr: '', exitCode: 0 };
+    const options = { aiwgRoot: root, cacheFile, inventory, forceRefresh: true, now: () => now,
+      nativeDiscoverers: { [provider]: async () => ({ ...await discover('fake', runner), observedAt: now.toISOString() }) } };
+    const first = await resolveDynamicModelCatalog(options);
+    expect(first.discovery!.providers[provider].errorKind).toBeUndefined();
+    failed = true;
+    now = new Date('2026-10-18T12:00:00.000Z');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const resolved = await resolveDynamicModelCatalog(options);
+      const entry = resolved.discovery!.providers[provider];
+      expect(entry).toMatchObject({ source: 'native', errorKind: 'environment', error: message,
+        models: first.discovery!.providers[provider].models,
+        observedAt: first.discovery!.providers[provider].observedAt });
+      expect(resolved.providers[provider]).toEqual(first.providers[provider]);
+      expect(resolved.discovery!.fetchedAt).toBe(now.toISOString());
+      const cached = JSON.parse(await readFile(cacheFile, 'utf8'));
+      expect(cached.discovery.providers[provider]).toEqual(entry);
+      expect(Object.values(cached.discovery.instances)).toContainEqual(entry);
+      expect(JSON.stringify(cached)).not.toContain('\\u001b');
+    }
+    failed = false;
+    const recovered = (await resolveDynamicModelCatalog(options)).discovery!.providers[provider];
+    expect(recovered.errorKind).toBeUndefined();
+    expect(recovered.error).toBeUndefined();
+    expect(recovered.observedAt).toBe(now.toISOString());
   });
 
   it.each([
@@ -610,6 +716,18 @@ describe('#2882 production and evidence regressions', () => {
     expect(validateWorkerModelObservation(worker)).toEqual([]);
   });
 
+  it('preserves exact API/provider identity and blocks conflicting native rows', () => {
+    const row = { slug: 'synthetic-model', provider: 'synthetic-inference', visibility: 'listed', context_window: 32000, output_limit: 4096 };
+    const options = { ...evidenceOptions, cliId: 'codex' };
+    const exact = normalizeCodexDebugModels({ models: [row] }, options).models[0];
+    expect(exact.apiModelId).toBe('synthetic-model');
+    expect(exact.llmProvider).toBe('synthetic-inference');
+    expect(exact.worker!.provenance[0].fields).toEqual(expect.arrayContaining(['/apiModelId', '/llmProvider']));
+    const conflicting = normalizeCodexDebugModels({ models: [row, { ...row, provider: 'other-inference' }] }, options).models[0];
+    expect(conflicting.llmProvider).toBeUndefined();
+    expect(conflicting.worker!.conflicts).toEqual(expect.arrayContaining([expect.objectContaining({ field: '/llmProvider' })]));
+  });
+
   it('hashes evidence values and covers every emitted field with concrete provenance', async () => {
     const one = normalizeMuseCatalogRows({ rows: [evidenceRow] }, evidenceOptions).models[0];
     const two = normalizeMuseCatalogRows({ rows: [{ ...evidenceRow, context_limit: 200 }] }, evidenceOptions).models[0];
@@ -1003,6 +1121,7 @@ describe('#2882 real parser completeness regressions', () => {
 
   it('keeps only the last 4 KiB of Codex app-server stderr and redacts timeout errors', async () => {
     const child = Object.assign(new EventEmitter(), {
+      pid: 54321,
       stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
       kill: vi.fn(),
     });
@@ -1023,6 +1142,7 @@ describe('#2882 real parser completeness regressions', () => {
       : { id: 2, result: { data: [{ model: 'current-code' }, ...(shape === 'mixed' ? [null, {}] : [])],
         ...(shape === 'pagination' ? { nextCursor: 'page-2' } : {}) } };
     const child = Object.assign(new EventEmitter(), {
+      pid: 54321,
       stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
       kill: vi.fn(),
     });
@@ -1051,6 +1171,63 @@ describe('#2882 real parser completeness regressions', () => {
       if (shape === 'mixed') expect(next.error).toContain('/result/data/1');
       if (shape === 'truncated') expect(next.error).toContain('line 2');
       if (shape === 'pagination') expect(next.error).toContain('/result/nextCursor');
+    }
+  });
+});
+
+it('normalizes inference identity from real providerless Codex and provider_id Muse rows', () => {
+  const options = { cliId: 'codex', source: 'fixture:real-shape', runtimeVersion: '0.163.0', accountScope: 'local-account' as const };
+  const codex = normalizeCodexDebugModels({ models: [{ slug: 'synthetic-code', visibility: 'list' }] }, options).models[0];
+  expect(codex.llmProvider).toBe('openai');
+  expect(codex.apiModelId).toBe('synthetic-code');
+  const muse = normalizeMuseCatalogRows({ rows: [{ model_id: 'synthetic-muse', provider_id: 'meta' }] }, { ...options, cliId: 'muse' }).models[0];
+  expect(muse.llmProvider).toBe('meta');
+  expect(muse.apiModelId).toBe('synthetic-muse');
+  expect(muse.worker!.provenance[0].fields).toContain('/llmProvider');
+  const unknown = normalizeMuseCatalogRows({ rows: [{ model_id: 'synthetic-muse' }] }, { ...options, cliId: 'muse' }).models[0];
+  expect(unknown.llmProvider).toBeUndefined();
+});
+
+describe('#3083 native catalog context and delegation facts', () => {
+  it.each([
+    [{ context_window: 500000, max_context_window: 872000, effective_context_window_percent: 95 }, 475000],
+    [{ context_window: 272000, max_context_window: 872000, effective_context_window_percent: 95 }, 258400],
+    [{ context_window: 500000, max_context_window: 272000, effective_context_window_percent: 95 }, 258400],
+    [{ context_window: 1001, effective_context_window_percent: 95 }, 950],
+    [{ context_window: 32000 }, 32000],
+    [{ max_context_window: 872000 }, null],
+  ])('bounds context using the active catalog window: %j', (limits, expected) => {
+    const result = normalizeCodexDebugModels({ models: [{ slug: 'synthetic-code', ...limits }] }, evidenceOptions);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.models[0].worker).toMatchObject({ contextTokens: expected, maxOutputTokens: null });
+    expect(result.models[0].worker!.provenance[0].fields).toContain('/contextTokens:context_window+max_context_window+effective_context_window_percent');
+    expect(validateWorkerModelObservation(result.models[0].worker)).toEqual([]);
+  });
+
+  it.each([
+    { max_context_window: -1 }, { max_context_window: '872000' },
+    { effective_context_window_percent: 0 }, { effective_context_window_percent: 101 },
+    { effective_context_window_percent: '95' }, { context_window: 3.5 },
+  ])('keeps malformed context facts unknown: %j', limits => {
+    const result = normalizeCodexDebugModels({ models: [{ slug: 'synthetic-code', context_window: 500000, ...limits }] }, evidenceOptions);
+    expect(result.diagnostics.length).toBeGreaterThan(0);
+    expect(result.models[0].worker!.contextTokens).toBeNull();
+  });
+
+  it.each(['codex', 'muse'] as const)('%s distinguishes ultra delegation from ordinary reasoning and child effort', cli => {
+    const ids = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+    const levels = ids.map(id => ({ [cli === 'codex' ? 'effort' : 'tier']: id,
+      description: id === 'ultra' ? 'Maximum reasoning with automatic task delegation' : 'Reasoning depth' }));
+    const normalize = (raw: unknown) => cli === 'codex'
+      ? normalizeCodexDebugModels({ models: [{ slug: 'synthetic-code', supported_reasoning_levels: raw,
+        multi_agent_reasoning_effort: 'xhigh', multi_agent_version: 'v2' }] }, { ...evidenceOptions, cliId: cli })
+      : normalizeMuseCatalogRows({ rows: [{ model_id: 'synthetic-code', reasoning_effort_variants: raw }] }, { ...evidenceOptions, cliId: cli });
+    for (const raw of [levels, ids]) {
+      const worker = normalize(raw).models[0].worker!;
+      expect(worker.effortSupport).toBe('explicit');
+      expect(worker.efforts).toEqual(ids.map(id => ({ id, selfDelegates: id === 'ultra' })));
+      expect(worker.dataUse).toEqual({ processing: 'unknown', productImprovement: null, retentionDays: null });
+      expect(validateWorkerModelObservation(worker)).toEqual([]);
     }
   });
 });

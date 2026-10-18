@@ -1566,6 +1566,28 @@
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
     },
     {
+      "path": "test/fixtures/ralph-recovery-baseline/src/config/aiwg-config.ts",
+      "owner": "test/fixtures",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [
+        "unknown"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/fixtures/ralph-recovery-baseline/vscode-extension/schemas/aiwg.config.v1.json",
+      "owner": "test/fixtures",
+      "role": "fixture-or-test",
+      "currentVersion": "UHP 2026-08-11",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
       "path": "test/fixtures/sandbox-api/executor-v1/dispatch/dispatch-request.json",
       "owner": "test/fixtures",
       "role": "fixture-or-test",
@@ -1779,6 +1801,18 @@
       "statusVocabulary": [
         "completed",
         "input-required",
+        "running"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/integration/tools-packed-relative-imports.test.ts",
+      "owner": "test/integration",
+      "role": "fixture-or-test",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
         "running"
       ],
       "serialization": "typescript/javascript",
@@ -2002,7 +2036,8 @@
         "cancelled",
         "completed",
         "done",
-        "failed"
+        "failed",
+        "running"
       ],
       "serialization": "typescript/javascript",
       "migrationAction": "retain",

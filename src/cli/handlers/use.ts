@@ -14,6 +14,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { pathToFileURL } from 'node:url';
+import { createHash } from 'node:crypto';
+import { canDeploySkill, sameSkillOwner, extractFrameworkSlug } from '../../providers/skill-ownership.mjs';
 import { resolveOmpPaths } from '../../providers/omp-paths.mjs';
 import YAML from 'yaml';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
@@ -77,6 +79,7 @@ import {
   normalizeProviderDefinitionId,
   type ProviderArtifactPathStrings,
 } from '../../providers/provider-definitions.js';
+import { deployedSkillRoots } from '../../providers/deployed-skill-roots.js';
 
 // Module-level guard so the iteration loops further down (which re-enter
 // execute() per framework/provider) don't re-emit the warning each pass.
@@ -333,7 +336,7 @@ const FRAMEWORK_DIR_MAP: Partial<Record<string, string>> = {
 };
 
 /** Resolve actual framework directory name for a given user-facing name. */
-function resolveFrameworkDir(framework: string): string | undefined {
+export function resolveFrameworkDir(framework: string): string | undefined {
   return FRAMEWORK_DIR_MAP[framework];
 }
 
@@ -1331,17 +1334,10 @@ async function countDeployedBundleSkills(
   bundlePath: string,
   target: string,
   provider: string,
-  paths: ProviderArtifactPathStrings,
 ): Promise<number> {
   const skillCandidates = await listBundleSkillNameCandidates(bundlePath);
   if (skillCandidates.length === 0) return 0;
-  const candidateDirs = [
-    paths.skills,
-    getProviderKernelSkillsPath(provider),
-  ]
-    .filter(Boolean)
-    .map(dir => resolveDeployPath(target, dir));
-  const uniqueCandidateDirs = [...new Set(candidateDirs)];
+  const uniqueCandidateDirs = deployedSkillRoots(target, provider);
 
   let count = 0;
   for (const names of skillCandidates) {
@@ -1368,7 +1364,7 @@ async function countBundleDeployedArtifacts(
   return {
     agents: await countDeployedBundleFiles(bundlePath, 'agents', target, paths.agents, ['.md', '.toml']),
     commands: await countDeployedBundleFiles(bundlePath, 'commands', target, paths.commands, ['.md']),
-    skills: await countDeployedBundleSkills(bundlePath, target, provider, paths),
+    skills: await countDeployedBundleSkills(bundlePath, target, provider),
     rules: await countDeployedBundleFiles(bundlePath, 'rules', target, paths.rules, ['.md', '.mdc']),
   };
 }
@@ -1376,10 +1372,22 @@ async function countBundleDeployedArtifacts(
 const SKILL_SUPPORT_REFERENCE = /(?:^|[\s`('"\[])((?:templates|references|scripts|assets)\/[A-Za-z0-9._@/+\-]+)(?=$|[\s`)'"\],:;])/gm;
 
 /** Copy one support file, preserving its executable bit. */
-async function copySkillSupportFile(source: string, destination: string): Promise<void> {
+async function copySkillSupportFile(source: string, destination: string, skillDir?: string): Promise<void> {
   await fs.mkdir(path.dirname(destination), { recursive: true });
   await fs.copyFile(source, destination);
   await fs.chmod(destination, (await fs.stat(source)).mode & 0o777);
+  // Extend the shared copier's receipt for bundle-root assets too. Adapters
+  // without that receipt keep their own ownership and cleanup contract.
+  if (!skillDir) return;
+  const manifestPath = path.join(skillDir, '.aiwg-manifest.json');
+  let manifest;
+  try { manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')); } catch { return; }
+  if (!manifest.skillSource || !manifest.managed?.['SKILL.md']) return;
+  manifest.managed[path.relative(skillDir, destination)] = {
+    ...manifest.managed['SKILL.md'],
+    hash: `sha256:${createHash('sha256').update(await fs.readFile(destination)).digest('hex')}`,
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 /**
@@ -1396,6 +1404,7 @@ async function copySkillSupportTree(
   sourceSkillMd: string,
   reference: string,
   deployFile: ((from: string, to: string) => void) | null,
+  skillDir?: string,
 ): Promise<void> {
   await fs.mkdir(destination, { recursive: true });
   const label = reference.replace(/\/+$/, '');
@@ -1409,7 +1418,7 @@ async function copySkillSupportTree(
       );
     }
     if (entry.isDirectory()) {
-      await copySkillSupportTree(from, to, sourceSkillMd, `${label}/${entry.name}`, deployFile);
+      await copySkillSupportTree(from, to, sourceSkillMd, `${label}/${entry.name}`, deployFile, skillDir);
       continue;
     }
     if (!entry.isFile()) continue;
@@ -1417,7 +1426,7 @@ async function copySkillSupportTree(
       deployFile(from, to);
       continue;
     }
-    await copySkillSupportFile(from, to);
+    await copySkillSupportFile(from, to, skillDir);
   }
 }
 
@@ -1431,7 +1440,7 @@ async function reconcileDeployedSkillAssets(
   bundlePath: string,
   target: string,
   provider: string,
-  options: { strictReferences?: boolean; scope?: 'user' | 'project'; skipUndeployed?: boolean } = {},
+  options: { strictReferences?: boolean; scope?: 'user' | 'project'; skipUndeployed?: boolean; force?: boolean } = {},
 ): Promise<void> {
   const strictReferences = options.strictReferences ?? true;
   const skillsRoot = path.join(bundlePath, 'skills');
@@ -1443,19 +1452,38 @@ async function reconcileDeployedSkillAssets(
   } catch {
     return;
   }
-  const paths = getProviderPaths(provider);
-  const kernelSkillsPath = getProviderKernelSkillsPath(provider);
   const deployRoots = provider === 'omp' && options.scope === 'user'
     ? [path.join(resolveOmpPaths({ cwd: target }).agentDir, 'skills')]
-    : [...new Set([paths.skills, kernelSkillsPath]
-      .filter((value): value is string => Boolean(value)).map(value => resolveDeployPath(target, value)))];
+    : deployedSkillRoots(target, provider);
 
   for (const skillName of skillDirs) {
     const sourceSkillDir = path.join(skillsRoot, skillName);
     const sourceSkillMd = path.join(sourceSkillDir, 'SKILL.md');
     let content: string;
     try { content = await fs.readFile(sourceSkillMd, 'utf8'); } catch { continue; }
-    if (options.skipUndeployed && !(await Promise.all(deployRoots.map(root =>
+    // Check each deployed tier independently: a foreign mirror must not block
+    // support assets for a tier already owned by this source.
+    const ownedRoots: string[] = [];
+    for (const root of deployRoots) {
+      const skillDir = path.join(root, skillName);
+      try {
+        const manifestPath = path.join(skillDir, '.aiwg-manifest.json');
+        const receipt = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+        if (!canDeploySkill(receipt, sourceSkillDir, options)) continue;
+        if (!sameSkillOwner(receipt, sourceSkillDir)) {
+          receipt.skillSource = path.resolve(sourceSkillDir);
+          const slug = extractFrameworkSlug(sourceSkillMd);
+          for (const record of Object.values(receipt.managed ?? {}) as Array<{ frameworkSlug?: string }>) {
+            if (slug) record.frameworkSlug = slug;
+            else delete record.frameworkSlug;
+          }
+          await fs.writeFile(manifestPath, `${JSON.stringify(receipt, null, 2)}\n`);
+        }
+      } catch { /* adapters without shared ownership receipts keep their own contract */ }
+      if (await fileExists(path.join(skillDir, 'SKILL.md'))) ownedRoots.push(root);
+    }
+    if (ownedRoots.length === 0) continue;
+    if (options.skipUndeployed && !(await Promise.all(ownedRoots.map(root =>
       fileExists(path.join(root, skillName, 'SKILL.md'))))).some(Boolean)) continue;
     const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? '';
     const declaredEntrypoint = frontmatter
@@ -1499,7 +1527,7 @@ async function reconcileDeployedSkillAssets(
       }
 
       let deployedSkillRoot: string | undefined;
-      for (const root of deployRoots) {
+      for (const root of ownedRoots) {
         // The deployer may select the bulk or kernel tier; use the tier that
         // actually contains this skill's transformed SKILL.md.
         if (await fileExists(path.join(root, skillName, 'SKILL.md'))) {
@@ -1516,14 +1544,14 @@ async function reconcileDeployedSkillAssets(
         })()
         : null;
       if (sourceIsDirectory) {
-        await copySkillSupportTree(source, destination, sourceSkillMd, relative, deployFile);
+        await copySkillSupportTree(source, destination, sourceSkillMd, relative, deployFile, path.join(deployedSkillRoot, skillName));
         continue;
       }
       if (deployFile) {
         deployFile(source, destination);
         continue;
       }
-      await copySkillSupportFile(source, destination);
+      await copySkillSupportFile(source, destination, path.join(deployedSkillRoot, skillName));
     }
   }
 }
@@ -1613,6 +1641,7 @@ async function deployOneProjectLocalBundle(opts: {
       ...modelArgs,
     ];
     args.push(...collectUseScopeDeployArgs(ctx.args));
+    if (ctx.args.includes('--force')) args.push('--force');
     if (dryRun) args.push('--dry-run');
     if (verbose) args.push('--verbose');
     if (force) args.push('--force');
@@ -1637,7 +1666,7 @@ async function deployOneProjectLocalBundle(opts: {
     exitCode = result.exitCode;
     if (exitCode === 0 && !dryRun) {
       try {
-        await reconcileDeployedSkillAssets(bundle.artifactPath, target, provider);
+        await reconcileDeployedSkillAssets(bundle.artifactPath, target, provider, { force: ctx.args.includes('--force') });
       } catch (error) {
         ui.warn(`Project-local skill asset deployment failed for '${bundle.id}': ${(error as Error).message}`);
         exitCode = 1;
@@ -2615,6 +2644,48 @@ async function deployOmpUserSource(opts: {
       skills: entries.skills.length, rules: entries.rules.length }, entries });
 }
 
+/** Record native home writes without mirroring or changing user-scope removal roots. */
+async function recordNativeAddonDeploy(bundlePath: string, target: string, provider: string, bundle: string): Promise<void> {
+  const userPaths = USER_SCOPE_PATHS[provider];
+  const paths = getProviderPaths(provider);
+  const entries: Record<'agents' | 'commands' | 'skills' | 'rules', string[]> = {
+    agents: [], commands: [], skills: [], rules: [],
+  };
+  for (const names of await listBundleSkillNameCandidates(bundlePath)) {
+    for (const root of deployedSkillRoots(target, provider)) {
+      let name: string | undefined;
+      for (const candidate of names) {
+        if (await fileExists(path.join(root, candidate, 'SKILL.md'))) { name = candidate; break; }
+      }
+      if (!name) continue;
+      try {
+        const receipt = JSON.parse(await fs.readFile(path.join(root, name, '.aiwg-manifest.json'), 'utf8'));
+        const sourceDir = path.join(bundlePath, 'skills', names[names.length - 1]);
+        if (!sameSkillOwner(receipt, sourceDir)) continue;
+      } catch { /* legacy adapters may not write a shared ownership receipt */ }
+      entries.skills.push(path.relative(userPaths.skills, path.join(root, name)));
+      break;
+    }
+  }
+  for (const kind of ['agents', 'commands', 'rules'] as const) {
+    if (!paths[kind] || !userPaths[kind]) continue;
+    for (const stem of await listBundleMdStems(bundlePath, kind)) {
+      const filename = `${stem}.md`;
+      const destination = path.join(resolveDeployPath(target, paths[kind]), filename);
+      if (await fileExists(destination)) entries[kind].push(path.relative(userPaths[kind], destination));
+    }
+  }
+  const manifestPath = path.join(bundlePath, 'manifest.json');
+  const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as { version?: string };
+  const { recordUserDeploy } = await import('../../config/user-registry.js');
+  await recordUserDeploy({
+    framework: bundle, provider, version: manifest.version ?? (await getVersionInfo()).version,
+    source: 'bundled', manifestHash: await hashManifest(manifestPath), entries,
+    counts: { agents: entries.agents.length, commands: entries.commands.length,
+      skills: entries.skills.length, rules: entries.rules.length },
+  });
+}
+
 async function mirrorProjectLocalBundleToUserScope(opts: {
   bundle: ProjectLocalBundle;
   provider: string;
@@ -3456,6 +3527,7 @@ export class UseHandler implements CommandHandler {
         addonBaseArgs.push('--copy-all');
       }
       if (dryRunAddon) addonBaseArgs.push('--dry-run');
+      if (remainingArgs.includes('--force')) addonBaseArgs.push('--force');
 
       const kind = isExtension ? 'extension' : 'addon';
       const activationOrder = isAddon
@@ -3480,7 +3552,7 @@ export class UseHandler implements CommandHandler {
         }
         if (!dryRunAddon) {
           try {
-            await reconcileDeployedSkillAssets(dependencySource, target, provider, { strictReferences: false });
+            await reconcileDeployedSkillAssets(dependencySource, target, provider, { strictReferences: false, force: remainingArgs.includes('--force') });
           } catch (error) {
             return {
               exitCode: 1,
@@ -3523,7 +3595,7 @@ export class UseHandler implements CommandHandler {
 
       if (!dryRunAddon) {
         try {
-          await reconcileDeployedSkillAssets(addonSource, target, provider, { strictReferences: false });
+          await reconcileDeployedSkillAssets(addonSource, target, provider, { strictReferences: false, force: remainingArgs.includes('--force') });
         } catch (error) {
           return {
             exitCode: 1,
@@ -3571,6 +3643,14 @@ export class UseHandler implements CommandHandler {
           exitCode: 1,
           message: `Failed to register CLI commands: ${error instanceof Error ? error.message : String(error)}`,
         };
+      }
+
+      if (!dryRunAddon && (provider === 'openclaw' || (provider === 'grokbot' && addonScope === 'user'))) {
+        try {
+          await recordNativeAddonDeploy(addonSource, target, provider, framework);
+        } catch (error) {
+          return { exitCode: 1, message: `Addon user registry update failed: ${error instanceof Error ? error.message : String(error)}` };
+        }
       }
 
       // Persist the same lifecycle record frameworks and project-local bundles
@@ -3738,7 +3818,7 @@ export class UseHandler implements CommandHandler {
     }
     if (scope === 'user' && !deployArgs.includes('--scope')) deployArgs.push('--scope', 'user');
     const filteredArgs = deployArgs.filter(
-      a => a !== '--no-utils' && a !== '--no-project-local' && a !== '--ci-hooks-enabled' && a !== '--force' && a !== '--skip-conflicts' && a !== '--no-harness-agents'
+      a => a !== '--no-utils' && a !== '--no-project-local' && a !== '--ci-hooks-enabled' && a !== '--skip-conflicts' && a !== '--no-harness-agents'
     );
     const deployFilteredArgs = removeFlagWithOptionalValue(filteredArgs, '--harness-agents');
 

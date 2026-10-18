@@ -24,7 +24,12 @@
  * coreutils `timeout`).
  */
 
+import { importImpl } from '../_resolve-impl.mjs';
 import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 const TIMEOUT_EXIT_CODE = 124;
 
@@ -110,6 +115,7 @@ function captureDiagnostics(rootPid) {
     encoding: 'utf8',
     timeout: 15_000,
     maxBuffer: 8 * 1024 * 1024,
+    killSignal: 'SIGKILL',
   });
   if (result.status !== 0 || !result.stdout) {
     console.error(`[hang-report] process listing unavailable (${result.error?.message ?? `exit ${result.status}`})`);
@@ -130,15 +136,29 @@ function captureDiagnostics(rootPid) {
 }
 
 export async function run({ timeoutMs, graceMs, command }) {
+  // A fatal runtime crash cannot run reporter hooks. Keep the last snapshot
+  // outside the child, including when npm sits between us and vitest (#3073).
+  let stateDir;
+  try {
+    stateDir = mkdtempSync(path.join(tmpdir(), 'aiwg-hang-report-'));
+  } catch (error) {
+    console.error(`[hang-report] cannot prepare in-flight snapshot: ${error.message}`);
+  }
+  const stateFile = stateDir ? path.join(stateDir, 'in-flight.txt') : '';
   // Own process group: a wedged run's damage is usually in a *grandchild* that
   // inherited stdio, and signalling only the direct child leaves it alive
   // holding the pipe. `detached` gives us a group to signal as a unit.
-  const child = spawn(command[0], command.slice(1), { stdio: 'inherit', detached: true });
+  const child = spawn(command[0], command.slice(1), {
+    stdio: 'inherit',
+    detached: true,
+    env: { ...process.env, AIWG_HANG_REPORT_STATE_FILE: stateFile },
+  });
 
   /** Signal the whole group, falling back to the child if the group is gone. */
   const signalGroup = (signal) => {
+    if (!Number.isSafeInteger(child.pid) || child.pid <= 0) return;
     try { process.kill(-child.pid, signal); }
-    catch { try { child.kill(signal); } catch { /* already gone */ } }
+    catch { try { signalChild(child, signal); } catch { /* already gone */ } }
   };
 
   let timedOut = false;
@@ -162,18 +182,34 @@ export async function run({ timeoutMs, graceMs, command }) {
   process.on('SIGINT', onInt);
   process.on('SIGTERM', onTerm);
 
+  let exitSignal;
   const code = await new Promise((resolve) => {
     child.once('error', (err) => {
       console.error(`[hang-report] failed to start command: ${err.message}`);
       resolve(1);
     });
     child.once('exit', (exitCode, signal) => {
+      exitSignal = signal;
       resolve(exitCode ?? (signal ? 128 : 1));
     });
   });
   clearTimeout(timer);
   process.off('SIGINT', onInt);
   process.off('SIGTERM', onTerm);
+
+  if (!timedOut && (exitSignal || code >= 128)) {
+    console.error(`\n[hang-report] command exited abnormally (${exitSignal ?? `exit ${code}`}) — last reported test files in flight (#3073):`);
+    try {
+      const snapshot = readFileSync(stateFile, 'utf8');
+      console.error(snapshot || '  (none — all reported modules finished)');
+    } catch {
+      console.error('  (unavailable — no readable reporter snapshot)');
+    }
+  }
+  if (stateDir) {
+    try { rmSync(stateDir, { recursive: true, force: true }); }
+    catch (error) { console.error(`[hang-report] snapshot cleanup failed: ${error.message}`); }
+  }
 
   if (timedOut) {
     console.error(`[hang-report] treating as failure (exit ${TIMEOUT_EXIT_CODE})`);

@@ -9,6 +9,9 @@
  */
 
 import { spawnSync } from 'child_process';
+import { importImpl } from '../../_resolve-impl.mjs';
+
+const { positiveTimeoutMs } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 /**
  * @typedef {Object} PromptContext
@@ -93,7 +96,11 @@ export class ClaudePromptGenerator {
       const result = spawnSync(binary, args, {
         encoding: 'utf8',
         input: '',
-        timeout: this.timeout,
+        // this.timeout is caller-controlled (options.timeout || 90000,
+        // which still lets a negative value through); clamp it so it can
+        // never disable or invert the bound (#3062 B/C finding 8).
+        timeout: positiveTimeoutMs(this.timeout, 90000),
+        killSignal: 'SIGKILL',
       });
 
       if (result.status !== 0) {

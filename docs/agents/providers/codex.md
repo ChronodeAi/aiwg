@@ -610,7 +610,7 @@ aiwg ralph-external "Migrate codebase to TypeScript" \
 
 Model mapping: opus → gpt-5.6-sol, sonnet → gpt-5.6-terra, haiku → gpt-5.6-luna.
 
-See [Al Guide](../ralph-guide.md) for full documentation.
+See [Agent Loop Guide](../../agent-loop-guide.md) for full documentation.
 
 ---
 
@@ -660,4 +660,4 @@ bypass provides, connect the MCP sidecar:
 aiwg mcp install codex
 ```
 
-See the [Codex MCP Sidecar Guide](codex-mcp-sidecar.md) for the two-layer model and setup details.
+See the [Codex MCP Sidecar Guide](../../integrations/codex-mcp-sidecar.md) for the two-layer model and setup details.

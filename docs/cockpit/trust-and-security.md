@@ -39,6 +39,14 @@ rotates the credential without a restart. Missing, malformed, or over-broad
 files fail closed; upstream 401/403 responses remain explicit authorization
 errors.
 
+Outbound executor requests are limited to the operator-configured origin. The
+Bridge refuses every 3xx response with `executor_redirect_refused`, including
+same-origin redirects and responses without `Location`, and cancels the response
+body. It never re-sends the request body or bearer to a redirect destination or
+tries a fallback after a redirect refusal. This prevents a 307/308 from replaying
+an operation to another agent or an admin path. A candidate refused before any
+request is sent can still use a fixed, allowed fallback.
+
 The executor bearer never enters HTML, browser state, WebSocket URLs, Cockpit
 audit JSON, or process arguments. REST/A2A calls receive the header inside the
 Bridge. PTY sockets also terminate at the Bridge: the browser presents only the

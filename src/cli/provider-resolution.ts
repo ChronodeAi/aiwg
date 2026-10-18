@@ -43,6 +43,19 @@ function uniqueProviders(providers: Iterable<string | undefined | null>): Platfo
   return result;
 }
 
+/**
+ * Sources that say which harness this process is actually running under.
+ * `config`, `deployment` and `default` describe the project, not the session:
+ * a project deployed for one provider is still not "inside" that provider
+ * when a command is run from a plain terminal.
+ */
+const SESSION_PROVIDER_SOURCES: ReadonlySet<string> = new Set(['explicit', 'env', 'runtime-env', 'process']);
+
+/** True when a resolution came from the running session rather than project state. */
+export function isSessionProviderResolution(resolution: { provider: unknown; source: string }): boolean {
+  return resolution.provider != null && SESSION_PROVIDER_SOURCES.has(resolution.source);
+}
+
 function detectProviderFromRuntimeEnv(env: NodeJS.ProcessEnv): Platform | null {
   const definitions = [...listProviderDefinitions()].sort(
     (a, b) => (a.detection.runtimeEnvPriority ?? Number.MAX_SAFE_INTEGER) - (b.detection.runtimeEnvPriority ?? Number.MAX_SAFE_INTEGER),

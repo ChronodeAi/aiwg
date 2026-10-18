@@ -6,6 +6,7 @@
  * provider even though `--provider dsh` works everywhere else (#2161).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { clearInteractiveEnv } from '../../../helpers/interactive-env.js';
 import { mkdirSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -35,9 +36,15 @@ vi.mock('readline', () => ({
 // First string prompt is the provider selection; every yes/no prompt declines.
 const askString = vi.fn(async () => 'dsh, codex');
 const askYesNo = vi.fn(async () => false);
+// #3050: the worker-dispatch opt-in offer uses askConsent; this test isn't
+// about that offer, so answer as a plain decline (irrelevant to the
+// provider-alias assertions below) rather than hanging/crashing on a
+// missing mock export.
+const askConsent = vi.fn(async () => ({ kind: 'answered' as const, value: false }));
 vi.mock('../../../../src/cli/prompt-utils.js', () => ({
   askString: (...args: unknown[]) => askString(...args),
   askYesNo: (...args: unknown[]) => askYesNo(...args),
+  askConsent: (...args: unknown[]) => askConsent(...args),
 }));
 
 const { initHandler } = await import('../../../../src/cli/handlers/init.js');
@@ -56,7 +63,7 @@ describe('init interactive provider picker', () => {
   let tmpDir: string;
   const originalStdinTTY = process.stdin.isTTY;
   const originalStdoutTTY = process.stdout.isTTY;
-  const originalCi = process.env['CI'];
+  let restoreInteractiveEnv: () => void = () => {};
 
   beforeEach(() => {
     tmpDir = makeTmpDir();
@@ -64,15 +71,14 @@ describe('init interactive provider picker', () => {
     // non-interactive; force the interactive wizard so the picker runs.
     Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-    delete process.env['CI'];
+    restoreInteractiveEnv = clearInteractiveEnv();
     warn.mockClear();
   });
 
   afterEach(() => {
     Object.defineProperty(process.stdin, 'isTTY', { value: originalStdinTTY, configurable: true });
     Object.defineProperty(process.stdout, 'isTTY', { value: originalStdoutTTY, configurable: true });
-    if (originalCi === undefined) delete process.env['CI'];
-    else process.env['CI'] = originalCi;
+    restoreInteractiveEnv();
     rmSync(tmpDir, { recursive: true, force: true });
   });
 

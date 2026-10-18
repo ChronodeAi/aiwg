@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { importImpl } from '../_resolve-impl.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -7,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { transformAgent } from '../../src/providers/omp-agent.mjs';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const manifest = JSON.parse(await readFile(join(root, 'test/fixtures/providers/omp-conformance/manifest.json'), 'utf8'));
 const args = process.argv.slice(2);
@@ -31,7 +33,7 @@ try {
       const workspace=join(sandbox,'workspace'), agentDir=join(sandbox,'agent'), report=join(sandbox,'probe.json');
       const env={PATH:process.env.PATH ?? '/usr/bin:/bin', XDG_CONFIG_HOME:join(sandbox,'config'), XDG_CACHE_HOME:join(sandbox,'cache'), XDG_DATA_HOME:join(sandbox,'data'), XDG_STATE_HOME:join(sandbox,'state'), PI_CODING_AGENT_DIR:agentDir, AIWG_OMP_CONFORMANCE_REPORT:report, NO_COLOR:'1', TERM:'dumb'};
       for(const dir of [workspace,agentDir])await mkdir(dir,{recursive:true});
-      const version=spawnSync(binary,['--version'],{env,cwd:workspace,encoding:'utf8',timeout:15000});
+      const version=spawnSync(binary,['--version'],{env,cwd:workspace,encoding:'utf8',timeout:15000, killSignal: 'SIGKILL' });
       result.binaryVersion=version.stdout?.trim();
       result.checks.version=version.status===0 && result.binaryVersion.includes(manifest.release.version);
       if(!result.checks.version)throw Error('OMP_VERSION_MISMATCH');
@@ -71,8 +73,8 @@ function runRpc(binary,args,options){
   return new Promise((resolve,reject)=>{
     const child=spawn(binary,args,{...options,stdio:['pipe','pipe','pipe']});
     let buffer='',count=0,finished=false;const checks={ready:false,negotiate:false,state:false,abort:false};
-    const timer=setTimeout(()=>{child.kill('SIGKILL');reject(Error('OMP_RPC_TIMEOUT'));},45000);
-    const finish=error=>{if(finished)return;finished=true;clearTimeout(timer);if(error){child.kill('SIGKILL');reject(error);}else resolve(checks);};
+    const timer=setTimeout(()=>{signalChild(child, 'SIGKILL');reject(Error('OMP_RPC_TIMEOUT'));},45000);
+    const finish=error=>{if(finished)return;finished=true;clearTimeout(timer);if(error){signalChild(child, 'SIGKILL');reject(error);}else resolve(checks);};
     child.stderr.on('data',()=>{});
     child.stdout.on('data',chunk=>{
       buffer+=chunk.toString();if(buffer.length>1024*1024||++count>10000)return finish(Error('OMP_RPC_OUTPUT_LIMIT'));

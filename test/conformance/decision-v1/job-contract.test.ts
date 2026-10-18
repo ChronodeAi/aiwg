@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { assertJobTransition, DecisionJobContractError, ITEM_STATES, validateDecisionJob, type DecisionJob, type ItemState } from '../../../src/decision/job-contract.js';
 const digest = `sha256:${'a'.repeat(64)}` as const;
 function fixture(state: ItemState = 'queued'): DecisionJob {
@@ -71,5 +71,26 @@ describe('JOB offline contract (dispatch disabled)', () => {
     expect(() => validateDecisionJob(job)).toThrow(DecisionJobContractError);
     const injected = { ...fixture(), providerAsyncEndpoint: 'execute-action' };
     expect(() => validateDecisionJob(injected)).toThrow(DecisionJobContractError);
+  });
+
+  it('JOB-008 handles wall-clock drift using thread CPU', () => {
+    const cpuClock = vi.spyOn(process, 'threadCpuUsage').mockReturnValue({ user: 0, system: 0 });
+    const nowSpy = vi.spyOn(performance, 'now');
+    let fakeNow = 0;
+    nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
+    try {
+      const job = fixture();
+      const before = fixture(); const after = fixture();
+      after.state = 'running'; after.items[0]!.state = 'running';
+      after.summary.queued = 0; after.summary.running = 1;
+      for (const operation of [() => validateDecisionJob(job), () => assertJobTransition(before, after)]) {
+        expect(operation).not.toThrow();
+      }
+      expect(cpuClock).toHaveBeenCalled();
+      expect(nowSpy).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+      cpuClock.mockRestore();
+    }
   });
 });

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import YAML from 'yaml';
-import { resolveOmpPaths } from '../../../src/providers/omp-paths.mjs';
+import { importImpl } from '../../_resolve-impl.mjs';
 import { collectFrameworkArtifacts, getAddonFiles, isKernelSkill, listMdFiles, listSkillDirs, normalizeDeploymentMode, resolveAiwgRoot, rulesIndexProjectionName } from './base.mjs';
 export const name = 'omp';
 export const aliases = ['oh-my-pi'];
@@ -18,7 +18,10 @@ function parse(content) {
 }
 const render = (metadata, body) => `---\n${YAML.stringify(metadata)}---\n\n${body.trim()}\n`;
 function diagnostic(opts, message) { opts.diagnostics?.push(message); if (!opts.quiet) console.warn(`OMP: ${message}`); }
-import { transformAgent, mapModel } from '../../../src/providers/omp-agent.mjs';
+// Resolved through the shared resolver: an installed package ships these
+// modules under dist/src, not src, so a literal path into src fails there.
+const { resolveOmpPaths } = await importImpl(import.meta.url, 'providers/omp-paths.mjs');
+const { transformAgent, mapModel } = await importImpl(import.meta.url, 'providers/omp-agent.mjs');
 export { transformAgent, mapModel };
 const array = value => Array.isArray(value) ? value : typeof value === 'string' ? value.split(',').map(s => s.trim()).filter(Boolean) : [];
 export function transformCommand(src, content, opts = {}) {

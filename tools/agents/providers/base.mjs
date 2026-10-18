@@ -11,10 +11,16 @@
 import realFs from 'fs';
 import path from 'path';
 import os from 'os';
+import yaml from 'yaml';
 import { classifyModelRole } from './model-role.mjs';
 import { createHash } from 'crypto';
 import { createRequire } from 'module';
-import { execSync as nodeExecSync } from 'child_process';
+import { importImpl } from '../../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { extractFrameworkSlug, sameSkillOwner, canDeploySkill, pruneRecordedSkillFiles, releaseSkillOwnership } =
+  await importImpl(import.meta.url, 'providers/skill-ownership.mjs');
+export { extractFrameworkSlug, sameSkillOwner, pruneRecordedSkillFiles, releaseSkillOwnership };
 
 // Use graceful-fs to prevent EMFILE crashes on systems with low ulimit.
 // graceful-fs queues open() calls when FD pressure is detected and retries
@@ -253,26 +259,6 @@ export function updateSidecarManifest(dir, deployedEntries, opts) {
 }
 
 // ============================================================================
-// Cross-Framework Collision Detection (#1169)
-// ============================================================================
-
-/**
- * Extract the framework slug from a source file path.
- *
- * Recognizes paths under `agentic/code/frameworks/<slug>/...` and
- * `agentic/code/addons/<slug>/...`. Returns null for paths outside
- * those namespaces (operator-authored bundles, addons under
- * `.aiwg/addons/`, etc.) — those don't get collision-tracked.
- */
-export function extractFrameworkSlug(srcPath) {
-  if (typeof srcPath !== 'string') return null;
-  // Normalize separators for cross-platform matching
-  const normalized = srcPath.replace(/\\/g, '/');
-  const m = normalized.match(/agentic\/code\/(?:frameworks|addons)\/([^/]+)\//);
-  return m ? m[1] : null;
-}
-
-// ============================================================================
 // Model Configuration
 // ============================================================================
 
@@ -376,41 +362,38 @@ const PROVIDER_TO_PLATFORM = {
 
 /**
  * Parse the platforms: field from a SKILL.md frontmatter block.
- * Handles both inline array (platforms: [a, b]) and multi-line list formats.
- * Returns null if no platforms field is present (= deploy to all providers).
- * Returns an empty array only if the field is explicitly empty.
+ * Accepts a string or a list of strings; all alone means unrestricted.
+ * Returns null if platforms is missing, or no frontmatter is present.
+ * Returns an empty array for malformed frontmatter or invalid platforms.
  */
 export function parseSkillPlatforms(content) {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!fmMatch) return null;
-
-  const fm = fmMatch[1];
-
-  // Inline array: platforms: [claude-code, codex] or platforms: [all]
-  const inlineMatch = fm.match(/^platforms:\s*\[([^\]]*)\]/m);
-  if (inlineMatch) {
-    const items = inlineMatch[1].split(',').map(s => s.trim()).filter(Boolean);
-    if (items.length === 0 || (items.length === 1 && items[0] === 'all')) return null;
-    return items;
+  // A leading UTF-8 BOM must not hide the frontmatter (and its restrictions).
+  if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
+  const fmMatch = content.match(/^---\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m);
+  if (!fmMatch || fmMatch.index !== 0) {
+    return /^---[ \t]*(?:\r?\n|$)/.test(content) ? [] : null;
   }
 
-  // Multi-line list:
-  //   platforms:
-  //     - claude-code
-  //     - hermes
-  const multiMatch = fm.match(/^platforms:\s*\n((?:[ \t]+-[ \t]+\S[^\n]*\n?)+)/m);
-  if (multiMatch) {
-    const items = multiMatch[1]
-      .split('\n')
-      .map(line => line.match(/^[ \t]+-[ \t]+(\S+)/)?.[1])
-      .filter(Boolean);
-    return items.length > 0 ? items : null;
+  let metadata;
+  try {
+    const document = yaml.parseDocument(fmMatch[1]);
+    if (document.errors.length > 0) return [];
+    if (!document.contents) return null; // Empty frontmatter has no restrictions.
+    metadata = document.toJS();
+  } catch {
+    return [];
   }
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return [];
+  // The yaml package leaves merge keys unresolved, so platforms could arrive only
+  // through `<<`; without an explicit key that is ambiguous, so fail closed.
+  if (!Object.hasOwn(metadata, 'platforms')) return Object.hasOwn(metadata, '<<') ? [] : null;
 
-  // platforms: key present but empty
-  if (/^platforms:\s*$/m.test(fm)) return null;
-
-  return null; // Field absent = deploy to all
+  const platforms = metadata.platforms;
+  const items = typeof platforms === 'string' ? [platforms] : platforms;
+  if (!Array.isArray(items) || !items.every(item => typeof item === 'string')) return [];
+  const normalized = items.map(item => item.trim());
+  if (normalized.some(item => !item)) return [];
+  return normalized.length === 1 && normalized[0] === 'all' ? null : normalized;
 }
 
 /**
@@ -1113,7 +1096,7 @@ export function deploySkillsWithKernelRouting(
   // Standard-dir cleanup (#1217): when we're NOT copying standard
   // skills, anything AIWG-named under standardDestDir is a legacy
   // mirror from a rc.13-or-earlier deploy. Prune to clean up.
-  let prunedFromStandardDir = 0;
+  let prunedFromStandardDir = pruneMissingStandardSkills(standardDestDir, opts);
   if (
     !copyStandardSkills &&
     standardDestDir &&
@@ -1572,6 +1555,32 @@ export function pruneStaleAiwgFiles(destDir, desiredStems, opts = {}) {
   return removed;
 }
 
+/** Source-scoped cleanup also works when a removed standard skill is absent from this deploy's input. */
+function pruneMissingStandardSkills(destDir, opts) {
+  if (!destDir || !opts?.srcRoot || opts.dryRun || !fs.existsSync(destDir)) return 0;
+  const sourceRoot = path.resolve(opts.srcRoot);
+  let pruned = 0;
+  for (const entry of fs.readdirSync(destDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const skillDir = path.join(destDir, entry.name);
+    const receipt = readSidecarManifest(skillDir);
+    if (!receipt?.skillSource || !receipt.managed?.['SKILL.md']) continue;
+    const relative = path.relative(sourceRoot, receipt.skillSource);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) continue;
+    try {
+      fs.statSync(path.join(receipt.skillSource, 'SKILL.md'));
+      continue;
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') continue;
+    }
+    if (releaseSkillOwnership(skillDir, {
+      frameworkSlug: receipt.managed['SKILL.md'].frameworkSlug,
+      skillSource: receipt.skillSource,
+    }, opts)) pruned++;
+  }
+  return pruned;
+}
+
 /**
  * Deploy a skill directory (copy recursively).
  *
@@ -1596,6 +1605,10 @@ export function deploySkillDir(skillDir, destDir, opts) {
   }
 
   const destSkillDir = path.join(destDir, skillName);
+  const previous = readSidecarManifest(destSkillDir);
+  const frameworkSlug = extractFrameworkSlug(skillMdPath);
+  if (!canDeploySkill(previous, skillDir, opts)) return;
+  const managed = {};
   if (!dryRun) ensureDir(destSkillDir);
 
   function copyRecursive(src, dest) {
@@ -1623,6 +1636,13 @@ export function deploySkillDir(skillDir, destDir, opts) {
           }
         }
 
+        const relative = path.relative(destSkillDir, destPath);
+        managed[relative] = {
+          hash: `sha256:${contentHash(srcContent)}`,
+          source: opts.deploySource || 'bundled',
+          version: opts.deployVersion || 'unknown',
+          ...(frameworkSlug ? { frameworkSlug } : {}),
+        };
         if (fs.existsSync(destPath)) {
           const destContent = fs.readFileSync(destPath, 'utf8');
           if (destContent === srcContent && !force) {
@@ -1642,6 +1662,8 @@ export function deploySkillDir(skillDir, destDir, opts) {
   }
 
   copyRecursive(skillDir, destSkillDir);
+  pruneRecordedSkillFiles(destSkillDir, previous?.managed, new Set(Object.keys(managed)), opts);
+  writeSidecarManifest(destSkillDir, { managed, skillSource: path.resolve(skillDir) }, dryRun);
 
   // Drop a `.aiwg-managed` marker so future cleanup runs can identify
   // AIWG-deployed skills regardless of frontmatter shape (some providers
@@ -1833,7 +1855,7 @@ export function buildRemotesTopologyBlock(targetDir) {
 
   function getUrl(remote) {
     try {
-      return nodeExecSync(`git -C ${JSON.stringify(targetDir)} remote get-url ${JSON.stringify(remote)}`, {
+      return boundedExecFileSync('git', ['-C', targetDir, 'remote', 'get-url', '--', remote], 'quick', {
         stdio: ['ignore', 'pipe', 'ignore'],
         encoding: 'utf8',
       }).trim();

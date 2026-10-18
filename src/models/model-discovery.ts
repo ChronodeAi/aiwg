@@ -1,3 +1,4 @@
+import { signalChild } from '../process/signal-child.mjs';
 import { hasSelectionRelevantConflicts, validateWorkerCatalogDiscovery } from './provider-policy.js';
 import type { WorkerModelObservation } from './types.js';
 import { spawn } from 'node:child_process';
@@ -7,6 +8,7 @@ import { lstat, mkdir, open, readFile, readdir, realpath, rename, writeFile } fr
 import { dirname, join, relative } from 'node:path';
 import { constants } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
+import { stripVTControlCharacters } from 'node:util';
 import type { ProviderInventory } from '../providers/provider-inventory.js';
 
 export type ModelCatalogSource = 'native' | 'remote' | 'cache' | 'static';
@@ -177,7 +179,7 @@ export interface ProviderModelDiscovery {
   models: DiscoveredModel[];
   /** Absent only for a successful, completely parsed refresh. Invalid rows/files
    * make the refresh partial even when valid models survive normalization. */
-  errorKind?: 'authentication' | 'rate-limit' | 'timeout' | 'unsupported' | 'invalid-output' | 'command';
+  errorKind?: 'authentication' | 'rate-limit' | 'timeout' | 'unsupported' | 'invalid-output' | 'environment' | 'command';
   error?: string;
   policy?: ProviderModelPolicyReport;
 }
@@ -247,6 +249,12 @@ const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 export function classifyDiscoveryError(
   message: string,
 ): ProviderModelDiscovery['errorKind'] {
+  message = stripVTControlCharacters(message);
+  if (/\b(?:EROFS|EACCES|EPERM)\b|read-only file system/i.test(message)
+    || (/FileSystem\.open|permission denied|operation not permitted/i.test(message)
+      && /[\\/]opencode[\\/]log[\\/]|[\\/]\.pi[\\/]agent(?:[\\/]|$)/i.test(message))) {
+    return 'environment';
+  }
   if (/(?:401|403|unauth|forbidden|credential|login|required auth)/i.test(message)) {
     return 'authentication';
   }
@@ -260,7 +268,7 @@ const BEARER_SECRET = /(bearer\s+)[A-Za-z0-9._~+/=-]+/gi;
 
 /** Keep native diagnostics useful without ever echoing credential material. */
 export function redactModelDiscoveryText(value: string): string {
-  return value
+  return stripVTControlCharacters(value)
     .replace(SECRET_ASSIGNMENT, '$1[REDACTED]')
     .replace(BEARER_SECRET, '$1[REDACTED]')
     .slice(0, 4096);
@@ -285,7 +293,7 @@ export const runModelDiscoveryCommand: ModelDiscoveryCommandRunner = (
     clearTimeout(timer);
     resolveCommand({ stdout, stderr, exitCode });
   };
-  child.stdout.on('data', chunk => { stdout += String(chunk); if (Buffer.byteLength(stdout) > 8 * 1024 * 1024) { stdout = ''; stderr = 'Model catalog exceeded 8 MiB limit'; child.kill('SIGKILL'); finish(1); } });
+  child.stdout.on('data', chunk => { stdout += String(chunk); if (Buffer.byteLength(stdout) > 8 * 1024 * 1024) { stdout = ''; stderr = 'Model catalog exceeded 8 MiB limit'; signalChild(child, 'SIGKILL'); finish(1); } });
   child.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-4096); });
   child.on('error', error => {
     stderr = `${stderr}${stderr ? '\n' : ''}${error.message}`;
@@ -294,7 +302,7 @@ export const runModelDiscoveryCommand: ModelDiscoveryCommandRunner = (
   child.on('close', code => finish(code ?? 1));
   const timer = setTimeout(() => {
     stderr = `${stderr}${stderr ? '\n' : ''}${command} timed out`;
-    child.kill();
+    signalChild(child);
     finish(124);
   }, options.timeoutMs ?? 10_000);
 });
@@ -599,7 +607,7 @@ export async function discoverCodexModels(
       settled = true;
       clearTimeout(timer);
       lines.close();
-      child.kill();
+      signalChild(child);
       resolveDiscovery(result);
     };
     child.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-4096); });
@@ -807,6 +815,7 @@ export async function resolveDynamicModelCatalog(
         };
       }
       const next = providerDiscovery[provider];
+      if (next.error) next.error = stripVTControlCharacters(next.error);
       const instanceId = discoveryInstanceId(next);
       const prior = cached?.discovery?.instances?.[instanceId]
         ?? cached?.discovery?.providers[provider];
@@ -1173,6 +1182,31 @@ function validTimestamp(value: unknown): value is string {
     && validDate(value.slice(0, 10)) && Number.isFinite(Date.parse(value));
 }
 
+/** Use the active window, capped by the reported maximum, with native headroom. */
+function codexContextTokens(row: Record<string, unknown>): number | null {
+  const window = normalizePositiveInt(row.context_window);
+  const maximum = normalizePositiveInt(row.max_context_window);
+  const percent = row.effective_context_window_percent;
+  // A malformed supplied limit must not silently enlarge the qualified window.
+  if (window === null || row.max_context_window != null && maximum === null
+    || percent != null && (typeof percent !== 'number' || !Number.isFinite(percent) || percent <= 0 || percent > 100)) return null;
+  return normalizePositiveInt(Math.floor(Math.min(window, maximum ?? window) * (typeof percent === 'number' ? percent : 100) / 100));
+}
+
+function catalogEfforts(ids: string[], raw: unknown): WorkerModelObservation['efforts'] {
+  return ids.map(id => {
+    const entry = Array.isArray(raw) ? raw.find(value => value && typeof value === 'object'
+      && (value.effort ?? value.tier) === id) : undefined;
+    // Conductor-verified Codex/Muse catalog rule (#3083): only ultra is
+    // "Maximum reasoning with automatic task delegation". Prefer that explicit
+    // description when present; other listed levels do not self-delegate.
+    // multi_agent_reasoning_effort/version describe child execution, not which
+    // selected effort activates delegation (e.g. xhigh is not self-delegating).
+    return { id, selfDelegates: id === 'ultra'
+      || typeof entry?.description === 'string' && /automatic task delegation/i.test(entry.description) };
+  });
+}
+
 function normalizeObservationRows(rows: unknown[], options: NormalizeDiscoveryOptions, cli: 'muse' | 'codex'): NormalizedDiscovery {
   const diagnostics: string[] = [];
   const models: DiscoveredModel[] = [];
@@ -1191,11 +1225,16 @@ function normalizeObservationRows(rows: unknown[], options: NormalizeDiscoveryOp
       diagnostics.push(`${source}: skipped entry without a ${cli === 'muse' ? 'model_id' : 'slug'}`); continue;
     }
     const times = observationTimestamps(sourceOptions);
-    for (const field of [cli === 'muse' ? 'context_limit' : 'context_window', 'output_limit']) {
+    for (const field of [...(cli === 'muse' ? ['context_limit'] : ['context_window', 'max_context_window']), 'output_limit']) {
       if (row[field] != null && (typeof row[field] !== 'number' || !Number.isSafeInteger(row[field]) || (row[field] as number) < 1)) {
         diagnostics.push(`${source}: malformed ${field} for ${id}; retained as unknown`);
         // Do not round or coerce malformed evidence into a valid observation.
       }
+    }
+    if (cli === 'codex' && row.effective_context_window_percent != null
+      && (typeof row.effective_context_window_percent !== 'number' || !Number.isFinite(row.effective_context_window_percent)
+        || row.effective_context_window_percent <= 0 || row.effective_context_window_percent > 100)) {
+      diagnostics.push(`${source}: malformed effective_context_window_percent for ${id}; context retained as unknown`);
     }
     for (const field of ['is_default', 'is_current', 'retired', 'deprecated']) {
       if (row[field] != null && typeof row[field] !== 'boolean') diagnostics.push(`${source}: malformed ${field} for ${id}`);
@@ -1235,8 +1274,16 @@ function normalizeObservationRows(rows: unknown[], options: NormalizeDiscoveryOp
     }
     const efforts = cli === 'muse' ? museEfforts(row) : [...new Set([...stringList(row.supported_reasoning_levels),
       ...(typeof row.default_reasoning_level === 'string' && row.default_reasoning_level ? [row.default_reasoning_level] : [])])];
+    // Codex's registry provider and catalogAdapter contain no inference-provider
+    // identity. Its providerless native catalog is OpenAI; never infer from a slug.
+    // Muse's real local catalogs use provider_id, not provider.
+    const llmProvider = typeof row.provider === 'string' && row.provider ? row.provider
+      : cli === 'muse' && typeof row.provider_id === 'string' && row.provider_id ? row.provider_id
+        : cli === 'codex' ? 'openai' : undefined;
     const model: DiscoveredModel = {
-      id, ...(visibility === 'unknown' ? {} : { hidden: visibility === 'hidden' }),
+      id, apiModelId: typeof row.api_model_id === 'string' ? row.api_model_id : id,
+      ...(llmProvider ? { llmProvider } : {}),
+      ...(visibility === 'unknown' ? {} : { hidden: visibility === 'hidden' }),
       ...(cli === 'muse' ? { isDefault: row.is_default === true } : {}),
       ...(efforts.length ? { reasoningEfforts: efforts } : {}),
       worker: buildWorkerObservation(sourceOptions, {
@@ -1244,18 +1291,25 @@ function normalizeObservationRows(rows: unknown[], options: NormalizeDiscoveryOp
         visibility, ...lifecycle, releaseDate,
         availability: lifecycle.lifecycle === 'retired' ? 'unavailable'
           : cli === 'muse' ? (row.is_current === true ? 'accessible' : 'unknown') : 'accessible',
-        contextTokens: normalizePositiveInt(cli === 'muse' ? row.context_limit : row.context_window),
+        contextTokens: cli === 'muse' ? normalizePositiveInt(row.context_limit) : codexContextTokens(row),
         maxOutputTokens: normalizePositiveInt(row.output_limit),
-        efforts: efforts.map(id => ({ id, selfDelegates: null })),
+        efforts: catalogEfforts(efforts, rawEfforts),
+        // The native renderer passes model_reasoning_effort (Muse: --reasoning-effort).
         effortSupport: efforts.length ? 'explicit' : 'unknown',
         ...(cli === 'muse' ? { dataUseNote: 'contributor policy is config-scoped' } : {}),
         provenanceFields: cli === 'muse'
-          ? ['/id:model_id', '/isDefault:is_default', '/availability:is_current', '/efforts:reasoning_effort_variants[].tier', '/contextTokens:context_limit', '/maxOutputTokens:output_limit', '/releaseDate:release_date']
-          : ['/id:slug', '/efforts:supported_reasoning_levels+default_reasoning_level', '/contextTokens:context_window'],
+          ? ['/id:model_id', '/isDefault:is_default', '/availability:is_current', '/efforts:reasoning_effort_variants[].tier',
+            '/efforts/selfDelegates:catalog-description+verified-ultra-rule', '/contextTokens:context_limit', '/maxOutputTokens:output_limit', '/releaseDate:release_date']
+          : ['/id:slug', '/efforts:supported_reasoning_levels+default_reasoning_level',
+            '/efforts/selfDelegates:catalog-description+verified-ultra-rule',
+            '/contextTokens:context_window+max_context_window+effective_context_window_percent'],
       }),
     };
     // Bind compatibility-row values without including unrelated credential-bearing row keys.
-    const compatibility = { id: model.id, hidden: model.hidden, isDefault: model.isDefault, reasoningEfforts: model.reasoningEfforts };
+    model.worker!.provenance[0].fields.push('/apiModelId');
+    if (model.llmProvider) model.worker!.provenance[0].fields.push('/llmProvider',
+      `/llmProvider:${typeof row.provider === 'string' && row.provider ? 'provider' : cli === 'muse' ? 'provider_id' : 'codex-openai-default'}`);
+    const compatibility = { id: model.id, apiModelId: model.apiModelId, llmProvider: model.llmProvider, hidden: model.hidden, isDefault: model.isDefault, reasoningEfforts: model.reasoningEfforts };
     model.worker!.evidenceDigest = discoveryDigest(JSON.stringify({
       workerDigest: model.worker!.evidenceDigest, ...compatibility,
     }));
@@ -1304,6 +1358,16 @@ function reconcileDuplicateObservations(models: DiscoveredModel[], diagnostics: 
         case 'replacementModelId': delete worker.replacementModelId; break;
         case 'family': worker.family = 'unknown'; break;
       }
+    }
+    // Provider/API identity is selection evidence too. Conflicting rows must
+    // not acquire a qualified route merely because one row appeared first.
+    for (const field of ['apiModelId', 'llmProvider'] as const) {
+      if (new Set(group.map(row => row[field])).size < 2) continue;
+      conflicts.push({ field: `/${field}`, evidence: group.map(row => ({ value: row[field] ?? null,
+        source: row.worker!.provenance[0].source, pointer: field === 'apiModelId' ? '/api_model_id' : '/provider',
+        observedAt: row.worker!.observedAt, digest: row.worker!.provenance[0].digest })) });
+      diagnostics.push(`${model.id}: conflicting ${field}`);
+      delete model[field];
     }
     // Compatibility defaults also remain evidence rather than silently keeping the first.
     if (new Set(group.map(m => m.isDefault)).size > 1) {

@@ -17,6 +17,7 @@ import {
 } from './fortemi-export-mapping.js';
 import { discoverSessionOutputCandidates, type SessionOutputCandidate } from './output-lineage.js';
 import { FilesystemDerivedOutputIndex } from './output-registration.js';
+import { redactSessionValue } from './policy.js';
 import type { SessionRepository } from './repository.js';
 
 export const SESSION_EXPORT_PLAN_SCHEMA_VERSION = '1.1.0' as const;
@@ -106,7 +107,7 @@ function localEventAttachment(
     && value.dataBytes.every((item) => Number.isInteger(item) && Number(item) >= 0 && Number(item) <= 255)) {
     return { filename, mediaType, bytes: Uint8Array.from(value.dataBytes as number[]) };
   }
-  if (typeof value.dataUrl === 'string') {
+  if (typeof value.dataUrl === 'string' && !value.dataUrl.startsWith('[REDACTED:')) {
     const match = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(value.dataUrl);
     if (!match) throw new SessionContractError('MALFORMED_SOURCE', `invalid data URL attachment: ${event.eventId}`);
     const bytes = match[2]
@@ -114,7 +115,7 @@ function localEventAttachment(
       : Buffer.from(decodeURIComponent(match[3]), 'utf8');
     return { filename, mediaType: match[1] || mediaType, bytes };
   }
-  if (typeof value.fileUrl === 'string') {
+  if (typeof value.fileUrl === 'string' && !value.fileUrl.startsWith('[REDACTED:')) {
     if (!projectRoot) throw new SessionContractError('SOURCE_NOT_AUTHORIZED', 'project root is required for file attachments');
     const root = realpathSync(projectRoot);
     const candidate = fileURLToPath(value.fileUrl);
@@ -234,7 +235,7 @@ export function buildSessionExportPlan(
       sampleRecordIds: index.items.slice(0, sampleSize).map((item) => item.id),
     },
   };
-  return { plan, sessions, eventsBySessionId };
+  return { plan: redactSessionValue(plan).value, sessions, eventsBySessionId };
 }
 
 /**

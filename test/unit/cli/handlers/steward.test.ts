@@ -100,6 +100,9 @@ import { readAiwgConfig } from '../../../../src/config/aiwg-config.js';
 const providerEnvKeys = [
   'CLAUDE_CODE_VERSION',
   'ANTHROPIC_API_KEY',
+  'CLAUDECODE',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_DESKTOP_APP_VERSION',
   'OPENAI_API_KEY',
   'CURSOR_TRACE_ID',
   'CURSOR_VERSION',

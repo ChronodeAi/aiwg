@@ -45,6 +45,47 @@ function importProfile(hitPolicy: DmnHitPolicy, rows: string, aggregation = '', 
 }
 
 describe('DMN/OPA decision interoperability profile', () => {
+  function logValue(value: string) {
+    const result = rulesetResult();
+    result.spec.outcome = value;
+    return exportOpaDecisionLog(result, {
+      profileVersion: DECISION_INTEROP_PROFILE_VERSION,
+      bundle: { name: 'authz', revision: 'rev-1' },
+      decisionId: 'decision-1', policyPath: '/aiwg/decision/allow',
+      input: { value }, inputProjectionAllowlist: ['/value'],
+    });
+  }
+
+  it.each(['a'.repeat(60_000), `a@${'.'.repeat(60_000)}!`, 'a'.repeat(64 * 1024), 'a'.repeat(64 * 1024 + 1), 'a'.repeat(1_000_000)].map(value => ({ value, size: value.length })))('bounds email redaction for pathological input of length $size (alert 2)', ({ value }) => {
+    const started = performance.now();
+    const log = logValue(value);
+    expect(performance.now() - started).toBeLessThan(5_000);
+    if (value.length > 64 * 1024) {
+      expect(log.result).toBe('[redacted]');
+      expect(log.input).toEqual({ value: '[redacted]' });
+      expect(log.redaction.removed).toEqual(['$.input/value', '$.result']);
+    } else {
+      expect(log.result).toBe(value);
+      expect(log.input).toEqual({ value });
+    }
+  });
+
+  it.each([65_535, 65_536, 65_537])('applies the OPA redaction cap at %i UTF-16 code units', size => {
+    // Non-ASCII content distinguishes the string-length cap from a byte cap.
+    const value = 'é'.repeat(size);
+    const log = logValue(value);
+    const expected = size > 65_536 ? '[redacted]' : value;
+    expect(log.result).toBe(expected);
+    expect(log.input).toEqual({ value: expected });
+    expect(log.redaction.removed).toEqual(size > 65_536 ? ['$.input/value', '$.result'] : []);
+
+    const sensitive = `${value.slice(0, size - 7)}a@b.com`;
+    const sensitiveLog = logValue(sensitive);
+    expect(sensitiveLog.result).toBe('[redacted]');
+    expect(sensitiveLog.input).toEqual({ value: '[redacted]' });
+    expect(sensitiveLog.redaction.removed).toEqual(['$.input/value', '$.result']);
+  });
+
   it('emits schema-valid dry-run mapping provenance and round-trips supported DMN', () => {
     const mapping = importProfile('FIRST', [
       row('review', 1, '= "docs"', '>= 0.7', '"manual-review"'),
@@ -197,6 +238,108 @@ describe('DMN/OPA decision interoperability profile', () => {
       input: { provider: 'attacker-selected' },
       result: true,
     })).toThrow(/cannot set/);
+  });
+});
+
+describe('OPA input projection prototype safety', () => {
+  const project = (input: Parameters<typeof exportOpaDecisionLog>[1]['input'], allowlist: string[]) => exportOpaDecisionLog(rulesetResult(), {
+    profileVersion: DECISION_INTEROP_PROFILE_VERSION,
+    bundle: { name: 'authz', revision: 'rev-1' },
+    decisionId: 'decision-1',
+    policyPath: '/aiwg/decision/allow',
+    input,
+    inputProjectionAllowlist: allowlist,
+    result: 'docs-review',
+  });
+
+  it.each([
+    ...['__proto__'].flatMap(segment => [
+      `/${segment}`,
+      `/${segment}/wp4Polluted`,
+      `/safe/${segment}/wp4Polluted`,
+      `/safe/nested/${segment}`,
+    ]),
+  ])('rejects unsafe projection %s for present and absent values', pointer => {
+    const input = pointer.slice(1).split('/').reduceRight<Parameters<typeof project>[0]>(
+      (child, segment) => Object.fromEntries([[segment, child]]), true,
+    );
+    const prototype = Object.getOwnPropertyDescriptors(Object.prototype);
+    try {
+      expect(() => project(input, [pointer])).toThrow(expect.objectContaining({ code: 'opa-input-projection' }));
+      expect(() => project({}, [pointer])).toThrow(expect.objectContaining({ code: 'opa-input-projection' }));
+      expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototype);
+    } finally {
+      delete (Object.prototype as Record<string, unknown>).wp4Polluted;
+    }
+  });
+
+  it('preserves escaped keys, arrays and overlapping projections in ordinary exported objects', () => {
+    const input = { 'a/b': { '~key': { value: 7, sibling: false } }, items: [{ value: 3 }] };
+    const log = project(input, ['/a~1b/~0key', '/a~1b/~0key/value', '/items/0/value']);
+    expect(JSON.parse(JSON.stringify(log.input))).toEqual({
+      'a/b': { '~key': { value: 7, sibling: false } }, items: { '0': { value: 3 } },
+    });
+    const output = log.input as Record<string, Record<string, unknown>>;
+    expect(Object.getPrototypeOf(output)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(output['a/b'])).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(output['a/b']['~key'])).toBe(Object.prototype);
+    expect(output instanceof Object).toBe(true);
+    expect(output.hasOwnProperty('a/b')).toBe(true);
+    expect(output['a/b'].hasOwnProperty('~key')).toBe(true);
+  });
+
+  it('copies prototype-named JSON data as own properties without changing object prototypes', () => {
+    const data = JSON.parse('{"__proto__":{"wp4Polluted":true},"constructor":{"prototype":{"value":1}}}');
+    const log = project({ safe: data }, ['/safe']);
+    const safe = (log.input as Record<string, unknown>).safe as Record<string, unknown>;
+    expect(Object.getPrototypeOf(safe)).toBe(Object.prototype);
+    expect(Object.hasOwn(safe, '__proto__')).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(safe, '__proto__')).toEqual({
+      value: { wp4Polluted: true }, enumerable: true, writable: true, configurable: true,
+    });
+    expect(safe.wp4Polluted).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(safe))).toEqual(data);
+    expect(Object.hasOwn(Object.prototype, 'wp4Polluted')).toBe(false);
+  });
+
+  it('projects constructor and prototype as data keys at intermediate and final segments', () => {
+    const input = { constructor: { prototype: { value: 7 } }, safe: { constructor: 'own', prototype: 3 } };
+    for (const allowlist of [
+      ['/constructor/prototype/value', '/safe/constructor', '/safe/prototype'],
+      ['/constructor', '/constructor/prototype/value', '/safe'],
+    ]) {
+      const projected = project(input, allowlist).input as Record<string, unknown>;
+      expect(JSON.parse(JSON.stringify(projected))).toEqual(input);
+      expect(Object.getPrototypeOf(projected)).toBe(Object.prototype);
+      expect(Object.hasOwn(projected, 'constructor')).toBe(true);
+      expect(Object.getPrototypeOf(projected.constructor)).toBe(Object.prototype);
+    }
+    const absent = project({ safe: {} }, ['/constructor/prototype/value', '/safe/constructor', '/safe/prototype']).input;
+    expect(absent).toEqual({});
+    expect(Object.hasOwn(absent as object, 'constructor')).toBe(false);
+  });
+
+  it('exports ordinary empty input and nested result objects, including objects in arrays', () => {
+    const result = rulesetResult();
+    const outcome = JSON.parse('{"items":[{"value":3}],"__proto__":{"wp4Polluted":true}}');
+    result.spec.outcome = outcome;
+    const log = exportOpaDecisionLog(result, {
+      profileVersion: DECISION_INTEROP_PROFILE_VERSION,
+      bundle: { name: 'authz', revision: 'rev-1' },
+      decisionId: 'decision-1',
+      policyPath: '/aiwg/decision/allow',
+      input: {},
+      result: outcome,
+    });
+    expect(Object.getPrototypeOf(log.input)).toBe(Object.prototype);
+    const exported = log.result as Record<string, unknown>;
+    expect(Object.getPrototypeOf(exported)).toBe(Object.prototype);
+    const items = exported.items as Array<Record<string, unknown>>;
+    expect(Object.getPrototypeOf(items[0])).toBe(Object.prototype);
+    expect(items[0].hasOwnProperty('value')).toBe(true);
+    expect(Object.hasOwn(exported, '__proto__')).toBe(true);
+    expect(JSON.parse(JSON.stringify(exported))).toEqual(outcome);
+    expect(Object.hasOwn(Object.prototype, 'wp4Polluted')).toBe(false);
   });
 });
 

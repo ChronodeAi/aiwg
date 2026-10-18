@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
 import { readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const baselinePath = path.join(root, 'schemas/mission-protocol/inventory-v1.json');
@@ -19,10 +21,10 @@ const requiredSurfaces = new Set([
 function trackedFiles() {
   let output;
   try {
-    output = execFileSync(process.env.AIWG_RG_BIN || 'rg', ['--files', ...roots], { cwd: root, encoding: 'utf8' });
+    output = boundedExecFileSync(process.env.AIWG_RG_BIN || 'rg', ['--files', ...roots], 'quick', { cwd: root, encoding: 'utf8' });
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
-    output = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '--', ...roots], { cwd: root, encoding: 'utf8' });
+    output = boundedExecFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '--', ...roots], 'quick', { cwd: root, encoding: 'utf8' });
   }
   return output
     .split('\n').filter(Boolean)

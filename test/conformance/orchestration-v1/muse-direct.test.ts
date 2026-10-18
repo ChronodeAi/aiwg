@@ -105,11 +105,12 @@ async function execute(f: Awaited<ReturnType<typeof fixture>>, scenario: string,
 }
 
 describe('Muse S1 offline profile and direct execution', () => {
-  it('MD01 records exact syntax version, unavailable signals and separate live qualification', () => {
+  it('MD01 records compatible syntax versions, unavailable signals and separate live qualification', () => {
     const adapter = loadProviderModelCapabilities().providers.muse.workerHealthAdapter!;
-    expect(adapter.supportedVersions).toBe(MUSE_DIRECT_VERSION);
+    expect(adapter.supportedVersions).toBe('>=1.4.4-R5419.1 <2.0.0');
     expect(adapter.qualification.status).toBe('unqualified');
     const profile = adapter.invocationProfiles!['direct-shell'];
+    expect(profile.supportedVersions).toBe(adapter.supportedVersions);
     expect(profile.controls.trust.mapping).toBe('[]');
     expect(profile.controls.approval.mapping).toBe('["--approval-mode","never","--approval-judge","off"]');
     expect(profile.health).toMatchObject({ coverage: 'degraded', sessionLogLocator: null, progressEvidence: [],

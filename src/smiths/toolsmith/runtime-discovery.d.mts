@@ -1,7 +1,7 @@
 export class RuntimeDiscovery {
   basePath: string;
-  constructor();
-  discover(): Promise<any>;
+  constructor(basePath?: string | null, options?: { cwd?: string; quiet?: boolean });
+  discover(options?: { force?: boolean }): Promise<any>;
   verify(): Promise<any>;
   getCatalog(): Promise<any>;
   generateDefinition(): Promise<any>;

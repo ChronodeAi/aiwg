@@ -1,8 +1,13 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { importImpl } from '../_resolve-impl.mjs';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
+
+const { positiveTimeoutMs } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 /** Preserve process identity and state: zombies still fail the cleanup gate. */
 export async function inspectOmpProcess({ pid, startTime }) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return { pid, present: false };
   try {
     const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
     const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
@@ -142,7 +147,7 @@ export class OmpRpcClient {
     } catch (error) { await this.close(); throw error; } finally { this.running = false; }
   }
   fail(error) { if (this.failure) return; this.failure = error; clearTimeout(this.readyTimer); this.readyReject(error); this.promptReject?.(error); for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); } this.pending.clear(); if (!this.isClosed) this.kill('SIGKILL'); }
-  kill(signal) { try { if (process.platform !== 'win32' && this.child.pid) process.kill(-this.child.pid, signal); else this.child.kill(signal); } catch { /* already exited */ } }
+  kill(signal) { try { if (process.platform !== 'win32' && Number.isSafeInteger(this.child.pid) && this.child.pid > 0) process.kill(-this.child.pid, signal); else signalChild(this.child, signal); } catch { /* already exited */ } }
   async close() {
     if (this.isClosed) return this.closed;
     if (this.closing) return this.closing;
@@ -176,7 +181,9 @@ export class OmpRpcClient {
  */
 export async function warmAndConnectOmpRpcClient({ binary, cwd, env, warmArgs = ['--version'], warmTimeoutMs = 15000, ...clientOptions }) {
   const warmStarted = Date.now();
-  const warmup = spawnSync(binary, warmArgs, { cwd, env, encoding: 'utf8', timeout: warmTimeoutMs });
+  // warmTimeoutMs is caller-controlled; clamp it so a caller passing 0 (or
+  // anything else non-positive) can't disable the bound (#3062 B/C finding 8).
+  const warmup = spawnSync(binary, warmArgs, { cwd, env, encoding: 'utf8', timeout: positiveTimeoutMs(warmTimeoutMs, 15000), killSignal: 'SIGKILL' });
   const warmedMs = Date.now() - warmStarted;
   const warmupResult = { status: warmup.status ?? null, signal: warmup.signal ?? null, error: warmup.error ? String(warmup.error.message ?? warmup.error) : null };
   const readyStarted = Date.now();

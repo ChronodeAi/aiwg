@@ -225,24 +225,45 @@ export async function assertHeldoutRequestBounds(corpus: HeldoutCorpus, plan: He
     }
   }
 }
-export async function planHeldoutCollection(bundle: HeldoutBundle, digest: string) {
+/** Prior observations are reusable only within the same study, corpus and preregistration. */
+export function heldoutResumeAttempts(bundle: HeldoutBundle, prior: readonly HeldoutAttempt[]) {
+  const a = bundle.approval;
+  const old = prior.filter(attempt => attempt.study === a.study && attempt.corpusDigest === a.corpusDigest);
+  if (old.some(attempt => attempt.preregistrationDigest !== a.preregistrationDigest)) throw new HeldoutError('changed-preregistration');
+  const latest = new Map<string, HeldoutAttempt>();
+  for (const attempt of old) {
+    const key = `${attempt.rowId}/${attempt.requestId}`, previous = latest.get(key);
+    if (previous?.result?.disposition !== 'success' && (attempt.result?.disposition === 'success'
+      || attempt.ordinal >= (previous?.ordinal ?? 0))) latest.set(key, attempt);
+  }
+  return { old, latest };
+}
+/** The collector and dry-run reserve only unfinished requests, with their unspent retry allowance. */
+export function heldoutPendingRequests(row: HeldoutRow, plan: HeldoutPreregistration, latest: ReadonlyMap<string, HeldoutAttempt>) {
+  return row.requests.flatMap(request => {
+    const previous = latest.get(`${row.id}/${request.id}`);
+    const first = (previous?.ordinal ?? 0) + 1, attempts = 2 + plan.providerFailurePolicy.maxRetries - first;
+    return previous?.result?.disposition === 'success' || attempts <= 0 ? [] : [{ request, first, attempts }];
+  });
+}
+export async function planHeldoutCollection(bundle: HeldoutBundle, digest: string, prior: readonly HeldoutAttempt[] = []) {
   validateHeldoutBundle(bundle, digest);
   await assertHeldoutRequestBounds(bundle.corpus, bundle.preregistration, bundle.approval);
-  let maximumRequestEstimateTokens = 0, tokens = 0, usdMicros = 0;
+  const { latest } = heldoutResumeAttempts(bundle, prior);
+  let maximumRequestEstimateTokens = 0, tokens = 0, usdMicros = 0, maximumAttempts = 0;
   const rows = heldoutRowsInScope(bundle);
-  for (const row of rows) for (const request of row.requests) {
+  for (const row of rows) for (const { request, attempts } of heldoutPendingRequests(row, bundle.preregistration, latest)) {
     const planned = await heldoutRequest(bundle.corpus, bundle.preregistration, bundle.approval, row, request);
     maximumRequestEstimateTokens = Math.max(maximumRequestEstimateTokens, planned.estimatedTokens);
     const reservation = heldoutReservationMicros(bundle.approval, planned.estimatedTokens);
     if (reservation > Math.floor(bundle.approval.budget.usd * 1_000_000)) throw new HeldoutError('approval-call-budget');
-    const attempts = 1 + bundle.preregistration.providerFailurePolicy.maxRetries;
+    maximumAttempts += attempts;
     tokens += attempts * heldoutReservationTokens(bundle.preregistration, planned.estimatedTokens);
     usdMicros += attempts * reservation;
   }
-  const attempts = rows.reduce((n, r) => n + r.requests.length, 0) * (1 + bundle.preregistration.providerFailurePolicy.maxRetries);
   const a = bundle.approval;
-  return { calibration: structuredClone(a.calibration), rowsInScope: rows.map(row => row.id), providerCalls: 0, maximumAttempts: attempts, maximumRequestEstimateTokens, reservedTokens: tokens, reservedUsdMicros: usdMicros,
-    fitsBeforeStop: attempts <= Math.floor(a.budget.calls * 0.8) && tokens <= Math.floor(a.budget.tokens * 0.8)
+  return { calibration: structuredClone(a.calibration), rowsInScope: rows.map(row => row.id), providerCalls: 0, maximumAttempts, maximumRequestEstimateTokens, reservedTokens: tokens, reservedUsdMicros: usdMicros,
+    fitsBeforeStop: maximumAttempts <= Math.floor(a.budget.calls * 0.8) && tokens <= Math.floor(a.budget.tokens * 0.8)
       && usdMicros <= Math.floor(Math.min(a.budget.usd, HELDOUT_CAP_USD[a.study] - a.priorStudySpendUsd,
         HELDOUT_PORTFOLIO_CAP_USD - a.priorPortfolioSpendUsd) * 800_000) };
 }

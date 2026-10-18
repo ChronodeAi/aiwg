@@ -1,8 +1,9 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync } from '../../helpers/temp-dir.js';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { OPERATIONAL_DISCOVERY_TYPES, OPERATIONAL_SHOW_TYPES } from '../../../src/artifacts/types.js';
 import { parseGatePackDoc } from '../../../src/artifacts/index-builder.js';
 import { BundleManifestSchema } from '../../../src/extensions/manifest.js';
@@ -101,6 +102,24 @@ describe('gate-pack bundle registry', () => {
     expect(loaded).toContain('aiwg:decision-engine/integrity-ceiling');
     expect(registry.getPack('aiwg:decision-engine/integrity-ceiling').metadata.id)
       .toBe('aiwg:decision-engine/integrity-ceiling');
+  });
+
+  it('discovers shipped packs with wall-clock drift using thread CPU', () => {
+    const cpuClock = vi.spyOn(process, 'threadCpuUsage').mockReturnValue({ user: 0, system: 0 });
+    const nowSpy = vi.spyOn(performance, 'now');
+    let fakeNow = 0;
+    nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
+    try {
+      const registry = new GateRegistry(createCoreProviderRegistry());
+      expect(() => discoverShippedGatePacks(repoRoot, registry)).not.toThrow();
+      expect(registry.getPack('aiwg:decision-engine/integrity-ceiling').metadata.id)
+        .toBe('aiwg:decision-engine/integrity-ceiling');
+      expect(cpuClock).toHaveBeenCalled();
+      expect(nowSpy).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+      cpuClock.mockRestore();
+    }
   });
 });
 

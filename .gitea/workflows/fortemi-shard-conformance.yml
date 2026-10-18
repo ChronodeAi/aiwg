@@ -13,18 +13,6 @@ on:
       - 'schemas/artifacts/aiwg-fortemi-full-v1-consumer-receipt.v1.schema.json'
       - 'tools/ci/verify-aiwg-fortemi-shard-receipt.mjs'
       - '.gitea/workflows/fortemi-shard-conformance.yml'
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - 'package.json'
-      - 'package-lock.json'
-      - 'src/artifacts/fortemi-shard-export.ts'
-      - 'test/unit/artifacts/fortemi-shard-export.test.ts'
-      - 'test/fixtures/fortemi-shard/**'
-      - 'schemas/artifacts/aiwg-fortemi-shard-receipt.v1.schema.json'
-      - 'schemas/artifacts/aiwg-fortemi-full-v1-consumer-receipt.v1.schema.json'
-      - 'tools/ci/verify-aiwg-fortemi-shard-receipt.mjs'
-      - '.gitea/workflows/fortemi-shard-conformance.yml'
   workflow_dispatch:
 
 concurrency:
@@ -45,7 +33,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node -e "const major = Number(process.versions.node.split('.')[0]); if (major < 20) throw new Error('Node 20 or newer is required')"
+          node -e "const major = Number(process.versions.node.split('.')[0]); if (major < 24) throw new Error('Node 24 or newer is required')"
           git --version
           DOCKER_VERSION=27.5.1
           DOCKER_ARCHIVE=/tmp/docker.tgz

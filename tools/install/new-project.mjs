@@ -19,7 +19,9 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { spawnSync } from 'node:child_process';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedSpawnSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 function printHelp() {
   console.log(`aiwg new — Scaffold a new AIWG project
@@ -300,16 +302,25 @@ function createOrUpdateSettings(aiwgPath, provider) {
       const agentArgs = ['--provider', provider, '--mode', 'sdlc'];
       if (provider === 'openai') agentArgs.push('--as-agents-md');
       console.log('Deploying SDLC agents...');
-      const agentRes = spawnSync('node', [deployPath, ...agentArgs], { stdio: 'inherit' });
-      if (agentRes.status !== 0) {
+      const agentRes = boundedSpawnSync('node', [deployPath, ...agentArgs], 'long', { stdio: 'inherit' });
+      // `agentRes.error ||`, not just `status !== 0` (#3062 B/C finding 13):
+      // a surviving descendant holding the pipe can produce ETIMEDOUT with
+      // status 0 — status alone would then read as success.
+      if (agentRes.error || agentRes.status !== 0) {
+        // `agentRes.error` carries the enriched timeout explanation (tier,
+        // bound, AIWG_SYNC_LONG_TIMEOUT_MS override) that `status` alone
+        // does not (#3062 finding 17) — print it so a `long`-tier bound
+        // is not indistinguishable from a real deploy failure.
+        if (agentRes.error) console.warn(agentRes.error.message);
         console.warn('Agent deployment returned non-zero status');
       }
 
       // Deploy commands (SDLC flow commands)
       console.log('Deploying SDLC commands...');
       const cmdArgs = ['--deploy-commands', '--provider', provider, '--mode', 'sdlc'];
-      const cmdRes = spawnSync('node', [deployPath, ...cmdArgs], { stdio: 'inherit' });
-      if (cmdRes.status !== 0) {
+      const cmdRes = boundedSpawnSync('node', [deployPath, ...cmdArgs], 'long', { stdio: 'inherit' });
+      if (cmdRes.error || cmdRes.status !== 0) {
+        if (cmdRes.error) console.warn(cmdRes.error.message);
         console.warn('Command deployment returned non-zero status');
       }
     }
@@ -318,11 +329,11 @@ function createOrUpdateSettings(aiwgPath, provider) {
   // Initialize git repository if not present
   if (!fs.existsSync(path.resolve(process.cwd(), '.git'))) {
     try {
-      let r = spawnSync('git', ['init', '-b', 'main'], { stdio: 'inherit' });
-      if (r.status !== 0) {
+      let r = boundedSpawnSync('git', ['init', '-b', 'main'], 'quick', { stdio: 'inherit' });
+      if (r.error || r.status !== 0) {
         // fallback for older git
-        spawnSync('git', ['init'], { stdio: 'inherit' });
-        spawnSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { stdio: 'inherit' });
+        boundedSpawnSync('git', ['init'], 'quick', { stdio: 'inherit' });
+        boundedSpawnSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], 'quick', { stdio: 'inherit' });
       }
       const gi = path.resolve(process.cwd(), '.gitignore');
       if (!fs.existsSync(gi)) {

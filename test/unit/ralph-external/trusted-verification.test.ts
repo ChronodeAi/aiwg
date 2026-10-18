@@ -12,7 +12,7 @@
  *
  * @source @tools/ralph-external/lib/trusted-verification.mjs
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, type TestContext } from 'vitest';
 import {
   chmodSync,
   closeSync,
@@ -26,6 +26,7 @@ import {
   renameSync,
   rmSync,
   rmdirSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -61,9 +62,25 @@ const sandboxFixture = path.join(fixturesRoot, 'simulate-sandbox-error.mjs');
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-function tmpWorktree() {
+// Test-only capability gate: production must still reject device mismatches.
+function fileDeviceSkipReason(directory: string, file: string, stat: (file: string) => { dev: number } = statSync) {
+  const directoryDev = stat(directory).dev;
+  const fileDev = stat(file).dev;
+  return directoryDev === fileDev ? undefined
+    : `host st_dev quirk: a fresh temp file reports dev ${fileDev}, but its directory reports dev ${directoryDev}; requires matching file/directory devices`;
+}
+
+function tmpWorktree(context?: TestContext) {
   const root = mkdtempSync(path.join(tmpdir(), 'aiwg-trusted-verify-worktree-'));
   roots.push(root);
+  if (context) {
+    const probe = path.join(root, '.device-probe');
+    writeFileSync(probe, 'probe');
+    let reason: string | undefined;
+    try { reason = fileDeviceSkipReason(root, probe); }
+    finally { unlinkSync(probe); }
+    if (reason) context.skip(reason);
+  }
   return root;
 }
 
@@ -89,6 +106,23 @@ function fakeConfinedRunner(responder: (opts: Record<string, unknown>) => Record
   });
 }
 
+describe('temp fixture device capability', () => {
+  it('runs device-dependent cases when the file and directory devices match', () => {
+    expect(fileDeviceSkipReason('/fixture', '/fixture/probe', () => ({ dev: 39 }))).toBeUndefined();
+  });
+
+  it('skips device-dependent cases with the host quirk and both devices in the reason', () => {
+    const reason = fileDeviceSkipReason('/fixture', '/fixture/probe', file => ({ dev: file === '/fixture' ? 39 : 40 }));
+    expect(reason).toMatch(/host st_dev quirk/);
+    expect(reason).toContain('file reports dev 40');
+    expect(reason).toContain('directory reports dev 39');
+  });
+
+  it('does not turn stat errors into a capability skip', () => {
+    expect(() => fileDeviceSkipReason('/fixture', '/fixture/probe', () => { throw new Error('stat failed'); })).toThrow('stat failed');
+  });
+});
+
 describe('path-safety: symlink and hardlink escape are blocked (T-OG-04)', () => {
   it('denies a symlink inside the worktree pointing outside, regardless of target', () => {
     const worktree = tmpWorktree();
@@ -103,8 +137,8 @@ describe('path-safety: symlink and hardlink escape are blocked (T-OG-04)', () =>
     expect(() => assertWithinWorktree(worktreeRootReal, link)).toThrow(/outside the worktree/);
   });
 
-  it('m1: allows a symlink inside the worktree whose target also stays inside it (node_modules/.bin-style layouts)', () => {
-    const worktree = tmpWorktree();
+  it('m1: allows a symlink inside the worktree whose target also stays inside it (node_modules/.bin-style layouts)', context => {
+    const worktree = tmpWorktree(context);
     const real = path.join(worktree, 'real.txt');
     writeFileSync(real, 'ok\n');
     const link = path.join(worktree, 'inside-link.txt');
@@ -114,8 +148,8 @@ describe('path-safety: symlink and hardlink escape are blocked (T-OG-04)', () =>
     expect(assertWithinWorktree(worktreeRootReal, link)).toBe(real);
   });
 
-  it('denies a hardlink to a file outside the worktree when validating the ARTIFACT specifically (pinArtifact)', () => {
-    const worktree = tmpWorktree();
+  it('denies a hardlink to a file outside the worktree when validating the ARTIFACT specifically (pinArtifact)', context => {
+    const worktree = tmpWorktree(context);
     const outside = tmpOutside();
     const target = path.join(outside, 'shared-dependency.txt');
     writeFileSync(target, 'mutable shared content\n');
@@ -126,11 +160,11 @@ describe('path-safety: symlink and hardlink escape are blocked (T-OG-04)', () =>
     expect(() => pinArtifact(worktreeRootReal, hardlink)).toThrow(/multiply-linked/);
   });
 
-  it('m1: a multiply-linked file is NOT denied by the general path check (assertWithinWorktree) used for cwd/binary resolution, only by pinArtifact', () => {
+  it('m1: a multiply-linked file is NOT denied by the general path check (assertWithinWorktree) used for cwd/binary resolution, only by pinArtifact', context => {
     // Legitimate npm/pnpm installs routinely hardlink node_modules content
     // from a shared store; general path resolution must not blanket-deny
     // nlink > 1, or every real install would be refused.
-    const worktree = tmpWorktree();
+    const worktree = tmpWorktree(context);
     const outside = tmpOutside();
     const target = path.join(outside, 'store-file.txt');
     writeFileSync(target, 'package-manager store content\n');
@@ -141,8 +175,8 @@ describe('path-safety: symlink and hardlink escape are blocked (T-OG-04)', () =>
     expect(assertWithinWorktree(worktreeRootReal, hardlink)).toBe(hardlink);
   });
 
-  it('accepts a plain regular file created fresh inside the worktree', () => {
-    const worktree = tmpWorktree();
+  it('accepts a plain regular file created fresh inside the worktree', context => {
+    const worktree = tmpWorktree(context);
     const file = path.join(worktree, 'normal.txt');
     writeFileSync(file, 'fine\n');
     const worktreeRootReal = resolveWorktreeRoot(worktree);
@@ -175,8 +209,8 @@ describe('path-safety: symlink and hardlink escape are blocked (T-OG-04)', () =>
 });
 
 describe('B2: TOCTOU — a path validated before use is pinned by file descriptor, not re-resolved later', () => {
-  it('a symlink swapped in after a path was first validated is denied on the later access that actually uses it', () => {
-    const worktree = tmpWorktree();
+  it('a symlink swapped in after a path was first validated is denied on the later access that actually uses it', context => {
+    const worktree = tmpWorktree(context);
     const outside = tmpOutside();
     const secret = path.join(outside, 'secret-after-swap.txt');
     writeFileSync(secret, 'TOP SECRET\n');
@@ -271,7 +305,8 @@ describe('M1 residual: an allowlisted interpreter given a worktree-path argument
   const enforcedCapabilities = {
     mode: 'systemd-unit', writeConfinement: 'enforced', homeReadIsolation: 'enforced',
     networkIsolation: 'enforced', tmpIsolation: 'enforced', noNewPrivileges: 'enforced',
-    tmpWriteConfinement: 'enforced', arbitraryPathReadIsolation: 'enforced', degraded: [],
+    tmpWriteConfinement: 'enforced', arbitraryPathReadIsolation: 'degraded',
+    degraded: [{ capability: 'arbitraryPathReadIsolation', reason: 'other host paths remain readable' }],
   };
 
   it('refuses /usr/bin/node <worktree-script> when confinement is degraded and no explicit opt-in was given', () => {
@@ -294,7 +329,7 @@ describe('M1 residual: an allowlisted interpreter given a worktree-path argument
     })).not.toThrow();
   });
 
-  it('allows the same combination when confinement is fully enforced (no opt-in needed)', () => {
+  it('allows the same combination when required capabilities are enforced despite degraded arbitrary reads (no opt-in needed)', () => {
     const worktree = tmpWorktree();
     const script = path.join(worktree, 'worker-script.js');
     writeFileSync(script, 'console.log("hi");\n');
@@ -505,8 +540,8 @@ describe('verifyWorkerArtifact: digest-bound acceptance (pre+post), no auto-merg
     };
   }
 
-  it('accepts only when every protected check passes, binding acceptance to the exact artifact digest and reporting isolation', () => {
-    const worktree = tmpWorktree();
+  it('accepts only when every protected check passes, binding acceptance to the exact artifact digest and reporting isolation', context => {
+    const worktree = tmpWorktree(context);
     const artifact = path.join(worktree, 'final.json');
     writeFileSync(artifact, JSON.stringify({ type: 'result', result: { status: 'completed' } }));
 
@@ -523,8 +558,8 @@ describe('verifyWorkerArtifact: digest-bound acceptance (pre+post), no auto-merg
     expect(Array.isArray(verified.isolation.degraded)).toBe(true);
   });
 
-  it('a later edit to the artifact invalidates the digest the prior run accepted', () => {
-    const worktree = tmpWorktree();
+  it('a later edit to the artifact invalidates the digest the prior run accepted', context => {
+    const worktree = tmpWorktree(context);
     const artifact = path.join(worktree, 'final.json');
     writeFileSync(artifact, 'version-1\n');
     const first = verifyWorkerArtifact({ worktreeRoot: worktree, artifactPath: artifact, checks: [] });
@@ -533,8 +568,8 @@ describe('verifyWorkerArtifact: digest-bound acceptance (pre+post), no auto-merg
     expect(first.artifactDigest).not.toBe(second.artifactDigest);
   });
 
-  it('M3: rejects when the worktree tree changes DURING the checks, even though the single artifact file itself is untouched', () => {
-    const worktree = tmpWorktree();
+  it('M3: rejects when the worktree tree changes DURING the checks, even though the single artifact file itself is untouched', context => {
+    const worktree = tmpWorktree(context);
     const artifact = path.join(worktree, 'final.json');
     writeFileSync(artifact, 'ok\n');
     // Seed a real git repo so computeWorktreeTreeDigest has something to
@@ -563,8 +598,8 @@ describe('verifyWorkerArtifact: digest-bound acceptance (pre+post), no auto-merg
     expect(verified.findings.join(';')).toMatch(/tree digest changed during verification/);
   });
 
-  it('M3: a clean run with no mutation computes a stable fd-walk tree digest across pre/post', () => {
-    const worktree = tmpWorktree();
+  it('M3: a clean run with no mutation computes a stable fd-walk tree digest across pre/post', context => {
+    const worktree = tmpWorktree(context);
     const artifact = path.join(worktree, 'final.json');
     writeFileSync(artifact, 'ok\n');
 
@@ -584,8 +619,8 @@ describe('verifyWorkerArtifact: digest-bound acceptance (pre+post), no auto-merg
     expect(digest).toMatch(/^fd-tree:sha256:[a-f0-9]{64}$/);
   });
 
-  it('M3 (round 2): a digest computation failure REJECTS verification outright, never silently falls back to "unchanged"', () => {
-    const worktree = tmpWorktree();
+  it('M3 (round 2): a digest computation failure REJECTS verification outright, never silently falls back to "unchanged"', context => {
+    const worktree = tmpWorktree(context);
     const artifact = path.join(worktree, 'final.json');
     writeFileSync(artifact, 'ok\n');
     const unreadableDir = path.join(worktree, 'unreadable');
@@ -634,7 +669,7 @@ describe('verifyWorkerArtifact: digest-bound acceptance (pre+post), no auto-merg
     expect(existsSync(marker)).toBe(false);
   });
 
-  it('M3 (round 2): a root swap-and-restore (root renamed away, an identical-looking replacement created at the same path) is rejected, even though content alone would match', () => {
+  it('M3 (round 2): a root swap-and-restore (root renamed away, an identical-looking replacement created at the same path) is rejected, even though content alone would match', context => {
     // Defense-in-depth: whenever at least one check runs, B2's own pinned-
     // cwd identity re-check (the check's cwd defaults to the worktree
     // root) ALSO independently detects this exact swap, because the cwd fd
@@ -648,7 +683,7 @@ describe('verifyWorkerArtifact: digest-bound acceptance (pre+post), no auto-merg
     // reject; this test asserts the externally-observable outcome
     // (rejected, never silently accepted as "unchanged") rather than
     // which specific internal layer fired first.
-    const worktree = tmpWorktree();
+    const worktree = tmpWorktree(context);
     const artifact = path.join(worktree, 'final.json');
     const artifactContent = JSON.stringify({ type: 'result', result: { status: 'completed' } });
     writeFileSync(artifact, artifactContent);
@@ -678,8 +713,8 @@ describe('verifyWorkerArtifact: digest-bound acceptance (pre+post), no auto-merg
     expect(verified.findings.join(';')).toMatch(/identity changed|root identity check failed|swap-and-restore/);
   });
 
-  it('returns "blocked" (not "accepted" and not "rejected") when a check hits a sandbox/isolation failure, distinguishing infra noise from a real verdict', () => {
-    const worktree = tmpWorktree();
+  it('returns "blocked" (not "accepted" and not "rejected") when a check hits a sandbox/isolation failure, distinguishing infra noise from a real verdict', context => {
+    const worktree = tmpWorktree(context);
     const artifact = path.join(worktree, 'final.json');
     writeFileSync(artifact, 'ok\n');
     const verified = verifyWorkerArtifact({
@@ -694,8 +729,8 @@ describe('verifyWorkerArtifact: digest-bound acceptance (pre+post), no auto-merg
     expect(verified.artifactDigest).toBeNull();
   });
 
-  it('returns "rejected" when a real check fails', () => {
-    const worktree = tmpWorktree();
+  it('returns "rejected" when a real check fails', context => {
+    const worktree = tmpWorktree(context);
     const artifact = path.join(worktree, 'final.json');
     writeFileSync(artifact, 'ok\n');
     const verified = verifyWorkerArtifact({
@@ -730,8 +765,8 @@ describe('verifyWorkerArtifact: digest-bound acceptance (pre+post), no auto-merg
     expect(verified.status).toBe('rejected');
   });
 
-  it('never mutates the worktree: a rejected verification leaves the artifact and all files exactly as found (dirty work retained)', () => {
-    const worktree = tmpWorktree();
+  it('never mutates the worktree: a rejected verification leaves the artifact and all files exactly as found (dirty work retained)', context => {
+    const worktree = tmpWorktree(context);
     const artifact = path.join(worktree, 'final.json');
     const dirty = path.join(worktree, 'uncommitted.txt');
     writeFileSync(artifact, 'ok\n');

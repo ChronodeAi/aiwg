@@ -7,21 +7,20 @@ Before installing AIWG, ensure you have the following requirements.
 
 ## Required
 
-### Node.js ≥20.0.0
+### Node.js ≥24
 
 ```bash
-node --version  # Should show v20.x.x or higher
+node --version  # Should show v24.x.x or higher
 npm --version
 ```
 
-AIWG's package runtime supports Node 20 or newer. For new installs,
-prefer the current LTS line, Node 24.
+AIWG requires Node 24 or newer. Node 24 is the standard runtime for all installs.
 
 Contributor and release workflows have stricter npm requirements:
 
 | Use case | Requirement | Why |
 |----------|-------------|-----|
-| Install and run AIWG | Node 20+ | Matches the package `engines.node` floor |
+| Install and run AIWG | Node 24+ | Matches the package `engines.node` floor |
 | Change dependencies or regenerate lockfiles | npm 11.5+ | Required for the committed `min-release-age=7` gate |
 | Publish AIWG releases | Node 24 in the release workflow | Current npm 11.x plus npm trusted-publishing support |
 

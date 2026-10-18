@@ -1,7 +1,8 @@
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readAiwgConfigCandidate, writeAiwgConfig, emptyConfig } from '../../../src/config/aiwg-config.js';
 import {
   askDecision,
   DecisionAskUsageError,
@@ -86,8 +87,173 @@ describe('decision ask', () => {
     return directory;
   }
 
+  function scripted(values: Array<number | 'abstain' | 'error'>, delayMs = 0) {
+    let calls = 0;
+    let active = 0;
+    let peak = 0;
+    const adapter = new FakeAdapter();
+    const evaluate = vi.spyOn(adapter, 'evaluate').mockImplementation(async request => {
+      const value = values[calls++ % values.length]!;
+      active += 1;
+      peak = Math.max(peak, active);
+      try {
+        if (delayMs) await new Promise(resolve => setTimeout(resolve, delayMs));
+        if (value === 'error') throw new Error('fake Jev failure');
+        if (value === 'abstain') return { ...await new FakeAdapter().evaluate(request), status: 'abstained', reason: 'insufficient-information', value: undefined, uncertainty: null } as AdapterObservation;
+        return new FakeAdapter(value).evaluate(request);
+      } finally { active -= 1; }
+    });
+    return { adapter, evaluate, peak: () => peak };
+  }
+
+  it('runs ten independent unanimous passes with bounded concurrency and summed usage', async () => {
+    const fake = scripted([0.93]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 10, escalationPasses: 20 }, {
+      env: enabledEnv(), adapter: fake.adapter,
+    });
+    expect(result).toMatchObject({ status: 'answered', answer: true, usage: { inputTokens: 120, outputTokens: 30 },
+      aggregate: { passesRequested: 10, escalationPasses: 20, passesRun: 10, escalated: false, agreementRatio: 1, earlyStop: null,
+        votes: { true: 10, false: 0 }, confidenceSummary: { count: 10, missing: 0 } } });
+    expect(result.confidence).toBeCloseTo(0.93);
+    expect(fake.evaluate).toHaveBeenCalledTimes(10);
+    expect(fake.peak()).toBeLessThanOrEqual(4);
+    expect(new Set(fake.evaluate.mock.calls.map(([request]) => request.invocationId)).size).toBe(10);
+    expect(result.aggregate?.passes).toHaveLength(10);
+  });
+
+  it('escalates a split first round to twenty total and accepts a recovered modal answer', async () => {
+    const fake = scripted([0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.05, 0.05, 0.05, 0.05, ...Array(10).fill(0.95)]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 10, escalationPasses: 20 }, {
+      env: enabledEnv(), adapter: fake.adapter,
+    });
+    expect(result).toMatchObject({ status: 'answered', answer: true,
+      aggregate: { passesRun: 20, escalated: true, agreementRatio: 0.8, earlyStop: null } });
+    expect(result.confidence).toBeCloseTo(0.8 * 0.95);
+    expect(fake.evaluate).toHaveBeenCalledTimes(20);
+  });
+
+  it('falls back after twenty passes when the last wave preserves low agreement', async () => {
+    const fake = scripted([...Array(9).fill(0.99), 0.01, ...Array(9).fill(0.99), 0.01]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 10, escalationPasses: 20, threshold: 0.95 }, {
+      env: enabledEnv(), adapter: fake.adapter,
+    });
+    expect(result).toMatchObject({ status: 'fallback', reason: 'low-agreement',
+      aggregate: { escalated: true, passesRun: 20, agreementRatio: 0.9, earlyStop: null } });
+  });
+
+  it('stops a certain split failure early against the final escalation budget', async () => {
+    const fake = scripted([0.95, 0.05]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 10, escalationPasses: 20 }, {
+      env: enabledEnv(), adapter: fake.adapter,
+    });
+    expect(result).toMatchObject({ status: 'fallback', reason: 'low-agreement',
+      aggregate: { escalated: true, earlyStop: 'certain-failure', passesRun: 10, agreementRatio: 0.5 } });
+  });
+
+  it.each(['abstain', 'error'] as const)('handles a %s without trusting the other passes', async failure => {
+    const fake = scripted([0.95, failure, 0.95, 0.95]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 10, escalationPasses: 20 }, {
+      env: enabledEnv(), adapter: fake.adapter,
+    });
+    expect(result.status).toBe('fallback');
+    expect(result.aggregate).toMatchObject({ escalated: true, earlyStop: 'certain-failure', passesRun: 4 });
+    expect(result.aggregate?.passes.some(pass => pass.status === (failure === 'abstain' ? 'abstained' : 'failed'))).toBe(true);
+  });
+
+  it('escalates low mean confidence and reports the confidence summary on fallback', async () => {
+    const fake = scripted([0.75]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 2, escalationPasses: 4 }, {
+      env: enabledEnv(), adapter: fake.adapter,
+    });
+    expect(result).toMatchObject({ status: 'fallback', reason: 'low-confidence',
+      aggregate: { escalated: true, passesRun: 4, agreementRatio: 1, confidenceSummary: { mean: 0.75 } } });
+  });
+
+  it('shares one timeout across waves and aborts in-flight passes', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      const fake = scripted([0.95], 40);
+      const resultPromise = askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 16, timeoutMs: 100 }, {
+        env: enabledEnv(), adapter: fake.adapter,
+      });
+      const waitForCalls = async (count: number) => {
+        for (let step = 0; step < 10000 && fake.evaluate.mock.calls.length < count; step++) {
+          await new Promise(resolve => setImmediate(resolve));
+        }
+        expect(fake.evaluate).toHaveBeenCalledTimes(count);
+      };
+      await waitForCalls(4);
+      await vi.advanceTimersByTimeAsync(40);
+      await waitForCalls(8);
+      await vi.advanceTimersByTimeAsync(40);
+      await waitForCalls(12);
+      await vi.advanceTimersByTimeAsync(20);
+      const result = await resultPromise;
+      expect(result).toMatchObject({ status: 'fallback', reason: 'timeout', latencyMs: 100,
+        aggregate: { earlyStop: 'timeout', passesRun: 12 } });
+      expect(fake.evaluate).toHaveBeenCalledTimes(12);
+      expect(fake.peak()).toBeLessThanOrEqual(4);
+      expect(fake.evaluate.mock.calls.at(-1)?.[0].signal.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(fake.evaluate).toHaveBeenCalledTimes(12);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('bounds an injected evaluator that never resolves by the same ask deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const evaluate = vi.fn(() => new Promise<never>(() => {}));
+      const pending = askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 10, timeoutMs: 50 }, {
+        env: enabledEnv(), evaluate,
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(await pending).toMatchObject({ status: 'fallback', reason: 'timeout', aggregate: { passesRun: 4, earlyStop: 'timeout' } });
+      expect(evaluate).toHaveBeenCalledTimes(4);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('uses modal scale buckets and choice ids across repeated samples', async () => {
+    for (const mode of [{ kind: 'scale', low: 1, high: 5 }, { kind: 'choices', choices: ['alpha', 'beta'] }] as Array<Parameters<typeof askDecision>[0]['mode']>) {
+      const result = await askDecision({ question: 'Pick', mode, passes: 3 }, { env: enabledEnv(), adapter: new FakeAdapter(0.9) });
+      expect(result).toMatchObject({ status: 'answered', answer: mode.kind === 'scale' ? 3 : 'beta',
+        aggregate: { passesRun: 3, agreementRatio: 1 } });
+    }
+  });
+
+  it('loads project defaults, validates config on read/write, and applies explicit overrides', async () => {
+    const cwd = await configHome();
+    await mkdir(path.join(cwd, '.aiwg'));
+    const defaultFake = scripted([0.93]);
+    const defaultResult = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' } }, { cwd, env: enabledEnv(), adapter: defaultFake.adapter });
+    expect(defaultResult.aggregate).toMatchObject({ passesRequested: 5, escalationPasses: 10, passesRun: 5, escalated: false });
+    expect(defaultFake.evaluate).toHaveBeenCalledTimes(5);
+    const config = { ...emptyConfig(), decision: { ask: { passes: 3, escalation_passes: 6 } } };
+    await writeFile(path.join(cwd, '.aiwg/aiwg.config'), JSON.stringify(config));
+    expect((await readAiwgConfigCandidate(cwd))?.decision?.ask?.passes).toBe(3);
+    const fromConfig = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' } }, { cwd, env: enabledEnv(), adapter: new FakeAdapter() });
+    expect(fromConfig.aggregate).toMatchObject({ passesRequested: 3, passesRun: 3, escalationPasses: 6 });
+    const overridden = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 2, escalationPasses: 4 }, {
+      cwd, env: enabledEnv(), adapter: new FakeAdapter(),
+    });
+    expect(overridden.aggregate).toMatchObject({ passesRequested: 2, passesRun: 2, escalationPasses: 4 });
+    const verificationFake = scripted([0.93]);
+    await setupJev({ token: SECRET, verify: true }, { cwd, configHome: cwd, env: {}, adapter: verificationFake.adapter });
+    expect(verificationFake.evaluate).toHaveBeenCalledTimes(1);
+    for (const ask of [{ passes: 0 }, { passes: 1.2 }, { passes: '10' }, { passes: 3, escalation_passes: 2 }, { escalation_passes: 0 }]) {
+      const invalid = { ...config, decision: { ask } };
+      await writeFile(path.join(cwd, '.aiwg/aiwg.config'), JSON.stringify(invalid));
+      await expect(readAiwgConfigCandidate(cwd)).rejects.toThrow(/decision.ask/);
+      await expect(writeAiwgConfig(cwd, invalid as any)).rejects.toThrow(/decision.ask/);
+    }
+  });
+
+  it.each([{ passes: 0 }, { passes: 2.5 }, { passes: 3, escalationPasses: 2 }, { escalationPasses: NaN }])('rejects invalid sampling input %j', async sampling => {
+    await expect(askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, ...sampling }, { env: enabledEnv(), adapter: new FakeAdapter() }))
+      .rejects.toBeInstanceOf(DecisionAskUsageError);
+  });
+
   it('answers yes-no using truth probability', async () => {
-    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' } }, { env: enabledEnv(), adapter: new FakeAdapter(0.93) });
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 1 }, { env: enabledEnv(), adapter: new FakeAdapter(0.93) });
     expect(result).toMatchObject({
       schema: 'aiwg-decision-ask/v1',
       status: 'answered',
@@ -103,7 +269,7 @@ describe('decision ask', () => {
   it('answers bounded choices', async () => {
     const result = await askDecision({
       question: 'Pick one',
-      mode: { kind: 'choices', choices: ['alpha', 'beta'] },
+      mode: { kind: 'choices', choices: ['alpha', 'beta'] }, passes: 1,
     }, { env: enabledEnv(), adapter: new FakeAdapter(0.91) });
     expect(result).toMatchObject({ status: 'answered', answer: 'beta', confidence: 0.91 });
   });
@@ -222,7 +388,7 @@ describe('decision ask', () => {
     const body = { model: 'jev-1.13.0', answers: { answer: { type: 'score', score: 3.96, confidence: 0.97, legend,
       probabilities: { 0: 0, 1: 0, 2: 0, 3: 0.02, 4: 0.98 } } }, usage: { input_tokens: 402, output_tokens: 17 } };
     const fetch = vi.fn(async () => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }));
-    const result = await askDecision({ question: 'Severity of: production login is down', mode: { kind: 'scale', low: 1, high: 5 } }, {
+    const result = await askDecision({ question: 'Severity of: production login is down', mode: { kind: 'scale', low: 1, high: 5 }, passes: 1 }, {
       env: enabledEnv(),
       createAdapter: ({ region }) => new JevDecisionAdapter({ region, fetch: fetch as unknown as typeof globalThis.fetch }),
     });

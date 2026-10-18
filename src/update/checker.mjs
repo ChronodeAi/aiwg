@@ -12,7 +12,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import https from 'https';
-import { execSync } from 'child_process';
+import { boundedExecFileSync } from '../process/bounded-child-process.mjs';
 import { createInterface } from 'readline';
 import { loadConfig, saveConfig, getChannel, getPackageRoot } from '../channel/manager.mjs';
 import { updateInstallation } from './service.mjs';
@@ -68,15 +68,15 @@ async function fetchLatestNpmVersion() {
 async function checkGitUpdates(edgePath) {
   try {
     // Fetch latest without merging
-    execSync('git fetch --quiet', { cwd: edgePath, timeout: 10000 });
+    boundedExecFileSync('git', ['fetch', '--quiet'], 'network', { cwd: edgePath, timeout: 10000 });
 
     // Check if local is behind remote
-    const localHash = execSync('git rev-parse HEAD', {
+    const localHash = boundedExecFileSync('git', ['rev-parse', 'HEAD'], 'quick', {
       cwd: edgePath,
       encoding: 'utf8',
     }).trim();
 
-    const remoteHash = execSync('git rev-parse origin/main', {
+    const remoteHash = boundedExecFileSync('git', ['rev-parse', 'origin/main'], 'quick', {
       cwd: edgePath,
       encoding: 'utf8',
     }).trim();
@@ -322,7 +322,7 @@ async function checkEdgeUpdates(config) {
       console.log('');
       console.log('Updating edge installation...');
       try {
-        execSync('git pull --ff-only', { cwd: config.edgePath, stdio: 'inherit' });
+        boundedExecFileSync('git', ['pull', '--ff-only'], 'network', { cwd: config.edgePath, stdio: 'inherit' });
         console.log('Update complete!');
       } catch (error) {
         console.error('Update failed. Run manually:');

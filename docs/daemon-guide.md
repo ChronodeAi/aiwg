@@ -915,7 +915,7 @@ The daemon works in Docker containers and CI environments:
 
 ```dockerfile
 # Dockerfile
-FROM node:20
+FROM node:24
 RUN npm install -g aiwg
 WORKDIR /app
 COPY . .
@@ -1311,7 +1311,7 @@ aiwg daemon status
 ### Guides
 - [Serve Guide](serve-guide.md) — Operator web dashboard, sandbox registration, HITL relay
 - [Messaging Guide](messaging-guide.md) — Platform integration
-- [Al Guide](ralph-guide.md) — Iterative task loops via daemon
+- [Al Guide](agent-loop-guide.md) — Iterative task loops via daemon
 - [Behaviors Guide](behaviors-guide.md) — Attaching capabilities to daemon and long-running agents
 - [HITL Integration](addons/agent-persistence/hitl-integration.md) — HITL gates for agent recovery
 - [Provider Capability Matrix](providers/capability-matrix.md) — Per-provider daemon tier and feature support

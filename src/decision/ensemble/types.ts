@@ -191,3 +191,11 @@ export interface DriftResponseDecision {
   evidence: 'identity-change' | 'unlabeled-distribution-warning' | 'labeled-quality';
   response: DriftResponseAction | null;
 }
+
+/** Categorical stability shared by ensemble policies and bounded decision asks. */
+export interface ModalAnswerAggregate {
+  value: string | null;
+  votes: Record<string, number>;
+  tie: boolean;
+  agreementRatio: number;
+}

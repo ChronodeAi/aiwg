@@ -82,7 +82,7 @@ title: Incomplete Paper
 This note is missing required frontmatter fields.
 `);
 
-  // Bad REF note — non-standard naming
+  // Valid slugged REF filename
   writeFileSync(join(FINDINGS_DIR, 'REF-004-extra-slug.md'), `---
 title: Slugged Paper
 authors: Doe, J.
@@ -94,7 +94,7 @@ status: pending
 
 # Slugged Paper
 
-This file name has an extra slug that doesn't match REF-NNN format.
+This file name has an optional descriptive slug.
 `);
 
   // REF note with broken reference
@@ -179,15 +179,14 @@ describe('end-to-end lint run against fixture corpus', () => {
     expect(missingFields.some(m => m.includes('status'))).toBe(true);
   });
 
-  it('detects non-standard file naming in REF-004-extra-slug', async () => {
+  it('accepts the slugged file naming in REF-004-extra-slug', async () => {
     const ruleset = await loadRuleset(RESEARCH_LINT_DIR, 'research-complete');
     const result = await runLint(FIXTURE_DIR, [ruleset!]);
 
     const formatDiags = result.diagnostics.filter(
       d => d.file.includes('REF-004-extra-slug') && d.ruleId === 'research/ref-id-format'
     );
-    expect(formatDiags.length).toBeGreaterThanOrEqual(1);
-    expect(formatDiags[0].message).toContain('does not match');
+    expect(formatDiags).toHaveLength(0);
   });
 
   it('detects broken REF-999 reference in REF-005', async () => {

@@ -527,7 +527,15 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
     builtIn: true,
     surfaces: { primary: 'claude-code', compatibility: ['claude'], precedence: ['.claude/', 'CLAUDE.md'], related: [] },
     detection: {
-      env: ['CLAUDE_CODE_VERSION', 'ANTHROPIC_API_KEY'],
+      // CLAUDECODE / CLAUDE_CODE_ENTRYPOINT / CLAUDE_CODE_DESKTOP_APP_VERSION
+      // are the markers current Claude Code (CLI and Desktop Code tab)
+      // actually sets; confirmed empirically in both a CLI session and a
+      // Desktop Code-tab session (docs/planning/claude-desktop-provider/
+      // assessment-and-issue-plan.md §2.1). `CLAUDE_CODE_VERSION` is not set
+      // by current Claude Code, and `ANTHROPIC_API_KEY` is a false-positive
+      // signal — any non-Claude session with that key set would otherwise
+      // identify as `claude` (#2627).
+      env: ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_DESKTOP_APP_VERSION'],
       process: ['claude-code', 'claude'],
       capabilityId: 'claude-code',
       runtimeEnvPriority: 100,

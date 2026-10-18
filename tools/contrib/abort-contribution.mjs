@@ -24,10 +24,11 @@
  *   - Safe defaults (cancel operations)
  */
 
-import { execSync } from 'child_process';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { isMain } from '../_is-main.mjs';
 import {
   loadWorkspaceData,
   cleanWorkspace,
@@ -51,13 +52,15 @@ const colors = {
 
 /**
  * Execute command with error handling
- * @param {string} command - Command to execute
+ * @param {string} file - Executable to run
+ * @param {string[]} args - Command arguments
  * @param {Object} options - Execution options
  * @returns {Object} { success: boolean, stdout: string, stderr: string }
  */
-function exec(command, options = {}) {
+function exec(file, args, options = {}) {
   try {
-    const stdout = execSync(command, {
+    const tier = options.tier ?? 'quick';
+    const stdout = boundedExecFileSync(file, args, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options
@@ -78,7 +81,7 @@ function exec(command, options = {}) {
  * @returns {Object} { success: boolean, branch: string|null }
  */
 function getCurrentBranch(cwd) {
-  const result = exec('git rev-parse --abbrev-ref HEAD', { cwd });
+  const result = exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
   if (!result.success) {
     return { success: false, branch: null };
   }
@@ -91,7 +94,7 @@ function getCurrentBranch(cwd) {
  * @returns {Object} { success: boolean, changes: Array<string> }
  */
 function getUncommittedChanges(cwd) {
-  const result = exec('git status --porcelain', { cwd });
+  const result = exec('git', ['status', '--porcelain'], { cwd });
   if (!result.success) {
     return { success: false, changes: [] };
   }
@@ -115,7 +118,10 @@ function getUncommittedChanges(cwd) {
  * @returns {Object} { success: boolean, count: number }
  */
 function getCommitCount(branch, cwd) {
-  const result = exec(`git rev-list --count ${branch} ^main 2>/dev/null || git rev-list --count ${branch} ^master`, { cwd });
+  let result = exec('git', ['rev-list', '--count', branch, '^main'], { cwd });
+  if (!result.success) {
+    result = exec('git', ['rev-list', '--count', branch, '^master'], { cwd });
+  }
   if (!result.success) {
     return { success: false, count: 0 };
   }
@@ -123,15 +129,24 @@ function getCommitCount(branch, cwd) {
 }
 
 /**
- * Check if branch exists on remote
+ * Check if branch exists on remote.
+ *
+ * `'network'`, not `'quick'` (#3062 finding 6): this hits the remote, not
+ * just local git state. Returns `'unknown'` rather than `false` when the
+ * check itself failed (including a bounded-helper timeout) so a timeout
+ * is never silently read as "branch absent" — that previously caused
+ * remote branches to go undeleted (and the user un-warned) whenever the
+ * network check failed or timed out.
+ *
  * @param {string} branch - Branch name
  * @param {string} remote - Remote name (default: origin)
  * @param {string} cwd - Working directory
- * @returns {boolean} True if branch exists on remote
+ * @returns {'exists'|'absent'|'unknown'}
  */
 function branchExistsOnRemote(branch, remote, cwd) {
-  const result = exec(`git ls-remote --heads ${remote} ${branch}`, { cwd });
-  return result.success && result.stdout.trim() !== '';
+  const result = exec('git', ['ls-remote', '--heads', remote, branch], { cwd, tier: 'network' });
+  if (!result.success) return 'unknown';
+  return result.stdout.trim() !== '' ? 'exists' : 'absent';
 }
 
 /**
@@ -253,10 +268,10 @@ function deleteLocalBranch(branch, cwd) {
   console.log('Deleting local branch...');
 
   // First checkout main/master
-  const mainCheck = exec('git rev-parse --verify main', { cwd });
+  const mainCheck = exec('git', ['rev-parse', '--verify', 'main'], { cwd });
   const baseBranch = mainCheck.success ? 'main' : 'master';
 
-  const checkoutResult = exec(`git checkout ${baseBranch}`, { cwd });
+  const checkoutResult = exec('git', ['checkout', baseBranch], { cwd });
   if (!checkoutResult.success) {
     return {
       success: false,
@@ -266,7 +281,7 @@ function deleteLocalBranch(branch, cwd) {
   console.log(`${colors.green}✓${colors.reset} Checked out ${baseBranch}`);
 
   // Delete branch (force delete to handle uncommitted changes)
-  const deleteResult = exec(`git branch -D ${branch}`, { cwd });
+  const deleteResult = exec('git', ['branch', '-D', branch], { cwd });
   if (!deleteResult.success) {
     // Branch might already be deleted
     if (deleteResult.stderr.includes('not found')) {
@@ -294,7 +309,7 @@ function deleteRemoteBranch(branch, remote, cwd) {
   console.log('');
   console.log('Deleting remote branch...');
 
-  const result = exec(`git push ${remote} --delete ${branch}`, { cwd });
+  const result = exec('git', ['push', remote, '--delete', branch], { cwd, tier: 'network' });
   if (!result.success) {
     // Branch might already be deleted
     if (result.stderr.includes('not found') || result.stderr.includes('does not exist')) {
@@ -401,7 +416,16 @@ async function main() {
 
   // Check if branch exists on remote
   const remote = 'origin';
-  if (branchExistsOnRemote(branch, remote, cwd)) {
+  const remoteStatus = branchExistsOnRemote(branch, remote, cwd);
+  if (remoteStatus === 'unknown') {
+    // Do not conflate "could not check" with "absent" (#3062 finding 6) —
+    // say so and leave the manual command for the user to run themselves.
+    console.log('');
+    console.warn(`${colors.yellow}⚠${colors.reset} Could not determine whether ${remote}/${branch} exists on the remote (the check failed or timed out).`);
+    console.log('Check and delete manually if needed:');
+    console.log(`  git ls-remote --heads ${remote} ${branch}`);
+    console.log(`  git push ${remote} --delete ${branch}`);
+  } else if (remoteStatus === 'exists') {
     const shouldDeleteRemote = await promptDeleteRemote(branch);
 
     if (shouldDeleteRemote) {
@@ -459,7 +483,11 @@ async function main() {
 }
 
 // Run main function
-main().catch(err => {
-  console.error('Fatal error:', err.message);
-  process.exit(1);
-});
+if (isMain(import.meta.url)) {
+  main().catch(err => {
+    console.error('Fatal error:', err.message);
+    process.exit(1);
+  });
+}
+
+export { getCommitCount, branchExistsOnRemote, deleteLocalBranch, deleteRemoteBranch };

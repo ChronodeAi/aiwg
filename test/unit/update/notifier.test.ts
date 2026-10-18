@@ -14,6 +14,7 @@ const {
   formatUpdateNotice,
   noticeIsRateLimited,
   notificationDisabled,
+  notifierChildEnv,
 } = await import(notifierPath);
 
 describe('update notifier remediation', () => {
@@ -79,6 +80,36 @@ describe('update notifier remediation', () => {
   it('suppresses non-TTY output and allows an eligible terminal', () => {
     expect(notificationDisabled({}, false)).toBe(true);
     expect(notificationDisabled({}, true)).toBe(false);
+  });
+
+  // Go/no-go review blocker 1B.
+  it('notifierChildEnv copies only allow-listed names, even when the parent env holds an extra secret-shaped variable', () => {
+    const parentEnv = {
+      PATH: '/usr/bin',
+      HOME: '/home/someone',
+      AIWG_CONFIG: '/custom/config',
+      NODE_EXTRA_CA_CERTS: '/etc/ssl/corp-ca.pem',
+      // Plausible secrets that must never cross over, regardless of name:
+      AIWG_API_KEY: 'sk-should-not-leak',
+      JEV_API_KEY: 'sk-should-not-leak-either',
+      OPENAI_API_KEY: 'sk-also-should-not-leak',
+      SOME_RANDOM_TOKEN: 'super-secret',
+      HTTPS_PROXY: 'http://proxy.example:8080',
+    };
+    const childEnv = notifierChildEnv(parentEnv);
+    expect(childEnv).toEqual({
+      PATH: '/usr/bin',
+      HOME: '/home/someone',
+      AIWG_CONFIG: '/custom/config',
+      NODE_EXTRA_CA_CERTS: '/etc/ssl/corp-ca.pem',
+      AIWG_UPDATE_NOTIFIER_CHILD: '1',
+    });
+  });
+
+  it('notifierChildEnv omits an allow-listed name entirely when the parent does not have it, rather than passing undefined', () => {
+    const childEnv = notifierChildEnv({ PATH: '/usr/bin' });
+    expect(childEnv).toEqual({ PATH: '/usr/bin', AIWG_UPDATE_NOTIFIER_CHILD: '1' });
+    expect('HOME' in childEnv).toBe(false);
   });
 
   it('rate-limits repeated notices and recovers from malformed timestamps', () => {

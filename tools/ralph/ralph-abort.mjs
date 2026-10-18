@@ -7,8 +7,10 @@
  * @module tools/ralph/ralph-abort
  */
 
-import { execSync } from 'child_process';
 import { MultiLoopStateManager } from './state-manager-sync.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 function displayActiveLoops(stateManager) {
   const activeLoops = stateManager.listActiveLoops();
@@ -109,8 +111,9 @@ async function main() {
       console.log('Reverting changes...');
       try {
         // Find ralph commits for this loop
-        const log = execSync(
-          `git log --oneline --grep="^ralph:.*${loopId}" -n 20`,
+        const log = boundedExecFileSync(
+          'git', ['log', '--oneline', `--grep=^ralph:.*${loopId}`, '-n', '20'],
+          'quick',
           { encoding: 'utf8' }
         );
         const commits = log.trim().split('\n').filter(Boolean);

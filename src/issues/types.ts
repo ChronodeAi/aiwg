@@ -86,6 +86,7 @@ export interface LocalIssueIndexEntry {
 export interface LocalIssueIndex {
   provider: 'local';
   rebuilt_at: string;
+  inputFingerprint?: string;
   issues: LocalIssueIndexEntry[];
 }
 
@@ -168,5 +169,5 @@ export interface LocalIssueProvider {
   commentIssue(id: string, body: string, options?: { author?: string; type?: 'comment' | 'cycle_status' }): Promise<LocalIssueEvent>;
   closeIssue(id: string, options?: { author?: string; reason?: string }): Promise<LocalIssueRecord>;
   getIssueThreadSince(id: string, since: string): Promise<LocalIssueEventWithBody[]>;
-  rebuildIssueIndex(): Promise<LocalIssueIndex>;
+  rebuildIssueIndex(options?: { force?: boolean }): Promise<LocalIssueIndex>;
 }

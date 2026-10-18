@@ -30,41 +30,52 @@ import { randomUUID } from 'crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, '..');
+process.env['AIWG_LAUNCHER_ROOT'] = packageRoot;
 
-function readPackageVersion() {
+function readPackageVersion(root = packageRoot) {
   try {
-    const pkg = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+    const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
     return typeof pkg.version === 'string' ? pkg.version : '(unknown)';
   } catch {
     return '(unknown)';
   }
 }
 
-function detectVersionChannel(version) {
-  if (version.includes('-rc.')) return 'rc';
-  if (version.includes('-beta.')) return 'beta';
-  if (version.includes('-alpha.')) return 'alpha';
-  if (version.includes('-nightly.')) return 'nightly';
+function readVersionConfig() {
   try {
     const legacyDir = path.join(os.homedir(), '.aiwg');
     const xdgDir = path.join(os.homedir(), '.config', 'aiwg');
     const configDir = process.env.AIWG_CONFIG
       ? path.resolve(process.env.AIWG_CONFIG)
       : existsSync(legacyDir) ? legacyDir : existsSync(xdgDir) ? xdgDir : legacyDir;
+    let config = {};
+    try {
+      config = JSON.parse(readFileSync(path.join(configDir, 'channel.json'), 'utf8'));
+    } catch { /* Legacy config is optional. */ }
     const installationFile = path.join(configDir, 'installation.json');
     if (existsSync(installationFile)) {
       const installation = JSON.parse(readFileSync(installationFile, 'utf8'));
-      if (installation?.runMode === 'development') return 'dev';
-      if (typeof installation?.channel === 'string') return installation.channel;
+      return {
+        ...config,
+        devMode: installation?.runMode === 'development',
+        channel: installation?.channel,
+        edgePath: installation?.edgePath ?? config.edgePath,
+      };
     }
-    const raw = readFileSync(path.join(configDir, 'channel.json'), 'utf8');
-    const cfg = JSON.parse(raw);
-    if (cfg?.devMode) return 'dev';
-    if (typeof cfg?.channel === 'string') return cfg.channel;
+    return config;
   } catch {
     // Default below.
   }
-  return 'stable';
+  return {};
+}
+
+function detectVersionChannel(version, config) {
+  if (config.devMode) return 'dev';
+  if (version.includes('-rc.')) return 'rc';
+  if (version.includes('-beta.')) return 'beta';
+  if (version.includes('-alpha.')) return 'alpha';
+  if (version.includes('-nightly.')) return 'nightly';
+  return config.channel || 'stable';
 }
 
 function maybeHandleFastVersion(args) {
@@ -72,8 +83,15 @@ function maybeHandleFastVersion(args) {
   if (args[0] !== '--version' && args[0] !== '-version') return false;
 
   const version = readPackageVersion();
-  const channel = detectVersionChannel(version);
+  const config = readVersionConfig();
+  const channel = detectVersionChannel(version, config);
+  const runtimePath = config.devMode && config.edgePath ? config.edgePath : packageRoot;
   console.log(`  aiwg  ${version}  [${channel}]`);
+  if (config.devMode) {
+    console.log(`    launcher: ${version}`);
+    console.log(`    runtime: ${readPackageVersion(runtimePath)}`);
+    console.log(`    runtime path: ${runtimePath}`);
+  }
   console.log(`    path: ${packageRoot}`);
   return true;
 }
@@ -244,10 +262,81 @@ if (process.argv.slice(2).includes('--dry-run')) {
   process.env['AIWG_CLI_DRY_RUN'] = '1';
 }
 
+// Startup tracing — set AIWG_TRACE_STARTUP=1 to print per-phase timings to
+// stderr. Useful for diagnosing cold-start regressions, and for a test to
+// observe whether the credential-handling skip below actually fired,
+// without needing the update notifier to otherwise be eligible to run (it
+// also needs a real terminal — see `isCredentialHandlingCommand()`'s own
+// tests). No-op by default so it doesn't cost anything on the hot path.
+// Defined ahead of its first use below (moved up from just before
+// `resolveRouterPath()`, where it used to sit) so the notifier gate can use
+// it too.
+const traceStartup = process.env['AIWG_TRACE_STARTUP'] === '1' ||
+  process.env['AIWG_TRACE_STARTUP']?.toLowerCase() === 'true';
+const startHr = process.hrtime.bigint();
+function trace(phase) {
+  if (!traceStartup) return;
+  const ms = Number(process.hrtime.bigint() - startHr) / 1_000_000;
+  process.stderr.write(`[trace] +${ms.toFixed(1)}ms ${phase}\n`);
+}
+trace('bin:entry');
+
+/**
+ * True iff this invocation is a command that reads a secret directly from
+ * the environment or from an argument as part of its own documented
+ * contract (go/no-go review, blocker 1A). Checked from argv alone — no
+ * dist/ import, no router resolution — so it costs nothing on the
+ * `--version`/`--help` fast paths and can run before any bootstrap
+ * subprocess starts.
+ *
+ * No bootstrap subprocess may start before dispatch for one of these,
+ * because a bootstrap child that copies the parent's environment (or is
+ * merely spawned while `NODE_DEBUG=child_process` is set) would otherwise
+ * see whatever the command's own secret-bearing variable holds, before the
+ * command itself ever ran. Scrubbing a specific variable out of every
+ * possible bootstrap child is not attempted here — not starting the
+ * bootstrap at all for these commands is the smaller, certain fix. (The
+ * background update-check child also gets its own environment allow-list,
+ * independent of this list — see `notifierChildEnv()` in
+ * `src/update/notifier.mjs` — so a secret in the parent's environment that
+ * this list does not yet name is still not copied into that one child.)
+ *
+ * Qualifying commands, and why:
+ *   - `mcp profile login` — reads an API key via `--api-key-env`,
+ *     `--api-key-stdin`, or `--api-key-file`.
+ *   - `decision setup jev` — without `--token-stdin`, reads the token
+ *     directly from `JEV_API_KEY`/`AIWG_DECISION_JEV_API_KEY`.
+ *
+ * Checked and left out, with reasons (see the go/no-go review response):
+ *   - `auth login` — an OAuth device/browser flow; it does not read a
+ *     pre-existing secret from the environment or argv at invocation, it
+ *     obtains one over the network after the user authorizes it.
+ *   - `mcp inject` / `mcp add` / `mcp update` (including `--header-env`) —
+ *     `headerEnv`/`envFrom` references only ever carry a variable *name*
+ *     into a provider's config (resolved by that provider later, not by
+ *     this process); a literal `--env NAME=value` on `mcp add` is stored
+ *     to the registry file and never touches `process.env` here.
+ */
+function isCredentialHandlingCommand(args) {
+  const positionals = [];
+  for (const arg of args) {
+    if (arg === '--') break;
+    if (!arg.startsWith('-')) {
+      positionals.push(arg);
+      if (positionals.length >= 3) break;
+    }
+  }
+  if (positionals[0] === 'mcp' && positionals[1] === 'profile' && positionals[2] === 'login') return true;
+  if (positionals[0] === 'decision' && positionals[1] === 'setup' && positionals[2] === 'jev') return true;
+  return false;
+}
+
 // Display a cached notice and schedule its refresh before every eligible CLI
 // path, including fast help/version, channel recovery, and later preflight
-// failures. This local-only bootstrap never waits on the registry and failures
-// are deliberately ignored so update advice cannot change command behavior.
+// failures — except a credential-handling command (above), which never gets
+// this or any other bootstrap subprocess before dispatch. This local-only
+// bootstrap never waits on the registry and failures are deliberately
+// ignored so update advice cannot change command behavior.
 async function runUpdateNotifierBootstrap() {
   try {
     const notifierPath = path.join(packageRoot, 'dist', 'src', 'update', 'notifier.mjs');
@@ -260,12 +349,21 @@ async function runUpdateNotifierBootstrap() {
   }
 }
 
-await runUpdateNotifierBootstrap();
+const cliArgs = process.argv.slice(2);
+const indexRefresh = cliArgs[0] === 'index' && cliArgs[1] === 'refresh';
+if (indexRefresh) {
+  trace('notifier:skip (index refresh)');
+} else if (isCredentialHandlingCommand(cliArgs)) {
+  trace('notifier:skip (credential-handling command)');
+} else {
+  await runUpdateNotifierBootstrap();
+  trace('notifier:bootstrap-complete');
+}
 
-if (maybeHandleFastVersion(process.argv.slice(2))) {
+if (maybeHandleFastVersion(cliArgs)) {
   process.exit(0);
 }
-if (maybeHandleFastHelp(process.argv.slice(2))) {
+if (maybeHandleFastHelp(cliArgs)) {
   process.exit(0);
 }
 
@@ -285,19 +383,6 @@ function ensureInvocationId() {
   return fresh;
 }
 const invocationId = ensureInvocationId();
-
-// Startup tracing — set AIWG_TRACE_STARTUP=1 to print per-phase timings to
-// stderr. Useful for diagnosing cold-start regressions. No-op by default so
-// it doesn't cost anything on the hot path.
-const traceStartup = process.env['AIWG_TRACE_STARTUP'] === '1' ||
-  process.env['AIWG_TRACE_STARTUP']?.toLowerCase() === 'true';
-const startHr = process.hrtime.bigint();
-function trace(phase) {
-  if (!traceStartup) return;
-  const ms = Number(process.hrtime.bigint() - startHr) / 1_000_000;
-  process.stderr.write(`[trace] +${ms.toFixed(1)}ms ${phase}\n`);
-}
-trace('bin:entry');
 
 /**
  * Resolve the path to the compiled router.
@@ -448,8 +533,8 @@ async function main() {
       console.error(`  Or switch back: aiwg --use-stable`);
       process.exit(1);
     }
-    const { assertCanonicalInstallation } = await import(pathToFileURL(identityPath).href);
-    const readOnlyPreview = args.includes('--dry-run');
+    const { assertCanonicalInstallation, formatInstallationDiagnostic } = await import(pathToFileURL(identityPath).href);
+    const readOnlyPreview = args.includes('--dry-run') || indexRefresh;
     try {
       assertCanonicalInstallation({
         actualRoot: activePackageRoot,
@@ -468,12 +553,7 @@ async function main() {
         drift,
       });
       process.stderr.write(
-        `aiwg: warning: installation identity drift detected; \`${args[0]}\` is read-only and continues, ` +
-        'but update, refresh, and deployment stay blocked until the identity is repaired.\n' +
-        drift.map((item) => `- ${item}\n`).join('') +
-        'Inspect: aiwg installation show\n' +
-        'Adopt this installation: aiwg installation adopt\n' +
-        'Switch deliberately: aiwg installation switch --root <path> --method <npm|web|source> [--manager <absolute-path>]\n',
+        `aiwg: warning: ${formatInstallationDiagnostic(error.status, { readOnlyCommand: args[0] })}\n`,
       );
     }
   }
@@ -481,7 +561,7 @@ async function main() {
   // Wire up the logger level from -v/-vv/--quiet/AIWG_LOG_LEVEL before any
   // handler runs, and stamp the top-level invocation ID so the logger can
   // tag every record with it.
-  await applyVerbosityFromArgs(args, routerPath);
+  if (!indexRefresh) await applyVerbosityFromArgs(args, routerPath);
 
   // Top-level cancellation controller. SIGINT / SIGTERM flip it, long-running
   // handlers plumb ctx.signal through fetches and loops so Ctrl-C cancels

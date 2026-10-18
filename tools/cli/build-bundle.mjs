@@ -50,7 +50,7 @@ const result = await build({
   bundle: true,
   format: 'esm',
   platform: 'node',
-  target: 'node20',
+  target: 'node24',
   sourcemap: true,
   // Preserve the `import()` boundaries that the router uses to lazy-load
   // handlers. esbuild keeps them as runtime dynamic imports when we mark

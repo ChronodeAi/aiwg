@@ -116,12 +116,21 @@ export default defineConfig({
 
     // Reporter configuration.
     //
-    // On CI, also run the hanging-process reporter. Vitest's own exit guard
-    // prints nothing about *what* is holding the loop, and a run that finishes
-    // its tests but will not exit is one of the candidates for the silent
-    // three-hour CI hang in #2521. The reporter costs nothing on a clean run
-    // and names the open handle on a dirty one.
-    reporters: process.env.CI ? ['default', 'hanging-process'] : ['default'],
+    // On CI, two extra reporters cover the two halves of the silent three-hour
+    // hang in #2521, which the default reporter cannot describe at all:
+    //
+    // - hanging-process: the run finished but the process will not exit.
+    //   Vitest's own exit guard fires there but says nothing about what is
+    //   holding the loop; this names the open handle.
+    // - hang-watchdog: the run never finished because a worker is wedged.
+    //   The default reporter prints a file only once it completes, so a wedged
+    //   file is invisible — which is why run 59128 produced no attribution at
+    //   all. This names the modules still in flight and their phase.
+    //
+    // Both cost nothing on a clean run.
+    reporters: process.env.CI
+      ? ['default', 'hanging-process', './tools/ci/hang-watchdog-reporter.mjs']
+      : ['default'],
     outputFile: {
       json: './test-results/test-results.json'
     }

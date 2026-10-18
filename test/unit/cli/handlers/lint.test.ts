@@ -48,6 +48,12 @@ describe('lintHandler', () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it('routes help through the lint CLI so --allow-empty is documented', async () => {
+    const result = await lintHandler.help!(baseContext);
+    expect(mockLintMain).toHaveBeenCalledWith(['--help']);
+    expect(result.exitCode).toBe(0);
+  });
+
   it('delegates --list-rulesets', async () => {
     const ctx = { ...baseContext, args: ['--list-rulesets'] };
     const result = await lintHandler.execute(ctx);

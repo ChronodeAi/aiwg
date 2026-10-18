@@ -215,3 +215,109 @@ Both `discover` and `show` return paths anchored to `$AIWG_ROOT` for framework a
 - `.aiwg/architecture/design-manifest-schema.md` — bundle manifest design (#1044)
 - `agentic/code/addons/aiwg-utils/rules/skill-discovery.md` — the HIGH-enforcement rule that mandates discover-first
 - `agentic/code/addons/aiwg-utils/rules/post-commit-index-refresh.md` — the rule that keeps project/codebase graphs current
+
+## Scheduled index refresh
+
+Run `aiwg index refresh --root ~/dev --json` to refresh workspaces containing
+`.aiwg/` within four directory levels. The scan skips `node_modules`, `.git`,
+and worktree caches. Repeat `--root <dir>` to scan several trees, or repeat
+`--workspace <path>` to select projects explicitly; the two options can be combined.
+Directory symlinks are followed within the same depth limit, with cycle protection.
+Each canonical workspace runs once, retaining every logical path used to reach it
+for provider session matching (including Claude project keys). Without either
+option, refresh uses the current project.
+
+Refresh builds configured, existing, and default graphs incrementally, syncs
+existing Fortemi Core caches, then discovers and imports existing session catalogs.
+It resolves the models catalog once per host and probes runtime tools once, sharing
+that runtime catalog with each workspace while keeping its working directory and
+disk space local. JSON models jobs have `scope: "host"` and omit `workspace`;
+runtime jobs retain their workspace paths. The shared runtime cache lives in
+`$XDG_STATE_HOME/aiwg/index-refresh-runtime` (default
+`~/.local/state/aiwg/index-refresh-runtime`). Local issues indexes are rebuilt per
+workspace where issue storage exists. Runtime and issue jobs skip unchanged
+inputs; models reuse a fresh catalog cache. Models discovery
+may access the network, using the same discovery and offline fallback as
+`aiwg models refresh`.
+Session discovery uses only roots saved by an earlier authorized discovery;
+logical workspace aliases do not authorize additional provider roots. If a saved
+manifest covers only one Claude project key, run authorized session discovery
+again through the logical workspace path to include both logical and canonical keys.
+`--full` rebuilds graphs and reindexes every workspace in each selected session
+catalog, using the same unscoped rebuild as `aiwg sessions reindex --all-workspaces`.
+`--full` also forces runtime, models, and issues refreshes.
+Use `--only graphs|sessions|caches|runtime|models|issues`
+to narrow the work or `--dry-run` to inspect the plan without writes. Missing
+SQLite support skips sessions with `aiwg features install sqlite` as the remedy.
+
+Incremental session refresh reads the workspace's default discovery manifest and
+every path in `sessions.discovery_manifests` in `.aiwg/aiwg.config`. List custom
+manifests there, including those saved with `aiwg sessions discover --manifest`:
+
+```json
+{ "sessions": { "discovery_manifests": ["./exports/discovery.json", "/archive/home-discovery.json"] } }
+```
+
+Paths are workspace-relative or absolute. Each manifest must belong to the
+selected workspace; refresh scans only its saved authorized roots and updates
+that manifest under the catalog import lease. If none of the manifests exists,
+`messages` includes a workspace-specific `aiwg sessions discover --workspace`
+remedy. JSON session jobs include `noManifest` (1 when missing, otherwise 0),
+and `totals.noManifest` counts affected workspaces. These checks apply to existing
+catalogs during incremental runs; `--full` reindexes without discovery.
+
+A host lease prevents overlapping runs; `--lock-wait-ms <n>` optionally waits
+(default: zero). A same-host dead PID lease is reclaimed. Checkpoints in
+`$XDG_STATE_HOME/aiwg` (default `~/.local/state/aiwg`) resume matching interrupted
+or resource-deferred plans. A finished run clears its checkpoint even when jobs
+failed, so the next scheduled run considers every job again. The dispatch resource
+gate runs before each job, requiring at least 8 GiB available memory and load per
+core at most 0.8, plus the dispatch PSI/disk limits
+and any stricter project thresholds. A locked or resource-deferred run exits zero;
+job errors exit nonzero. JSON reports use `contractVersion: "1.0.0"`, command
+`index.refresh`, job outcomes and durations, and totals. Session jobs include the
+batch import receipt in `sessionImport` when one batch was imported, or the list
+of receipts in `sessionImports` when several batches were imported, retaining
+each batch's identity, rejection counts, and per-source details. Completed batches
+skipped as unchanged have no receipt in the report. A completed import with
+rejected sources has job status `ok` and overall
+status `partial`, with zero job errors and a zero exit status. Operational failures
+remain job errors. Refresh does not deploy, check for updates, log commands, or
+regenerate corpus views.
+
+For a systemd user timer, save `~/.config/systemd/user/aiwg-index-refresh.service`
+(replace `/home/you/.local/bin/aiwg` with the absolute path from `command -v aiwg`;
+ensure Node 24 is on the service's PATH):
+
+```ini
+[Unit]
+Description=Refresh AIWG indexes
+
+[Service]
+Type=oneshot
+ExecStart=/home/you/.local/bin/aiwg index refresh --root %h/dev --json
+```
+
+Save `~/.config/systemd/user/aiwg-index-refresh.timer`:
+
+```ini
+[Unit]
+Description=Refresh AIWG indexes hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable it with `systemctl --user daemon-reload` followed by
+`systemctl --user enable --now aiwg-index-refresh.timer`. For cron, use a PATH
+that includes AIWG and Node 24:
+
+```cron
+PATH=/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin
+17 * * * * aiwg index refresh --root ~/dev --json
+```

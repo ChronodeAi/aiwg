@@ -81,7 +81,7 @@ AIWG ships 5 behaviors out of the box:
 | `quality-gate-watcher` | on_commit, on_pr_open | SDLC gate enforcement |
 | `artifact-sync` | on_file_write (.aiwg/**) | Keep artifact index current |
 
-See the [Behaviors Guide](../behaviors-guide.md) for the full format spec.
+See the [Behaviors Guide](../../behaviors-guide.md) for the full format spec.
 
 ---
 
@@ -112,7 +112,7 @@ Agent loops support multi-provider execution:
 aiwg ralph "Fix all tests" --completion "npm test passes"
 ```
 
-See the [Al Guide](../ralph-guide.md) for full documentation.
+See the [Agent Loop Guide](../../agent-loop-guide.md) for full documentation.
 
 ---
 
@@ -172,15 +172,15 @@ For full unrestricted AIWG tool access (artifact management, workflow execution,
 aiwg mcp install openclaw
 ```
 
-See the [OpenClaw MCP Sidecar Guide](openclaw-mcp-sidecar.md) for complete setup including tool whitelisting and context optimization.
+See the [OpenClaw MCP Sidecar Guide](../../integrations/openclaw-mcp-sidecar.md) for complete setup including tool whitelisting and context optimization.
 
 ---
 
 ## Related Resources
 
-- [OpenClaw MCP Sidecar Guide](openclaw-mcp-sidecar.md) - Full MCP integration
-- [Cross-Platform Overview](cross-platform-overview.md) - All provider comparison
-- [OpenClaw Guide](../openclaw-guide.md)
-- [OpenClaw Integration Guide](../openclaw-guide.md) - Comprehensive guide with routing advice
-- [Behaviors Guide](../behaviors-guide.md) - Behaviors format spec and authoring
+- [OpenClaw MCP Sidecar Guide](../../integrations/openclaw-mcp-sidecar.md) - Full MCP integration
+- [Cross-Platform Overview](../../integrations/cross-platform-overview.md) - All provider comparison
+- [OpenClaw Guide](../../openclaw-guide.md)
+- [OpenClaw Integration Guide](../../openclaw-guide.md) - Comprehensive guide with routing advice
+- [Behaviors Guide](../../behaviors-guide.md) - Behaviors format spec and authoring
 - [OpenClaw Official Docs](https://docs.openclaw.ai) - Upstream documentation

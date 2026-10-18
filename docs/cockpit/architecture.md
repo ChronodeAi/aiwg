@@ -84,7 +84,9 @@ degrade to opaque posture rather than a broken screen.
 ## Ports
 
 The agentic-sandbox canonical dev runner binds **8120** (gRPC), **8121**
-(pty-ws), **8122** (HTTP). The Bridge therefore defaults to **8140**, off that
+(legacy WS hub), **8122** (HTTP). PTY attach is served on the executor HTTP
+surface via `pty_ws_url`, with `{host}` replaced by the configured executor
+host and port. The Bridge therefore defaults to **8140**, off that
 range, and **refuses to start on a reserved executor port** rather than
 silently squatting on one. Override with `PORT` or
 `AIWG_COCKPIT_BRIDGE_PORT`.

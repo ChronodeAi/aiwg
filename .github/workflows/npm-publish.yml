@@ -70,10 +70,9 @@
 # 1. Bump version in package.json
 # 2. Sign with the dedicated release key: tools/release/cut-tag.sh YYYY.M.PATCH
 #    Then push the verified tag: git push github main --tags
-# 3. Watch this workflow on the GitHub mirror. The post-publish step verifies
-#    that the provenance attestation landed on npmjs.org, then cosign-signs
-#    the tarball + manifest and uploads release assets to the GitHub
-#    release.
+# 3. Watch this workflow on the GitHub mirror. It creates the release after
+#    tag verification, then builds, tests, publishes, signs, and uploads local
+#    release assets. Advisory npm registry checks run last.
 # 4. Mirror the signed assets to the Gitea release with the manual operator
 #    step in the runbook (`gh workflow run upload-release-sigs.yml -F tag=…`
 #    against the Gitea Actions API, or the Gitea Actions UI).
@@ -190,6 +189,60 @@ jobs:
           # to have been dispatched with --ref <tag>.
           AIWG_VERIFY_TAG_REF: refs/tags/${{ steps.release_tag.outputs.release_tag }}
         run: bash tools/ci/verify-signed-tag.sh
+
+      - name: Install GitHub CLI (node:24 image does not ship it)
+        # node:24-bookworm doesn't include `gh`. Release creation and asset
+        # upload use `gh release create` / `gh release upload`. rc.1
+        # retag #7 (1f6531f0) blew up here with exit 127 after a
+        # successful cosign + SBOM run. Pin to a specific gh release;
+        # the tarball is content-addressed by the v<X.Y.Z> tag at
+        # raw.githubusercontent (same approach as syft install below).
+        run: |
+          set -euo pipefail
+          GH_VERSION=2.81.0
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /tmp
+          mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
+          chmod +x /usr/local/bin/gh
+          gh --version
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release_tag.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          ANNOUNCEMENT="docs/releases/v${VERSION}-announcement.md"
+          BODY_FILE="$ANNOUNCEMENT"
+          if [ ! -f "$ANNOUNCEMENT" ]; then
+            BODY_FILE=$(mktemp)
+            trap 'rm -f "$BODY_FILE"' EXIT
+            # Match the mirror's announcement → CHANGELOG → minimal notes fallback.
+            awk -v ver="$VERSION" '
+              $0 ~ "^## \\["ver"\\]" { capture=1; print; next }
+              capture && /^## \[/ { exit }
+              capture { print }
+            ' CHANGELOG.md > "$BODY_FILE"
+            if [ ! -s "$BODY_FILE" ]; then
+              printf '# AIWG v%s\n\nSee [CHANGELOG.md](https://github.com/jmagly/aiwg/blob/main/CHANGELOG.md) for details.\n' "$VERSION" > "$BODY_FILE"
+            fi
+          fi
+          LATEST=false
+          PRERELEASE=true
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            LATEST=true
+            PRERELEASE=false
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Re-runs (including recovery for an older tag) refresh notes but never
+            # move the "latest" marker.
+            gh release edit "$TAG" --notes-file "$BODY_FILE" \
+              --draft=false --prerelease="$PRERELEASE"
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file "$BODY_FILE" \
+              --verify-tag --latest="$LATEST" --prerelease="$PRERELEASE"
+          fi
 
       - name: Checkout release tag
         id: release_source
@@ -369,6 +422,9 @@ jobs:
         # entries against ci/expected-tarball-top-level.txt.
         run: npm run lint:tarball
 
+      - name: Pack local release tarball
+        run: npm pack
+
       - name: Publish to npmjs.org (OIDC + provenance)
         # Trusted-publishing mode: no NODE_AUTH_TOKEN env, no .npmrc auth
         # block. npm 11.5.1+ on Node 22.14.0+ negotiates OIDC against
@@ -397,7 +453,8 @@ jobs:
           echo "  node version:     $(node --version)"
           echo
           NPM_TAG='${{ steps.version.outputs.npm_tag }}'
-          npm publish --provenance --access public --tag "$NPM_TAG" 2>&1 | tee publish-output.txt || {
+          VERSION='${{ steps.version.outputs.version }}'
+          npm publish "aiwg-${VERSION}.tgz" --provenance --access public --tag "$NPM_TAG" 2>&1 | tee publish-output.txt || {
             if grep -qE "cannot publish over|EPUBLISHCONFLICT|409" publish-output.txt; then
               echo "✓ Version already published to npmjs.org — treating as success"
               echo "already_published=true" >> "$GITHUB_OUTPUT"
@@ -424,7 +481,7 @@ jobs:
               echo "  If this is the first OIDC release, common causes:"
               echo "  - npmjs.org trusted-publisher not configured for jmagly/aiwg npm-publish.yml"
               echo "  - permissions: id-token: write not set on workflow"
-              echo "  - Node version below 22.14.0 (we pin 22.22.2 above; should not happen)"
+              echo "  - Node version below 22.14.0 (setup-node installs 24.x above; should not happen)"
               cat publish-output.txt
               exit 1
             fi
@@ -472,67 +529,11 @@ jobs:
             apt-get update && apt-get install -y --no-install-recommends jq
           fi
 
-      - name: Verify provenance attestation landed
-        # Independent post-publish check. Without this, a successful publish
-        # that did NOT actually emit provenance would appear identical to
-        # one that did. Sleeps briefly for registry propagation, then asks
-        # npmjs.org whether `dist.attestations` is populated for the
-        # version we just published.
-        run: |
-          set -o pipefail
-          VERSION='${{ steps.version.outputs.version }}'
-          # npm may accept a publish and keep a large package in processing
-          # after smaller workspace packages are already queryable. Retry the
-          # registry lookup so that normal processing latency does not skip all
-          # signing, SBOM, and release-asset steps. Keep npm-view failures out
-          # of errexit command substitutions so the final error is actionable.
-          verify_attestations() {
-            local package="$1"
-            local attestations=""
-            local attempt
-            for attempt in $(seq 1 90); do
-              attestations=$(npm view "${package}@${VERSION}" --json --prefer-online 2>/dev/null \
-                | jq -r '.dist.attestations // empty' || true)
-              if [ -n "$attestations" ]; then
-                echo "✓ Provenance attestation present for ${package}@${VERSION}"
-                if [ "$package" = "aiwg" ]; then
-                  local preview
-                  preview=$(mktemp)
-                  printf '%s\n' "$attestations" | jq '.' > "$preview"
-                  head -40 "$preview"
-                fi
-                return 0
-              fi
-              echo "Attempt ${attempt}/90: ${package}@${VERSION} or its provenance is not visible."
-              if [ "$attempt" -lt 90 ]; then sleep 10; fi
-            done
-            echo "✗ No provenance attestation found for ${package}@${VERSION} on npmjs.org after 15 minutes"
-            echo "  The publish was accepted but the package or attestation did not become queryable."
-            return 1
-          }
-
-          verify_attestations aiwg
-          verify_attestations @aiwg/cockpit
-          verify_attestations @aiwg/cli
-
-      - name: Verify stable dist-tag policy
-        # Confirm every published package resolves through `latest` and that the
-        # retired `next` alias has not been recreated.
-        run: |
-          set -euo pipefail
-          VERSION='${{ steps.version.outputs.version }}'
-          NPM_TAG='${{ steps.version.outputs.npm_tag }}'
-          [ "$NPM_TAG" = latest ] || {
-            echo "Stable publication must use the latest dist-tag; observed $NPM_TAG" >&2
-            exit 1
-          }
-          bash tools/release/verify-npm-dist-tags.sh "$VERSION"
-
       # ============================================================
       # Tarball Sigstore signing — #1287 / A8 (Wave 5 of #1278)
       # ============================================================
       #
-      # The npmjs.org provenance attestation (above) is registry-bound: a
+      # The npmjs.org provenance attestation is registry-bound: a
       # consumer who pulls the tarball from the Gitea bundled npm registry,
       # a mirror, or any other source has no way to use it. Cosign
       # keyless-signing produces a registry-independent signature anchored
@@ -562,7 +563,7 @@ jobs:
       - name: Generate tarball + cosign sign + manifest
         id: sign
         # Step does four things in order:
-        #   1. Locate (or regenerate) the published tarball.
+        #   1. Locate the locally packed tarball used for publication.
         #   2. cosign-sign the tarball → produces aiwg-X.Y.Z.tgz.sigstore.
         #   3. Build a signed release manifest with SHA-256 + tag + commit
         #      + workflow run URL for the audit trail.
@@ -575,15 +576,7 @@ jobs:
           TAG="v${VERSION}"
           TARBALL="aiwg-${VERSION}.tgz"
 
-          # `npm publish` typically leaves the tarball in CWD; if not,
-          # `npm pack` is idempotent and regenerates byte-identical content
-          # from the same package.json + .npmignore + lock state.
-          if [ ! -f "$TARBALL" ]; then
-            echo "Tarball not in CWD after publish — regenerating with npm pack…"
-            npm pack
-          fi
-
-          # Sanity: the tarball must exist now.
+          # Sign the same local artifact passed to npm publish; no registry lookup.
           if [ ! -f "$TARBALL" ]; then
             echo "✗ Expected tarball $TARBALL not present after npm pack"
             ls -la
@@ -731,7 +724,7 @@ jobs:
       - name: Generate CycloneDX SBOM
         id: sbom
         # `syft scan dir:.` walks the working tree including the built
-        # dist/ output, since dist/ is part of what ships in the tarball.
+        # dist/ output and node_modules, independently of npm visibility.
         # Output format is CycloneDX JSON — the industry-standard SBOM
         # format that npm, gh advisory tooling, and most SCA scanners
         # consume natively.
@@ -789,30 +782,11 @@ jobs:
           echo "installer=$INSTALLER" >> "$GITHUB_OUTPUT"
           echo "checksums=$CHECKSUMS" >> "$GITHUB_OUTPUT"
 
-      - name: Install GitHub CLI (node:24 image does not ship it)
-        # node:24-bookworm doesn't include `gh`. The asset-upload step
-        # below uses `gh release create` / `gh release upload`. rc.1
-        # retag #7 (1f6531f0) blew up here with exit 127 after a
-        # successful cosign + SBOM run. Pin to a specific gh release;
-        # the tarball is content-addressed by the v<X.Y.Z> tag at
-        # raw.githubusercontent (same approach as syft install above).
-        run: |
-          set -euo pipefail
-          GH_VERSION=2.81.0
-          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
-            | tar -xz -C /tmp
-          mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
-          chmod +x /usr/local/bin/gh
-          gh --version
-
       - name: Upload signed release assets to GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # `gh release upload --clobber` is idempotent: if the release was
-        # created by an earlier workflow run (or by `gh release create`
-        # manually), the assets get attached/replaced. If the release
-        # doesn't exist yet, `gh release create` runs first — typical when
-        # this workflow is the first thing that fires on a tag push.
+        # created before build/test/publish, the assets get attached/replaced.
         #
         # Core signed assets, post-A13 (#1288):
         #   1. aiwg-X.Y.Z.tgz              (the tarball itself; A8 baseline)
@@ -834,17 +808,6 @@ jobs:
           INSTALLER='${{ steps.release_files.outputs.installer }}'
           CHECKSUMS='${{ steps.release_files.outputs.checksums }}'
 
-          # Ensure the release exists; create it if not. `gh release view`
-          # exits non-zero on miss, which `|| true` swallows for the test.
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG not found — creating it now."
-            gh release create "$TAG" \
-              --title "$TAG" \
-              --notes "Release $TAG. Signed assets attached (cosign keyless, GitHub Actions OIDC). Verify with: cosign verify-blob --bundle ${TARBALL}.sigstore --certificate-identity-regexp '^https://github.com/jmagly/aiwg/.github/workflows/npm-publish.yml@refs/tags/v' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' ${TARBALL}" \
-          else
-            echo "Release $TAG exists — uploading signed assets."
-          fi
-
           gh release upload "$TAG" \
             "$TARBALL" \
             "$TARBALL_SIG" \
@@ -859,8 +822,8 @@ jobs:
           echo "✓ Uploaded signed assets, installer, and checksums to GitHub release $TAG"
 
       - name: Verification summary
-        # Final operator-facing block. Copy/pasteable verification commands
-        # so the release manager can drop them into a release comment or
+        # Asset verification commands, before advisory npm registry checks.
+        # The release manager can drop them into a release comment or
         # consumer-facing announcement without re-deriving them.
         run: |
           VERSION='${{ steps.version.outputs.version }}'
@@ -910,6 +873,73 @@ jobs:
           See docs/releases/verifying.md for consumer-facing instructions.
           ============================================================
           EOF
+
+      - name: Verify provenance attestation landed
+        id: npm_provenance
+        continue-on-error: true
+        timeout-minutes: 3
+        # Advisory: npm can hold accepted publishes in automated review.
+        # Three bounded lookups per package, with at most two short waits.
+        run: |
+          set -euo pipefail
+          VERSION='${{ steps.version.outputs.version }}'
+          verify_attestations() {
+            local package="$1"
+            local attestations=""
+            local attempt
+            for attempt in 1 2 3; do
+              attestations=$(timeout 10s npm view "${package}@${VERSION}" --json --prefer-online \
+                --fetch-retries=0 --fetch-timeout=10000 2>/dev/null \
+                | jq -r '.dist.attestations // empty' || true)
+              if [ -n "$attestations" ]; then
+                echo "✓ Provenance attestation present for ${package}@${VERSION}"
+                return 0
+              fi
+              echo "Attempt ${attempt}/3: ${package}@${VERSION} or its provenance is not visible."
+              if [ "$attempt" -lt 3 ]; then sleep 5; fi
+            done
+            return 1
+          }
+          FAILED=0
+          verify_attestations aiwg || FAILED=1
+          verify_attestations @aiwg/cockpit || FAILED=1
+          verify_attestations @aiwg/cli || FAILED=1
+          exit "$FAILED"
+
+      - name: Verify stable dist-tag policy
+        id: npm_dist_tags
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          npm_config_fetch_retries: '0'
+          npm_config_fetch_timeout: '10000'
+        run: |
+          set -euo pipefail
+          VERSION='${{ steps.version.outputs.version }}'
+          NPM_TAG='${{ steps.version.outputs.npm_tag }}'
+          [ "$NPM_TAG" = latest ]
+          timeout 75s bash tools/release/verify-npm-dist-tags.sh "$VERSION"
+
+      - name: Report advisory npm registry checks
+        if: ${{ !cancelled() && (steps.npm_provenance.outcome == 'failure' || steps.npm_dist_tags.outcome == 'failure') }}
+        env:
+          TAG: ${{ steps.release_tag.outputs.release_tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PROVENANCE_OUTCOME: ${{ steps.npm_provenance.outcome }}
+          DIST_TAGS_OUTCOME: ${{ steps.npm_dist_tags.outcome }}
+        run: |
+          set -euo pipefail
+          RECOVERY="gh workflow run npm-publish.yml --repo jmagly/aiwg --ref ${TAG} -f tag_to_publish=${TAG}"
+          if [ "$PROVENANCE_OUTCOME" = failure ]; then
+            MESSAGE="Re-check npm visibility and dist.attestations for aiwg@${VERSION}, @aiwg/cli@${VERSION}, and @aiwg/cockpit@${VERSION}: npm view <package>@${VERSION} dist.attestations --json --prefer-online. Recovery: ${RECOVERY}"
+            echo "::warning::${MESSAGE}"
+            printf '%s\n' "$MESSAGE" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$DIST_TAGS_OUTCOME" = failure ]; then
+            MESSAGE="Re-check latest = ${VERSION} and absence of next for aiwg, @aiwg/cli, and @aiwg/cockpit: bash tools/release/verify-npm-dist-tags.sh ${VERSION}. Recovery: ${RECOVERY}"
+            echo "::warning::${MESSAGE}"
+            printf '%s\n' "$MESSAGE" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   socket-post-publish:
     name: Audit published packages with Socket

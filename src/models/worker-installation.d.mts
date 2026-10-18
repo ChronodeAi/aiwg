@@ -6,9 +6,10 @@ export function loadRecordedWorkerInstallations(input: {
   registry: ProviderModelCapabilityRegistry;
   cwd: string;
   policy?: WorkerSelectionPolicy;
+  parallelism?: import('../config/aiwg-config.js').ParallelismConfig;
   storePath?: string;
   storeDigest?: string;
-}): Promise<{ registry: ProviderModelCapabilityRegistry; installations: Record<string, WorkerResolutionBinding>; drivers: Record<string, WorkerInvocationDriver> }>;
+}): Promise<{ registry: ProviderModelCapabilityRegistry; installations: Record<string, WorkerResolutionBinding>; drivers: Record<string, WorkerInvocationDriver>; observations: Record<string, import('./model-discovery.js').ProviderModelDiscovery> }>;
 
 export function hasProvider(name: string): boolean;
 
@@ -27,3 +28,12 @@ export function boundedVersionProbe(
   maxBytes: number,
   versionPattern: string | undefined,
 ): Promise<{ rawBanner: string; version: string }>;
+
+export interface WorkerRecoveryCapabilities {
+  canVerifyAttempt?: boolean;
+  parseWorkerAttemptFinal?(output: string | Uint8Array, options: Record<string, unknown>): Promise<unknown>;
+}
+export function registerWorkerRecoveryCapabilities<T extends object>(driver: T, capabilities: WorkerRecoveryCapabilities): T;
+export function getWorkerRecoveryCapabilities(driver: object | undefined | null): Readonly<WorkerRecoveryCapabilities> | null;
+
+export function prepareWorkerInstallationStore(input: { workerWritableRoots: string[]; apply?: boolean }): Promise<{ path: string; action: string }[]>;

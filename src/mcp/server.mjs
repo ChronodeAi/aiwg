@@ -24,6 +24,7 @@ import { registerCommandRunTool } from './tools/command-run.mjs';
 import { registerInteractionTools } from './tools/interaction.mjs';
 import { parseToolsets, registerOptInToolsets, KNOWN_TOOLSETS } from './tools/subsystems.mjs';
 import { AIWG_ROOT, findProjectRoot, resolveProjectAiwgDir } from './helpers.mjs';
+import { pinContainedRoot as pinArtifactRoot, openContainedFile as openArtifact, readContainedFile, listContainedFiles, validateContainedPath } from '../utils/contained-filesystem.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -51,7 +52,28 @@ export async function createServer() {
   //   discover, skill-list, skill-show, command-list, command-show,
   //   rule-list, rule-show, agent-show, template-list, template-show
   // ============================================
-  registerDiscoveryTools(server);
+  const corpusStore = await pinArtifactRoot(path.resolve(AIWG_ROOT));
+  registerDiscoveryTools(server, { corpusStore });
+  async function readCorpus(relative) {
+    const content = await readContainedFile(corpusStore, relative);
+    if (content === null) throw new Error('Corpus file not found');
+    return content;
+  }
+  function frameworkName(framework) {
+    validateContainedPath(framework);
+    return Object.hasOwn(FRAMEWORKS, framework) ? framework : 'sdlc-complete';
+  }
+  async function scanCorpusDirectory(relative, type) {
+    const entries = await listContainedFiles(corpusStore, `${relative}/`);
+    return entries.filter(entry => entry.path.endsWith('.md')).map(entry => {
+      const local = path.relative(relative, entry.path);
+      const name = path.basename(local, '.md');
+      return {
+        name, path: path.join(corpusStore.root, entry.path), uri: `aiwg://${type}/${name}`,
+        ...(path.dirname(local) !== '.' ? { category: local.split(path.sep)[0] } : {}),
+      };
+    });
+  }
   registerWriterProfileResources(server);
 
   // ============================================
@@ -90,20 +112,74 @@ export async function createServer() {
   }
   await registerOptInToolsets(server, requested, { projectRoot });
 
+  // Resolve operator configuration once per trusted project, then pin it.
+  // Artifact tools default to the server-start project (the launch directory),
+  // not an ancestor discovered by walking up from it: a fresh launch directory
+  // inside another marked tree (for example a stray `.aiwg` in the temp dir)
+  // must pin its own missing default at startup, never adopt the ancestor's
+  // store. Callers select other projects explicitly via `project_dir`.
+  const artifactEnv = { ...process.env };
+  const trustedProjectRoot = await fs.realpath(process.cwd());
+  const trustedArtifactRoot = await resolveProjectAiwgDir(trustedProjectRoot, { env: artifactEnv });
+  const startupStore = await pinArtifactRoot(trustedArtifactRoot, trustedProjectRoot);
+  const trustedStore = startupStore.root;
+  const projects = new Map();
+  async function trustProject(requested, store) {
+    const canonical = await fs.realpath(requested);
+    const identity = await fs.stat(requested);
+    if (!identity.isDirectory()) throw new Error('project_dir must be a real directory');
+    if (canonical !== trustedProjectRoot) {
+      const inStore = path.relative(trustedStore, canonical);
+      if (canonical.split(path.sep).includes('.aiwg') || !inStore
+        || (inStore !== '..' && !inStore.startsWith(`..${path.sep}`) && !path.isAbsolute(inStore))) {
+        throw new Error('project_dir must not select a project inside an artifact store');
+      }
+    }
+    const configured = store ? undefined : await resolveProjectAiwgDir(canonical, { env: { ...process.env } });
+    return { canonical, identity, store: store || await pinArtifactRoot(configured, canonical) };
+  }
+  const startupProject = Promise.resolve(await trustProject(trustedProjectRoot, startupStore));
+  projects.set(trustedProjectRoot, startupProject);
+  const canonicalProjects = new Map([[trustedProjectRoot, startupProject]]);
+  async function artifactRoots(explicit) {
+    const requested = explicit ? path.resolve(trustedProjectRoot, explicit) : trustedProjectRoot;
+    // Key by the supplied project path, so a replacement cannot acquire fresh trust.
+    if (!projects.has(requested)) {
+      const canonical = await fs.realpath(requested);
+      if (!canonicalProjects.has(canonical)) canonicalProjects.set(canonical, trustProject(requested));
+      projects.set(requested, canonicalProjects.get(canonical));
+    }
+    const pinned = await projects.get(requested);
+    const canonical = await fs.realpath(requested);
+    const current = await fs.stat(requested);
+    if (canonical !== pinned.canonical || !current.isDirectory()
+      || current.dev !== pinned.identity.dev || current.ino !== pinned.identity.ino) {
+      throw new Error('Project root changed since it was pinned');
+    }
+    return pinned.store;
+  }
+
   // Tool: artifact-read
   server.registerTool('artifact-read', {
     title: 'Read AIWG Artifact',
     description: 'Read artifact from .aiwg/ directory',
     inputSchema: {
       path: z.string().describe('Path relative to .aiwg/ (e.g., "requirements/UC-001.md")'),
-      project_dir: z.string().optional().describe('Project directory path (defaults to auto-detected project root)')
+      project_dir: z.string().optional().describe('Real project directory outside artifact trees (defaults to server-start project; artifact store pinned on first use)')
     }
   }, async ({ path: artifactPath, project_dir }) => {
     try {
-      // Auto-find project root if not specified
-      const projectRoot = project_dir || await findProjectRoot();
-      const fullPath = path.join(await resolveProjectAiwgDir(projectRoot), artifactPath);
-      const content = await fs.readFile(fullPath, 'utf-8');
+      const store = await artifactRoots(project_dir);
+      const { handle, close } = await openArtifact(store, artifactPath);
+      let content;
+      let completed = false;
+      try {
+        content = await handle.readFile('utf-8');
+        completed = true;
+      } finally {
+        const [closed] = await Promise.allSettled([close()]);
+        if (completed && closed.status === 'rejected') throw closed.reason;
+      }
       return {
         content: [{
           type: 'text',
@@ -128,20 +204,22 @@ export async function createServer() {
     inputSchema: {
       path: z.string().describe('Path relative to .aiwg/'),
       content: z.string().describe('Artifact content'),
-      project_dir: z.string().optional().describe('Project directory path (defaults to auto-detected project root)')
+      project_dir: z.string().optional().describe('Real project directory outside artifact trees (defaults to server-start project; artifact store pinned on first use)')
     }
   }, async ({ path: artifactPath, content, project_dir }) => {
     try {
-      // Auto-find project root if not specified
-      const projectRoot = project_dir || await findProjectRoot();
-      const fullPath = path.join(await resolveProjectAiwgDir(projectRoot), artifactPath);
-      const dir = path.dirname(fullPath);
-
-      // Ensure directory exists
-      await fs.mkdir(dir, { recursive: true });
-
-      // Write file
-      await fs.writeFile(fullPath, content, 'utf-8');
+      const store = await artifactRoots(project_dir);
+      const { handle, fullPath, commit, close } = await openArtifact(store, artifactPath, { write: true });
+      let completed = false;
+      try {
+        await handle.writeFile(content, 'utf-8');
+        await commit();
+        completed = true;
+      } finally {
+        // Close every owned descriptor; preserve any write/verification error.
+        const [closed] = await Promise.allSettled([close()]);
+        if (completed && closed.status === 'rejected') throw closed.reason;
+      }
 
       return {
         content: [{
@@ -175,12 +253,10 @@ export async function createServer() {
   }, async ({ template, variables = {} }) => {
     try {
       // Determine framework and template path
+      validateContainedPath(template);
       const [framework, ...pathParts] = template.split('/');
-      const frameworkPath = FRAMEWORKS[framework] || FRAMEWORKS['sdlc-complete'];
-      const templatePath = path.join(frameworkPath, 'templates', ...pathParts);
-
-      // Read template
-      let content = await fs.readFile(templatePath, 'utf-8');
+      const relative = `agentic/code/frameworks/${frameworkName(framework)}/templates/${pathParts.join('/')}`;
+      let content = await readCorpus(relative);
 
       // Simple variable substitution
       for (const [key, value] of Object.entries(variables)) {
@@ -277,8 +353,7 @@ export async function createServer() {
       mimeType: 'application/json'
     },
     async () => {
-      const promptsDir = path.join(AIWG_ROOT, 'agentic/code/addons/aiwg-utils/prompts');
-      const catalog = await scanDirectory(promptsDir, 'prompts');
+      const catalog = await scanCorpusDirectory('agentic/code/addons/aiwg-utils/prompts', 'prompts');
       return {
         contents: [{
           uri: 'aiwg://prompts/catalog',
@@ -299,10 +374,9 @@ export async function createServer() {
     },
     async () => {
       const catalogs = {};
-      for (const [fw, fwPath] of Object.entries(FRAMEWORKS)) {
-        const templatesDir = path.join(fwPath, 'templates');
+      for (const fw of Object.keys(FRAMEWORKS)) {
         try {
-          catalogs[fw] = await scanDirectory(templatesDir, 'templates');
+          catalogs[fw] = await scanCorpusDirectory(`agentic/code/frameworks/${fw}/templates`, 'templates');
         } catch {
           catalogs[fw] = [];
         }
@@ -327,10 +401,9 @@ export async function createServer() {
     },
     async () => {
       const catalogs = {};
-      for (const [fw, fwPath] of Object.entries(FRAMEWORKS)) {
-        const agentsDir = path.join(fwPath, 'agents');
+      for (const fw of Object.keys(FRAMEWORKS)) {
         try {
-          catalogs[fw] = await scanDirectory(agentsDir, 'agents');
+          catalogs[fw] = await scanCorpusDirectory(`agentic/code/frameworks/${fw}/agents`, 'agents');
         } catch {
           catalogs[fw] = [];
         }
@@ -353,14 +426,9 @@ export async function createServer() {
       description: 'Retrieve specific AIWG prompt template'
     },
     async (uri, { category, name }) => {
-      const promptPath = path.join(
-        AIWG_ROOT,
-        'agentic/code/addons/aiwg-utils/prompts',
-        category,
-        `${name}.md`
-      );
       try {
-        const content = await fs.readFile(promptPath, 'utf-8');
+        validateContainedPath(category); validateContainedPath(name);
+        const content = await readCorpus(`agentic/code/addons/aiwg-utils/prompts/${category}/${name}.md`);
         return {
           contents: [{
             uri: uri.href,
@@ -387,14 +455,9 @@ export async function createServer() {
       description: 'Retrieve specific AIWG template'
     },
     async (uri, { framework, category, name }) => {
-      const templatePath = path.join(
-        FRAMEWORKS[framework] || FRAMEWORKS['sdlc-complete'],
-        'templates',
-        category,
-        `${name}.md`
-      );
       try {
-        const content = await fs.readFile(templatePath, 'utf-8');
+        validateContainedPath(category); validateContainedPath(name);
+        const content = await readCorpus(`agentic/code/frameworks/${frameworkName(framework)}/templates/${category}/${name}.md`);
         return {
           contents: [{
             uri: uri.href,
@@ -421,13 +484,9 @@ export async function createServer() {
       description: 'Retrieve specific AIWG agent definition'
     },
     async (uri, { framework, name }) => {
-      const agentPath = path.join(
-        FRAMEWORKS[framework] || FRAMEWORKS['sdlc-complete'],
-        'agents',
-        `${name}.md`
-      );
       try {
-        const content = await fs.readFile(agentPath, 'utf-8');
+        validateContainedPath(name);
+        const content = await readCorpus(`agentic/code/frameworks/${frameworkName(framework)}/agents/${name}.md`);
         return {
           contents: [{
             uri: uri.href,
@@ -592,34 +651,6 @@ If retry fails, prepare structured escalation:
 // ============================================
 // HELPER FUNCTIONS
 // ============================================
-
-/**
- * Scan directory for files
- */
-async function scanDirectory(dir, type) {
-  const results = [];
-  try {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const subResults = await scanDirectory(path.join(dir, entry.name), type);
-        results.push(...subResults.map(r => ({
-          ...r,
-          category: entry.name
-        })));
-      } else if (entry.isFile() && entry.name.endsWith('.md')) {
-        results.push({
-          name: entry.name.replace('.md', ''),
-          path: path.join(dir, entry.name),
-          uri: `aiwg://${type}/${entry.name.replace('.md', '')}`
-        });
-      }
-    }
-  } catch {
-    // Directory doesn't exist
-  }
-  return results;
-}
 
 /**
  * Start the MCP server with stdio transport

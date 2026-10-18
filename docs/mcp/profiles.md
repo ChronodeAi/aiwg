@@ -288,7 +288,7 @@ If you used `roctinam/sysops` shell wrappers (`claude-role.sh` / `codex-role.sh`
 | Before | After |
 |--------|-------|
 | `codex-role dev` | `aiwg session --provider codex --profile dev` |
-| `codex-role ops -- login` | `aiwg mcp profile login ops --provider codex` |
+| `codex-role ops -- login` | `aiwg mcp profile login ops` (or `aiwg mcp profile login ops --api-key-env <ENV_VAR_NAME>` headless, #3062) |
 | Manual `~/.codex/roles-runtime/dev/` setup | Handled automatically by AIWG on first run |
 
 The runtime home layout (`~/.codex/roles-runtime/<profile>/`) is identical to the sysops implementation, so existing auth tokens in those directories are reused automatically on the first `aiwg session` run. No re-authentication needed.

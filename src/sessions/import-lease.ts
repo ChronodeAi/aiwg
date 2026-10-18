@@ -1,5 +1,5 @@
 import {
-  mkdir, readFile, rename, rm, stat, writeFile,
+  mkdir, readFile, rename, rm, writeFile,
 } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname } from 'node:path';
@@ -11,6 +11,7 @@ export interface ImportLeaseOwner {
   host: string;
   startedAt: string;
   heartbeatAt: string;
+  processStartId?: string;
 }
 
 export interface ImportLease {
@@ -23,16 +24,17 @@ export interface ImportLeaseOptions {
   waitMs?: number;
   pollMs?: number;
   heartbeatMs?: number;
+  /** Retained for compatibility; confirmed dead owners are reclaimed immediately. */
   staleMs?: number;
   now?: () => Date;
   processAlive?: (pid: number) => boolean;
+  processStartId?: (pid: number) => Promise<string | null>;
 }
 
 const DEFAULTS = {
   waitMs: 5_000,
   pollMs: 50,
   heartbeatMs: 1_000,
-  staleMs: 30_000,
 } as const;
 
 export class ImportLeaseContentionError extends Error {
@@ -65,12 +67,13 @@ export async function acquireImportLease(
   const waitMs = options.waitMs ?? DEFAULTS.waitMs;
   const pollMs = options.pollMs ?? DEFAULTS.pollMs;
   const heartbeatMs = options.heartbeatMs ?? DEFAULTS.heartbeatMs;
-  const staleMs = options.staleMs ?? DEFAULTS.staleMs;
   const now = options.now ?? (() => new Date());
   const processAlive = options.processAlive ?? defaultProcessAlive;
+  const processStartId = options.processStartId ?? defaultProcessStartId;
   const lockPath = importLeasePath(databasePath);
   const ownerPath = `${lockPath}/owner.json`;
   const deadline = Date.now() + waitMs;
+  const startId = await processStartId(process.pid);
 
   await mkdir(dirname(databasePath), { recursive: true, mode: 0o700 });
   while (true) {
@@ -84,6 +87,7 @@ export async function acquireImportLease(
         host: hostname(),
         startedAt: observed,
         heartbeatAt: observed,
+        ...(startId === null ? {} : { processStartId: startId }),
       };
       await writeOwner(ownerPath, owner);
       let heartbeatWrite = Promise.resolve();
@@ -112,10 +116,10 @@ export async function acquireImportLease(
     } catch (error) {
       if (!isNodeError(error) || error.code !== 'EEXIST') throw error;
       const existing = await readOwner(ownerPath);
-      if (await staleLease(lockPath, existing, staleMs, processAlive)) {
+      if (await staleLease(existing, processAlive, processStartId)) {
         const confirmed = await readOwner(ownerPath);
         if (sameLease(existing, confirmed)
-          && await staleLease(lockPath, confirmed, staleMs, processAlive)) {
+          && await staleLease(confirmed, processAlive, processStartId)) {
           await rm(lockPath, { recursive: true, force: true });
           continue;
         }
@@ -139,8 +143,9 @@ async function readOwner(path: string): Promise<ImportLeaseOwner | null> {
     const value = JSON.parse(await readFile(path, 'utf8')) as Partial<ImportLeaseOwner>;
     if (value.contractVersion !== '1.0.0'
       || typeof value.runId !== 'string'
-      || typeof value.pid !== 'number'
+      || !Number.isSafeInteger(value.pid) || (value.pid ?? 0) <= 0
       || typeof value.host !== 'string'
+      || (value.processStartId !== undefined && typeof value.processStartId !== 'string')
       || typeof value.startedAt !== 'string'
       || typeof value.heartbeatAt !== 'string') return null;
     return value as ImportLeaseOwner;
@@ -150,20 +155,15 @@ async function readOwner(path: string): Promise<ImportLeaseOwner | null> {
 }
 
 async function staleLease(
-  lockPath: string,
   owner: ImportLeaseOwner | null,
-  staleMs: number,
   processAlive: (pid: number) => boolean,
+  processStartId: (pid: number) => Promise<string | null>,
 ): Promise<boolean> {
   if (!owner || owner.host !== hostname()) return false;
-  if (processAlive(owner.pid)) return false;
-  const heartbeat = owner ? Date.parse(owner.heartbeatAt) : Number.NaN;
-  if (Number.isFinite(heartbeat)) return Date.now() - heartbeat > staleMs;
-  try {
-    return Date.now() - (await stat(lockPath)).mtimeMs > staleMs;
-  } catch {
-    return false;
-  }
+  if (!processAlive(owner.pid)) return true;
+  if (!owner.processStartId) return false;
+  const current = await processStartId(owner.pid);
+  return current !== null && current !== owner.processStartId;
 }
 
 function sameLease(
@@ -175,6 +175,7 @@ function sameLease(
     && first.pid === second.pid
     && first.host === second.host
     && first.startedAt === second.startedAt
+    && first.processStartId === second.processStartId
     && first.heartbeatAt === second.heartbeatAt;
 }
 
@@ -183,7 +184,24 @@ function defaultProcessAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return isNodeError(error) && error.code === 'EPERM';
+    return !isNodeError(error) || error.code !== 'ESRCH';
+  }
+}
+
+async function defaultProcessStartId(pid: number): Promise<string | null> {
+  if (process.platform !== 'linux') return null;
+  try {
+    const [details, bootId] = await Promise.all([
+      readFile(`/proc/${pid}/stat`, 'utf8'),
+      readFile('/proc/sys/kernel/random/boot_id', 'utf8'),
+    ]);
+    // The command name may contain spaces and parentheses; field 22 is starttime.
+    const startTicks = details.slice(details.lastIndexOf(')') + 2).split(/\s+/)[19];
+    return startTicks && /^\d+$/.test(startTicks) && bootId.trim()
+      ? `${bootId.trim()}:${startTicks}`
+      : null;
+  } catch {
+    return null;
   }
 }
 

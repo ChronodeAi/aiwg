@@ -26,6 +26,40 @@ function registration(overrides: Partial<DerivedOutputRegistration> = {}): Deriv
 const session = { sessionId: 'session-1', nativeSessionId: 'native-1', provider: 'claude' as const };
 
 describe('discoverSessionOutputCandidates (#2566)', () => {
+  it('preserves conflicting registrations without selecting a winner (#2568)', () => {
+    const first = registration({ conflictsWith: ['output:other'] });
+    const second = registration({ registrationId: sha256('registration-2'), conflictsWith: [first.registrationId] });
+    const candidates = discoverSessionOutputCandidates([first, second], [session]);
+    expect(candidates.map(candidate => candidate.registration)).toEqual([first, second]);
+    expect(candidates.map(candidate => candidate.lineage)).toEqual(['registered', 'registered']);
+  });
+
+  it('does not promote opaque labels or unknown source refs to session lineage (#2568)', () => {
+    const reg = registration({
+      contextPack: {
+        id: 'session-1', digest: sha256('pack'),
+        sources: [
+          { kind: 'note', ref: 'session-1', digest: null, span: null },
+          { kind: 'session', ref: 'unknown-origin', digest: null, span: null },
+        ],
+      },
+    });
+    expect(discoverSessionOutputCandidates([reg], [session])).toEqual([]);
+  });
+
+  it('reports an explicit session reference with an unknown digest as registered lineage only (#2568)', () => {
+    const reg = registration({
+      contextPack: {
+        id: 'opaque-label', digest: sha256('pack'),
+        sources: [{ kind: 'session', ref: session.sessionId, digest: null, span: null }],
+      },
+    });
+    expect(discoverSessionOutputCandidates([reg], [session])).toEqual([{
+      registration: reg, sessionId: session.sessionId, lineage: 'registered',
+      matchReason: 'ref equals the stable session id',
+    }]);
+  });
+
   it('matches a source whose ref equals the stable session id', () => {
     const candidates = discoverSessionOutputCandidates([registration()], [session]);
     expect(candidates).toHaveLength(1);

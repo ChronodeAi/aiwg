@@ -306,6 +306,25 @@ export class CopilotAdapter {
     error.code = 'OG_CONTRACT_UNSUPPORTED';
     throw error;
   }
+
+  /** #2915 follow-up: `parseWorkerFinal` above always throws, for every
+   * input -- there is no observed final envelope to extract from yet, ever.
+   * `CopilotAdapter` does not extend `ProviderAdapter` (flat, standalone
+   * module; see the class doc above), so this capability signal is defined
+   * directly rather than inherited/overridden. A canary admitted for this
+   * CLI could structurally never report a verified success, so this CLI is
+   * never eligible for recovery-breaker gating at all. */
+  supportsAttemptVerification() { return false; }
+
+  /** No inherited base class (see class doc above): defined directly,
+   * always refusing exactly like `parseWorkerFinal` above. */
+  async parseWorkerAttemptFinal(_output, _options = {}) {
+    const error = new Error(
+      'Copilot final answer extraction is unavailable until the event stream is observed (docs/providers/copilot-direct.md)');
+    error.name = 'WorkerContractError';
+    error.code = 'OG_CONTRACT_UNSUPPORTED';
+    throw error;
+  }
 }
 
 /** Installed-module registration: exactly the one approved adapter ID. */

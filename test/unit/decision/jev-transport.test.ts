@@ -348,10 +348,7 @@ describe('Jev transport contract', () => {
       ['long string with escapes', atByteLimit(JSON.stringify('"\\{}[]'.repeat(131_000)))],
       ['many small containers (349525)', atByteLimit('[' + '{},'.repeat(349_524) + '{}]')],
     ] as const;
-    // Per-thread CPU time (Node 23.9+); older runtimes report process CPU without asserting it.
-    const threadCpu = typeof (process as any).threadCpuUsage === 'function';
-    const cpu = (previous?: NodeJS.CpuUsage): NodeJS.CpuUsage =>
-      threadCpu ? (process as any).threadCpuUsage(previous) : process.cpuUsage(previous);
+    const cpu = process.threadCpuUsage.bind(process);
     for (const [name, body] of shapes) {
       expect(Buffer.byteLength(body), name).toBe(BODY_LIMIT);
       parseBoundedJson(body); // One warmup; construction and assertions are outside CPU samples.
@@ -362,11 +359,10 @@ describe('Jev transport contract', () => {
         const used = cpu(started);
         samples.push((used.user + used.system) / 1000);
       }
-      console.info(`SEC-RESPONSE-PARSE-TIME ${name}: ${threadCpu ? 'thread' : 'process'} CPU ms = ${samples.map(ms => ms.toFixed(3)).join(', ')}; budget = ${PARSE_CPU_BUDGET_MS}`);
+      console.info(`SEC-RESPONSE-PARSE-TIME ${name}: thread CPU ms = ${samples.map(ms => ms.toFixed(3)).join(', ')}; budget = ${PARSE_CPU_BUDGET_MS}`);
       // The cheapest sample bounds the parse's own cost; a real complexity
-      // regression raises every sample. Process-wide CPU also counts other
-      // test threads, so the budget is asserted only on this thread's CPU.
-      if (threadCpu) expect(Math.min(...samples), name).toBeLessThan(PARSE_CPU_BUDGET_MS);
+      // regression raises every sample.
+      expect(Math.min(...samples), name).toBeLessThan(PARSE_CPU_BUDGET_MS);
     }
     const parse = vi.spyOn(JSON, 'parse');
     for (const body of [dense.body + ' ', '['.repeat(65) + '0' + ']'.repeat(65)]) {

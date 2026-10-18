@@ -19,6 +19,11 @@ describe('ExampleGenerator', () => {
     generator = new ExampleGenerator();
   });
 
+  it('uses Node 24 when adding a concrete runtime to examples', () => {
+    expect(generator['addSpecificity']('Use Node for the service.', 'technical'))
+      .toBe('Use Node.js 24 for the service.');
+  });
+
   describe('Before/After Generation', () => {
     it('should generate complete before/after pair with all required properties', async () => {
       const topics = ['authentication', 'caching', 'rate limiting', 'API design', 'security'];

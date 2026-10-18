@@ -23,6 +23,23 @@ function matches(text: string, pattern: RegExp) {
   return [...text.matchAll(pattern)].map(m => ({ text: m[0], start: m.index!, end: m.index! + m[0].length }));
 }
 
+function sentences(text: string) {
+  const result: Array<{ text: string; start: number; end: number }> = [];
+  let start = 0;
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    if (character === '\n' || character === '.' || character === '!' || character === '?') {
+      if (index > start) {
+        const end = character === '\n' ? index : index + 1;
+        result.push({ text: text.slice(start, end), start, end });
+      }
+      start = index + 1;
+    }
+  }
+  if (start < text.length) result.push({ text: text.slice(start), start, end: text.length });
+  return result;
+}
+
 /** Literal invariants fail closed; lexical signals locate changes requiring semantic review. */
 export function assessWritingFidelity(original: string, candidate: string, value?: WritingBrief): FidelityAssessment {
   const brief = value ? parseWritingBrief(value) : undefined;
@@ -57,7 +74,7 @@ export function assessWritingFidelity(original: string, candidate: string, value
   }
   const firstPerson = /\b(?:I|we|my|our|me|us)\b/giu;
   const allowedPersonal = brief?.authorClaims.map(c => c.text) ?? [];
-  for (const claim of matches(candidate, /[^.!?\n]+(?:[.!?]|$)/gu)) {
+  for (const claim of sentences(candidate)) {
     if (matches(claim.text, firstPerson).length && !original.includes(claim.text.trim()) && !allowedPersonal.some(text => text === claim.text.trim())) {
       changes.push({ kind: 'first-person', side: 'candidate', start: claim.start, end: claim.end, reason: 'New first-person wording lacks exact supplied author grounding; review is required.' });
     }

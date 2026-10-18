@@ -792,6 +792,7 @@ export async function verifyProviderDeployment(
     const graph = options.scope === 'user' ? 'user' : 'project';
     indexesToVerify.push({
       index: loadGraphIndexFile<ArtifactIndex>(options.projectRoot, 'metadata.json', graph),
+      stats: loadGraphIndexFile<IndexStats>(options.projectRoot, 'stats.json', graph),
       graph,
       bundles: projectLocalBundles,
     });
@@ -850,16 +851,19 @@ export async function verifyProviderDeployment(
       ));
     }
     if (options.invocationStartedAt) {
-      const builtAt = Date.parse(index.builtAt);
+      // No-op builds preserve metadata bytes and record the refresh in stats.
+      const refreshedAt = Math.max(...[index.builtAt, stats?.builtAt]
+        .map((timestamp) => Date.parse(timestamp ?? ''))
+        .filter(Number.isFinite));
       const startedAt = Date.parse(options.invocationStartedAt);
-      if (!Number.isFinite(builtAt) || builtAt + 2_000 < startedAt) {
+      if (!Number.isFinite(refreshedAt) || refreshedAt + 2_000 < startedAt) {
         findings.push(finding(
           normalized,
           `index-stale:${graph}`,
           'blocking',
           `The ${graph} capability index was not refreshed during this deployment.`,
           `Re-run aiwg use after correcting the ${graph} index build failure.`,
-          { graph, builtAt: index.builtAt, invocationStartedAt: options.invocationStartedAt },
+          { graph, builtAt: index.builtAt, statsBuiltAt: stats?.builtAt, invocationStartedAt: options.invocationStartedAt },
         ));
       }
     }
@@ -887,7 +891,7 @@ export async function verifyProviderDeployment(
     }
     const requiredContext = [
       path.join(options.projectRoot, 'WORKSPACE.md'),
-      path.join(options.projectRoot, 'AIWG.md'),
+      ...(definition?.paths.contextFiles.aiwgMd === false ? [] : [path.join(options.projectRoot, 'AIWG.md')]),
       path.join(options.projectRoot, '.aiwg', 'AIWG.md'),
     ];
     for (const contextPath of requiredContext) {

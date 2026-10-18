@@ -26,6 +26,6 @@ a mapping and loss report, verify the result, and keep rollback available.
 8. Roll back consumer selection if verification fails. Preserve failed output for diagnosis.
 
 No surface in this table is newly deprecated by Dataset Intelligence Stage A.
-The machine-readable [deprecation inventory](../deprecations/dataset-deprecations.v1.json) is empty until
+The machine-readable [deprecation inventory](https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/dataset-intelligence/deprecations/dataset-deprecations.v1.json) is empty until
 a release owner supplies a date, support window, automated detector, rollback,
 and measurable removal criteria.

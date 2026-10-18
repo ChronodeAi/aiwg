@@ -36,14 +36,10 @@ import { constants, openSync, closeSync, writeFileSync, fsyncSync, renameSync, l
 import path from 'node:path';
 import { sampleWorkerIdentity, createWorkerIdentityCapture } from '../process-monitor.mjs';
 import { checkWorkerDispatch } from '../../scripts/resource-preflight.mjs';
+import { buildSystemdClientEnv, resolveSystemdClient, resolveSystemdRun, CONNECTION_NAMES, unitEnvironmentNames, isClientControlVariable } from './systemd-client.mjs';
 
 const UNIT_SAFE = /[^A-Za-z0-9:_.@-]/g;
 const transportBootstrapVariables = ['NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'LD_DEBUG', 'LD_DEBUG_OUTPUT'];
-
-// Never unset these from a unit's environment even when the manager reports
-// them and they are not allowlisted; see buildWorkerIsolationArgs' doc
-// comment for why XDG_RUNTIME_DIR specifically must survive.
-const UNAVOIDABLE_UNIT_ENV_NAMES = ['XDG_RUNTIME_DIR'];
 
 /** Derive a unit-safe `aiwg-worker-<name>-<epoch>` unit name. */
 export function proposeWorkerUnitName(name, nowSeconds = Math.floor(Date.now() / 1000)) {
@@ -62,13 +58,13 @@ function assertAbsolute(label, value) {
  * `{ spawn }` is injectable so tests never touch the real user manager.
  * Returns `{ mode: 'systemd-unit' | 'degraded', reason, detail? }`.
  */
-export function detectWorkerIsolation({ spawn = spawnSync, env = process.env } = {}) {
+export function detectWorkerIsolation({ spawn = spawnSync } = {}) {
   if (process.platform !== 'linux') {
     return { mode: 'degraded', reason: `systemd user isolation requires Linux (this host: ${process.platform})` };
   }
   let runner;
   try {
-    runner = spawn('systemd-run', ['--version'], { encoding: 'utf8', timeout: 10000 });
+    runner = spawn(resolveSystemdRun(), ['--version'], { encoding: 'utf8', timeout: 10000, env: buildSystemdClientEnv({ envNames: [] }) });
   } catch (error) {
     return { mode: 'degraded', reason: `systemd-run is unavailable: ${error.message}` };
   }
@@ -77,7 +73,7 @@ export function detectWorkerIsolation({ spawn = spawnSync, env = process.env } =
   }
   let manager;
   try {
-    manager = spawn('systemctl', ['--user', 'show', '-p', 'Version', '--value'], { encoding: 'utf8', timeout: 10000, env });
+    manager = spawn(resolveSystemdClient('systemctl'), ['--user', 'show', '-p', 'Version', '--value'], { encoding: 'utf8', timeout: 10000, env: buildSystemdClientEnv({ envNames: [] }) });
   } catch (error) {
     return { mode: 'degraded', reason: `systemd user manager is unreachable: ${error.message}` };
   }
@@ -104,23 +100,10 @@ export function detectWorkerIsolation({ spawn = spawnSync, env = process.env } =
  * unit (`systemctl --user show-environment`: LANG, XDG_*, SSH_AUTH_SOCK,
  * etc. on an interactive manager), so `managerEnvNames` — the caller's own
  * live snapshot of that list — drives a single `-p UnsetEnvironment=...`
- * removing every manager-injected name that is not on the allowlist, except
- * `XDG_RUNTIME_DIR` (`UNAVOIDABLE_UNIT_ENV_NAMES`): unsetting it is harmless
- * to secrecy (it is just `/run/user/<uid>`, not a secret) but was verified
- * empirically to make the launched unit's own `/proc/<pid>/environ`
- * unreadable (EACCES) even to the same-UID conductor that just started
- * it — on this host with `kernel.yama.ptrace_scope=1`, removing it strips
- * the unit of whatever ties it to the login session that would otherwise
- * grant that read. Carrying it through is the "systemd's minimal unit
- * variables if unavoidable" carve-out. The result is a unit environment
- * containing exactly the allowlisted names, `XDG_RUNTIME_DIR`, and whatever
- * few variables systemd itself always injects into a unit (`INVOCATION_ID`,
- * `MANAGERPID`, `MEMORY_PRESSURE_WATCH`, ...) — never a secret, never an
- * unrelated inherited variable. `kind: 'scope'` is exempt:
- * `--scope` execs directly as a child of the `systemd-run` client itself
- * (confirmed empirically — it inherits that process's environment wholesale,
- * ignoring `UnsetEnvironment`), so this guarantee applies only to `kind:
- * 'unit'`, not `'scope'`.
+ * removing every manager-injected name that is not on the allowlist, plus
+ * all client-only connection names. Bootstrap controls are refused.
+ * Scopes ignore UnsetEnvironment, so launchIsolatedWorker strips connection
+ * names with the private wrapper used for attached units.
  *
  * `attached: true` (#2892 B2 / #2895) is `kind: 'unit'` plus `--wait --pipe
  * --quiet`: systemd-run itself stays attached for the lifetime of the unit,
@@ -220,8 +203,7 @@ export function buildWorkerIsolationArgs({
   // it, so --quiet is mandatory whenever both --pipe and --wait are used.
   if (pipe && wait && !attached) argv.push('--quiet');
   const requestedNames = [];
-  for (const name of envNames) {
-    if (attached && transportBootstrapVariables.includes(name)) throw new Error('Worker environment cannot alter trusted transport bootstrap');
+  for (const name of unitEnvironmentNames(envNames)) {
     const value = env?.[name];
     if (value === undefined) continue;
     if (typeof value !== 'string' || value.includes('\0')) throw new Error(`Worker isolation environment value for ${name} is not a NUL-free string`);
@@ -229,7 +211,7 @@ export function buildWorkerIsolationArgs({
     argv.push(`--setenv=${name}`);
   }
   if (kind === 'unit') {
-    const toUnset = managerEnvNames.filter(name => !requestedNames.includes(name) && !UNAVOIDABLE_UNIT_ENV_NAMES.includes(name));
+    const toUnset = [...new Set([...managerEnvNames, ...CONNECTION_NAMES])].filter(name => !requestedNames.includes(name));
     if (toUnset.length > 0) argv.push('-p', `UnsetEnvironment=${toUnset.join(' ')}`);
   }
   // stdin is /dev/null unless a brief file is given; attached (supervised)
@@ -265,7 +247,7 @@ export function buildWorkerIsolationArgs({
  * the exact same security-relevant query instead of re-deriving it.
  */
 export function resolveManagerEnvNames({ spawn = spawnSync } = {}) {
-  const shown = spawn('systemctl', ['--user', 'show-environment'], { encoding: 'utf8', timeout: 10000 });
+  const shown = spawn(resolveSystemdClient('systemctl'), ['--user', 'show-environment'], { encoding: 'utf8', timeout: 10000, env: buildSystemdClientEnv({ envNames: [] }) });
   if (shown.error || shown.status !== 0) throw new Error(shown.error?.message ?? (String(shown.stderr ?? '').trim() || `exit ${shown.status}`));
   return String(shown.stdout ?? '').split('\n').map(line => line.slice(0, line.indexOf('='))).filter(Boolean);
 }
@@ -294,6 +276,54 @@ export function resolveManagerEnvNames({ spawn = spawnSync } = {}) {
  *   the live `systemd-run --pipe --wait` process itself — its stdio IS the
  *   unit's stdio, and its own `close` event fires with the unit's exit code.
  */
+/**
+ * Run the real process-start call, optionally gated by the D2 dispatch-
+ * commit hook (#2915 round 8). `spawnFn` performs the actual, otherwise
+ * irreversible side effect (the `spawn`/`spawnAsync` call) and returns the
+ * same result shape `launchIsolatedWorker` always returned.
+ *
+ * Dual-mode, deliberately: when `onDispatchCommit` is omitted (every
+ * existing caller — direct production callers, every test in this repo
+ * that constructs `launchIsolatedWorker` options itself), this returns
+ * `spawnFn()`'s result DIRECTLY and synchronously — `launchIsolatedWorker`
+ * is NOT declared `async`, and its sync return contract for every pre-D2
+ * caller is completely unaffected; nothing here ever makes an existing
+ * caller receive a Promise where it previously received a plain object.
+ * Only when a caller supplies the hook (today: `session-launcher.mjs`'s own
+ * gated launch paths) does this return a Promise, which that caller already
+ * awaits.
+ *
+ * When the hook IS given, it runs immediately before `spawnFn()` — after
+ * every preparation check `launchIsolatedWorker` performs for whichever
+ * branch (degraded/systemd-unit, attached/non-attached) is actually taken.
+ * If it throws, `spawnFn` is NEVER called — nothing starts — and the thrown
+ * error is converted into the same `{ launched: false, blocked: true,
+ * failures: [...] }` refusal shape every other pre-spawn refusal in this
+ * module already uses, rather than propagating as a rejected promise: a
+ * proven pre-spawn refusal is a RESULT here, consistent with the dispatch
+ * gate and degraded-without-allowDegraded refusals above it.
+ *
+ * `onAbort` (#2915 round 8 review 8, C3 follow-up), when given, runs ONLY
+ * on that same hook-throws path -- it exists so a caller that had to open
+ * resources (e.g. the non-attached degraded path's stdio file descriptors)
+ * BEFORE this call, so that opening them is itself part of "every
+ * preparation check" the hook boundary assumes already ran, can release
+ * them when the hook aborts the dispatch instead of leaking them.
+ */
+function _runDispatchCommit(onDispatchCommit, spawnFn, onAbort) {
+  if (!onDispatchCommit) return spawnFn();
+  return (async () => {
+    try {
+      await onDispatchCommit();
+    } catch (error) {
+      if (onAbort) { try { onAbort(); } catch { /* best-effort cleanup only */ } }
+      return { launched: false, blocked: true,
+        failures: [{ signal: 'dispatch-commit', reason: error?.message ?? String(error) }] };
+    }
+    return spawnFn();
+  })();
+}
+
 export function launchIsolatedWorker({
   name = 'worker',
   memoryMaxGb,
@@ -317,7 +347,16 @@ export function launchIsolatedWorker({
   proposeUnit = proposeWorkerUnitName,
   stdin = 'closed',
   ownedGroup = false,
+  onSpawnAttempt,
   runDir,
+  // #2915 round 8 (D2): INTERNAL dispatch-commit hook — never documented as
+  // a public launch option; only `session-launcher.mjs`'s own gated launch
+  // paths (and, through `planDirectWorkerLaunch`'s borrowed-admission
+  // branch, `src/mcp/tools/worker-invoke.mjs`'s two dispatch boundaries)
+  // ever pass it. See `_runDispatchCommit`'s doc comment for the exact
+  // contract and why every existing caller that omits it is byte-for-byte
+  // unaffected.
+  onDispatchCommit,
 } = {}) {
   const resolvedGate = gate === 'disabled' && !config?.parallelism?.worker_dispatch
     ? checkWorkerDispatch({ config })
@@ -369,44 +408,62 @@ export function launchIsolatedWorker({
     // whether the wrapper is ALSO given `--run-dir`/`--invocation-id` to
     // write those record files; it never toggles whether the wrapper runs
     // at all.
-    if (attached && envNames.some(variable => transportBootstrapVariables.includes(variable))) {
+    if (attached && envNames.some(isClientControlVariable)) {
       throw new Error('Worker environment cannot alter trusted transport bootstrap');
     }
-    let child;
-    if (attached) {
-      const launchArgs = [fileURLToPath(import.meta.url), '--worker-environment', JSON.stringify(envNames),
-        ...(runDir ? ['--run-dir', runDir, '--invocation-id', name] : []), '--', command, ...args];
-      child = spawnAsync(process.execPath, launchArgs, { cwd, stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-        env: allowedEnv, ...(ownedGroup ? { detached: true } : {}) });
-    } else {
-      // Opening the brief/output files ourselves (rather than letting the
-      // worker inherit a stream) is what lets a degraded launch still honor a
-      // resolved #2887 invocation's stdin source and separate stdout/stderr
-      // destinations; `openSync` throws rather than silently falling back.
-      // 'w' truncates a pre-existing file at open time (matching the #2887
-      // shell renderer's `>`/`2>` contract); the previous 'a' silently kept
-      // appending onto a stale file across repeated degraded launches.
-      const stdinFd = stdinPath !== undefined ? openSync(stdinPath, 'r') : 'ignore';
-      const stdoutFd = stdoutPath !== undefined ? openSync(stdoutPath, 'w') : 'pipe';
-      const stderrFd = stderrPath !== undefined ? openSync(stderrPath, 'w') : 'pipe';
-      child = spawnAsync(command, args, { cwd, env: allowedEnv, stdio: [stdinFd, stdoutFd, stderrFd], detached: ownedGroup });
-      // Node dup()s a numeric stdio fd into the child and never closes the
-      // parent's own copy; the child's duplicated fd keeps working after this
-      // call returns (verified empirically), so closing here is what the
-      // previous code was missing — every launch otherwise leaked up to three
-      // fds in the long-running conductor process.
-      for (const fd of [stdinFd, stdoutFd, stderrFd]) if (typeof fd === 'number') closeSync(fd);
-    }
-    const outcome = {
-      launched: Number.isInteger(child.pid) && child.pid > 0,
-      mode: 'degraded', child, pid: child.pid,
-      ...(attached ? { transportSupervisor: true } : {}),
-      diagnostic: `launched without resource confinement: ${detected.reason}`,
-      gate: resolvedGate,
+    // Finish descriptor, argv and environment preparation before consuming
+    // dispatch authority. Keep the no-hook path synchronous.
+    const fds = [];
+    const closePreparedFds = () => {
+      for (const fd of fds) if (typeof fd === 'number') closeSync(fd);
     };
-    // Keep launch failures observable even if the caller attaches listeners later.
-    child.once('error', error => { outcome.launched = false; outcome.error = error.message; });
-    return outcome;
+    let deferredClose = false;
+    try {
+      let launchCommand, launchArgs, launchOptions;
+      if (attached) {
+        launchCommand = process.execPath;
+        launchArgs = [fileURLToPath(import.meta.url), '--worker-environment', JSON.stringify(envNames),
+          ...(runDir ? ['--run-dir', runDir, '--invocation-id', name] : []), '--', command, ...args];
+        launchOptions = { cwd, stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+          env: allowedEnv, ...(ownedGroup ? { detached: true } : {}) };
+      } else {
+        // Open every input/output before commit; a preparation failure never
+        // consumes dispatch authority. Output truncation matches the renderer.
+        const stdinFd = stdinPath !== undefined ? openSync(stdinPath, 'r') : 'ignore';
+        fds.push(stdinFd);
+        const stdoutFd = stdoutPath !== undefined ? openSync(stdoutPath, 'w') : 'pipe';
+        fds.push(stdoutFd);
+        const stderrFd = stderrPath !== undefined ? openSync(stderrPath, 'w') : 'pipe';
+        fds.push(stderrFd);
+        launchCommand = command;
+        launchArgs = args;
+        launchOptions = { cwd, env: allowedEnv, stdio: [stdinFd, stdoutFd, stderrFd], detached: ownedGroup };
+      }
+      const result = _runDispatchCommit(onDispatchCommit, () => {
+        const child = spawnAsync(launchCommand, launchArgs, launchOptions);
+        onSpawnAttempt?.({ mode: 'degraded', child, pid: child.pid });
+        const outcome = {
+          launched: Number.isInteger(child.pid) && child.pid > 0,
+          mode: 'degraded', child, pid: child.pid,
+          ...(attached ? { transportSupervisor: true } : {}),
+          diagnostic: `launched without resource confinement: ${detected.reason}`,
+          gate: resolvedGate,
+        };
+        // Preserve launch errors even when callers attach listeners later.
+        child.once('error', error => { outcome.launched = false; outcome.error = error.message; });
+        return outcome;
+      });
+      if (onDispatchCommit) {
+        const pending = result.finally(closePreparedFds);
+        deferredClose = true;
+        return pending;
+      }
+      return result;
+    } finally {
+      // Numeric stdio descriptors are duplicated into the child. Close our
+      // copies on every preparation, hook-refusal and spawn-error path.
+      if (!deferredClose) closePreparedFds();
+    }
   }
   // The unit path's security contract (see buildWorkerIsolationArgs' doc
   // comment) depends on knowing exactly which names the user manager would
@@ -415,77 +472,86 @@ export function launchIsolatedWorker({
   // either omit `UnsetEnvironment` (silently falling back to the padded,
   // non-exact environment this fix exists to remove) or guess — both are
   // refused in favor of an explicit failure.
-  let managerEnvNames;
+  let managerEnvNames, systemdRun;
   try {
     managerEnvNames = resolveManagerEnvNames({ spawn });
+    systemdRun = resolveSystemdRun();
   } catch (error) {
     return {
       launched: false,
       mode: 'systemd-unit',
-      diagnostic: `unable to determine the user manager's inherited environment (required to isolate the worker's environment exactly): ${error.message}`,
+      diagnostic: `unable to determine the user manager's inherited environment or resolve the trusted systemd-run client (required to isolate the worker's environment exactly): ${error.message}`,
       gate: resolvedGate,
     };
   }
   const unit = proposeUnit(name);
-  // A private host-owned transport wrapper strips the manager's environment
+  // A private host-owned wrapper strips manager/client connection variables
   // before spawning the real worker. Environment values never enter argv.
-  const isolatedCommand = attached ? process.execPath : command;
-  const isolatedArgs = attached ? [fileURLToPath(import.meta.url), '--worker-environment', JSON.stringify(envNames),
+  const wrapped = attached || kind === 'scope';
+  const isolatedCommand = wrapped ? process.execPath : command;
+  const isolatedArgs = wrapped ? [fileURLToPath(import.meta.url), '--worker-environment', JSON.stringify(unitEnvironmentNames(envNames)),
     ...(runDir ? ['--run-dir', runDir, '--invocation-id', name] : []), '--', command, ...args] : args;
   const argv = buildWorkerIsolationArgs({ unit, memoryMaxGb, command: isolatedCommand, args: isolatedArgs,
     cwd, logFile, stdinPath, stdoutPath, stderrPath, env, envNames, managerEnvNames, kind, attached });
+  // #2915 round 8 (D2): same dispatch-commit boundary as the degraded path
+  // above — every systemd-unit preparation check (gate, manager-environment
+  // query, argv construction) has already run by this point.
   if (attached) {
-    // The spawned transport wrapper's OWN process env is `{...process.env,
-    // ...env}` (minus bootstrap vars) so systemd-run's bare `--setenv=NAME`
-    // (see buildWorkerIsolationArgs' doc comment) can import allowlisted
-    // values that live only in a caller-supplied `env` map (e.g. an MCP
-    // worker server's own registered credentials) and not in the
-    // conductor's own `process.env` — `process.env` is spread first so
-    // systemd-run can still reach its D-Bus user session. The wrapper
-    // itself then builds the REAL worker's environment purely from
-    // `envNames`/`env` (never from this spawn env), so this merge only
-    // widens what systemd-run's CLIENT can import from, never what the
-    // worker receives.
-    const child = spawnAsync(argv[0], argv.slice(1), { cwd,
-      env: Object.fromEntries(Object.entries({ ...process.env, ...env })
-        .filter(([variable]) => !transportBootstrapVariables.includes(variable))),
-      stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: ownedGroup });
-    const outcome = { launched: Number.isInteger(child.pid) && child.pid > 0, mode: 'systemd-unit', unit, child, gate: resolvedGate };
-    child.once('error', error => { outcome.launched = false; outcome.error = error.message; });
-    return outcome;
+    const launchArgs = argv.slice(1);
+    const launchOptions = { cwd, env: buildSystemdClientEnv({ env, envNames }),
+      stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: ownedGroup };
+    return _runDispatchCommit(onDispatchCommit, () => {
+      onSpawnAttempt?.({ mode: 'systemd-unit', unit });
+      const child = spawnAsync(systemdRun, launchArgs, launchOptions);
+      const outcome = { launched: Number.isInteger(child.pid) && child.pid > 0, mode: 'systemd-unit', unit, child, gate: resolvedGate };
+      child.once('error', error => { outcome.launched = false; outcome.error = error.message; });
+      return outcome;
+    });
   }
-  const child = spawn(argv[0], argv.slice(1), { encoding: 'utf8', timeout: 30000 });
-  if (child.error || child.status !== 0) {
-    const stderr = String(child.stderr ?? '').trim();
-    return {
-      launched: false,
-      mode: 'systemd-unit',
-      unit,
-      diagnostic: `systemd-run launch failed: ${child.error?.message ?? stderr ?? `exit ${child.status}`}`,
-      gate: resolvedGate,
-    };
-  }
-  let pid;
-  try {
-    const shown = spawn('systemctl', ['--user', 'show', '-p', 'MainPID', '--value', unit], { encoding: 'utf8', timeout: 10000 });
-    const parsed = Number(String(shown.stdout ?? '').trim());
-    if (Number.isInteger(parsed) && parsed > 0) pid = parsed;
-  } catch {
-    pid = undefined;
-  }
-  return { launched: true, mode: 'systemd-unit', unit, pid, gate: resolvedGate };
+  const launchArgs = argv.slice(1);
+  const launchOptions = { encoding: 'utf8', timeout: 30000, env: buildSystemdClientEnv({ env, envNames }) };
+  return _runDispatchCommit(onDispatchCommit, () => {
+    onSpawnAttempt?.({ mode: 'systemd-unit', unit });
+    const child = spawn(systemdRun, launchArgs, launchOptions);
+    if (child.error || child.status !== 0) {
+      const stderr = String(child.stderr ?? '').trim();
+      return {
+        launched: false,
+        mode: 'systemd-unit',
+        unit,
+        // #2915 round 8 review 8 (C2): a failed or timed-out `systemd-run`
+        // submission does not PROVE the transient unit was never created
+        // (e.g. a 30s wait timeout after the unit itself started) -- carry
+        // this forward as dispatch-UNCERTAIN, never as "never began", so any
+        // caller deriving stop evidence from this result (`resolveStopEvidence`'s
+        // `dispatchState`) resolves to `unresolved`, never a confirmed stop.
+        ...(onDispatchCommit ? { dispatchState: 'submission-uncertain' } : {}),
+        diagnostic: `systemd-run launch failed: ${child.error?.message ?? stderr ?? `exit ${child.status}`}`,
+        gate: resolvedGate,
+      };
+    }
+    let pid;
+    try {
+      const shown = spawn(resolveSystemdClient('systemctl'), ['--user', 'show', '-p', 'MainPID', '--value', unit], { encoding: 'utf8', timeout: 10000, env: buildSystemdClientEnv({ envNames: [] }) });
+      const parsed = Number(String(shown.stdout ?? '').trim());
+      if (Number.isInteger(parsed) && parsed > 0) pid = parsed;
+    } catch {
+      pid = undefined;
+    }
+    return { launched: true, mode: 'systemd-unit', unit, pid, gate: resolvedGate };
+  });
 }
 
 /**
  * Read retained service state after launch/exit without reaping or mutation.
  * `memoryMax` is bytes. Query failures throw rather than reporting success.
  */
-export function getWorkerIsolationStatus(unit, { spawn = spawnSync } = {}) {
+export function getWorkerIsolationStatus(unit, { spawn = spawnSync, timeoutMs = 10000 } = {}) {
   if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) {
     throw new Error('Worker isolation requires a unit-safe unit name');
   }
-  const shown = spawn('systemctl', ['--user', 'show', unit, '-p', 'ActiveState',
-    '-p', 'Result', '-p', 'ExecMainStatus', '-p', 'ExecMainCode', '-p', 'MainPID', '-p', 'MemoryMax'], { encoding: 'utf8', timeout: 10000 });
+  const shown = spawn(resolveSystemdClient('systemctl'), ['--user', 'show', unit, '-p', 'ActiveState',
+    '-p', 'Result', '-p', 'ExecMainStatus', '-p', 'ExecMainCode', '-p', 'MainPID', '-p', 'MemoryMax'], { encoding: 'utf8', timeout: timeoutMs, env: buildSystemdClientEnv({ envNames: [] }) });
   if (shown.error || shown.status !== 0) {
     throw new Error(`worker status unavailable: ${shown.error?.message ?? String(shown.stderr ?? '').trim()}`);
   }
@@ -519,11 +585,11 @@ export function getWorkerIsolationStatus(unit, { spawn = spawnSync } = {}) {
  * on an already-stopped/unknown unit — `systemctl --user stop` on a unit
  * that no longer exists is not an error worth surfacing to the caller.
  */
-export function stopWorkerUnit(unit, { spawn = spawnSync } = {}) {
+export function stopWorkerUnit(unit, { spawn = spawnSync, timeoutMs = 10000 } = {}) {
   if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) {
     throw new Error('Worker isolation requires a unit-safe unit name');
   }
-  const result = spawn('systemctl', ['--user', 'stop', unit], { encoding: 'utf8', timeout: 10000 });
+  const result = spawn(resolveSystemdClient('systemctl'), ['--user', 'stop', unit], { encoding: 'utf8', timeout: timeoutMs, env: buildSystemdClientEnv({ envNames: [] }) });
   return { ok: !result.error && result.status === 0,
     diagnostic: result.error ? result.error.message : String(result.stderr ?? '').trim() || null };
 }
@@ -540,7 +606,7 @@ export function stopWorkerUnit(unit, { spawn = spawnSync } = {}) {
 export function readUnitControlGroup(unit, { spawn = spawnSync } = {}) {
   if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) return null;
   try {
-    const shown = spawn('systemctl', ['--user', 'show', unit, '-p', 'ControlGroup', '--value'], { encoding: 'utf8', timeout: 10000 });
+    const shown = spawn(resolveSystemdClient('systemctl'), ['--user', 'show', unit, '-p', 'ControlGroup', '--value'], { encoding: 'utf8', timeout: 10000, env: buildSystemdClientEnv({ envNames: [] }) });
     if (shown.error || shown.status !== 0) return null;
     const value = String(shown.stdout ?? '').trim();
     return value || null;

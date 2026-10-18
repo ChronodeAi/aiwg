@@ -9,7 +9,6 @@
  *
  * Usage: node tools/decision/ccp-qualification-evidence.mjs
  */
-import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -19,13 +18,16 @@ import {
   executeQualificationPlan, pairedPreparationLatencyInterval, prepareAdapterRequest, verifyQualificationArtifacts,
   writeQualificationEvidenceManifest, DECISION_LIFECYCLE_SURFACES, DECISION_LIFECYCLE_VERSION,
 } from '../../dist/src/decision/index.js';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const root = process.cwd();
 const evidenceRoot = 'docs/decision/evidence/compile-cache-ccp-v1';
 const runId = 'd30-ccp-offline-v1';
 const suites = ['test/unit/decision/compile-cache.test.ts', 'test/unit/decision/compile-cache-closure.test.ts'];
 
-const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+const git = (...args) => boundedExecFileSync('git', args, 'quick', { cwd: root, encoding: 'utf8' }).trim();
 const sourceCommit = git('rev-parse', 'HEAD');
 const dirty = git('status', '--porcelain', '--untracked-files=no').length > 0;
 if (!/^[0-9a-f]{40}$/.test(sourceCommit) || dirty) {
@@ -45,8 +47,8 @@ const scratch = await mkdtemp(join(tmpdir(), 'ccp-evidence-'));
 try {
   const report = join(scratch, 'vitest.json');
   try {
-    execFileSync(join(root, 'node_modules/.bin/vitest'), ['run', '--config', 'config/vitest.config.js', ...suites,
-      '--reporter=json', `--outputFile=${report}`], { cwd: root, stdio: ['ignore', 'ignore', 'inherit'] });
+    boundedExecFileSync(join(root, 'node_modules/.bin/vitest'), ['run', '--config', 'config/vitest.config.js', ...suites,
+      '--reporter=json', `--outputFile=${report}`], 'long', { cwd: root, stdio: ['ignore', 'ignore', 'inherit'] });
   } catch { /* failures are read from the report below */ }
   const tests = JSON.parse(await readFile(report, 'utf8')).testResults
     .flatMap(file => file.assertionResults.map(test => ({ id: /^(CCP-[A-Z0-9]+)/.exec(test.title)?.[1] ?? null,

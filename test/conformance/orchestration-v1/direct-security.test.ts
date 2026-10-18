@@ -85,7 +85,7 @@ describe('T-OG-18 no secret in command/log/result: unrelated environment is neve
     process.env.AIWG_FIXTURE_UNRELATED_SECRET = planted;
     process.env.NODE_OPTIONS = '--require /nonexistent/malicious-hook.js';
     try {
-      const outcome = planDirectWorkerLaunch({
+      const outcome = await planDirectWorkerLaunch({
         name: 'security-demo', memoryMaxGb: 1,
         command: process.execPath, args: [path.join(fixtureRoot, 'ralph-worker-cli.mjs')],
         cwd: root, stdinPath: brief, stdoutPath, stderrPath,
@@ -255,7 +255,7 @@ describe('T-OG-18 nested delegation: schema-locked to zero, not merely policy-ad
     // the worker ever starts, independent of anything in its environment.
     process.env.AIWG_WORKER_DELEGATION_ALLOWANCE = attemptedGrant;
     try {
-      const outcome = planDirectWorkerLaunch({
+      const outcome = await planDirectWorkerLaunch({
         name: 'delegation-env-demo', memoryMaxGb: 1,
         command: process.execPath, args: [path.join(fixtureRoot, 'ralph-worker-cli.mjs')],
         cwd: root, envNames: ['AIWG_FAKE_WORKER_CONFIG', 'AIWG_WORKER_DELEGATION_ALLOWANCE'],

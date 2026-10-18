@@ -33,7 +33,7 @@ Complete reference for all `aiwg` CLI commands.
 >
 > Full rule: `agentic/code/addons/aiwg-utils/rules/cli-secondary.md` (#1272).
 
-**Prerequisites:** Node.js ≥20.0.0 and `npm install -g aiwg`
+**Prerequisites:** Node.js ≥24 and `npm install -g aiwg`
 
 ## Authentication
 
@@ -57,6 +57,82 @@ contains access or refresh tokens.
 - @docs/configuration/aiwg-config.md - `.aiwg/aiwg.config` field reference (delivery, remotes, installed)
 - @docs/configuration/setup-manifest.md - `setup.aiwg.io/v1` SetupManifest reference
 - @docs/configuration/model-configuration.md - `models.json` model role mapping
+
+---
+
+## Running Headless
+
+A few commands hand the terminal to an interactive process by design (an editor, a
+provider binary the user is meant to talk to, an OAuth login flow), or run a
+multi-step wizard that would otherwise prompt for several inputs in a row. The rule
+(#3062): **every input those steps would otherwise ask for interactively has a
+command-line argument.** Without an interactive terminal attached (no TTY, or a CI
+environment), supplying every required argument runs the command fully headless;
+missing one refuses immediately — before spawning anything, reading anything, or
+writing anything — naming the missing argument. With a terminal attached, any of
+these arguments given directly skips that one question; only genuinely missing
+inputs are still asked (review item 10's "skip steps for any params provided, only
+interact when missing a value"). Every value-taking argument below is parsed
+strictly: present with no value, or immediately followed by another flag, is a
+usage error (exit 2) raised before any of the above — never silently treated as "not
+given" (review item 11).
+
+| Command | Every input, and its argument | Without a terminal and a required one missing |
+| --- | --- | --- |
+| `aiwg config edit` | `--print-path` (prints the config file path; or use `aiwg config set <key> <value>`) | Refuses, naming both alternatives |
+| `aiwg session` (any spawnable provider) | `--prompt <text>` / `--prompt-file <path>`; `--non-interactive` forces the refusal even with a terminal attached | Refuses, naming `--prompt`/`--prompt-file`. An unsupported (non-spawnable) provider given `--prompt`/`--prompt-file` refuses outright, naming the provider, instead of discarding the prompt and printing IDE guidance |
+| `aiwg session --provider codex --profile <p>` | `--prompt <text>` / `--prompt-file <path>` (maps to `codex exec -`, prompt on stdin, inside the profile's runtime home) | Refuses, naming `--prompt`/`--prompt-file` |
+| `aiwg setup-run` steps (`script`/`verify`/`detect`/`os-config`) | none needed — runs bounded with stdin ignored instead of hanging | N/A (never required; see below) |
+| `aiwg setup-run` step marked `interactive: true` | `--param <name>=<value>` for every name the step's `params` field declares (optional — a plain interactive step with no declared `params` just runs normally with a terminal, exactly as before) | With every declared param supplied, runs headless (bounded) instead of needing a terminal at all. With none declared, or some still missing, refuses up front (preflighted before any step runs), naming the step/missing names |
+| `aiwg setup-run` step `type: ask` | `--param <name>=<value>` (repeatable) for every name the step's `params` field declares | With every declared param supplied, runs headless. With some missing **and a terminal attached**, prompts for just the missing ones. With some missing **and no terminal**, or with no `params` declared at all, refuses up front (preflighted before any step runs) — a step declaring no params has no destination to store an answer in, so that case is always refused, with or without a terminal |
+| `aiwg setup-run` step `type: agentic`/`type: chain` | none — always refused by design (deterministic CLI execution does not support either) | Refuses up front (preflighted before any step runs), naming the step, regardless of terminal |
+| `aiwg init` provider selection | `--providers <list>` (comma-separated, same form as `aiwg setup project`'s flag) | Defaults to `claude` (a safe headless default; not a refusal) |
+| `aiwg init` add default scripts | `--default-scripts true\|false` | Defaults to `true` |
+| `aiwg init` add a custom script (name + command) | `--script <name>=<command>` (repeatable; implies yes) or `--custom-scripts true\|false` to answer the question directly without supplying one | Skipped — no custom scripts added |
+| `aiwg init` / `aiwg setup project` worker-dispatch offer | `--worker-dispatch enable\|decline` | Optional — unchanged one-line hint (now also naming `--worker-dispatch`); see [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md#answering-headlessly) |
+| `aiwg setup project` (every other prompted field: `--primary`, `--issue-provider`, `--issue-tracker`, `--ci`, `--delivery-mode`, `--default-branch`, `--require-ci-green`, `--auto-close-issues`, `--force-push-policy`, `--require-signed-commits`, `--providers`) | See `aiwg setup project --help` for the full flag list | Refuses writing without `--yes` in a non-interactive context — checked before any `git` call, not just before the final write; with `--yes`, unsupplied fields fall back to their detected/default value |
+| `aiwg mcp profile login <name>` | Exactly one of `--api-key-stdin` (most preferred), `--api-key-file <path>`, or `--api-key-env <ENV_VAR_NAME>` (least preferred) — see [Supplying credentials safely](../mcp/codex-profiles.md#supplying-credentials-safely). In every case the key reaches `codex` over stdin only — it never appears on argv, the child's own environment, logs, or error messages | Refuses, naming all three flags. More than one given is a usage error naming the flags given. If the named variable/file is unset/missing, the error names it, never a value. Requires a built CLI (`npm run build:cli`, or an installed `aiwg`) — it never falls back to loading TypeScript source directly |
+| `aiwg decision setup jev` | `--token-stdin` (preferred) or the `JEV_API_KEY`/`AIWG_DECISION_JEV_API_KEY` environment variables (least preferred) | See [Supplying credentials safely](../mcp/codex-profiles.md#supplying-credentials-safely) — the same environment-variable caveat applies |
+
+No bootstrap subprocess (today: the update-notifier check `bin/aiwg.mjs` fires on
+every invocation) is ever started before `bin/aiwg.mjs` has decided whether the
+invocation is one of these two credential-handling commands, and that check never
+inherits the whole parent environment regardless of command — see
+[Supplying credentials safely](../mcp/codex-profiles.md#supplying-credentials-safely)
+for why, and what it protects against.
+
+`aiwg setup-run` `script`/`verify`/`detect`/`os-config` steps don't need a headless
+argument because a manifest step's shell command/script is already bounded (stdin
+ignored) whenever no terminal is attached — see
+[the SetupManifest reference](../configuration/setup-manifest.md#running-headless-3062)
+for the full `interactive: true`/`type: ask`/`agentic`/`chain` per-step behavior,
+including the preflight that checks every selected step (recursively into
+`platform-route` nesting, and into the recovery sequence any selected step's
+`on_fail` names) before any of them run.
+
+A value-taking flag above that repeats keeps whichever precedence that command
+already had before this rule existed — `aiwg session`'s flags are last-occurrence-
+wins (its own pre-existing hand-rolled parser already worked that way); every other
+command listed here is first-occurrence-wins. Every occurrence is validated
+regardless of which one wins: a later malformed occurrence is still a usage error,
+not silently ignored because an earlier one was valid.
+
+### Which Providers Expose The Prompt In The Process List
+
+`aiwg session --prompt`/`--prompt-file` delivers the prompt text to the provider
+binary off argv wherever the provider's own CLI documents a transport for it (review
+item 8) — never by building a shell string. A provider without an evidenced
+non-interactive form at all refuses `--prompt`/`--prompt-file` instead of guessing.
+
+| Provider | Headless form | Prompt transport | Visible in `ps`/`/proc/<pid>/cmdline`? |
+| --- | --- | --- | --- |
+| `claude` / `claude-code` | `claude --print --input-format text` | stdin | No |
+| `codex` / `openai` | `codex exec -` | stdin | No |
+| `deepseek-harness` | `dsh --profile headless -` | stdin | No |
+| `opencode` | `opencode run --format json -f <temp-file>` | private temp file (path only; content never on argv) | No (the temp file *path* is on argv; the prompt text is not) |
+| any other provider (e.g. `antigravity`) | — | — | N/A — refuses with "no evidenced non-interactive CLI form" rather than guessing |
+
+See each command's own section below for its full headless argument details.
 
 ---
 
@@ -202,6 +278,7 @@ Show version and channel information.
 aiwg version
 aiwg -version
 aiwg --version
+aiwg --version --json
 ```
 
 **Capabilities:** cli, version, info
@@ -214,6 +291,14 @@ Shows:
 - Active channel (stable/main)
 - Installation path
 - Node.js version
+
+In dev mode, text output labels both the global launcher version and the effective
+runtime version. JSON output adds `launcherVersion`, `runtimeVersion`, and
+`runtimePath`; the existing `version` and `packageRoot` fields still describe the
+package executing the report. Plain `--version` runs in the launcher, while
+`version` and `--version --json` run through the selected runtime. An unreadable
+package version is reported as `(unknown)`. `aiwg doctor` warns when the launcher
+and runtime versions differ or either version cannot be determined.
 
 **Example output:**
 
@@ -1219,6 +1304,9 @@ aiwg session mcp                    # inject configured MCPs first, then launch
 aiwg session --provider codex       # explicit provider
 aiwg session mcp --provider cursor  # MCP inject for cursor + start instructions
 aiwg session --no-repair            # skip auto-repair (still checks and reports)
+aiwg session --prompt "fix the failing test"   # headless: one-shot, bounded, exits (#3062)
+aiwg session --prompt-file ./task.md           # headless, prompt read from a file
+aiwg session --non-interactive                 # force the non-interactive decision even with a terminal
 ```
 
 **Options:**
@@ -1228,6 +1316,10 @@ aiwg session --no-repair            # skip auto-repair (still checks and reports
 - `--no-repair` - Skip auto-repair; still runs health checks and reports issues
 - `--profile <name>` - Launch with a named MCP profile (ephemeral by default — does not modify your provider's default config). For Claude: passes a temp config via `--mcp-config`. For Codex: sets up a per-profile runtime home via `~/.codex/roles-runtime/<profile>/`
 - `--persist` - When combined with `--profile`, writes servers to the provider's default config instead of using an ephemeral temp file
+- `--prompt <text>` / `--prompt-file <path>` - Run headless: maps to the provider's documented non-interactive CLI form and delivers the prompt off argv wherever the provider documents a transport for it — `claude --print --input-format text` (stdin), `codex exec -` (stdin), `dsh --profile headless -` (stdin), `opencode run --format json -f <temp-file>` (private temp file; see the provider/transport table above). Mutually exclusive with each other. The headless run is bounded (10 minutes by default, `AIWG_SYNC_LONG_TIMEOUT_MS` to override).
+- `--non-interactive` - Force the non-interactive decision (same effect as no TTY/CI) even when a real terminal is attached (#3062 review item 12)
+
+**Running headless (#3062):** without an interactive terminal attached, `aiwg session` refuses with a usage error naming `--prompt`/`--prompt-file` instead of launching a provider binary that would hang waiting for a terminal that doesn't exist. Supplying `--prompt`/`--prompt-file` runs headless even when a terminal *is* attached. A provider with no evidenced non-interactive CLI form (anything not listed in the transport table above) refuses `--prompt`/`--prompt-file` rather than guessing an invocation. A provider with no CLI binary to spawn at all (IDE-integrated, e.g. Factory) refuses `--prompt`/`--prompt-file` outright, naming the provider, instead of silently discarding the prompt and printing IDE guidance at exit 0 — this check runs before any pre-flight step.
 
 **Pre-flight sequence:**
 
@@ -1342,13 +1434,14 @@ scripts, delivery policy). Distinct from `aiwg new` (which scaffolds a
 brand-new project tree).
 
 ```bash
-aiwg init [--force] [--non-interactive | --yes]
+aiwg init [--force] [--non-interactive | --yes] [--worker-dispatch enable|decline]
 ```
 
 **Options:**
 
 - `--force` - Overwrite an existing `.aiwg/aiwg.config`
 - `--non-interactive`, `--yes` - Skip prompts and accept detected defaults
+- `--worker-dispatch enable|decline` - Answer the direct-worker-dispatch opt-in question directly (#3062), with or without a terminal — see [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md#answering-headlessly). An invalid value exits non-zero naming `enable`/`decline`.
 
 **Capabilities:** cli, project, config, setup
 **Tools:** Read, Write
@@ -1365,8 +1458,15 @@ agent/skill during the guided setup conversation rather than used as the first
 user-facing step.
 
 ```bash
-aiwg setup project [--yes] [--dry-run] [--target <dir>]
+aiwg setup project [--yes] [--dry-run] [--target <dir>] [--worker-dispatch enable|decline]
 ```
+
+`--worker-dispatch enable|decline` answers the direct-worker-dispatch opt-in
+question directly (#3062), with or without a terminal, and is honored even when
+fewer than two worker CLIs are detected. `--dry-run` never writes it — with
+`--json` the would-be choice is reported under
+`worker_dispatch_offer.applied_choice`. An invalid value exits non-zero naming
+`enable`/`decline`. See [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md#answering-headlessly).
 
 The helper detects Git remotes and proposes `remotes.primary`,
 `remotes.issue_tracker`, optional `remotes.customer_issue_tracker`,
@@ -1375,6 +1475,17 @@ delivery policy, committer identity, and signing metadata. Agents should use
 `--dry-run` first, discuss the preview with the user, then write only after the
 policy choices are understood. In non-interactive contexts it refuses to write
 unless `--yes` is present.
+
+With a terminal attached (and without `--yes`), the interactive wizard asks one
+question per remaining field — `--primary`, `--issue-provider`, `--issue-tracker`,
+`--ci`, `--delivery-mode`, `--default-branch`, `--require-ci-green`,
+`--auto-close-issues`, `--force-push-policy`, `--require-signed-commits`,
+`--providers` — but any of these already supplied on the command line is never
+re-asked; only genuinely missing ones prompt (#3062 review item 10). A value-taking
+flag present with no value (or immediately followed by another flag) is a usage
+error naming the flag, raised before Git is even inspected (review item 11). The
+interactive decision itself honors `--non-interactive`/`--yes` together with TTY,
+`TERM=dumb`, and CI-environment detection — not TTY alone (review item 12).
 
 Common overrides:
 
@@ -1939,6 +2050,7 @@ aiwg mcp profile <subcommand>
 | `import <file>`                | Import profiles from a JSON file          |
 | `export [<name>] --out <file>` | Export one or all profiles                |
 | `init-presets`                 | Install built-in preset profiles          |
+| `login <name> [--api-key-env <ENV_VAR_NAME>]` | Log in to a Codex profile's isolated runtime home (#3062, #3069) — interactive OAuth with a terminal, or headless via `--api-key-env`; see [Codex Per-Profile Runtime Homes](../mcp/codex-profiles.md#explicit-login) |
 
 **Preset Profiles** (installed via `aiwg mcp profile init-presets`):
 
@@ -2139,6 +2251,17 @@ Show runtime environment summary with tool discovery.
 aiwg runtime-info
 ```
 
+`aiwg runtime-info --discover` refreshes the tool catalog. On Unix it searches
+PATH first, then common user bin directories (`~/.cargo/bin`, `~/.local/bin`,
+`~/bin`, `~/.npm-global/bin`, `~/go/bin`, `~/.bun/bin`, and `~/.deno/bin`);
+`CARGO_HOME/bin` replaces the default Cargo directory when configured. Only the
+curated tool allowlist is probed. Refresh output reports added/removed counts
+and warns with the names of previously cataloged tools that disappeared. The
+JSON catalog includes `delta.added`, `delta.removed`, and an `inputFingerprint`.
+Unchanged tool paths, executable metadata, definitions, and lookup environment
+skip version probes and catalog writes, preserving the previous discovery time
+and delta. Use `--discover --force` to repeat all probes and resource sampling.
+
 **Capabilities:** cli, toolsmith, discovery
 **Platforms:** All
 **Tools:** Read, Bash
@@ -2167,7 +2290,7 @@ Available Tools:
 System Utilities:
   ✓ git v2.39.0
   ✓ jq v1.6
-  ✓ node v20.10.0
+  ✓ node v24.0.0
   ✓ npm v10.2.3
   ✗ gh (GitHub CLI not installed)
 
@@ -2402,7 +2525,7 @@ Lint AIWG artifacts against declarative rule sets discovered from installed fram
 ```bash
 aiwg lint <target> [--ruleset <name>] [--format full|summary|json]
                    [--ci] [--fail-on error|warn|info] [--dry-run]
-                   [--no-gitignore]
+                   [--no-gitignore] [--allow-empty]
 aiwg lint --list-rulesets
 aiwg lint --list-rules <ruleset>
 ```
@@ -2415,7 +2538,8 @@ aiwg lint --list-rules <ruleset>
 
 - `--ruleset <name>` - Force a specific ruleset (otherwise auto-detected from path)
 - `--format full|summary|json` - Output format
-- `--ci` - CI-friendly output and exit codes
+- `--ci` - CI-friendly output and exit codes; fails when no files are checked or no rules apply
+- `--allow-empty` - Permit zero files checked or zero rules applied under `--ci`
 - `--fail-on error|warn|info` - Severity threshold for non-zero exit
 - `--dry-run` - Report what would run without executing rules
 - `--list-rulesets` - List all discovered rulesets
@@ -2426,9 +2550,18 @@ aiwg lint --list-rules <ruleset>
 **Output:**
 
 A run reports `Rules applied: N of M` and names any rule whose glob matched no
-file in the target. When no rule applies, the run says so explicitly — a target
-that excludes every rule is not a clean result, and rule globs are written from
-the project root, so lint a parent directory or check `--ruleset` (#2555).
+file in the target. JSON includes `ruleCoverage`, mapping each rule ID to its
+selected target-relative file paths (including empty lists); full output lists
+those paths too. `inapplicableRules` remains available in the JSON summary.
+Empty, nonexistent, unsupported-file and entirely ignored targets explain why
+no files were checked. Under `--ci`, zero files checked or zero rules applied
+fails unless `--allow-empty` is set. This opt-out does not suppress violations.
+
+Research rules cover both `documentation/references/REF-*.md` and legacy
+`findings/REF-*.md`, including when the target is a note or its containing
+directory. Frontmatter paths (`pdf_location`, `source_text`) resolve from the
+nearest ancestor containing `.git` (a directory or worktree file) or `.aiwg`.
+Without either marker, paths resolve from the target directory.
 
 **Capabilities:** cli, lint, validation, quality
 **Tools:** Bash, Read, Glob, Grep
@@ -4242,6 +4375,12 @@ optional, not a runtime dependency. Account-specific native results are marked
 `--drift` compares resolved role mappings with the committed catalog and emits
 a reviewable, non-mutating provider/role before-and-after report.
 
+Native discovery reports local filesystem access failures such as `EROFS`,
+`EACCES`, and `EPERM` as `errorKind: environment`. Stored native error diagnostics
+have ANSI controls stripped. A failed refresh retains the
+last good models, role mappings, and observation time for the same account and
+scope while recording the current error and fetch time.
+
 AIWG does not currently operate a built-in public feed. See
 [the feed decision record](../architecture/adr-optional-model-catalog-feed.md)
 and the
@@ -4413,9 +4552,24 @@ aiwg index build [options]
 - `--verbose` - Show detailed progress during indexing
 - `--all` - Build all known graphs (built-in + user-defined)
 - `--scope <dir>` - Limit scan to a specific subdirectory (relative to project root)
+- `--include-ignored` - Include gitignored artifact sources (default: respect Git ignore rules)
 - `--graph <name>` - Build a single graph only — built-in (`project`, `codebase`, `framework`) or user-defined
 
 **Default behavior** (no `--graph`): Builds all graphs with `defaultBuild: true`. Built-in defaults: `project` (always) and `codebase` (JavaScript/TypeScript roots plus detected conventional Python layouts; skipped with a warning only when no supported roots exist). The `framework` graph covers AIWG framework source (`agentic/code/`, `docs/`) and must be built explicitly with `--graph framework`.
+
+**Source discovery**: Artifact scans skip symlinked files and directories. The artifact root's `working/`, `sessions/`,
+`scratch/`, `tmp/`, `temp/`, `cache/`, `.index/`, `.cache/`, and `.storage-cache/` directories are always excluded,
+including under a configured artifact root and with `--scope` or `--include-ignored`. Git ignore rules (including nested
+`.gitignore` files and negations) apply by default in Git worktrees; `--include-ignored` opts in to other ignored
+sources. Outside a Git worktree or without Git, ignore filtering is unavailable. Rebuild an existing index to remove
+previously indexed scratch.
+
+**Fortemi synchronization**: Builds refresh the Fortemi static caches after writing the graph indexes. A cache failure
+identifies the graph and makes the command exit non-zero after attempting the remaining graphs. `aiwg index sync`
+refreshes the project cache; `aiwg index sync --all` attempts every built graph, reports each failure, and exits
+non-zero if any graph failed. With `--json`, the multi-graph report contains `manifests` for successful graphs and
+`failures` with each failed graph's error. Exports serialize and hash bounded chunks, preserving the JSON format and
+checksums without constructing a single export-sized string.
 
 **Incremental mode** (default): Only re-indexes files whose checksum has changed. Use `--force` for a full rebuild.
 
@@ -4453,7 +4607,8 @@ Fields:
 - `defaultBuild` — whether to include in `aiwg index build` with no `--graph` (default: `true`)
 - `shared` — whether the graph is shared across projects (default: `false`)
 
-User-defined graph names cannot override built-in names (`project`, `codebase`, `framework`).
+User-defined graph names cannot override built-in names (`project`, `codebase`, `framework`); attempted definitions warn
+instead of silently disappearing.
 
 The same `index.graphs` contract is accepted in `~/.aiwg/aiwg.config` for shared
 user-level graphs; those graphs also default `defaultBuild` to `true` and are
@@ -4462,12 +4617,20 @@ reported by bare `aiwg index stats` after they have been built. The concise
 with `defaultBuild: false`; use `index.graphs` when a user-level graph should be
 part of the default build/stats set.
 
-To replace only the built-in `codebase` graph's scan roots or extension allow-list, use the bounded `index.graphOverrides.codebase` contract. Present fields replace the detected/default value; omitted fields retain it. The graph identity, storage location, sharing mode, build policy, and backend cannot be widened through an override.
+To replace the built-in `project` or `codebase` graph's scan roots or extension allow-list, use
+`index.graphOverrides.project` or `index.graphOverrides.codebase`. Present fields replace the detected/default value;
+omitted fields retain it. Each field must be a non-empty array of non-blank strings. The graph identity, storage
+location, sharing mode, build policy, and backend cannot be widened through an override. Scratch exclusions still apply
+to overridden roots. Other built-in graph overrides are unsupported and produce diagnostics.
 
 ```json
 {
   "index": {
     "graphOverrides": {
+      "project": {
+        "scanDirs": [".aiwg/references", ".aiwg/requirements"],
+        "extensions": [".md"]
+      },
       "codebase": {
         "scanDirs": ["backend", "spec", "scripts"],
         "extensions": [".py", ".pyi"]
@@ -4490,6 +4653,18 @@ To replace only the built-in `codebase` graph's scan roots or extension allow-li
 | `filenamePattern`       | string                             | Regex with named groups for `filename-metadata` strategy |
 | `edgeExtraction.parser` | string                             | Parser for edge extraction (e.g., `citation-sidecar`)    |
 | `edgeExtraction.edges`  | array                              | Edge type declarations for the parser                    |
+
+The `citation-sidecar` parser accepts registered bibliographic, compact, and relationship table
+headers and reads only their resolution column (`Inducted REF`, `Corpus REF`,
+`Citing REF`, and registered equivalents). The ordered forms and exact header
+aliases live in `src/artifacts/citation-table-schema.ts`. Within Incoming/Outgoing
+sections, tables such as `| REF | Relationship |` declare citations: the REF column
+resolves the edge and the relationship text describes it. Explicit topical,
+thematic, related, conditional, or non-citation qualifiers suppress the affected
+rows or tables. Other rows still produce edges. Unknown headers, headerless continuation
+rows, and rows with extra or missing cells are skipped rather than inferred.
+Rebuild an existing graph with `aiwg index build --graph citation-network --force`
+to apply the extraction rules.
 
 **Graph backends**: The default `json` backend requires no extra packages. For larger corpora or richer traversal, install an optional backend:
 
@@ -5530,7 +5705,8 @@ aiwg config <subcommand> [args] [--config-dir <path>]
 - `validate` - Check the config file against the schema
 - `reset` - Restore defaults
 - `path` - Print the resolved config file path
-- `edit` - Open the config in `$EDITOR`
+- `edit` - Open the config in `$EDITOR`/`$VISUAL` (requires an interactive terminal)
+- `edit --print-path` - Print the resolved config file path instead of opening an editor; works headless
 
 **Options:**
 
@@ -5540,6 +5716,11 @@ aiwg config <subcommand> [args] [--config-dir <path>]
 **Tools:** Read, Write, Bash
 
 Resolution order: `$AIWG_CONFIG` env var → `--config-dir` flag → `~/.aiwg/` → `~/.config/aiwg/`.
+
+**Running headless (#3062):** `aiwg config edit` without an interactive terminal refuses
+instead of spawning `$EDITOR`/`$VISUAL` and hanging — it names `aiwg config set <key>
+<value>` and `aiwg config edit --print-path` as the headless alternatives. `aiwg config
+edit --print-path` always works headless, with or without a terminal.
 
 ---
 

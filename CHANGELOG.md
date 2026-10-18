@@ -9,6 +9,400 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Add configurable multi-pass Jev decision validation with escalation, bounded
+  concurrency and a shared timeout; CLI/MCP sampling overrides, aggregate JSON,
+  ledger agreement telemetry and hit rates grouped by pass policy/escalation.
+  Defaults to 5 passes, escalating to twice the pass count (10) (#3274).
+- `decision.enabled` in project or user config enables the decision runtime
+  persistently; `AIWG_DECISION_ENABLED` still overrides, and status reports
+  `enabledSource` (#3275).
+
+- Session import size limits are configurable: `sessions.import.max_record_bytes`
+  (default 64 MiB) and `sessions.import.max_source_bytes` (default 1 GiB, `0` means
+  unlimited), via config, `AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES` /
+  `AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES`, or `--max-record-bytes` / `--max-source-bytes`
+  (flag > env > config > default). JSONL sources are streamed with bounded memory,
+  and limit diagnostics name the setting that was hit (#340, Gitea #3264).
+- Add `sessions.import.exclude` (session IDs or absolute/`~` path globs, also
+  `AIWG_SESSIONS_IMPORT_EXCLUDE` and repeatable `--exclude`). Matching sources are
+  skipped before they are read and reported as `excluded`, not rejected (#340, Gitea #3264).
+
+- `aiwg index refresh` also refreshes the runtime (toolsmith), models and local issues
+  indexes, selectable with `--only runtime|models|issues` (#330, Gitea #3251).
+- Add design documents for account-scoped Grok Bot sessions (#316, Gitea #3232),
+  live session tail and attach (#311, Gitea #3228), and native Grok Build and Hermes
+  session discovery (#312, Gitea #3229). Documentation only.
+- Add `aiwg sessions reindex --all-workspaces` to rebuild search and analytics
+  indexes for every workspace in the selected catalog; `index refresh --full` now
+  reindexes every scope in each selected catalog (#318, Gitea #3234).
+- Add `aiwg index refresh` for incremental graph, existing Fortemi cache, and
+  authorized session catalog maintenance, with host locking, resumable checkpoints,
+  resource deferral, dry-run planning, and a versioned JSON report (#310, Gitea #3227).
+
+### Fixed
+
+- Credentials are redacted on import before anything is stored or indexed, across
+  every catalog sink (events, sessions, sources, extensions, FTS, analytics, receipts,
+  checkpoints, diagnostics, candidates, audit and export plans). Detection now also
+  covers JWTs, Google, Slack webhook, Stripe, GitLab, xAI, npm, Hugging Face,
+  Anthropic and AWS secrets, extra private-key formats and netrc entries (#340, Gitea #3264).
+- Codex child and forked rollouts keep their own session ID instead of taking the
+  ID of the parent `session_meta` they replay. Lineage and inherited-record markers
+  are recorded. Existing catalogs need a fresh import to drop duplicates that are
+  already stored (#339, Gitea #3263).
+- `aiwg index refresh` runs the host-scoped models job once per refresh and probes
+  the runtime once, publishing each workspace's runtime catalog from that result
+  instead of re-running both for every workspace (#338, Gitea #3261).
+- Sessions whose recorded worktree or subfolder has since been deleted are attributed
+  to the workspace that enclosed them instead of landing in no catalog (#335, Gitea #3258).
+- Session JSONL readers split records on LF only, so valid records containing raw
+  U+2028/U+2029 are no longer rejected as malformed or truncated (#336, Gitea #3259).
+- Pi session import resumes from its stored checkpoint instead of rejecting unchanged
+  sources as truncated; Pi now records byte cursors (#337, Gitea #3260).
+- `aiwg index refresh` treats per-source session rejections as a partial import
+  rather than a job error, and clears its checkpoint after every finished run so
+  later runs no longer skip completed jobs (#328, Gitea #3249).
+- `aiwg index refresh` accepts repeatable `--root`, follows symlinked workspace
+  directories with cycle protection, and matches sessions recorded under the logical
+  (symlinked) workspace path (#329, Gitea #3250).
+- Session refresh uses every authorized discovery manifest recorded for a workspace
+  and reports workspaces without one (`noManifest`) instead of skipping them
+  silently (#331, Gitea #3252).
+- `aiwg sessions discover --json` drains stdout before exiting, so piped output is
+  complete (#332, Gitea #3253).
+- Install-identity diagnostics name the running and registered installs and give
+  adoption or removal guidance; `doctor` detects shadowing copies on PATH and in other
+  nvm Node versions (#334, Gitea #3255).
+- Evaluate inferred session lifecycle against the current time on catalog reads, so
+  provisional `active` sessions age out after the inactivity threshold without
+  re-import (#308, Gitea #3225).
+- Reclaim the import lease immediately from a dead same-host owner, mark orphaned
+  `running` batch imports `interrupted` after SIGKILL, and report recovered runs
+  (#309, Gitea #3226).
+- Report a batch import `complete` when every in-scope source is accounted for, and
+  list providers outside that scope under `coverage.unresolvedProviders`; batch and
+  coverage contracts move to 2.0.0 with legacy runs still readable (#313, Gitea #3230).
+- Skip dependency reconstruction and output rewrites on no-op incremental index
+  builds (#314, Gitea #3231).
+- Classify read-only or permission-denied filesystem failures during model discovery
+  as `environment`, and strip terminal escapes from diagnostics (#320, Gitea #3236).
+- Find runtime tools in common user bin directories when PATH is narrower, report
+  added and removed tools, and skip unchanged toolsmith refreshes (#321, Gitea #3237).
+- Report launcher and runtime versions separately and warn in `doctor` when they
+  differ (#322, Gitea #3238).
+- Attribute oversized Muse sessions using a bounded tail fallback instead of leaving
+  them inconclusive (#326, Gitea #3242).
+- Match Claude Code project-folder encoding for workspace paths containing dots,
+  spaces or underscores, using the transcript `cwd` to resolve collisions
+  (#327, Gitea #3243).
+- Record which limit (configured and observed) or which schema path and validator
+  code caused a source rejection in batch receipts and diagnostics, without
+  transcript content (#317, Gitea #3233).
+- List sessions newest first by `updatedAt`, with session IDs descending to break
+  ties and undated sessions last; cursors continue to older sessions (#319, Gitea #3235).
+- Make the storage-containment missing-root trust test independent of filesystem
+  inode reuse (#323, Gitea #3239).
+- Attribute Codex, Muse and OMP sessions started in a workspace subfolder or a
+  linked git worktree to the nearest enclosing workspace, without sibling-prefix
+  matches; discovery reports subfolder and worktree match counts (#324, Gitea #3240).
+- Discover Codex sessions across the default root, `CODEX_HOME`, role-profile homes
+  under `~/.codex/roles-runtime/*` and configured `sessions.codex_roots`, deduplicating
+  rollouts by session id and reporting per-root counts (#325, Gitea #3241).
+- Rebuild session analytics only for sessions affected by committed incremental
+  imports, index source/batch totals and aggregate them in one query, and skip
+  verified analytics scans and use covering indexes for FTS checks on open,
+  while repairing desynchronized analytics and FTS tables (#306).
+- Accept null Grok Bot replica hints and skip unknown send-message types while
+  retaining validation for known types; include field paths and codes in malformed
+  source diagnostics without exposing transcript values (#307, Gitea #3224).
+- Extract citation-sidecar graph edges from the resolution column of registered
+  bibliographic and relationship tables in Incoming/Outgoing sections. Skip explicitly
+  topical/thematic, related, conditional, or non-citation declarations and ambiguous
+  rows; preserve verified citations in mixed tables (#3186).
+
+## [2026.10.3] - 2026-10-14
+
+> 2026.10.2 was tagged (`v2026.10.2`) but never published: its npm publish jobs failed
+> runner-specific tests. Its changes ship in 2026.10.3 together with the publish-job fixes below.
+
+### Fixed
+
+- Make publish-job tests independent of the runner: worker-installation and model-invocation fixtures copy Node to a private single-link executable instead of reusing the runner's (often user-writable) binary, and clock-, deadline-, HOME- and network-sensitive tests are deterministic on GitHub's toolcache Node 24 and the Node 20 publish container.
+- Drain captured script output to prevent pipe-buffer deadlocks during compound-memory previews; retain at most 1 MiB of stderr for failure diagnostics.
+- Retry GitHub tag polling only for HTTP 404 / Not Found responses; fail immediately on authentication and other `gh api` errors with token-redacted diagnostics.
+- Wait for the MCP overflow error event with stream-driven FIFO reads in worker
+  termination tests, preventing false failures under CI CPU contention (#3131).
+- Remaining CodeQL findings after the security sweep (#3093–#3097, #3099 follow-up): use argv for synchronous command callers, guard every nested configuration key, anchor and escape test hostname patterns, and replace generated runtime test code with static fixtures. Review follow-up (#3116) preserves Windows npm shim execution and symlinked script entry points, escapes tmux separators, retains Windows eval script quoting, rejects Git push option operands, and passes ClawHub queries, editor file paths, npm package names, and Git revision ranges safely. Windows command resolution honors explicit relative paths against the invocation directory and applies PATHEXT to dotted names with unrecognized extensions while preserving PATH directory precedence. `sync-upstream` prefers native editors and launches `.cmd`/`.bat` editors through ComSpec with separately quoted arguments and delayed expansion disabled.
+
+- Parse skill platform frontmatter with YAML to preserve comments and scalar restrictions,
+  fail closed on malformed restrictions, and quote YAML 1.1 boolean words in injected
+  metadata (#3109).
+
+- Correct JavaScript test-name and OpenClaw handler-comment escaping, TOML hook/MCP
+  encoding, and YAML hook/metadata keys and nested values; preserve noncanonical
+  numeric test examples and reject invalid generator string inputs; warn explicitly
+  when Vault provisioning opts out of TLS verification (#3096).
+
+### Added
+
+- `address-issues`, `aiwg-mission`, and `subagent-scoping` Rule 9 (Tier 0 direct handoff) now pass a
+  `--caller <skill-or-rule>:<checkpoint>` tag at each Jev-first bounded-decision checkpoint (worker/model/effort
+  pick, environmental-vs-real failure triage, and — in `address-issues` — review-verdict follow-up and
+  reviewer-minor fix-now-vs-defer), so `aiwg decision stats --group-by caller` reports adoption per
+  checkpoint. Every checkpoint still degrades to the prior LLM-decides-it-yourself behavior on `fallback`
+  or when the decision engine isn't configured — the `--caller` tag is additive, never a hard dependency.
+  The full caller-tag table is documented in the `decision-offload` skill.
+- `src/process/bounded-child-process.mjs` (#3062) provides `boundedExecSync`/`boundedExecFileSync`/
+  `boundedSpawnSync` wrappers over Node's synchronous child-process APIs, each taking a required
+  `tier` (`quick` 30s / `network` 2m / `long` 10m, the `long` bound overridable via
+  `AIWG_SYNC_LONG_TIMEOUT_MS`, `0` disables it) right before the normal options argument. A bounded
+  call never inherits stdin, kills with SIGKILL at the bound (Node's own `timeout`+`killSignal` sends
+  one signal and then keeps blocking forever if the child ignores it — confirmed with a real
+  SIGTERM-ignoring child), and enriches the resulting `ETIMEDOUT` error/result with the command, tier
+  and bound while leaving `code`/`signal`/`status` exactly as Node set them. `tools/testing/
+  check-sync-child-process-timeouts.mjs` now scans `src/`, `tools/` and `bin/` in addition to the
+  pre-existing `test/` scan and fails on any unbounded call there (`npm run
+  lint:test-process-timeouts`; `npm run lint:test-process-timeouts:report` prints counts by directory
+  without failing).
+  Interactive-by-design calls (an editor, a login flow, handing the terminal to a harness binary) are
+  exempted via a `// sync-spawn: interactive <anchor>` comment at the call site paired with an entry
+  in `tools/testing/sync-spawn-allowlist.json`; the gate fails (even in report mode) on a stale
+  allow-list entry or one with an unsupported `kind`.
+- Every non-interactive synchronous child-process call under `src/` now goes through the bounded
+  helper above, each with a tier chosen by what the command does (local query, network call, or
+  install/clone/build-shaped work) rather than where the call site lives (#3062). The remaining
+  interactive sites (an editor, codex exec/login, the configured provider binary, and arbitrary
+  manifest-defined shell commands/scripts) are unchanged and documented in the allow-list.
+- Every remaining interactive call site is now headless-safe (#3062): any input a person would
+  supply interactively has a command-line argument, and without a terminal attached a missing
+  argument refuses immediately (naming it) instead of spawning anything.
+  - `aiwg config edit --print-path` prints the resolved config file path and exits — the headless
+    equivalent of opening `$EDITOR`/`$VISUAL`. Without a terminal and without `--print-path`,
+    `aiwg config edit` now refuses, naming it and `aiwg config set <key> <value>`.
+  - `aiwg session --prompt <text>` / `--prompt-file <path>` runs a provider headless, bounded
+    (`long` tier), with the prompt delivered off argv wherever the provider documents a transport
+    for it (never on argv, never a shell string): `claude --print --input-format text` (stdin),
+    `codex exec -` (stdin), `dsh --profile headless -` (stdin), or `opencode run --format json -f
+    <temp-file>` (private temp file — binary disassembly found no stdin support in `opencode run`
+    at all). Without a terminal and without a prompt, a spawnable provider now refuses instead of
+    hanging waiting for one; a provider with no evidenced non-interactive form refuses
+    `--prompt`/`--prompt-file` rather than guessing an invocation; a provider with no spawnable
+    binary at all (IDE-integrated, e.g. Factory) refuses outright instead of silently discarding
+    the prompt and printing IDE guidance at exit 0 — checked before any pre-flight step runs.
+    `--non-interactive` forces the non-interactive decision even with a terminal attached.
+    `aiwg session --provider codex --profile <p> --prompt <text>` maps to `codex exec -` (prompt on
+    stdin) inside that profile's runtime home, likewise bounded.
+  - `aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME>]` (#3069) wires
+    `loginInProfile()` (`src/mcp/adapters/codex-runtime.ts`) to the CLI: interactive OAuth with a
+    terminal, or headless via `--api-key-env`, which reads the key from that environment variable
+    over stdin (never argv, never in logs or error messages) and runs `codex login
+    --with-api-key`. Without a terminal and without `--api-key-env`, refuses naming the argument;
+    an unset named variable errors naming the variable (never a value).
+  - Every helper call whose exit code was derived from `result.status ?? 0` now treats a `null`/
+    killed/signaled/failed-to-spawn result as a failure, never success, and surfaces the bounded
+    helper's `error`/`signal` diagnostic (e.g. the enriched timeout message naming the bound and
+    override variable) instead of dropping it — `aiwg session`'s headless and interactive launch
+    paths, doctor/sync/mcp-inject self-invocations, `codex login`, `aiwg config gitignore`,
+    `aiwg diagnose`'s `tar` step, and `aiwg setup-run`'s script/shell-command steps.
+  - `aiwg init` gains arguments for its three remaining wizard inputs: `--providers <list>`
+    (provider selection), `--default-scripts true|false`, and repeatable `--script
+    <name>=<command>` (custom scripts) — each skips its interactive question when supplied, with
+    or without a terminal. `aiwg setup project` now does the same for every one of its existing
+    flags (previously they only changed the *default* a still-asked question used): a value
+    already supplied by flag is never re-asked, only genuinely missing ones prompt. Every
+    value-taking flag across `init`/`setup project`/`setup-run`/`mcp profile login` is parsed
+    strictly — present with no value, or immediately followed by another flag, is now a usage
+    error (exit 2) naming the flag, raised before any preflight, spawn, or write, instead of being
+    silently treated as "not given". The shared interactive decision
+    (`isInteractive(explicitNonInteractive)`, `src/cli/env.ts`) now takes the command's own
+    explicit non-interactive flag as input everywhere it's used (`init`, `session`
+    `--non-interactive`, `setup project`, `tools/contrib/sync-upstream.mjs`'s duplicated
+    equivalent) instead of each site re-deriving a narrower TTY-only or `CI==='true'`-only check.
+  - `aiwg setup-run` steps are now preflighted recursively (including nested `platform-route`
+    steps) *before* any step executes, rather than refusing mid-sequence inside the per-step loop —
+    an earlier normal step can no longer run ahead of a later step's refusal. A `type: ask` step
+    with every param it declares (via the same `params` field a `script` step already uses for env
+    vars) already resolved via `--param`/`--params-file`/env/default now runs headless instead of
+    always refusing; one with a param still missing, or declaring none at all, is refused up front
+    naming the missing names — there is no interactive-capture mechanism for `ask` steps in this
+    CLI, with or without a terminal.
+  - `tools/contrib/sync-upstream.mjs`'s conflict-resolution prompt ("Choice [1-4]") gains
+    `--on-conflict <1-4>`, answering it headlessly (choice `1`, opening `$EDITOR`, still refuses
+    without a terminal even when given, since it is interactive by nature); its interactive
+    detection now matches the shared `isInteractive()` semantics (TTY + TERM + CI vars) instead of
+    checking `stdin.isTTY` alone; and its `git fetch upstream`/`git push` calls now use the
+    `network` tier instead of the default `quick` tier.
+  - The UAT hang guard (`test/uat/sync-headless-interactive.uat.ts`) now supervises each spawned
+    CLI process asynchronously with an independent hard deadline that sends `SIGKILL` to the whole
+    process group, instead of a synchronous `spawnSync` with Node's native `timeout` — which sends
+    `SIGTERM` once and then blocks the *calling* thread until the child exits, so a CLI that traps
+    SIGTERM (or has a descendant still blocked in its own synchronous child call) could hang the
+    test process too, past even Vitest's own per-test timeout. A dedicated fixture
+    (`test/uat/fixtures/blocking-descendant.mjs`) that ignores SIGTERM and blocks on a
+    SIGTERM-ignoring grandchild proves the new guard still reaches it.
+  - `aiwg setup-run` manifest steps (`script`/`verify`/`detect`/`os-config`) run bounded with
+    stdin ignored whenever no terminal is attached, instead of inheriting stdio and potentially
+    hanging on a command that tries to prompt; with a terminal, unchanged. A step may now declare
+    `interactive: true` in its manifest to be refused up front (naming the step) instead of run at
+    all when no terminal is attached.
+  - `tools/contrib/sync-upstream.mjs`'s conflict-resolution editor launch is marked on the
+    sync-spawn allow-list; it already refuses to reach the editor without a terminal (prints the
+    file to edit instead), unchanged by this work.
+- `aiwg init` and `aiwg setup project` accept `--worker-dispatch enable|decline` (#3062), answering
+  the direct-worker-dispatch opt-in question directly instead of leaving it unanswerable headless:
+  `enable` writes `parallelism.worker_dispatch: true` and nothing else; `decline` writes
+  `setup.worker_dispatch_offer: "declined"` and nothing else. Honored with or without a terminal
+  (suppressing the interactive question either way) and even when fewer than two worker CLIs are
+  detected — an explicit choice overrides the presence-only detection gate. `--dry-run` never
+  writes it; `aiwg setup project --json` reports the would-be choice under
+  `worker_dispatch_offer.applied_choice`. An unrecognized value exits non-zero naming
+  `enable`/`decline`. The one-line hint shown without a terminal and without the argument now also
+  names `--worker-dispatch`.
+- A second #3062 review round fixed a real credential-exposure bug and several remaining gaps in
+  the work above:
+  - **Security fix:** `loginInProfile()`'s `--api-key-env` path (`src/mcp/adapters/codex-runtime.ts`)
+    placed the API key in `boundedSpawnSync`'s `input` option, which sits inside the options object
+    `child_process` hands to its native binding — printed verbatim by `NODE_DEBUG=child_process` (and
+    any other dump of those options), and the named variable was also still present in the child's
+    inherited environment. It now launches `codex login --with-api-key` with an async `spawn()`
+    (never a sync call with `input` at all) and writes the key directly to the already-created
+    child's own `stdin` stream after spawning; the child's environment excludes the named variable
+    and any other variable holding the identical value. A dedicated end-to-end test
+    (`test/unit/mcp/codex-login-credential-safety.test.ts`) runs this under
+    `NODE_DEBUG=child_process` against a stub `codex` and asserts the fake key appears nowhere in
+    the parent's own stdout/stderr, and that the stub receives it only on stdin, never in its own
+    argv or environment.
+  - `aiwg mcp profile login` resolved its TypeScript-authored adapter through a src/dist-aware
+    resolver that falls back to loading TypeScript *source* when no build exists — but that
+    source module's own internal imports have no compiled sibling under `src/` either, so the
+    fallback failed deep inside the adapter with an unrelated `ERR_MODULE_NOT_FOUND`, on every Node
+    version. It now loads the compiled module directly and, when it is missing, reports one
+    actionable line (run `npm run build:cli`, or use an installed `aiwg`) instead of attempting a
+    source fallback at all.
+  - The shared strict flag parser (`src/cli/flag-parsing.ts`) tokenizes once per call, stops
+    recognizing flags at a bare `--` terminator, accepts both `--flag value` and `--flag=value`,
+    and validates **every** occurrence of a repeated flag — a previously-valid first occurrence no
+    longer hides a malformed later one. A value starting with a single `-` is accepted; a
+    space-separated value starting with `--` is still treated as missing (use `--flag=--literal`
+    when a value must start with `--`). An empty-string value is now rejected for
+    `--prompt`/`--prompt-file`/`--api-key-env`/`--worker-dispatch` specifically. Repeated-flag
+    precedence is configurable per call and now matches each command's own pre-#3062 behavior:
+    `aiwg session`'s flags are last-occurrence-wins (restoring a real regression the first round
+    introduced by always resolving to the first occurrence); every other touched command remains
+    first-occurrence-wins, unchanged. `tools/contrib/sync-upstream.mjs`'s `--on-conflict` and
+    `src/mcp/cli.mjs`'s `--api-key-env` (both plain-JS duplicates of the shared parser, for the same
+    source/dist reasons documented at each site) gained the same validation.
+  - `aiwg init` gains `--custom-scripts true|false`, answering "add a custom script?" directly
+    (`false` declines outright) when `--script` itself was not given — closing the one remaining
+    selective-prompting gap (`aiwg init` with providers/default-scripts/worker-dispatch all supplied
+    still asked this one question).
+  - `aiwg setup-run` steps marked `interactive: true` now run headless when every name in their own
+    `params` field is resolved, instead of always being refused without a terminal — this field was
+    already optional and already used by `type: ask` steps; the bug was that `interactive: true`
+    steps never got the same treatment. Declared `ask`-step inputs still missing **at a terminal**
+    are now prompted for (the answer threads into every later step's env, same as a
+    `--param`-supplied one); an `ask` step declaring no params at all remains always refused, with
+    or without a terminal — one of exactly two permanent exceptions (the other: the contributor
+    sync-upstream strategy choice stays unargumented). The manifest step preflight (which runs
+    before any selected step executes) now also rejects a selected `agentic`/`chain` step up front —
+    both are refused unconditionally once reached — and recurses into the entire recovery sequence
+    any selected step's `on_fail` names, so a blocked recovery step can no longer let an earlier,
+    unrelated step run first.
+  - `aiwg setup project` now checks whether an unattended write can ever be confirmed
+    (`--yes`/terminal/`--dry-run`) *before* building the project plan, which makes four `git` calls
+    on its own — the refusal used to happen only after those calls (and the full plan print)
+    already ran. `aiwg session --prompt` for a provider that is spawnable but has no evidenced
+    headless transport (e.g. `antigravity`) is now checked in the same early spot as the
+    non-spawnable case, before the version-check/doctor/deployment/mcp-inject pre-flight runs.
+  - OpenCode's headless prompt temp file (`src/cli/handlers/session.ts`) now gets an explicit
+    `0600` mode via an exclusive create (`flag: 'wx'`), and cleanup ownership for its private
+    `mkdtemp()` directory starts immediately after that directory is created — before the write —
+    so a failed write cannot leave the directory behind any more than a failed launch would. The
+    directory itself stays under the system temp directory (never a custom location).
+  - The UAT hang guard (`test/uat/sync-headless-interactive.uat.ts`) now kills the whole process
+    group on the child's *ordinary* exit too, not only on the hang-guard timeout, and waits for
+    `'close'` (stdio fully drained) rather than `'exit'` before settling — the first round's version
+    settled on `exit` and never cleaned the remaining group at all, so a surviving descendant could
+    leak even when the direct child exited cleanly and quickly. Settles independently via a short
+    grace timer if a group kill ever fails for a reason other than "already gone". A new fixture
+    (`test/uat/fixtures/parent-exits-first.mjs`) proves a surviving grandchild is reaped even when
+    its parent's own exit is fast and ordinary. Every stub executable placed on `PATH` now gets an
+    absolute `#!<process.execPath>` shebang instead of `#!/usr/bin/env node`, so resolving it never
+    depends on `env` or on `PATH` containing a `node` at all.
+- A go/no-go review of #3062 found four blockers, all fixed in a third round:
+  - **Startup order (security):** `bin/aiwg.mjs` used to run a background update-notifier bootstrap
+    before it knew which command was running at all — and that bootstrap child copied the whole
+    parent environment. Under `NODE_DEBUG=child_process`, a credential-bearing variable the *command
+    itself* was about to read (`--api-key-env` for `aiwg mcp profile login`, or `JEV_API_KEY`/
+    `AIWG_DECISION_JEV_API_KEY` for `aiwg decision setup jev`) printed in the bootstrap's own spawn
+    diagnostics before the command's own (already-careful) handling ever ran. Fixed two ways,
+    composing for defense in depth: `bin/aiwg.mjs` now resolves whether the invocation is one of
+    these two credential-handling commands from argv alone, before starting the notifier bootstrap
+    (or any other bootstrap subprocess) at all for either one; and the notifier's own background
+    child (`src/update/notifier.mjs`) now gets an explicit environment allow-list
+    (`PATH`/`HOME`/`USERPROFILE`/`HOMEDRIVE`/`HOMEPATH`/`AIWG_CONFIG`/`NODE_EXTRA_CA_CERTS`) instead
+    of a full copy of the parent's, so a secret this CLI does not yet know to name is still never
+    copied into it, for *any* command. A second, independently-discovered instance of the same
+    full-environment-copy pattern — installation-identity creation's own `which`/`where.exe` lookup
+    for `git` (`src/installation/manager.mjs`), which runs before dispatch on every first invocation
+    — is now also PATH-only (plus `PATHEXT`/`SystemRoot` on Windows).
+  - **More secure ways to supply a credential:** `aiwg mcp profile login` gains `--api-key-stdin`
+    (piped from a secret manager, never touching an environment variable or argv) and
+    `--api-key-file <path>` (refused unless the file is a regular file, not a symlink, with exactly
+    one hard link, owned by the current user, and not readable/writable by group or other) alongside
+    the existing (now least-preferred) `--api-key-env`. Exactly one of the three may be given; more
+    than one is a usage error naming the flags given; none at all without a terminal errors naming
+    all three. In every case the key reaches `codex` over stdin only. See "Supplying Credentials
+    Safely" in `docs/mcp/codex-profiles.md`.
+  - **Unhandled EPIPE:** `loginInProfile()`'s async `--with-api-key` launch
+    (`src/mcp/adapters/codex-runtime.ts`) wrote to the child's stdin with no error listener and no
+    completion callback — a `codex` that exited (or closed stdin) before reading raised an unhandled
+    `EPIPE`/`ECONNRESET`, an uncaught exception rather than a normal failure result. Stdin error,
+    write completion, child `error`, child `exit`, and the deadline timer now all funnel through one
+    settle function that runs exactly once, always clears the timer and removes its own listeners,
+    and kills the child if it is still running when settling on a failure.
+  - **Setup-run recovery preflight was too eager:** `aiwg setup-run`'s preflight used to recurse into
+    every selected step's `on_fail` recovery procedure up front, before the main sequence even ran —
+    refusing a manifest whose main sequence would succeed outright, solely because its *unused*
+    recovery contained something unsupported, and (with no cycle protection) recursing without bound
+    on a recovery procedure that referenced itself (`RangeError: Maximum call stack size exceeded`).
+    The main sequence's own preflight no longer looks at `on_fail` at all; a recovery procedure is now
+    preflighted completely, but only at the moment a failure actually selects it, before any of its
+    steps run. A manifest-validation-time graph check (`detectRecoveryReferenceCycles`, independent of
+    the step preflight) catches a cycle among recovery procedures themselves as a clean validation
+    error instead of a stack overflow.
+  - **`aiwg session`'s `mcp` detection:** `args.includes('mcp')` (and the equivalent hand-rolled loop
+    this replaced, which already shipped on `main`) matched the literal word `mcp` anywhere in argv —
+    including inside a free-text `--prompt`/`--prompt-file` value (`aiwg session --prompt mcp` set
+    `mcp: true` and reached MCP config injection) or after a bare `--` terminator (`--persist` there
+    was still honored). `--no-repair`/`--persist`/`--non-interactive` had the same gap. The shared
+    flag parser (`src/cli/flag-parsing.ts`) gained `hasPositionalOrSwitch()`: a positional word or
+    boolean switch now excludes anything consumed as a value-taking flag's own value, and stops
+    recognizing anything at or after `--`, same as the value-flag parser already did.
+- `aiwg decision ask` (CLI and MCP) now appends exactly one record per **completed** call —
+  including `fallback` and `not-configured` outcomes, never a usage error — to a decision ledger
+  (`.aiwg/decision/ledger.jsonl`, resolved like `aiwg artifacts path`). The ledger's trust boundary is
+  the local filesystem under the project artifact root, owned by the same user running `aiwg` — not a
+  defense against a hostile process already running as that user. The writer uses only portable Node
+  primitives (`mkdir`/`lstat` for the directory, `open`+`fstat` for the file, `O_NOFOLLOW` where the
+  platform defines it): a symlinked directory or file, or a file with more than one hard link, is
+  skipped with one warning and never modified (no chmod, no truncation — an existing file/directory
+  that fails a safety check is left exactly as it was). Records carry provider, session id, decision
+  kind, choice ids (at most 10; `choiceCount`/`choiceIdsTruncated` report how many there really were),
+  `answerIndex` (the selected option's position, surviving redaction), question/context SHA-256
+  digests, outcome, model, Jev usage, latency, and an estimated-LLM-tokens-avoided figure with its
+  method. Every persisted field — including `model` — is redacted; `--record-text` additionally stores
+  redacted, length-capped question/context text. `--session`/`--caller` must match
+  `^[A-Za-z0-9_.:/@-]{1,96}$` (CLI: exit 2; MCP: dropped), covering documented forms like
+  `address-issues:worker-pick`. Recording — including attribution/provider resolution — is bounded by
+  a 250ms deadline and warns at most once; on timeout the warning says "completion unknown" (the
+  in-flight attempt cannot be cancelled, but no later stage of it starts), and it never changes the
+  `ask` result or exit code. `aiwg decision history` and `aiwg decision stats` read the ledger offline,
+  strictly validating each record (calendar timestamps, confidence/threshold ranges, non-negative token
+  counts), streaming line-by-line and reporting a `skipped` count, with `--json`, the same filters on
+  both commands, and `--group-by provider|session|kind|caller` (an absent caller groups under a
+  distinct `null`, not the literal string `"unattributed"`). The ledger has no built-in retention —
+  both commands tolerate a missing file; archiving/rotation is a documented follow-up, not shipped yet.
 - `AIWG_CONFIG_LAYERS` reads MCP servers and profiles from several configuration directories, lowest
   precedence first, so an organisation base and a per-identity overlay can be kept apart. Writes go to
   the last directory only. Profiles gain `extends` (`aiwg mcp profile add --extends`), resolved across
@@ -42,6 +436,32 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   transcript-replica files are opened; credential, cookie and other app-state
   files are never read. A truncated cache window is imported as `provisional`,
   and re-imports add only newer entries.
+- `aiwg init` and `aiwg setup project` now detect which supported worker CLIs
+  are installed (presence-only, no network, no spawn) and offer to turn on
+  `parallelism.worker_dispatch` when two or more are found and dispatch is
+  off, defaulting to no (#3050). Non-interactive runs and a declined offer
+  (`setup.worker_dispatch_offer: "declined"` — a setup preference, kept out
+  of the `parallelism` worker-policy block) leave the setting untouched and
+  print a one-line hint instead. `aiwg regenerate`, `aiwg refresh`, and
+  `aiwg doctor --probe-workers` print the same hint when it still applies,
+  and generated project context now states the dispatch state plainly. See
+  [Turn On Direct Worker Dispatch](docs/getting-started/worker-dispatch.md).
+- The CI-safe stub UAT lane (`npm run uat`) now automates nine previously
+  human-run agentic UAT scenarios: the provider x role compilation matrix
+  (MW-023, MW-001 count), `regenerate` flag validation and idempotency
+  (MW-018, MW-019), the `worker_dispatch: false` dispatch gate (WD-002),
+  generated-context dispatch-state wording (CX-001), the
+  `regenerate`/`refresh`/`doctor --probe-workers` dispatch hints (IN-002),
+  and `clean:providers`' preservation of operator-owned provider config
+  (SE-002). A new opt-in lane (`npm run uat:workers-live`,
+  `config/vitest.uat-workers-live.config.js`) covers `doctor
+  --probe-workers`' install-readiness matrix (WD-001) against fixture worker
+  CLIs — no real worker CLI or network access involved.
+- `aiwg decision history` and `aiwg decision stats` accept `--caller <tag>` (exact match), `--caller '<prefix>*'`
+  (prefix match; a trailing `*` is the only wildcard), and `--no-caller` (records with no caller tag), applied
+  inside the ledger reader so `stats` aggregates only matching records; both commands reject unknown flags and
+  positional arguments with exit 2, echo applied filters under a `filters` key in `--json` output, and print a
+  `Caller filter:` header line in human-readable output (#3065).
 
 - **Film Production framework (`film-production`)** - A provider-neutral
   framework for reference-driven films, animated shorts, and episodes across
@@ -97,6 +517,115 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `line-memory` concurrent additions now wait up to 30 seconds for a live project lock instead
+  of exhausting 100 short retries under load (#3110). Deterministic contention regressions verify
+  every add succeeds and all 25 facts and their metadata survive in both addon and plugin copies.
+- Structural candidate labels accept CRLF lines and Unicode-normalized case variants with exact evidence
+  offsets (#3106); writing fidelity reviews unpunctuated spans ending at a newline (#3107); Logseq
+  strips final `id::` properties and preserves body lines after empty values (#3108).
+
+- Pi timeout teardown tests publish fixture receipts only after their JSON write completes,
+  preventing an interrupted write from being parsed as empty JSON under load. A regression
+  synchronizes timeout with an in-progress receipt write and verifies production Pi teardown
+  without an abort grace window (#3113).
+- Polynomial-time regular expressions on imported or external text are replaced with linear scans
+  (#3094, CodeQL WP3): session candidate structural labels and structure-breaking checks
+  (`src/sessions/candidates.ts`), Logseq `id::` stripping, frontmatter and property parsing
+  (`src/storage/backends/logseq.ts`), decision-interop log redaction email detection (values over
+  65,536 UTF-16 code units are now redacted in full) and writing-fidelity sentence splitting. Output on
+  normal input is unchanged (characterization tests pin it).
+- Prototype-polluting key paths are rejected (#3095, CodeQL WP4): decision-interop OPA input
+  projection refuses only `__proto__` JSON Pointer segments and allows `constructor`/`prototype`
+  as data keys with own-property traversal. Projection and sanitization return ordinary objects
+  using data-property definitions, preserving nested own `__proto__` keys in serialized JSON.
+  Config YAML keys and dotted set paths reject all three names; config reads follow own properties only.
+  Config read/parse errors report the file and reason and block overwrites; only missing files use defaults.
+- Cockpit bridge hardening (#3099, CodeQL WP2): the legacy bridge page escapes `&`, `<`, `>`, `"` and
+  `'` in every attribute it builds and renders the WebSocket role badge and session options with
+  `textContent` and an allowlist instead of `innerHTML`; outbound executor fetches are limited to the
+  operator-configured executor origin (AgentCard and request data cannot add destinations), refuse
+  redirects; bridge and upstream error responses return safe public projections, retain validated
+  inventory codes and `Retry-After`
+  metadata, and log each failed upstream response once with bounded, redacted details; the
+  `workspace-status` HTTP server returns a fixed error instead of exception text.
+- Security test hygiene (#3097): pass subprocess arguments without a shell, serialize
+  generated fixtures safely, tighten identity/version assertions, restore TLS test
+  settings, and preserve literal data in comment and receipt-tampering checks.
+
+- Shell commands are no longer built from untrusted strings (#3093, CodeQL WP1). The agent-loop
+  `ralph-commit` hook commits with `git commit -F -` on stdin instead of interpolating a message that
+  embeds changed filenames into `git commit -m "..."`; `tools/daemon/tmux-manager.mjs` sends literal
+  text with argv `send-keys -l`; `tools/contrib/lib/github-client.mjs` calls `gh` with argv, passes
+  PR bodies and comments via `--body-file -`, and validates PR numbers and `owner/repo` arguments;
+  Remote topology in `tools/agents/providers/base.mjs` and disk checks in `tools/workspace/migration-tool.mjs` use argv.
+  edge-channel git calls in `src/channel/manager.mjs` use argv with `--` before clone operands and
+  require an absolute edge path. **Behaviour change:** `AIWG_VISION_COMMAND` / `--command`
+  templates map unquoted, unescaped `{image}`/`{prompt_file}`/`{out}` placeholders to
+  `"$1"`/`"$2"`/`"$3"`, with paths passed as separate shell arguments. `AIWG_VISION_IMAGE`,
+  `AIWG_VISION_PROMPT_FILE` and `AIWG_VISION_OUT` remain exported. Only `$1`, `$2`, `$3`,
+  `$AIWG_VISION_IMAGE`, `$AIWG_VISION_PROMPT_FILE`, and `$AIWG_VISION_OUT` may expand,
+  also in braced form. All other `$` parameter/variable expansions are rejected, including
+  `$SHELL`, `$IFS`, special parameters, arithmetic, and braced operators; `$` inside single
+  quotes is literal text and allowed. Command substitution,
+  backticks, `eval`, nested shells (any shell word together with a short `-c` option cluster
+  anywhere in the template), here-documents and
+  here-strings (`<<`), `#` comments outside single quotes, backslash-newline line continuations, and templates over 4096 characters are rejected. Use the quoted
+  positional parameters directly or a wrapper script for complex logic. Templates are trusted
+  executable code and must not re-parse path values as shell source.
+- `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
+  strict flags (#3066): `--probe-workers --json` prints exactly one JSON document on stdout (one
+  record per CLI with `cli`, `installed`, `version`, `inRange`, `ready`, `reason`, plus top-level
+  `probeWorkers`/`workerDispatch`/`workersConfigured` fields and a `message` naming the
+  configuration command when there is nothing to report); with no worker CLIs configured the text
+  run prints one `Direct Worker` line saying so and how to configure a complete CLI entry
+  (`aiwg config set --project parallelism.clis.codex` with adapter and account/quota scopes)
+  instead of silence; disabled dispatch still reports each CLI as skipped in JSON; unknown
+  `aiwg doctor` flags (and valueless value flags, and `--json` without `--probe-workers`) exit 2
+  naming the flag. Doctor flags are parsed through the shared strict parser from #3062 rather than
+  a hand-rolled loop.
+- MCP template tools/resources and opt-in filesystem storage now share the pinned artifact
+  containment boundary, refusing path escapes, root retargets, and unsafe links while preserving
+  external stores, missing-file semantics, append behavior, and overwrite modes (#3086).
+
+- `aiwg models resolve` explains when `parallelism.worker_dispatch` is off with shared enable/readiness commands before checking installation qualification (#3070).
+- The OMP provider failed in an installed package: its deploy tool imported two modules by a path
+  into the unshipped source tree, and `aiwg remove omp` imported that tool by a path that is one
+  directory short once compiled. Both now resolve from the installed layout (#3062, refs #3077).
+- A caller-supplied timeout of zero can no longer disable the bound on a synchronous child-process
+  call: such values go through a clamp helper, and the gate accepts a non-literal timeout only when
+  it resolves to a positive constant or to that helper (#3062).
+- A timed-out call whose child had already exited cleanly was read as success in the evaluation
+  harness, `aiwg doctor` and several lint and packaging tools; a timeout is now always a failure
+  (#3062).
+- `tools/qualification` and `tools/benchmarks` are no longer shipped in the npm package; nothing
+  installed uses them (#3062, refs #3075).
+- Shipped tools now find the bounded child-process helper through the same resolver they use for
+  other built code, instead of a path into the unshipped source tree. Without this an installed
+  `aiwg doctor`, deploy or new-project run would have failed to start. A packaging test now checks
+  that every relative import in a shipped tool resolves to a shipped file (#3062).
+- The bounded helper always kills with SIGKILL, also treats descriptor `0` and `process.stdin` as
+  inherited input, and states plainly that only the direct child is guaranteed gone. The gate
+  resolves renamed and destructured child-process bindings, rejects a `timeout` of `0`,
+  `undefined` or one a later spread could override, and normalises allow-list paths for Windows
+  (#3062).
+- Network and install operations in the contribution and packaging tools that were given the
+  30-second tier now use the network or long tier, and a timed-out remote branch check is reported
+  as unknown instead of absent (#3062).
+- `aiwg team run`/`list` and the legacy `tools/cli/runtime-info.mjs` script behind `aiwg sync` now
+  detect Claude Code through the same shared `resolveActiveProvider` path `runtime-info` and `steward
+  capabilities` already used, instead of an ad-hoc `CLAUDE_CODE_VERSION`/`ANTHROPIC_API_KEY` check:
+  neither variable is set by current Claude Code, and `ANTHROPIC_API_KEY` was a false positive for any
+  non-Claude session with that key set. The `.mjs` script falls back to the current marker variables
+  directly when no build output is available to resolve the shared path through.
+- `npm run clean:providers` no longer removes `.cursor/`, `.agents/`, or `opencode.json` wholesale.
+  Each holds a project file AIWG merges entries into rather than owns outright — the Cursor and
+  Antigravity project MCP configs, and `opencode.json`'s `instructions` entry. AIWG-deployed
+  subdirectories under `.cursor`/`.agents` are still removed, and AIWG-managed MCP servers (identified
+  through the central MCP server registry's `injectedProviders` record) and the `WORKSPACE.md`/
+  `AIWG.md` instructions entries are still removed from those files in place, but a user's own MCP
+  servers or instructions entries, and anything else in those files, survive. A merge-target file is
+  deleted only once nothing but AIWG's own entries remain; invalid JSON, or an unreadable MCP server
+  registry, leaves the file untouched and is reported rather than guessed at.
 - Layered MCP writes reject overlapping realpath targets and symlinked files or directories below the config root,
   use atomic replacement, and refresh server/profile ownership after each successful save.
 - Profile imports validate the complete layered `extends` graph before writing, naming cycles and missing bases.
@@ -134,6 +663,23 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   missing layer paths use filesystem-aware case comparisons to prevent overlap.
 - Regression coverage verifies inherited tool denies and credential references in Codex runtime configs
   and Claude injection, with TypeScript and runtime registries exercising the same layered behaviour.
+- `npm run clean:providers` removes only the subpaths AIWG deploys under `.claude/` (agents, commands,
+  skills, rules, hooks) instead of the whole directory, preserving Claude Desktop/Code-owned state
+  (`worktrees/`, `settings.local.json`, `settings.json` and its backups, `launch.json`). Every other
+  provider target keeps its previous whole-directory/whole-file removal behavior unchanged.
+- `aiwg doctor --provider grok-build` no longer silently skips the context/memory firewall scan;
+  `grok-build` is now in both the doctor provider label map and the firewall's own provider registry.
+  The `grokbot.mjs` provider header comment now reads stable instead of experimental.
+- `aiwg runtime-info` and `aiwg steward capabilities` now agree on whether the current session is
+  Claude Code: both resolve through the shared `resolveActiveProvider` path, and the `claude` provider's
+  detection markers are the ones current Claude Code actually sets (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`,
+  `CLAUDE_CODE_DESKTOP_APP_VERSION`) instead of the stale `CLAUDE_CODE_VERSION` and the false-positive
+  `ANTHROPIC_API_KEY` (which any non-Claude session with that key set would otherwise match).
+- Pi v3 session history can be imported again: `PiSessionAdapter` declares its schema major so the
+  importer no longer rejects every Pi source as an unsupported schema. Workspace discovery now scopes
+  Pi session discovery to the current workspace's own `--<path>--` subdirectory (matching Pi's own
+  per-working-directory session layout) instead of scanning the whole `~/.pi/agent/sessions` tree, so
+  fixing the schema-major gate does not start importing other workspaces' sessions into the wrong catalog.
 
 - Claude profile settings preserve uncertain deny-rule ownership after manual edits, with a deny-array
   digest, tracked preservation and actionable warnings. Ownership follows realpath parent aliases;
@@ -239,6 +785,40 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   `general` and `aiwg use <addon>` are unchanged. Extensions deploy by name
   (`aiwg use sys`) or through `all`.
 
+### Security
+
+- Anchor MCP artifact reads, atomic writes, and directory creation to verified Linux procfs directory descriptors; use static containment, symlink, and link-count checks on macOS and Windows. Resolve operator location pointers and environment overrides per project, then pin the project and artifact store on first trust (server start for the default project). Refuse location-pointer writes and caller-selected projects inside artifact trees. Create missing default roots exclusively; unavailable configured stores remain unavailable. Reject multiply-linked read files and atomically replace writes, preserving existing modes and outside hard-linked inodes. Allow standalone `.` components on all platforms and valid POSIX filenames; apply reserved-name, trailing-dot/space, and stream restrictions only on Windows. Artifact containment holds against any path the caller supplies; it does not hold against concurrent modification of the artifact tree by another local process. Leftover temporary files after a failed write are possible.
+- Artifact I/O is not a hostile-user filesystem sandbox: concurrent same-user directory relocation or replacement between a check and the following operation remains outside the guarantee on every platform, and macOS and Windows rely on static checks only. Regression tests cover attached external stores, per-project environment overrides, pinned `project_dir` roots, mode preservation, platform-specific filename rules, symlink swaps, hard links, and replacement-safe failure handling.
+- Refuse credential-bearing definitions for `mcp inject --ephemeral --out` destinations inside the project, as for persistent project injection. Use the same credential scanner for refusal and display redaction, including header-style argv, env-style argv assignments, embedded URL userinfo, fragment assignments before/after `?`, and dotted/bracketed query or fragment names. Redact `mcp profile show --json`, profile/server lists, and update displays; refusal errors never echo argument values. Preserve ordinary names such as `monkey` and `sort_key` and supported environment references.
+- Cap MCP worker frames at 10 MiB; stop owned workers on overflow and release
+  invocation capacity only after termination proof. Retain capacity and explicit
+  cancel/recheck control while termination is uncertain, including degraded containment.
+- Require regular artifacts up to 10 MiB and hash in bounded chunks with size
+  rechecks; cap tree hashing at 10 MiB/file, 100 MiB, 10,000 entries and depth 128.
+- Bound unit stop/status timeouts; filesystem reads remain subject to host I/O.
+
+- MCP shell deadlines and cancellation escalate to SIGKILL; capacity and evidence remain reserved until termination is confirmed.
+- Shell workers use private framed stdin, `0600` output reservations, and systemd memory limits; pre-launch failures release resources.
+- Status checks retry transient failures and use bounded background polling; confirmed stops clear timers and clean up stdin.
+- Systemd clients use canonical executables from the conductor PATH and conductor-only
+  connections; PATH directories and symlink targets must remain trusted.
+- Worker and verification launches import allowlisted caller values without exposing them
+  in argv, strip connection variables from workers, and reject loader/bootstrap controls.
+- Verification reports arbitrary-path reads as degraded even when home/tmp isolation works;
+  the required write, home-read, and network capability gates remain unchanged.
+- **Runtime MCP dependency floor** - the root package and the `droid-bridge`
+  addon/plugin now require `@modelcontextprotocol/sdk@^1.30.0` resolved to
+  current patch releases, closing `GHSA-6qxp-vccf-f47h` and raising the
+  transitive floor for `proxy-addr` (`GHSA-jqcg-44mw-7w3h`, critical), `hono`
+  (`GHSA-hxh3-vqpv-xpqv`), `fast-uri` (`GHSA-hrr3-gc8f-f4qj`,
+  `GHSA-qw65-cvwx-89v3`, `GHSA-58mr-gqgx-xq4g`), `ip-address`
+  (`GHSA-j6r3-76f7-8jcv`, `GHSA-h3mg-xc3c-68pw`, `GHSA-rpw4-54j3-4h4q`,
+  `GHSA-2vr4-cq9g-pvrc`), and — in `droid-bridge` only — `qs`
+  (`GHSA-x5fp-wj9c-mxmx`, `GHSA-4mjr-xmp4-gh2g`). The root lockfile also picks
+  up a `glob`/`minimatch` floor fixing `brace-expansion`
+  (`GHSA-q2hr-2g5m-vwhr`, `GHSA-qhr7-859c-m2p7`, `GHSA-6j4f-fj2g-mc7p`). No
+  package.json ranges changed; every fix landed within already-declared
+  semver ranges.
 
 ## [2026.10.1] - 2026-10-05 - "Turnkey Jev decision offload"
 

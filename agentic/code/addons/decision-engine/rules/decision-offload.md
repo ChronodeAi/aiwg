@@ -69,6 +69,29 @@ independently.
 The question and context are sent to Jev. Never send secrets: no tokens,
 passwords, private keys, or credentials in `--question` or `--context`.
 
+### Rule 5: Every completed call is recorded
+
+Every **completed** `ask` call (CLI and MCP) appends exactly one record —
+including `fallback` and `not-configured` outcomes — to a decision ledger
+(`.aiwg/decision/ledger.jsonl`, resolved like `aiwg artifacts path`). Usage
+errors (a bad flag, oversized context) never reach a completed call and are
+never recorded. Only SHA-256 digests of the question and context are stored
+by default — a digest is a correlation key, not a confidentiality guarantee:
+a short or guessable question can still be matched by hashing candidates.
+Pass `--record-text` to also record the (redacted, length-capped) text.
+`--session`/`--caller` must match `^[A-Za-z0-9_.:/@-]{1,96}$` (covering
+forms like `address-issues:worker-pick`); the CLI rejects an invalid value
+with exit 2, the MCP tool drops it. Every persisted field — not only opt-in
+text — is redacted before being written. Recording is bounded by a short
+deadline (on timeout the warning says "completion unknown", not
+"abandoned": the in-flight attempt cannot be cancelled) and never changes
+the `ask` result or exit code. The ledger's trust boundary is the local
+filesystem under the project artifact root, owned by the same user running
+`aiwg` — not a defense against a hostile process already running as that
+user — and it has no built-in retention (`history`/`stats` tolerate a
+missing file). See the Jev quickstart's ledger section for
+`aiwg decision history` / `aiwg decision stats`.
+
 ## Examples
 
 ```bash

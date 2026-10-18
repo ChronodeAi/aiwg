@@ -1,5 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { mkdtemp } from '../../helpers/temp-dir.js';
+import type { ReaderLimits } from '../../../src/sessions/readers.js';
+import { grokbotTranscriptReplicaFilename } from '../../../src/sessions/adapters/grokbot-locator.js';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import {
@@ -21,6 +26,7 @@ import {
   PiSessionAdapter,
   OmpSessionAdapter,
   SESSION_PROVIDER_IDS,
+  SessionContractError,
   WarpSessionAdapter,
   type SelectedSource,
   type SessionSourceAdapter,
@@ -105,6 +111,67 @@ describe('eighteen-provider session release conformance', () => {
     },
   );
 
+  it.each(['claude', 'codex', 'cursor', 'factory', 'grokbot', 'muse', 'pi', 'omp', 'deepseek-harness'])(
+    '%s identifies discovery file limits without source content', async (provider) => {
+      const directory = await mkdtemp(resolve(tmpdir(), 'session-file-limit-'));
+      await writeFile(resolve(directory, 'session.jsonl'), '{}\n');
+      const replica = grokbotTranscriptReplicaFilename('synthetic', '00000000-0000-4000-8000-000000000001');
+      await writeFile(resolve(directory, replica), '{}\n');
+      const nativeDirectory = resolve(directory, '2026', '10', '18', 'synthetic');
+      await mkdir(nativeDirectory, { recursive: true });
+      await writeFile(resolve(nativeDirectory, 'session.jsonl'), '{}\n');
+      await expect(collect(adapterFor(provider, undefined, 0).discover({
+        workspaceId: 'workspace-fixture', allowedRoots: [directory],
+      }))).rejects.toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED', detail: {
+        limit: 'maxFiles', configured: 0, observed: 1,
+      } });
+    },
+  );
+
+  it.each(matrix.providers)('$provider reports content-free schema rejection details', async (entry) => {
+    const directory = await mkdtemp(resolve(tmpdir(), 'session-rejection-'));
+    const locator = resolve(directory, basename(entry.conformance.malformed[0]));
+    const marker = 'synthetic-transcript-marker';
+    const expectedPaths: Record<string, string> = {
+      claude: 'type', codex: 'method', copilot: 'version', cursor: 'type', factory: 'type',
+      hermes: 'id', opencode: 'info', openclaw: 'schemaVersion', openhuman: 'recordType',
+      grokbot: 'type', 'grok-build': 'headings', pi: 'type', omp: 'type',
+      'deepseek-harness': 'type', warp: 'headings', 'devin-desktop': 'type',
+      muse: 'export_schema_version', generic: 'type',
+    };
+    await writeFile(locator, entry.provider === 'warp' || entry.provider === 'grok-build'
+      ? marker : JSON.stringify({ text: marker }) + '\n');
+    const selected = { ...selectedFixture(entry, entry.conformance.malformed[0]), locator,
+      authorizedScope: { workspaceId: 'workspace-fixture', allowedRoots: [directory] } };
+    for (const operation of [
+      () => adapterFor(entry.provider).inspect(selected),
+      () => collect(adapterFor(entry.provider).stream(selected)),
+    ]) {
+      await expect(operation()).rejects.toSatisfy((error: SessionContractError) => {
+        expect(error.code).toMatch(/^(MALFORMED_SOURCE|SCHEMA_DRIFT)$/);
+        expect(error.detail).toMatchObject({ issues: expect.arrayContaining([
+          { path: expectedPaths[entry.provider], code: expect.any(String) },
+        ]) });
+        expect(JSON.stringify(error.detail)).not.toContain(marker);
+        return true;
+      });
+    }
+  });
+
+  it.each(matrix.providers)('$provider reports configured and observed byte limits', async (entry) => {
+    const directory = await mkdtemp(resolve(tmpdir(), 'session-byte-limit-'));
+    const locator = resolve(directory, basename(entry.conformance.malformed[0]));
+    const content = JSON.stringify({ text: 'synthetic-transcript-marker' }) + '\n';
+    await writeFile(locator, content);
+    const selected = { ...selectedFixture(entry, entry.conformance.malformed[0]), locator,
+      authorizedScope: { workspaceId: 'workspace-fixture', allowedRoots: [directory] } };
+    await expect(adapterFor(entry.provider, { maxRecordBytes: 1 }).inspect(selected))
+      .rejects.toMatchObject({
+        code: 'RESOURCE_LIMIT_EXCEEDED',
+        detail: { limit: 'maxRecordBytes', configured: 1, observed: Buffer.byteLength(content) },
+      });
+  });
+
   it.each(matrix.providers.filter((entry) => !entry.operations.includes('discover')))(
     '$provider discovery exception is executable and performs no source selection',
     async (entry) => {
@@ -183,26 +250,26 @@ describe('eighteen-provider session release conformance', () => {
   });
 });
 
-function adapterFor(provider: string): SessionSourceAdapter {
+function adapterFor(provider: string, limits?: Partial<ReaderLimits>, maxFiles = 10_000): SessionSourceAdapter {
   const adapters: Record<string, () => SessionSourceAdapter> = {
-    claude: () => new ClaudeSessionAdapter(),
-    codex: () => new CodexSessionAdapter(),
-    copilot: () => new CopilotSessionAdapter(),
-    cursor: () => new CursorSessionAdapter(),
-    'deepseek-harness': () => new DeepSeekHarnessSessionAdapter(),
-    factory: () => new FactorySessionAdapter(),
-    generic: () => new GenericSessionInterchangeAdapter(),
-    grokbot: () => new GrokbotSessionAdapter(),
-    'grok-build': () => new GrokBuildSessionAdapter(),
-    hermes: () => new HermesSessionAdapter(),
-    muse: () => new MuseSessionAdapter(),
-    openclaw: () => new OpenClawSessionAdapter(),
-    opencode: () => new OpenCodeSessionAdapter(),
-    openhuman: () => new OpenHumanSessionAdapter(),
-    pi: () => new PiSessionAdapter(),
-    omp: () => new OmpSessionAdapter(),
-    warp: () => new WarpSessionAdapter(),
-    'devin-desktop': () => new DevinDesktopSessionAdapter(),
+    claude: () => new ClaudeSessionAdapter(limits, { maxDepth: 8, maxFiles }),
+    codex: () => new CodexSessionAdapter(limits, { maxDepth: 8, maxFiles }),
+    copilot: () => new CopilotSessionAdapter(limits),
+    cursor: () => new CursorSessionAdapter(limits, { maxDepth: 8, maxFiles }),
+    'deepseek-harness': () => new DeepSeekHarnessSessionAdapter(limits, maxFiles),
+    factory: () => new FactorySessionAdapter(limits, [], { maxDepth: 8, maxFiles }),
+    generic: () => new GenericSessionInterchangeAdapter(limits),
+    grokbot: () => new GrokbotSessionAdapter(limits, maxFiles),
+    'grok-build': () => new GrokBuildSessionAdapter(limits),
+    hermes: () => new HermesSessionAdapter(limits),
+    muse: () => new MuseSessionAdapter(limits, maxFiles),
+    openclaw: () => new OpenClawSessionAdapter(limits),
+    opencode: () => new OpenCodeSessionAdapter(limits),
+    openhuman: () => new OpenHumanSessionAdapter(limits),
+    pi: () => new PiSessionAdapter(limits, maxFiles),
+    omp: () => new OmpSessionAdapter(limits, maxFiles),
+    warp: () => new WarpSessionAdapter(limits),
+    'devin-desktop': () => new DevinDesktopSessionAdapter(limits),
   };
   const create = adapters[provider];
   if (!create) throw new Error(`provider matrix has no executable adapter: ${provider}`);

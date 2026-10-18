@@ -23,7 +23,7 @@ For a headless Linux host with Xvfb installed:
 AIWG_VSCODE_EXECUTABLE=/usr/share/code/code xvfb-run -a npm test
 ```
 
-The test toolchain requires Node 20.19+ or 22.12+ (Mocha 12). This does not change
+The test toolchain requires Node 24+ (Mocha 12). This does not change
 the extension's runtime API requirement. Record the actual VS Code version with
 test evidence; passing one host version does not qualify every supported host.
 

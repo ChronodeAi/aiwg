@@ -11,7 +11,7 @@ Install Oh My Pi from its [upstream installation guide](https://github.com/can13
 The npm/Bun package route requires Bun >=1.3.14. The standalone release binary
 is a separate route and does not require Bun to launch. Python, Docker, Nix,
 and the upstream robomp service are not prerequisites for this provider.
-AIWG itself requires Node.js >=20.
+AIWG itself requires Node.js >=24.
 
 The integration baseline is OMP **18.1.10**, source commit
 `5964a0f7649275bcde818f20073193fd032451f2`. Live standalone checks have run on

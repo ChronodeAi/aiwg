@@ -18,6 +18,7 @@ import { join, basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
 import { normalizeProviderDefinitionId } from '../../providers/provider-definitions.js';
+import { isSessionProviderResolution, resolveActiveProvider } from '../provider-resolution.js';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -49,16 +50,23 @@ interface TeamDefinition {
 
 // ── Provider Detection ───────────────────────────────────────
 
-function detectProvider(args: string[]): string {
+async function detectProvider(args: string[], cwd: string): Promise<string> {
   const providerFlag = parseFlag(args, '--provider');
   if (providerFlag) return normalizeProviderDefinitionId(providerFlag) ?? providerFlag;
 
-  // Claude Code sets CLAUDE_CODE_VERSION; API key presence is secondary heuristic
-  const isClaudeCode =
-    process.env.CLAUDE_CODE_VERSION !== undefined ||
-    process.env.ANTHROPIC_API_KEY !== undefined;
-
-  return isClaudeCode ? 'claude' : 'unknown';
+  // Resolved through the same shared provider-resolution path `runtime-info`
+  // and `steward capabilities` use (`resolveActiveProvider` -> the `claude`
+  // provider's `detection.env` markers in provider-definitions.ts) so none
+  // of them disagree about which provider the current session is running
+  // under (#2623, #2627, #3054). The ad-hoc `CLAUDE_CODE_VERSION`/
+  // `ANTHROPIC_API_KEY` check this replaced was stale (neither is set by
+  // current Claude Code) and `ANTHROPIC_API_KEY` was a false positive for
+  // any non-Claude session with that key set.
+  // Only a session signal counts. Native team dispatch needs the command to
+  // be running inside that harness; project configuration alone does not
+  // establish that.
+  const resolution = await resolveActiveProvider({ cwd });
+  return isSessionProviderResolution(resolution) ? (resolution.provider ?? 'unknown') : 'unknown';
 }
 
 function isNativeTeamsProvider(provider: string): boolean {
@@ -189,7 +197,7 @@ async function teamRunOmp(ctx: HandlerContext): Promise<HandlerResult> {
 }
 
 async function teamRun(ctx: HandlerContext): Promise<HandlerResult> {
-  if (['omp', 'oh-my-pi'].includes(detectProvider(ctx.args))) return teamRunOmp(ctx);
+  if (['omp', 'oh-my-pi'].includes(await detectProvider(ctx.args, ctx.cwd))) return teamRunOmp(ctx);
   const positional = getPositionalArgs(ctx.args);
   const slug = positional[0];
 
@@ -198,7 +206,7 @@ async function teamRun(ctx: HandlerContext): Promise<HandlerResult> {
     return { exitCode: 1 };
   }
 
-  const provider = detectProvider(ctx.args);
+  const provider = await detectProvider(ctx.args, ctx.cwd);
   const objective = parseFlag(ctx.args, '--objective') || `Execute ${slug} team workflow`;
 
   const team = await loadTeam(slug, ctx.frameworkRoot, ctx.cwd);
@@ -265,7 +273,7 @@ async function teamRun(ctx: HandlerContext): Promise<HandlerResult> {
 
 async function teamList(ctx: HandlerContext): Promise<HandlerResult> {
   const json = hasFlag(ctx.args, '--json');
-  const provider = detectProvider(ctx.args);
+  const provider = await detectProvider(ctx.args, ctx.cwd);
   const teams = await listAllTeams(ctx.frameworkRoot, ctx.cwd);
 
   if (json) {

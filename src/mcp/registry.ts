@@ -1,3 +1,5 @@
+import { tomlString } from './toml-string.mjs';
+import { buildServerConfig as renderServerConfig } from './server-config.mjs';
 import { type Layering, isLowerLayerEntry, loadLayered, lowerEntryQualified, resolveConfigLayers, saveLayerData } from './config-layers.mjs';
 import { assertConfigDestination, assertProjectCredentials, classifyMcpDestination, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
 import { manageOmpMcp } from './omp-config.mjs';
@@ -5,7 +7,7 @@ import { manageGrokBuildMcp } from './grok-build-config.mjs';
 import { replaceServer } from './toml-editor.mjs';
 import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 import { applyJsonToolFilterPlan, claudeSettingsPath, prepareClaudePermissions, planToolFilters, type ToolFilterPlan, type ToolFilters } from './tool-filters.mjs';
-import { assertCredentialPolicy, resolveCredentialPolicy, renderCredentialMaps, validateEnvReferenceName, type McpCredentialPolicy } from './credentials.mjs';
+import { assertCredentialPolicy, resolveCredentialPolicy, validateEnvReferenceName, type McpCredentialPolicy } from './credentials.mjs';
 /**
  * MCP Server Registry
  *
@@ -22,7 +24,6 @@ import { qualifyWorkerInvocationProfile, requiredWorkerControls, type WorkerAdap
 import { dirname, isAbsolute, resolve } from 'path';
 import { homedir } from 'os';
 import { resolveConfigDir } from '../config/user-config.js';
-import { getProviderDefinition } from '../providers/provider-definitions.js';
 
 // ============================================
 // Types
@@ -145,8 +146,6 @@ export type InjectProvider =
   | 'opencode'
   | 'windsurf'
   | 'warp';
-
-type McpInjectionAdapter = 'antigravity' | 'claude-code' | 'cursor' | 'factory' | 'codex' | 'grok-build' | 'opencode' | 'windsurf' | 'warp' | null;
 
 // ============================================
 // Registry
@@ -471,115 +470,7 @@ export function buildServerConfig(
   server: McpServerDefinition,
   provider: InjectProvider,
 ): Record<string, unknown> {
-  const adapter = getProviderDefinition(provider)?.adapters.mcpInjection as McpInjectionAdapter | undefined;
-  const { env, headers } = adapter && adapter !== 'codex'
-    ? renderCredentialMaps(server, adapter)
-    : { env: server.env, headers: server.headers };
-  switch (adapter) {
-    case 'antigravity': {
-      if (server.type === 'stdio') {
-        return { command: server.command, args: server.args || [], ...(env ? { env } : {}) };
-      }
-      return { serverUrl: server.url, ...(headers ? { headers } : {}) };
-    }
-    case 'claude-code': {
-      if (server.type === 'stdio') {
-        return {
-          command: server.command,
-          args: server.args || [],
-          ...(env ? { env } : {}),
-        };
-      }
-      // Claude Code skips a url entry that has no type.
-      return {
-        type: server.type,
-        url: server.url,
-        ...(headers ? { headers } : {}),
-      };
-    }
-
-    case 'cursor': {
-      if (server.type === 'stdio') {
-        return {
-          command: server.command,
-          args: server.args || [],
-          ...(env ? { env } : {}),
-        };
-      }
-      return {
-        url: server.url,
-        ...(headers ? { headers } : {}),
-      };
-    }
-
-    case 'factory': {
-      if (server.type === 'stdio') {
-        return {
-          type: 'stdio',
-          command: server.command,
-          args: server.args || [],
-          disabled: false,
-          ...(env ? { env } : {}),
-        };
-      }
-      return {
-        type: server.type,
-        url: server.url,
-        disabled: false,
-        ...(headers ? { headers } : {}),
-      };
-    }
-
-    case 'opencode': {
-      if (server.type === 'stdio') {
-        return {
-          type: 'local',
-          command: [server.command, ...(server.args || [])],
-          // opencode names a local server's variables `environment`.
-          ...(env ? { environment: env } : {}),
-        };
-      }
-      return {
-        type: 'remote',
-        url: server.url,
-        ...(headers ? { headers } : {}),
-      };
-    }
-
-    case 'windsurf':
-    case 'warp': {
-      if (server.type === 'stdio') {
-        return {
-          command: server.command,
-          args: server.args || [],
-          ...(env ? { env } : {}),
-        };
-      }
-      return {
-        url: server.url,
-        ...(headers ? { headers } : {}),
-      };
-    }
-
-    case 'codex':
-      // TOML format handled separately
-      return {};
-
-    default:
-      return {};
-  }
-}
-
-/**
- * Build a TOML section for a server (Codex/OpenAI provider).
- */
-function tomlString(value: unknown): string {
-  if (typeof value !== 'string' || [...value].some(char => {
-    const point = char.codePointAt(0)!;
-    return point >= 0xd800 && point <= 0xdfff;
-  })) throw new Error('TOML values must be strings containing valid Unicode scalar values');
-  // JSON escapes align with TOML basic strings except DEL must also be escaped.
-  return JSON.stringify(value).replace(/\u007f/g, '\\u007f');
+  return renderServerConfig(server, provider);
 }
 
 function tomlKey(value: unknown): string {

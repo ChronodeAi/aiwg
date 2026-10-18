@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sessionsHandler } from '../../../src/cli/handlers/sessions.js';
 import type { HandlerContext } from '../../../src/cli/handlers/types.js';
 import { SessionRepository } from '../../../src/sessions/repository.js';
-import { readDiscoveryManifest } from '../../../src/sessions/workspace-discovery.js';
+import { readDiscoveryManifest, writeDiscoveryManifest } from '../../../src/sessions/workspace-discovery.js';
+import { MUSE_WORKSPACE_SCAN_LIMITS } from '../../../src/sessions/adapters/muse-workspace-scan.js';
 import { itWithSqlite } from '../../helpers/sqlite.js';
 import { museMetadata, writeMuseLog } from '../../helpers/muse-native.js';
 
@@ -99,6 +100,58 @@ describe('Muse discovery through the public sessions handler', () => {
     expect(report.museSourceInspections).toEqual(expect.arrayContaining([
       expect.objectContaining({ outcome: 'inconclusive', reasonCode: 'MALFORMED_SOURCE' }),
     ]));
+  });
+
+  it('selects tail-attributed sources and persists unattributed limit receipts in CLI JSON', async () => {
+    const museRoot = join(root, 'sessions');
+    const matched = await writeMuseLog(museRoot, 'tail-matched', MUSE_WORKSPACE_SCAN_LIMITS.maxRecords + 1,
+      workspace, MUSE_WORKSPACE_SCAN_LIMITS.maxRecords);
+    await writeMuseLog(museRoot, 'unattributed', MUSE_WORKSPACE_SCAN_LIMITS.maxRecords + 1);
+    const output = await discover();
+    const manifest = await readDiscoveryManifest(manifestPath);
+    expect(manifest.sources.map((source) => source.locator)).toEqual([matched]);
+    const report = output.data.manifest.providers.find((provider: { provider: string }) => provider.provider === 'muse');
+    expect(report).toMatchObject({
+      sourceCount: 1, status: 'not-checked', reasonCode: 'MUSE_SOURCE_INSPECTION_INCOMPLETE',
+      remediation: expect.stringContaining('unattributed'),
+    });
+    expect(report.museSourceInspections).toEqual(expect.arrayContaining([
+      expect.objectContaining({ outcome: 'matched', attribution: 'matched', fallback: 'bounded-tail' }),
+      expect.objectContaining({
+        outcome: 'inconclusive', attribution: 'unattributed', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
+        nativeSessionId: 'unattributed',
+        limit: { name: 'maxRecords', value: MUSE_WORKSPACE_SCAN_LIMITS.maxRecords },
+        sourceKey: expect.any(String), redactedLocator: expect.any(String),
+      }),
+    ]));
+    expect(manifest.providers.find((provider) => provider.provider === 'muse')!.museSourceInspections)
+      .toEqual(report.museSourceInspections);
+    expect(JSON.stringify(report)).not.toContain(museRoot);
+    const unresolved = manifest.providers.find((provider) => provider.provider === 'muse')!
+      .museSourceInspections!.find((inspection) => inspection.attribution === 'unattributed')!;
+    unresolved.limit!.value += 1;
+    await writeDiscoveryManifest(manifestPath, manifest);
+    await expect(readDiscoveryManifest(manifestPath)).rejects.toThrow('identity');
+  });
+
+  itWithSqlite('imports a session attributed from tail evidence into the workspace catalog', async () => {
+    const count = MUSE_WORKSPACE_SCAN_LIMITS.maxRecords + 1;
+    await writeMuseLog(join(root, 'sessions'), 'tail-import', count, workspace, count - 1);
+    await discover();
+    const output = await execute([
+      'import-discovered', '--workspace', workspace, '--manifest', manifestPath,
+      '--db', database, '--confirm', '--json',
+    ]);
+    expect(output.data.receipt.totals).toMatchObject({
+      discovered: 1, accepted: 1, rejected: 0, eventsAccepted: count,
+    });
+    const repository = new SessionRepository(database);
+    try {
+      expect(repository.listSessions({ workspaceId: workspace, limit: 20 }).items)
+        .toEqual([expect.objectContaining({ nativeSessionId: 'tail-import', workspaceId: workspace })]);
+    } finally {
+      repository.close();
+    }
   });
 
   itWithSqlite.each([false, true])('imports a 5000-record session (retained evidence: %s)', async (retained) => {

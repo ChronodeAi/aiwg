@@ -10,8 +10,8 @@
 #   - workflow_dispatch                                     → manual rerun
 #     from the UI, with `sandbox_ref` and `conformance_ref` inputs for
 #     pinned-ref retries.
-#   - pull_request                                          → optional, opt-in
-#     via the `conformance:full` PR label.
+#   - pull requests do not run CI: developers build and test locally
+#     before opening a PR; CI runs after merge to main.
 #
 # We deliberately do NOT trigger on push-to-main: the upstream sandbox v2
 # reference instance is still pre-release, so a green main branch shouldn't
@@ -38,8 +38,6 @@ on:
   push:
     tags:
       - 'v*'
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       sandbox_ref:
@@ -75,7 +73,7 @@ jobs:
     name: Graph Profile Fast Conformance
     runs-on: ubuntu-latest
     container:
-      image: node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5  # node 20.20.2
+      image: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0
     timeout-minutes: 10
     steps:
       - name: Checkout AIWG
@@ -88,20 +86,15 @@ jobs:
   conformance:
     name: A2A Conformance Harness
     runs-on: ubuntu-latest
-    # node:20-bookworm has node pre-installed so JS-based actions (checkout@v4,
+    # node:24-bookworm has node pre-installed so JS-based actions (checkout@v4,
     # upload-artifact@v4) execute, and Debian package mirrors give us docker-cli
     # + go via apt without the docker:dind privileged-container gymnastics.
     # The runner mounts the host docker socket at /var/run/docker.sock so we
     # use DooD (Docker-outside-of-Docker) — no DinD, no --privileged.
     container:
-      image: node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5  # node 20.20.2 (see ci/digests.txt)
+      image: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 (see ci/digests.txt)
     timeout-minutes: 25
 
-    # PRs only run the gate when explicitly opted in. Default PR run is a
-    # noop status-check so PR latency stays bounded.
-    if: |
-      github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.labels.*.name, 'conformance:full')
 
     steps:
       # ── Phase 1: Upstream prerequisite probe ──────────────────────────
@@ -116,7 +109,7 @@ jobs:
         run: |
           set -uo pipefail
 
-          # node:20-bookworm ships curl + git + ca-certificates + jq is the
+          # node:24-bookworm ships curl + git + ca-certificates + jq is the
           # only one we'd want later; apt-get install all of them once here.
           apt-get update -qq
           apt-get install -y --no-install-recommends \

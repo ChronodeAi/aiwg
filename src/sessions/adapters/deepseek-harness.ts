@@ -2,11 +2,13 @@ import { opendir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError, type AuthorizedScope, type ImportCursor,
   type ProviderRecord, type SelectedSource, type SessionSourceAdapter,
   type SourceDescriptor, type SourceProbe,
 } from '../contracts.js';
-import { readBoundedJsonLines, streamBoundedJsonLines, type ReaderLimits } from '../readers.js';
+import { streamBoundedJsonLines, type ReaderLimits } from '../readers.js';
 
 export const DEEPSEEK_HARNESS_ADAPTER_VERSION = '1.0.0';
 export const DEEPSEEK_HARNESS_SOURCE_SCHEMA_VERSION = '2.0.0';
@@ -41,7 +43,7 @@ export class DeepSeekHarnessSessionAdapter implements SessionSourceAdapter {
     let count = 0;
     for (const root of [...scope.allowedRoots].sort()) {
       for await (const locator of jsonlFiles(resolve(root))) {
-        if (++count > this.maxFiles) throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'DeepSeek Harness discovery file limit exceeded');
+        if (++count > this.maxFiles) throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'DeepSeek Harness discovery file limit exceeded', { limit: 'maxFiles', configured: this.maxFiles, observed: count });
         yield { provider: this.provider, locator, locatorClass: 'deepseek-harness-session-v2-jsonl' };
       }
     }
@@ -50,9 +52,11 @@ export class DeepSeekHarnessSessionAdapter implements SessionSourceAdapter {
   async inspect(source: SelectedSource): Promise<SourceProbe> {
     let input;
     try {
-      input = await readBoundedJsonLines({ selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots }, { consistency: 'provisional', limits: this.limits });
+      input = await streamBoundedJsonLines({ selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots }, { consistency: 'provisional', limits: this.limits });
     } catch (error) { throw normalizeAuthorizationError(error); }
-    const header = parseHeader(input.records[0]?.value);
+    let header: ReturnType<typeof parseHeader> | undefined;
+    for await (const line of input) header ??= parseHeader(line.value);
+    header ??= parseHeader(undefined);
     if (input.incompleteTail) throw new SessionContractError('TRUNCATED_SOURCE', 'DeepSeek Harness session has a truncated JSONL tail');
     return { sourceSchemaVersion: `${header.version}.0.0`, consistency: 'complete', operationalState: 'available' };
   }
@@ -63,18 +67,18 @@ export class DeepSeekHarnessSessionAdapter implements SessionSourceAdapter {
       input = await streamBoundedJsonLines({ selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots }, { consistency: 'provisional', limits: this.limits });
     } catch (error) { throw normalizeAuthorizationError(error); }
     const start = cursor?.value.replace(/^byte:/, '') ?? '0';
-    if (!/^\d+$/.test(start)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid DeepSeek Harness cursor');
+    if (!/^\d+$/.test(start)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid DeepSeek Harness cursor', schemaIssueDetail('cursor'));
     let header: z.infer<typeof Header> | undefined;
     let expectedSeq = 0;
     let end = 0;
     for await (const line of input) {
       end = line.byteOffset + line.byteLength;
-      if (Number(start) > line.byteOffset && Number(start) < end) throw new SessionContractError('SCHEMA_DRIFT', 'DeepSeek Harness cursor is not a record boundary');
+      if (Number(start) > line.byteOffset && Number(start) < end) throw new SessionContractError('SCHEMA_DRIFT', 'DeepSeek Harness cursor is not a record boundary', schemaIssueDetail('cursor'));
       if (!header) { header = parseHeader(line.value); continue; }
       const parsed = Event.safeParse(line.value);
-      if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'DeepSeek Harness session event is malformed');
+      if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'DeepSeek Harness session event is malformed', schemaRejectionDetail(parsed.error));
       const event = parsed.data;
-      if (event.seq !== expectedSeq) throw new SessionContractError(event.seq < expectedSeq ? 'DUPLICATE_NATIVE_ID' : 'SCHEMA_DRIFT', `DeepSeek Harness sequence expected ${expectedSeq}, received ${event.seq}`);
+      if (event.seq !== expectedSeq) throw new SessionContractError(event.seq < expectedSeq ? 'DUPLICATE_NATIVE_ID' : 'SCHEMA_DRIFT', `DeepSeek Harness sequence expected ${expectedSeq}, received ${event.seq}`, schemaIssueDetail('seq'));
       expectedSeq++;
       if (end <= Number(start)) continue;
       const data = object(event.data);
@@ -109,15 +113,15 @@ export class DeepSeekHarnessSessionAdapter implements SessionSourceAdapter {
         },
       };
     }
-    if (!header) throw new SessionContractError('MALFORMED_SOURCE', 'DeepSeek Harness session header is missing');
-    if (Number(start) > end) throw new SessionContractError('SCHEMA_DRIFT', 'DeepSeek Harness cursor exceeds source size');
+    if (!header) throw new SessionContractError('MALFORMED_SOURCE', 'DeepSeek Harness session header is missing', schemaIssueDetail('header'));
+    if (Number(start) > end) throw new SessionContractError('SCHEMA_DRIFT', 'DeepSeek Harness cursor exceeds source size', schemaIssueDetail('cursor'));
     if (input.incompleteTail) throw new SessionContractError('TRUNCATED_SOURCE', 'DeepSeek Harness session has a truncated JSONL tail');
   }
 }
 
 function parseHeader(value: unknown) {
   const parsed = Header.safeParse(value);
-  if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'DeepSeek Harness session header is malformed');
+  if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'DeepSeek Harness session header is malformed', schemaRejectionDetail(parsed.error));
   if (parsed.data.version !== 2) throw new SessionContractError('UNKNOWN_SCHEMA_MAJOR', `unsupported DeepSeek Harness session version: ${parsed.data.version}`);
   return parsed.data;
 }

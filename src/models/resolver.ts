@@ -7,14 +7,15 @@
  */
 
 import { ConfigLoader } from './config-loader.js';
+import { WORKER_DISPATCH_ENABLE_COMMAND, WORKER_DISPATCH_READINESS_COMMAND } from './worker-dispatch-offer.js';
 import {
-  resolveWorkerGroupInstallation, resolveParallelism, validateWorkerGroupReferences, validateWorkerBudgetEnforcement,
+  resolveWorkerGroupInstallation, resolveParallelism, validateWorkerGroupQualifications, validateWorkerGroupReferences, validateWorkerBudgetEnforcement,
   workerActivationDigests, workerConfigDigest,
   type AiwgConfig, type WorkerActivation, type WorkerExecution,
 } from '../config/aiwg-config.js';
 import {
   qualifyWorkerInvocationProfile, validateWorkerPolicyRoute, validateWorkerModelObservation,
-  hasSelectionRelevantConflicts, workerContextHeadroom, workerModelKey, isCanonicalWorkerModelKey,
+  hasOperatorWorkerNativeRenderer, hasSelectionRelevantConflicts, workerContextHeadroom, workerModelKey, isCanonicalWorkerModelKey,
   WorkerSelectionPolicySchema, validateWorkerCatalogDiscovery,
   type ProviderModelCapabilityRegistry, type WorkerInvocationProfile, type WorkerContextEstimate,
   type WorkerBoundary,
@@ -470,7 +471,13 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
   const block = (code: WorkerPolicyDiagnostic['code'], pointer: string, message: string): void => {
     plan.diagnostics.push(diagnostic(code, pointer, message));
   };
-  if (!parallelism.worker_dispatch) { plan.status = 'disabled'; return plan; }
+  if (!parallelism.worker_dispatch) {
+    plan.status = 'disabled';
+    block('OG_CONFIG_REFERENCE', '/parallelism/worker_dispatch',
+      `Direct worker dispatch is off (parallelism.worker_dispatch). Enable with \`${WORKER_DISPATCH_ENABLE_COMMAND}\` `
+      + `(then check readiness with \`${WORKER_DISPATCH_READINESS_COMMAND}\`).`);
+    return plan;
+  }
   const now = new Date(request.now);
   if (!Number.isFinite(now.getTime())) block('OG_CONFIG_REFERENCE', '/request/now', 'A valid current clock is required');
   if (!request.context || typeof request.context.estimator !== 'string') block('OG_CONFIG_REFERENCE', '/request/context', 'A named, bounded context estimate is required');
@@ -519,7 +526,9 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
         ? observed.qualification.roles.filter(role => policy.roleGuidance?.[role]?.groups.includes(groupId)) : [];
     }
   }
-  for (const message of validateWorkerGroupReferences(parallelism, policy, qualifiedRoles)) block('OG_ADAPTER_UNQUALIFIED', '/parallelism/groups', message);
+  plan.diagnostics.push(...validateWorkerGroupQualifications(parallelism, qualifiedRoles).map(diagnostic => ({
+    ...diagnostic, message: `${diagnostic.message}. Run aiwg doctor --probe-workers --qualify.`,
+  })));
   const taskRole = request.taskClass ? policy.taskClasses?.[request.taskClass] : undefined;
   const role = request.role ?? taskRole;
   plan.role = role ?? null;
@@ -561,7 +570,7 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
         const pinMismatch = request.member && request.member !== member.id || request.model && request.model !== member.model || wrapperPin && wrapperPin !== member.model;
         const substitution = request.substitution && matchesChoice(tuple, request.substitution) && request.substitution.rationale.trim();
         if (pinMismatch && !substitution) deny('OG_PIN_MISMATCH', pointer, 'Exact request or wrapper pin requires explicit substitution');
-        if (!observation || !binding || !row?.llmProvider || !row.apiModelId) deny('OG_ADAPTER_UNQUALIFIED', pointer, 'Missing exact model, inference provider, observation or current installation evidence');
+        if (!observation || !binding || !row?.llmProvider || !row.apiModelId) deny('OG_ADAPTER_UNQUALIFIED', pointer, 'Missing exact model, inference provider, observation or current installation evidence. Run aiwg doctor --probe-workers --qualify.');
         if (observation && binding && row?.llmProvider && row.apiModelId) {
           const shapeErrors = validateWorkerModelObservation(observation);
           if (shapeErrors.length) {
@@ -585,10 +594,10 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
             if (configuredProfile && configuredProfile !== binding.profile) throw new Error('Configured invocation profile changed');
             const configuredServer = parallelism.clis?.[member.cli]?.mcpServerRef;
             if (transport === 'mcp' && configuredServer && configuredServer !== binding.mcp?.serverRef) throw new Error('Configured MCP server changed');
-            if (adapter.capabilities.modelPin === 'unsupported' || !adapter.capabilities.nativeFallbackControllable
-              || policy.guards?.denySelfDelegation !== false && !adapter.capabilities.nestedAgentsControllable) throw new Error('Exact model or child/fallback control is unqualified');
+            if (!hasOperatorWorkerNativeRenderer(adapter) && (adapter.capabilities.modelPin === 'unsupported' || !adapter.capabilities.nativeFallbackControllable)) throw new Error('Exact model or fallback control is unqualified; qualify an adapter with these controls');
+            if (policy.guards?.denySelfDelegation !== false && !adapter.capabilities.nestedAgentsControllable) throw new Error('Child-agent control is unqualified. Review models.json defaults.workerSelection.guards.denySelfDelegation; false permits uncontrolled child agents without qualifying their behavior.');
             if (binding.identityEvidence === 'backend-attested' && adapter.capabilities.modelPin !== 'observed') throw new Error('Requested-only mapping cannot attest backend identity');
-            if (group.execution?.sandbox && !adapter.capabilities.sandboxModes.includes(group.execution.sandbox)) throw new Error('Requested sandbox mode is unqualified');
+            if (!hasOperatorWorkerNativeRenderer(adapter) && group.execution?.sandbox && !adapter.capabilities.sandboxModes.includes(group.execution.sandbox)) throw new Error('Requested sandbox mode is unqualified');
             qualifyWorkerInvocationProfile(adapter, { profile: binding.profile, transport, cliVersion: binding.cliVersion,
               policy, permissions, effort, boundary: binding.boundary,
               requiredControls: request.requiredControls, mcp: binding.mcp });
@@ -606,7 +615,7 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
           // Worker candidates always invoke a model; deterministic/routine hints must not bypass premium authority.
           const authority = routeModelTier({ ...request.authority, deterministic: false, routine: false,
             defaultTier: guidance.tier === 'economy' ? 1 : 2, requestedPremium: premium || request.authority?.requestedPremium });
-          if (authority.requiresConfirmation) deny('OG_MODEL_UNAPPROVED', '/request/authority', authority.rationale.join('; '));
+          if (authority.requiresConfirmation) deny('OG_MODEL_UNAPPROVED', '/request/authority', `${authority.rationale.join('; ')}; agents may pass --authorize-premium only after the human explicitly confirmed the premium escalation (escalation-discipline rule)`);
           const installation = parallelism.clis?.[member.cli];
           const caps = [parallelism.max_parallel_subagents, group.maxParallel, parallelism.admission?.groupCaps?.[groupId],
             parallelism.admission?.memberCaps?.[`${groupId}/${member.id}`], parallelism.admission?.cliCaps?.[member.cli],

@@ -29,6 +29,12 @@ export const lintHandler: CommandHandler = {
   category: 'utility',
   aliases: ['-lint', '--lint'],
 
+  async help(): Promise<HandlerResult> {
+    const { main } = await import('../../lint/cli.js');
+    await main(['--help']);
+    return { exitCode: 0 };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {
       const { main } = await import('../../lint/cli.js');

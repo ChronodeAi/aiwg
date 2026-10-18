@@ -1,3 +1,4 @@
+import { validateDecisionConfig, type DecisionConfig } from './decision-config.js';
 /**
  * Project-Level AIWG Config
  *
@@ -9,8 +10,13 @@
  * @implements #621
  */
 
+import { validateImportExclusions } from '../sessions/import-exclusions.js';
+
 import { resolveDispatchHostThresholds } from './dispatch-thresholds-runtime.mjs';
 export { DEFAULT_DISPATCH_HOST_THRESHOLDS, resolveDispatchHostThresholds } from './dispatch-thresholds-runtime.mjs';
+
+import { validateIndexGraphOverrides, type IndexBuiltinGraphOverride } from './index-graph-overrides.js';
+export type { IndexBuiltinGraphOverride } from './index-graph-overrides.js';
 
 import Ajv, { type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
@@ -461,6 +467,19 @@ export interface ProjectLocalConfig {
  * Top-level shape of .aiwg/aiwg.config
  */
 export interface AiwgConfig {
+  decision?: DecisionConfig;
+  sessions?: {
+    /** Explicitly authorized Codex discovery roots, relative to the workspace or absolute. */
+    codex_roots?: string[];
+    /** Additional authorized discovery manifests for refresh, relative to the workspace or absolute. */
+    discovery_manifests?: string[];
+    /** Import limits and exclusions; source cap 0 means unlimited. */
+    import?: {
+      max_record_bytes?: number;
+      max_source_bytes?: number;
+      exclude?: string[];
+    };
+  };
   $schema?: string;
   version: '1';
 
@@ -600,6 +619,14 @@ export interface AiwgConfig {
   telemetry?: TelemetryConfig;
 
   /**
+   * Setup/onboarding preferences — answers to opt-in offers presented during
+   * `aiwg init` / `aiwg setup project` that are not worker policy and must
+   * not live in `parallelism` (a frozen contract fragment, B-OG-29).
+   * @implements #3050
+   */
+  setup?: SetupConfig;
+
+  /**
    * Project build policy. Large build workflows consult this before expensive
    * package installs, TypeScript compilation, or web bundle generation.
    * @implements #1692
@@ -649,6 +676,26 @@ export interface SkillUsageConfig {
   scopes?: Array<'project' | 'global'>;
   /** Maximum bytes per JSONL store before rotation to `.1`. */
   max_bytes?: number;
+}
+
+/**
+ * Setup/onboarding preferences (#3050). String enum (not boolean) so a
+ * future "snoozed" or "asked-but-no-answer" state can be added without a
+ * breaking schema change.
+ */
+export type WorkerDispatchOfferPreference = 'declined';
+
+/** Setup/onboarding preferences — answers to opt-in offers, not worker policy. */
+export interface SetupConfig {
+  /**
+   * Set to `"declined"` when a person explicitly said no to the
+   * `parallelism.worker_dispatch` opt-in offer presented by `aiwg init` /
+   * `aiwg setup project`. Suppresses the offer and every hint surface
+   * (regenerate/refresh/doctor/generated context) until cleared, so a
+   * decline is never re-asked on every run. The setting itself can still be
+   * turned on later with `aiwg config set --project parallelism.worker_dispatch true`.
+   */
+  worker_dispatch_offer?: WorkerDispatchOfferPreference;
 }
 
 /** Large-build host resource preflight mode (#1692). */
@@ -1088,7 +1135,7 @@ export function resolveWorkerGroupInstallation(
  * `options.aiwgHome`, when provided, is passed through to `ConfigLoader`
  * unchanged — it never reads or writes `process.env.AIWG_HOME`. Omitting it
  * keeps `ConfigLoader`'s own default precedence (`AIWG_HOME` env, else the
- * user-home install).
+ * running package root).
  */
 export async function validateWorkerConfigCandidate(projectDir: string, config: AiwgConfig, options?: { aiwgHome?: string }): Promise<void> {
   const errors = validateParallelismConfig(config.parallelism);
@@ -1249,19 +1296,12 @@ export interface IndexConfig {
   graphBackend?: 'json' | 'graphology' | 'sqlite';
   graphs?: Record<string, IndexGraphDef | IndexMarkdownIndices>;
   graphOverrides?: {
+    project?: IndexBuiltinGraphOverride;
     codebase?: IndexBuiltinGraphOverride;
   };
   userIndices?: {
     enabled?: boolean;
   };
-}
-
-/** Safe operator-controlled fields for adapting an immutable built-in graph. */
-export interface IndexBuiltinGraphOverride {
-  /** Replaces the built-in scan roots when present. */
-  scanDirs?: string[];
-  /** Replaces the built-in extension allow-list when present. */
-  extensions?: string[];
 }
 
 export interface UserIndicesConfig {
@@ -1334,36 +1374,7 @@ export function validateIndexConfig(index: unknown): string[] {
   }
   const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
 
-  const graphOverrides = indexObject.graphOverrides;
-  if (graphOverrides !== undefined) {
-    if (typeof graphOverrides !== 'object' || graphOverrides === null || Array.isArray(graphOverrides)) {
-      errors.push('index.graphOverrides: must be an object mapping supported built-in graph names to overrides');
-    } else {
-      for (const [name, rawOverride] of Object.entries(graphOverrides as Record<string, unknown>)) {
-        const where = `index.graphOverrides.${name}`;
-        if (name !== 'codebase') {
-          errors.push(`${where}: unsupported built-in graph override (supported: codebase)`);
-          continue;
-        }
-        if (typeof rawOverride !== 'object' || rawOverride === null || Array.isArray(rawOverride)) {
-          errors.push(`${where}: must be an object`);
-          continue;
-        }
-        const override = rawOverride as Record<string, unknown>;
-        for (const field of Object.keys(override)) {
-          if (field !== 'scanDirs' && field !== 'extensions') {
-            errors.push(`${where}.${field}: unknown field (supported: scanDirs, extensions)`);
-          }
-        }
-        if (override.scanDirs !== undefined && (!isStringArray(override.scanDirs) || override.scanDirs.length === 0)) {
-          errors.push(`${where}.scanDirs: must be a non-empty array of strings`);
-        }
-        if (override.extensions !== undefined && (!isStringArray(override.extensions) || override.extensions.length === 0)) {
-          errors.push(`${where}.extensions: must be a non-empty array of strings`);
-        }
-      }
-    }
-  }
+  errors.push(...validateIndexGraphOverrides(indexObject.graphOverrides));
 
   const graphs = indexObject.graphs;
   if (graphs === undefined) return errors; // index with no graphs is permissible
@@ -1961,6 +1972,37 @@ export async function readAiwgConfigCandidate(projectDir: string): Promise<AiwgC
   if (!parsed.installed) parsed.installed = {};
   if (!parsed.scripts) parsed.scripts = {};
 
+  if (parsed.sessions !== undefined && (
+    parsed.sessions === null || typeof parsed.sessions !== 'object' || Array.isArray(parsed.sessions)
+    || (parsed.sessions.codex_roots !== undefined && (
+      !Array.isArray(parsed.sessions.codex_roots)
+      || !parsed.sessions.codex_roots.every((root) => typeof root === 'string' && root.trim().length > 0)
+    ))
+  )) {
+    throw new Error('sessions.codex_roots must be an array of non-empty paths');
+  }
+  if (parsed.sessions?.discovery_manifests !== undefined && (
+    !Array.isArray(parsed.sessions.discovery_manifests)
+    || !parsed.sessions.discovery_manifests.every((file) => typeof file === 'string' && file.trim().length > 0)
+  )) {
+    throw new Error('sessions.discovery_manifests must be an array of non-empty paths');
+  }
+
+  if (parsed.sessions?.import !== undefined) {
+    const limits = parsed.sessions.import;
+    if (limits === null || typeof limits !== 'object' || Array.isArray(limits)) {
+      throw new Error('sessions.import must be an object');
+    }
+    if (limits.exclude !== undefined) validateImportExclusions(limits.exclude);
+    for (const key of ['max_record_bytes', 'max_source_bytes'] as const) {
+      const value = limits[key];
+      const minimum = key === 'max_source_bytes' ? 0 : 1;
+      if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum)) {
+        throw new Error(`sessions.import.${key} must be a ${minimum ? 'positive' : 'non-negative'} integer`);
+      }
+    }
+  }
+
   const externalLinkErrors = validateExternalLinks(parsed.externalLinks);
   if (externalLinkErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${externalLinkErrors.join('\n')}`);
@@ -1982,6 +2024,7 @@ export async function readAiwgConfigCandidate(projectDir: string): Promise<AiwgC
     ...validateThreatAssessmentConfig(parsed.security?.threatAssessment),
     ...validateProjectConfig(parsed.project),
     ...validateParallelismConfig(parsed.parallelism),
+    ...validateDecisionConfig(parsed.decision),
   ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
@@ -2032,6 +2075,7 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
     ...validateThreatAssessmentConfig(config.security?.threatAssessment),
     ...validateProjectConfig(config.project),
     ...validateParallelismConfig(config.parallelism),
+    ...validateDecisionConfig(config.decision),
   ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
@@ -2344,10 +2388,25 @@ export function validateWorkerGroupReferences(parallelism: ParallelismConfig, se
   for (const [role, guidance] of Object.entries(selection.roleGuidance ?? {})) {
     for (const group of guidance.groups) if (!parallelism.groups?.[group]) errors.push(`OG_CONFIG_REFERENCE /defaults/workerSelection/roleGuidance/${role}/groups: Unknown group ${group}`);
   }
-  if (qualifiedRoles) for (const [id, group] of Object.entries(parallelism.groups ?? {})) {
-    for (const role of group.requiredRoles ?? []) if (!group.members.some(m => m.enabled !== false && parallelism.clis?.[m.cli]?.enabled !== false && m.roles.includes(role) && qualifiedRoles[`${id}/${m.id}`]?.includes(role))) errors.push(`OG_ADAPTER_UNQUALIFIED /parallelism/groups/${id}/requiredRoles: No qualified route covers ${role}`);
-  }
+  if (qualifiedRoles) errors.push(...validateWorkerGroupQualifications(parallelism, qualifiedRoles)
+    .map(diagnostic => `${diagnostic.code} ${diagnostic.pointer}: ${diagnostic.message}`));
   return errors;
+}
+
+/** Structured qualification gaps retain role scope for readiness projections. */
+export function validateWorkerGroupQualifications(parallelism: ParallelismConfig,
+  qualifiedRoles: Record<string, string[]>): import('../models/types.js').WorkerPolicyDiagnostic[] {
+  const diagnostics: import('../models/types.js').WorkerPolicyDiagnostic[] = [];
+  for (const [id, group] of Object.entries(parallelism.groups ?? {})) {
+    for (const role of group.requiredRoles ?? []) {
+      if (!group.members.some(m => m.enabled !== false && parallelism.clis?.[m.cli]?.enabled !== false
+        && m.roles.includes(role) && qualifiedRoles[`${id}/${m.id}`]?.includes(role))) {
+        diagnostics.push({ code: 'OG_ADAPTER_UNQUALIFIED', pointer: `/parallelism/groups/${id}/requiredRoles`,
+          message: `No qualified route covers ${role}`, roles: [role] });
+      }
+    }
+  }
+  return diagnostics;
 }
 
 /** A configured hard ceiling is eligible only where a qualified control enforces it. */

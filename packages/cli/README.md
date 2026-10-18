@@ -42,7 +42,7 @@ and doctor commands remain advanced maintenance and recovery tools.
 [![npm downloads](https://img.shields.io/npm/dm/%40aiwg%2Fcli?color=CB3837&logo=npm&style=flat-square)](https://www.npmjs.com/package/@aiwg/cli)
 [![full distribution](https://img.shields.io/npm/v/aiwg/latest?label=aiwg&color=CB3837&logo=npm&style=flat-square)](https://www.npmjs.com/package/aiwg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://github.com/jmagly/aiwg/blob/main/LICENSE)
-[![Node Version](https://img.shields.io/badge/node-%E2%89%A520.0.0-brightgreen?style=flat-square&logo=node.js)](https://nodejs.org)
+[![Node Version](https://img.shields.io/badge/node-%E2%89%A524-brightgreen?style=flat-square&logo=node.js)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?style=flat-square&logo=typescript)](https://www.typescriptlang.org)
 [![Signed Resources](https://img.shields.io/badge/resources-signed-00a67d?style=flat-square)](https://releases.aiwg.io/)
 
@@ -857,7 +857,7 @@ mechanism, not a separate set of AIWG instructions.
 
 ### Requirements
 
-- Node.js 20 or newer;
+- Node.js 24 or newer;
 - npm or another package manager capable of installing npm packages;
 - HTTPS access to npmjs.org for installation;
 - HTTPS access to `releases.aiwg.io` for cold web-resource reads.

@@ -81,6 +81,11 @@ node ci/provision-vault-approle.mjs \
   --apply
 ```
 
+TLS certificate verification is enabled by default. For self-signed CI Vault only,
+`VAULT_SKIP_VERIFY=1` (or `true` / `yes`, case-insensitive) disables certificate
+verification for every HTTPS request in the provisioning process and prints a
+warning to stderr. Use trusted certificates in production; leave this opt-in unset.
+
 The handoff file is mode `0600`; its values must never be logged. A signing
 workflow authenticates, reads only the commit key into a temporary
 `GNUPGHOME`, verifies the expected commit fingerprint, signs and verifies the

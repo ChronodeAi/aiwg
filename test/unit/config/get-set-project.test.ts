@@ -203,6 +203,27 @@ describe('aiwg config get|set --project (#1006)', () => {
       ).rejects.toMatchObject({ code: 'ERR_INVALID_VALUE' });
     });
 
+    // #3050 fix-first: the decline is a setup/onboarding preference, not
+    // worker policy — it lives in `setup.worker_dispatch_offer` (a string
+    // enum), never in `parallelism` (the frozen B-OG-29 contract fragment).
+    it('sets setup.worker_dispatch_offer (#3050) and preserves it on an unrelated parallelism update', async () => {
+      await main(['set', '--project', 'setup.worker_dispatch_offer', 'declined', '--target', tmp]);
+      let cfg = readConfig(tmp);
+      expect((cfg as { setup?: { worker_dispatch_offer?: unknown } }).setup?.worker_dispatch_offer).toBe('declined');
+
+      await main(['set', '--project', 'parallelism.max_parallel_subagents', '8', '--target', tmp]);
+      cfg = readConfig(tmp);
+      const typed = cfg as { setup: { worker_dispatch_offer: unknown }; parallelism: { max_parallel_subagents: unknown } };
+      expect(typed.setup.worker_dispatch_offer).toBe('declined');
+      expect(typed.parallelism.max_parallel_subagents).toBe(8);
+    });
+
+    it('rejects an unsupported value for setup.worker_dispatch_offer', async () => {
+      await expect(
+        main(['set', '--project', 'setup.worker_dispatch_offer', 'maybe', '--target', tmp]),
+      ).rejects.toMatchObject({ code: 'ERR_INVALID_VALUE' });
+    });
+
     it('preserves unrelated fields on partial update', async () => {
       // First write — establishes baseline shape
       await main(['set', '--project', 'delivery.mode', 'pr-required', '--target', tmp]);

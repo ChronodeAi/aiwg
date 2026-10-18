@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// VAULT_SKIP_VERIFY is for self-signed CI Vault only; it disables TLS verification process-wide.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,6 +23,10 @@ Default mode is dry-run. Apply mode requires VAULT_ADMIN_TOKEN and writes:
   - a policy and AppRole named by --role
   - a handoff env file containing VAULT_ROLE_ID and VAULT_SECRET_ID
 
+TLS verification is enabled by default. VAULT_SKIP_VERIFY=1 (also true/yes, case-insensitive)
+disables certificate verification process-wide and emits a warning to stderr.
+Use only for self-signed CI Vault; configure trusted certificates for production.
+
 The generated secret ID is written only to the handoff file, never stdout.
 `);
 }
@@ -40,6 +45,7 @@ if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(role)) {
 const policyFile = argValue('--policy-file');
 
 if (['1', 'true', 'yes'].includes(String(process.env.VAULT_SKIP_VERIFY ?? '').toLowerCase())) {
+  console.error('WARNING: VAULT_SKIP_VERIFY is enabled. TLS certificate verification is DISABLED for all HTTPS requests in this process; use only for self-signed CI Vault.');
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 }
 

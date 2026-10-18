@@ -1,3 +1,4 @@
+import { escapeRegExp } from '../../helpers/regexp.js';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
@@ -68,7 +69,7 @@ describe('decision result version ownership', () => {
     for (const { field, document } of cases) {
       expect(() => validateDecisionDocument(document), field).toThrow(DecisionValidationError);
       expect(() => assertDecisionResultWriterVersion(document), field).toThrow(DecisionValidationError);
-      expect(() => assertDecisionResultWriterVersion(document), field).toThrow(new RegExp(`${field}.*requires ${V2}`));
+      expect(() => assertDecisionResultWriterVersion(document), field).toThrow(new RegExp(`${field}.*requires ${escapeRegExp(V2)}`));
       // Relabelling the same evidence as v1alpha2 is the only accepted representation.
       const upgraded = { ...structuredClone(document), apiVersion: V2 } as unknown as DecisionResult;
       assertDecisionResultWriterVersion(upgraded);
@@ -104,7 +105,7 @@ describe('decision result version ownership', () => {
     (legacy.spec as unknown as Record<string, unknown>).cache = structuredClone(cache);
     expect(decisionResultV1Alpha2Fields(legacy)).toEqual(['$.spec.cache']);
     expect(() => validateDecisionDocument(legacy)).toThrow(DecisionValidationError);
-    expect(() => assertDecisionResultWriterVersion(legacy)).toThrow(new RegExp(`\\$\\.spec\\.cache requires ${V2}`));
+    expect(() => assertDecisionResultWriterVersion(legacy)).toThrow(new RegExp(`\\$\\.spec\\.cache requires ${escapeRegExp(V2)}`));
     const current = fixture<RulesetResult>('ruleset-result-batch.v1alpha2.json');
     (current.spec as unknown as Record<string, unknown>).cache = structuredClone(cache);
     assertDecisionResultWriterVersion(current);

@@ -1,11 +1,38 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+// Go/no-go review blocker 1B: `resolveExecutable()`'s `which`/`where.exe`
+// lookup (reached via `createInstallationIdentity()` for a `method:
+// 'source'` identity with no `managerExecutable` override) must pass only
+// an allow-listed environment, never the whole parent one — this spies on
+// `boundedExecFileSync` to capture the environment at the lookup boundary.
+const boundedExecFileSyncSpy = vi.fn();
+vi.mock('../../../src/process/bounded-child-process.mjs', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../src/process/bounded-child-process.mjs')>();
+  return {
+    ...actual,
+    boundedExecFileSync: (...callArgs: Parameters<typeof actual.boundedExecFileSync>) => {
+      return boundedExecFileSyncSpy(...callArgs) ?? actual.boundedExecFileSync(...callArgs);
+    },
+  };
+});
+
+// Pin the fast-path filesystem probe without changing the real fixture I/O.
+const existsSyncSpy = vi.fn();
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const existsSync = (...args: Parameters<typeof actual.existsSync>) =>
+    existsSyncSpy(...args) ?? actual.existsSync(...args);
+  return { ...actual, existsSync, default: { ...actual.default, existsSync } };
+});
+
 import {
   adoptInstallation,
   assertCanonicalInstallation,
   createInstallationIdentity,
+  formatInstallationDiagnostic,
   inspectInstallation,
   installationFile,
   loadInstallationIdentity,
@@ -112,6 +139,34 @@ describe('canonical installation identity', () => {
     expect(status.drift.join(' ')).toContain('differs from canonical root');
   });
 
+  it('names running and registered roots and explicit recovery in drift diagnostics', () => {
+    const registered = packageRoot();
+    const running = packageRoot();
+    const identity = createInstallationIdentity({ actualRoot: registered, managerExecutable: process.execPath });
+    const status = inspectInstallation({ actualRoot: running, identity });
+    const message = formatInstallationDiagnostic(status);
+    expect(message).toContain(`Running installation: npm at ${running}`);
+    expect(message).toContain(`Registered installation: npm at ${registered}`);
+    expect(message).toContain('aiwg doctor');
+    expect(message).toContain('aiwg installation adopt --method npm --yes');
+    expect(message).toContain('npm uninstall -g aiwg');
+    expect(formatInstallationDiagnostic(status, { readOnlyCommand: 'doctor' })).toContain('`doctor` is read-only and continues');
+  });
+
+  it('requires explicit adoption even for a same-version npm copy', () => {
+    const configDir = tempDir('config');
+    const registered = packageRoot();
+    const running = packageRoot();
+    for (const root of [registered, running]) {
+      fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'aiwg', version: '1.0.0' }));
+    }
+    saveInstallationIdentity(createInstallationIdentity({ actualRoot: registered, managerExecutable: process.execPath }), { configDir });
+    expect(() => assertCanonicalInstallation({ actualRoot: running, configDir })).toThrow('installation identity drift');
+    expect(loadInstallationIdentity({ configDir })?.root).toBe(registered);
+    expect(adoptInstallation({ actualRoot: running, configDir, managerExecutable: process.execPath }).state).toBe('aligned');
+    expect(loadInstallationIdentity({ configDir })?.root).toBe(running);
+  });
+
   it('treats an edge launcher redirect as aligned, not drift (#2505)', () => {
     const configDir = tempDir('config');
     // The framework root: a local clone the operator develops against.
@@ -215,5 +270,56 @@ describe('canonical installation identity', () => {
     expect(status.state).toBe('mismatch');
     expect(status.managerProbe).toEqual({ state: 'failed', error: 'spawn failed' });
     expect(status.drift).toContain('recorded manager executable cannot be invoked: spawn failed');
+  });
+
+  it('probes a Windows manager path containing literal percent and metacharacters (#3117)', () => {
+    const root = packageRoot();
+    const manager = path.join(root, 'npm %PATH% & 100%.cmd');
+    fs.writeFileSync(manager, '');
+    fs.chmodSync(manager, 0o755);
+    const identity = createInstallationIdentity({ actualRoot: root, managerExecutable: manager });
+    const executeManager = vi.fn();
+
+    const status = inspectInstallation({
+      actualRoot: root, identity, probeManager: true, executeManager,
+      platform: 'win32', env: { ComSpec: 'cmd.exe' },
+    });
+
+    expect(status.managerProbe).toEqual({ state: 'usable' });
+    expect(executeManager).toHaveBeenCalledWith(
+      'cmd.exe',
+      ['/d', '/v:off', '/s', '/c', `"${root.replace(/ /g, '^ ')}${path.sep}npm^ ^%PATH^%^ ^&^ 100^%.cmd ^^^"--version^^^""`],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000, windowsVerbatimArguments: true },
+    );
+  });
+
+  // Go/no-go review blocker 1B.
+  it("resolving a method: 'source' identity's manager executable looks up `git` with only PATH, never the whole parent environment", () => {
+    const root = packageRoot('aiwg', true);
+    const git = path.join(root, 'git');
+    fs.writeFileSync(git, '');
+    const besideNode = path.join(path.dirname(process.execPath), process.platform === 'win32' ? 'git.cmd' : 'git');
+    // A system Node may share /usr/bin with git; that fast path skips which.
+    existsSyncSpy.mockImplementation(file => file === besideNode ? false : undefined);
+    boundedExecFileSyncSpy.mockReturnValue(`${git}\n`);
+    const env = {
+      PATH: path.join(root, 'lookup-bin'),
+      PATHEXT: '.EXE;.CMD',
+      SystemRoot: path.join(root, 'windows'),
+      AIWG_TEST_INSTALLATION_SECRET: 'sk-test-installation-secret',
+    };
+    const identity = createInstallationIdentity({ actualRoot: root, method: 'source', env });
+
+    expect(identity.managerExecutable).toBe(fs.realpathSync(git));
+    expect(existsSyncSpy).toHaveBeenCalledWith(besideNode);
+    expect(boundedExecFileSyncSpy).toHaveBeenCalledTimes(1);
+    const [finder, args, profile, options] = boundedExecFileSyncSpy.mock.calls[0];
+    expect(finder).toBe(process.platform === 'win32' ? 'where.exe' : 'which');
+    expect(args).toEqual(['git']);
+    expect(profile).toBe('quick');
+    expect(options.env).toEqual({
+      PATH: env.PATH,
+      ...(process.platform === 'win32' ? { PATHEXT: env.PATHEXT, SystemRoot: env.SystemRoot } : {}),
+    });
   });
 });

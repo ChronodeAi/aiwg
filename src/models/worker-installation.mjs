@@ -1,5 +1,6 @@
 /** Shared installed-worker qualification owner, also used by the Ralph compatibility facade. */
 import { spawn } from 'node:child_process';
+import { constants } from 'node:fs';
 import { open, realpath, lstat, mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
@@ -7,6 +8,21 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { parse } from 'acorn';
 import { satisfies, valid, validRange } from 'semver';
+
+// Recovery metadata belongs to the installed driver identity, never its shape.
+const workerRecoveryCapabilities = new WeakMap();
+
+/** Register capabilities for an installed or caller-supplied driver. Keep the
+ * original driver when passing it to readers; copies must be registered anew. */
+export function registerWorkerRecoveryCapabilities(driver, capabilities) {
+  workerRecoveryCapabilities.set(driver, Object.freeze({ ...capabilities }));
+  return driver;
+}
+
+/** Gated readers use this single lookup; ordinary driver properties are ignored. */
+export function getWorkerRecoveryCapabilities(driver) {
+  return workerRecoveryCapabilities.get(driver) ?? null;
+}
 
 // Shipped negative-suite definition. Evidence producers hash this definition,
 // including case semantics and permission rows; arbitrary fixture labels cannot
@@ -84,7 +100,7 @@ function assertWorkerControlArgv(profile, argv) {
 
 
 async function assertWorkerInstallationEvidence(request, scopeDigest) {
-  const { DEFAULT_WORKER_SELECTION } = await import('./provider-policy.js');
+  const { DEFAULT_WORKER_SELECTION, WORKER_OPERATOR_APPROVAL, isOperatorQualifiedWorkerAdapter } = await import('./provider-policy.js');
   const { evidence, now } = request;
   if (!Number.isFinite(now) || !evidence || !/^sha256:[a-f0-9]{64}$/.test(scopeDigest) || evidence.scopeDigest !== scopeDigest
     || evidence.fixtureDigest !== await workerNegativeFixtureDigest()
@@ -95,17 +111,21 @@ async function assertWorkerInstallationEvidence(request, scopeDigest) {
   if (now - Date.parse(evidence.verifiedAt) >= (request.policy?.freshness?.policyDays ?? DEFAULT_WORKER_SELECTION.freshness.policyDays) * 86400000) {
     throw new Error('Installation evidence expired');
   }
+  // Decision 17's direct CLI baseline records operator approval, never claims
+  // that a version probe ran the negative suite. Stronger host evidence keeps
+  // its existing checks below.
+  if (evidence.evidenceRef === WORKER_OPERATOR_APPROVAL && isOperatorQualifiedWorkerAdapter(request.adapter)) return;
   const { cases: requiredCases } = await workerPermissionRequirements(request.adapter.provider, request.requiredControls);
   if (requiredCases.some(id => evidence.cases?.[id] !== 'passed')) {
     throw new Error('Installation negative evidence is incomplete');
   }
 }
 
-/** Read-only recheck: the version probe is bound to the unchanged binary digest. */
+/** Read-only recheck of the approved installation bytes and bindings. */
 async function recheckWorkerInstallation(instance, options) {
   const request = structuredClone(options);
-  const { requiredWorkerControls } = await import('./provider-policy.js');
-  request.requiredControls = requiredWorkerControls(request);
+  const { requiredWorkerControls, isOperatorQualifiedWorkerAdapter } = await import('./provider-policy.js');
+  if (!isOperatorQualifiedWorkerAdapter(request.adapter)) request.requiredControls = requiredWorkerControls(request);
   const scope = await inspectWorkerInstallation(instance, request);
   await assertWorkerInstallationEvidence(request, scope.scopeDigest);
   return { scope, request };
@@ -143,9 +163,9 @@ export async function qualifyWorkerInstallation(instance, options) {
 }
 
 export async function prepareInstalledWorkerInvocation(instance, invocation, qualification) {
-  const { prepareWorkerInvocation } = await import('../serve/worker-invocation.js');
-  const { requiredWorkerControls, WorkerPolicyError } = await import('./provider-policy.js');
-  qualification = { ...qualification, requiredControls: requiredWorkerControls({
+  const { prepareWorkerInvocation, WorkerPathScopeError } = await import('../serve/worker-invocation.js');
+  const { requiredWorkerControls, WorkerPolicyError, isOperatorQualifiedWorkerAdapter } = await import('./provider-policy.js');
+  if (!isOperatorQualifiedWorkerAdapter(qualification.adapter)) qualification = { ...qualification, requiredControls: requiredWorkerControls({
     ...qualification, effort: invocation.selected.effort.value }) };
   const result = await prepareWorkerInvocation(invocation, { ...qualification, adapterId: instance.getName() });
   const profile = qualification.adapter.invocationProfiles[result.selected.profileRef];
@@ -172,14 +192,16 @@ export async function prepareInstalledWorkerInvocation(instance, invocation, qua
     for (const key of ['briefPath', 'stdoutPath', 'stderrPath', 'finalPath']) {
       const target = await canonicalFuturePath(result[key]);
       const roots = key === 'briefPath' ? scope.inputRoots : scope.outputRoots;
-      if (!roots.some(root => inside(root, target))) throw new WorkerPolicyError('OG_CONFIG_REFERENCE', 'Worker input/output path is outside the qualified scope');
+      if (!roots.some(root => inside(root, target))) throw new WorkerPathScopeError(key, result[key], roots);
     }
     if (result.transport === 'shell') {
+      const driverInput = isOperatorQualifiedWorkerAdapter(qualification.adapter)
+        ? { ...result, brief: (await readInstalledFile(result.briefPath)).toString('utf8') } : result;
       const expectedArtifacts = typeof instance.buildWorkerArtifacts === 'function'
-        ? instance.buildWorkerArtifacts({ ...result, permissions: qualification.permissions }) : undefined;
+        ? instance.buildWorkerArtifacts({ ...driverInput, permissions: qualification.permissions }) : undefined;
       if (JSON.stringify(expectedArtifacts) !== JSON.stringify(result.artifacts)) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Worker artifacts differ from authorized driver mapping');
-      const workerArgs = instance.buildWorkerArgs(result, profile, qualification.permissions);
-      assertWorkerControlArgv(profile, workerArgs);
+      const workerArgs = instance.buildWorkerArgs(driverInput, profile, qualification.permissions);
+      if (!isOperatorQualifiedWorkerAdapter(qualification.adapter)) assertWorkerControlArgv(profile, workerArgs);
       const expected = [scope.binary.realpath, ...workerArgs];
       if (JSON.stringify(expected) !== JSON.stringify(result.argv)
         || result.stdin !== qualification.adapter.invocation.stdin) {
@@ -215,6 +237,7 @@ async function binaryIdentity(filename, workerWritableRoots) {
     const stat = await handle.stat();
     if (!stat.isFile() || !(stat.mode & 0o111) || (stat.mode & 0o022)
       || (stat.nlink > 1 && (stat.mode & 0o222))) throw new Error('Untrusted binary permissions');
+    if (stat.size > 1024 * 1024 * 1024) throw new Error('Binary exceeds qualification byte bound (1 GiB)');
     const hash = createHash('sha256');
     // Incremental, bounded reads: never allocate the size reported by the binary.
     const buffer = Buffer.alloc(64 * 1024);
@@ -223,7 +246,7 @@ async function binaryIdentity(filename, workerWritableRoots) {
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (!bytesRead) break;
       total += bytesRead;
-      if (total > 256 * 1024 * 1024) throw new Error('Binary exceeds qualification byte bound');
+      if (total > 1024 * 1024 * 1024) throw new Error('Binary exceeds qualification byte bound');
       hash.update(buffer.subarray(0, bytesRead));
     }
     return { realpath: canonical, sha256: `sha256:${hash.digest('hex')}` };
@@ -245,11 +268,12 @@ async function canonicalFuturePath(filename) {
 }
 
 export async function inspectWorkerInstallation(instance, request) {
-  const { inspectWorkerInvocationProfile, requiredWorkerControls } = await import('./provider-policy.js');
+  const { inspectWorkerInvocationProfile, requiredWorkerControls, isOperatorQualifiedWorkerAdapter } = await import('./provider-policy.js');
   const { qualificationDigest } = await import('./qualification-digest.mjs');
   const { adapter, profile: profileId, cliVersion, workerWritableRoots,
     effectiveConfigDigest, accountScope, boundary, cwd } = request;
-  const requiredControls = requiredWorkerControls(request);
+  const operatorApproved = isOperatorQualifiedWorkerAdapter(adapter);
+  const requiredControls = operatorApproved ? request.requiredControls ?? [] : requiredWorkerControls(request);
   const platform = request.platform ?? process.platform;
   if (platform !== 'linux' || adapter.id !== instance.getName()) throw new Error('Unsupported installation identity/platform');
   if (!Array.isArray(requiredControls) || !Array.isArray(workerWritableRoots)
@@ -269,11 +293,11 @@ export async function inspectWorkerInstallation(instance, request) {
     throw new Error('External control lacks an enforcing boundary');
   }
   const permissionRequirements = await workerPermissionRequirements(adapter.provider, requiredControls);
-  if (permissionRequirements.externalBoundary && boundary.kind === 'native') {
+  if (!operatorApproved && permissionRequirements.externalBoundary && boundary.kind === 'native') {
     throw new Error('Profile requires an external enforcing boundary');
   }
   let controlArgv = null;
-  if (Object.values(profile.controls).some(hasControlArgvMapping)) {
+  if (!operatorApproved && Object.values(profile.controls).some(hasControlArgvMapping)) {
     if (!request.invocation) throw new Error('Worker control qualification requires representative argv invocation');
     controlArgv = instance.buildWorkerArgs(structuredClone(request.invocation), profile, request.permissions);
     assertWorkerControlArgv(profile, controlArgv);
@@ -425,7 +449,7 @@ export function boundedVersionProbe(executable, argv, environment, cwd, timeoutM
     let size = 0;
     let failed = false;
     const stop = () => {
-      if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already stopped */ } }
+      if (Number.isSafeInteger(child.pid) && child.pid > 0) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already stopped */ } }
     };
     // Never rely on close: an escaped descendant may retain the pipe descriptors.
     const abort = () => {
@@ -564,7 +588,8 @@ async function inspectInstalledModule(entry, workerWritableRoots, platform) {
   }
   for (const target of [root, path.join(root, 'package.json'), ...entry.modulePath.split('/').map((_, i, parts) => path.join(root, ...parts.slice(0, i + 1)))]) {
     const stat = await lstat(target);
-    if (stat.isSymbolicLink() || (stat.mode & 0o022) !== 0) throw new Error('Symlink or untrusted writable installed module path');
+    if (stat.isSymbolicLink()) throw new Error(`Symlink in installed module path: ${target}`);
+    if ((stat.mode & 0o022) !== 0) throw new Error(`Installed module path is group/other-writable: ${target}. Run: chmod -R go-w ${JSON.stringify(root)}`);
     // Directory link counts reflect children, not file aliases. Hardlinked store
     // files qualify only when no permission class can write the shared inode.
     if (stat.isFile() && stat.nlink > 1 && (stat.mode & 0o222) !== 0) {
@@ -722,7 +747,29 @@ function installationStorePath() {
   return path.join(root, 'worker-installations.json');
 }
 
-async function assertTrustedStore(filename, writableRoots) {
+// HOME is the operator's trust boundary; custom stores outside it are checked
+// back to /. O_NOFOLLOW on the store itself does not protect its ancestors.
+async function assertTrustedStoreAncestors(directory) {
+  const home = path.resolve(homedir());
+  const boundary = inside(home, directory) ? home : path.parse(directory).root;
+  // The store directory itself is checked by the caller.
+  if (directory === boundary) return;
+  const ancestors = [];
+  for (let target = path.dirname(directory); ; target = path.dirname(target)) {
+    ancestors.push(target);
+    if (target === boundary) break;
+  }
+  for (const target of ancestors.reverse()) {
+    const stat = await lstat(target);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.mode & 0o022
+      || process.getuid && stat.uid !== 0 && stat.uid !== process.getuid()) {
+      throw new Error(`Untrusted installation store ancestor: ${target}`);
+    }
+  }
+}
+
+async function assertTrustedStore(filename, writableRoots, repairDirectory = false, apply = false) {
+  const changes = [];
   const canonical = await canonicalFuturePath(filename);
   if (canonical !== filename) throw new Error('Symlinked installation store');
   for (const root of writableRoots) {
@@ -731,10 +778,35 @@ async function assertTrustedStore(filename, writableRoots) {
   for (const target of [path.dirname(filename), filename]) {
     try {
       const stat = await lstat(target);
-      if (stat.isSymbolicLink() || (stat.mode & 0o022) || stat.isFile() && stat.nlink !== 1
-        || process.getuid && stat.uid !== process.getuid()) throw new Error('Untrusted installation store permissions');
+      if (process.getuid && stat.uid !== process.getuid()) throw new Error(`Installation store path is owned by another user: ${target}`);
+      if (stat.isSymbolicLink() || stat.isFile() && stat.nlink !== 1
+        || target === path.dirname(filename) && !stat.isDirectory()
+        || target === filename && !stat.isFile()) throw new Error(`Untrusted installation store permissions: ${target}`);
+      if (stat.mode & 0o022) {
+        if (!repairDirectory || target !== path.dirname(filename) || !process.getuid) {
+          throw new Error(`Untrusted installation store permissions: ${target}`);
+        }
+        await assertTrustedStoreAncestors(target);
+        changes.push({ path: target, action: 'chmod go-w' });
+        if (apply) {
+          const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
+          try {
+            const current = await handle.stat();
+            if (current.uid !== process.getuid() || current.ino !== stat.ino || current.dev !== stat.dev) {
+              throw new Error(`Installation store directory changed: ${target}`);
+            }
+            await handle.chmod(current.mode & ~0o022);
+          } finally { await handle.close(); }
+        }
+      }
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
+  return changes;
+}
+
+/** Qualification's confirmed write may secure its own directory; ordinary readers never repair. */
+export async function prepareWorkerInstallationStore({ workerWritableRoots, apply = false }) {
+  return assertTrustedStore(installationStorePath(), workerWritableRoots, true, apply);
 }
 
 async function readInstallationStore(filename, expectedDigest) {
@@ -775,7 +847,7 @@ export async function recordWorkerInstallation(instance, options) {
   delete installation.environment;
   delete installation.adapter;
   delete installation.now;
-  const record = { cli, binding: { ...structuredClone(binding), boundary: installation.boundary }, adapter,
+  const record = { cli, ...(options.modelObservations ? { modelObservations: structuredClone(options.modelObservations) } : {}), binding: { ...structuredClone(binding), boundary: installation.boundary }, adapter,
     installation: { ...installation, environmentNames, versionProbe: { rawBanner: result.rawVersionBanner, version: result.cliVersion } },
     ...(options.mcpSchemas ? { mcpSchemas: structuredClone(options.mcpSchemas) } : {}),
     ...(options.mcpProfile ? { mcpProfile: structuredClone(options.mcpProfile) } : {}) };
@@ -789,9 +861,9 @@ export async function recordWorkerInstallation(instance, options) {
   return result;
 }
 
-/** Read recorded host authority, validate installation bytes, then load the same
- * approved factory used by Ralph. Resolution never launches a version probe. */
-export async function loadRecordedWorkerInstallations({ registry, cwd, policy, storePath, storeDigest }) {
+/** Read recorded host authority, validate installation bytes and the current CLI
+ * version, then load the same approved factory used by Ralph. */
+export async function loadRecordedWorkerInstallations({ registry, cwd, policy, parallelism, storePath, storeDigest }) {
   const { WorkerPolicyError, parseProviderModelCapabilities } = await import('./provider-policy.js');
   const { qualificationDigest } = await import('./qualification-digest.mjs');
   const fail = () => new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', 'Trusted installation qualification is required');
@@ -805,6 +877,7 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, s
   catch { throw fail(); }
   const installations = {};
   const drivers = {};
+  const observations = {};
   const resolvedRegistry = structuredClone(registry);
   const counts = new Map();
   for (const record of stored.registrations) counts.set(record?.cli, (counts.get(record?.cli) ?? 0) + 1);
@@ -825,8 +898,8 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, s
       const proof = adapter.invocationProfiles?.[binding.profile]?.installationQualification;
       if (!proof || ['scopeDigest', 'fixtureDigest', 'verifiedAt', 'evidenceRef'].some(key => proof[key] !== installation.evidence?.[key])) throw fail();
       // Reject expired/unbound negative observations before any factory import.
-      const { requiredWorkerControls } = await import('./provider-policy.js');
-      installation.requiredControls = requiredWorkerControls(installation);
+      const { requiredWorkerControls, isOperatorQualifiedWorkerAdapter } = await import('./provider-policy.js');
+      if (!isOperatorQualifiedWorkerAdapter(adapter)) installation.requiredControls = requiredWorkerControls(installation);
       await assertWorkerInstallationEvidence(installation, proof.scopeDigest);
       await assertTrustedStore(filename, installation.workerWritableRoots);
       const candidateRegistry = structuredClone(resolvedRegistry);
@@ -842,7 +915,31 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, s
         workerWritableRoots: installation.workerWritableRoots, platform: process.platform });
       const instance = createProvider(adapter.id);
       const { scope } = await recheckWorkerInstallation(instance, installation);
+      if (parallelism && isOperatorQualifiedWorkerAdapter(adapter)) {
+        const { resolveWorkerGroupInstallation } = await import('../config/aiwg-config.js');
+        const configured = resolveWorkerGroupInstallation(parallelism, cli, candidateRegistry);
+        let executable = configured.executable;
+        if (!path.isAbsolute(executable)) {
+          if (executable.includes(path.sep)) executable = path.resolve(cwd, executable);
+          else {
+            const candidates = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map(directory => path.resolve(directory, executable));
+            executable = null;
+            for (const candidate of candidates) {
+              try { await binaryIdentity(candidate, installation.workerWritableRoots); executable = candidate; break; } catch { /* Next PATH entry. */ }
+            }
+          }
+        }
+        if (!executable || await realpath(executable) !== scope.binary.realpath) throw fail();
+      }
       if (scope.scopeDigest !== proof.scopeDigest) throw fail();
+      // A launcher can keep the same bytes while its CLI payload is updated.
+      // Reuse the bounded, credential-free doctor probe before granting authority.
+      const { version } = await boundedVersionProbe(scope.binary.realpath,
+        adapter.invocation.versionArgv, workerVersionProbeEnvironment(), cwd,
+        workerVersionProbeDefaults.timeoutMs, workerVersionProbeDefaults.maxBytes,
+        adapter.invocation.versionPattern);
+      if (version !== binding.cliVersion
+        || (await inspectWorkerInstallation(instance, installation)).scopeDigest !== scope.scopeDigest) throw fail();
       const profile = adapter.invocationProfiles[binding.profile];
       let mcpRegistry;
       if (profile.transport === 'mcp') {
@@ -870,10 +967,20 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, s
         prepareWorkerInvocation: (invocation, qualification) => prepareInstalledWorkerInvocation(instance, invocation, qualification),
         ...(mcpRegistry ? { mcpRegistry, mcpProfile: record.mcpProfile } : {}),
       };
+      registerWorkerRecoveryCapabilities(drivers[cli], {
+        ...(typeof instance.parseWorkerAttemptFinal === 'function'
+          ? { parseWorkerAttemptFinal: (output, options) => instance.parseWorkerAttemptFinal(output, options) } : {}),
+        // Adapters with neither an explicit signal nor an attempt parser cannot
+        // verify success (e.g. OpenHuman); never admit an unreachable canary.
+        canVerifyAttempt: typeof instance.supportsAttemptVerification === 'function'
+          ? !!instance.supportsAttemptVerification()
+          : typeof instance.parseWorkerAttemptFinal === 'function',
+      });
       installations[cli] = structuredClone(binding);
+      if (record.modelObservations) observations[cli] = structuredClone(record.modelObservations);
       Object.assign(resolvedRegistry, candidateRegistry);
     } catch { /* One missing/changed installation cannot grant authority or hide qualified peers. */ }
   }
   if (!Object.keys(installations).length) throw fail();
-  return { registry: resolvedRegistry, installations, drivers };
+  return { registry: resolvedRegistry, installations, drivers, observations };
 }

@@ -18,10 +18,14 @@
  *   8. Update workspace status
  */
 
-import { execSync } from 'child_process';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
+import { execFileSync } from 'child_process';
+import { resolveExecutable } from '../../src/process/cli-command.mjs';
+import { resolveManagerCommand } from '../../src/installation/manager-command.mjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { isMain } from '../_is-main.mjs';
 import {
   loadWorkspaceData,
   updateWorkspaceStatus,
@@ -30,6 +34,74 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * Mirrors `src/cli/env.ts`'s `isInteractive()` (same TTY/TERM/CI checks;
+ * #3062 review item 12 — this script previously checked `process.stdin.isTTY`
+ * alone, so a CI job with a pseudo-terminal could still reach its prompts).
+ * Duplicated here, rather than imported, because this maintainer-only
+ * script (not shipped in the npm package) runs directly via plain Node,
+ * with no TypeScript build step to compile `env.ts` first.
+ */
+function isInteractiveTerminal() {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+  if (process.env.TERM === 'dumb') return false;
+  if (process.env.DEBIAN_FRONTEND === 'noninteractive') return false;
+  const ciVars = [
+    'CI', 'CONTINUOUS_INTEGRATION', 'BUILD_NUMBER', 'RUN_ID', 'GITHUB_ACTIONS',
+    'GITLAB_CI', 'CIRCLECI', 'TRAVIS', 'BUILDKITE', 'JENKINS_URL', 'TF_BUILD', 'TEAMCITY_VERSION',
+  ];
+  if (ciVars.some((name) => {
+    const value = process.env[name];
+    return value && value !== '0' && value.toLowerCase() !== 'false';
+  })) return false;
+  return true;
+}
+
+/**
+ * Strict `--on-conflict <choice>` parsing (#3062 review items 10/11): a
+ * flag present without a usable value, or with a value outside 1-4, is a
+ * usage error raised before any git command runs — never silently "not
+ * given".
+ */
+function parseOnConflictArg(args) {
+  // #3062 second review, finding 4: validate every occurrence (not just
+  // the first found), stop at a bare `--` terminator, and accept
+  // `--on-conflict=value` — mirrors `src/cli/flag-parsing.ts`'s
+  // `scanFlagOccurrences()` semantics, duplicated here in plain JS for
+  // the same reason as this file's own `isInteractiveTerminal()`: this
+  // maintainer script runs directly via plain Node, with no TypeScript
+  // build step. First occurrence wins (no pre-#3062 baseline to
+  // preserve; matches this function's own prior `indexOf`-based
+  // convention).
+  let resolved;
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === '--') break;
+
+    let flag;
+    let value;
+    if (token.startsWith('--on-conflict=')) {
+      flag = '--on-conflict';
+      value = token.slice('--on-conflict='.length);
+    } else if (token === '--on-conflict') {
+      flag = token;
+      value = args[i + 1];
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error('--on-conflict requires a value (1-4)');
+      }
+      i += 1;
+    } else {
+      continue;
+    }
+
+    if (!['1', '2', '3', '4'].includes(value)) {
+      throw new Error(`${flag} must be one of: 1, 2, 3, 4 (got '${value}')`);
+    }
+    if (resolved === undefined) resolved = value;
+  }
+  return resolved;
+}
 
 // ANSI color codes
 const colors = {
@@ -43,13 +115,15 @@ const colors = {
 
 /**
  * Execute command with error handling
- * @param {string} command - Command to execute
+ * @param {string} file - Executable to run
+ * @param {string[]} args - Command arguments
  * @param {Object} options - Execution options
  * @returns {Object} { success: boolean, stdout: string, stderr: string }
  */
-function exec(command, options = {}) {
+function exec(file, args, options = {}) {
   try {
-    const stdout = execSync(command, {
+    const tier = options.tier ?? 'quick';
+    const stdout = boundedExecFileSync(file, args, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options
@@ -70,7 +144,7 @@ function exec(command, options = {}) {
  * @returns {Object} { success: boolean, branch: string|null, error: string|null }
  */
 function getCurrentBranch(cwd) {
-  const result = exec('git rev-parse --abbrev-ref HEAD', { cwd });
+  const result = exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
   if (!result.success) {
     return {
       success: false,
@@ -92,7 +166,8 @@ function getCurrentBranch(cwd) {
  */
 function fetchUpstream(cwd) {
   console.log('Fetching upstream changes...');
-  const result = exec('git fetch upstream', { cwd });
+  // Network call (#3062 review item 6) — not the default 'quick' tier.
+  const result = exec('git', ['fetch', 'upstream'], { cwd, tier: 'network' });
   if (!result.success) {
     return {
       success: false,
@@ -110,7 +185,7 @@ function fetchUpstream(cwd) {
  */
 function getDivergence(cwd) {
   // Get commits behind
-  const behindResult = exec('git rev-list --count HEAD..upstream/main', { cwd });
+  const behindResult = exec('git', ['rev-list', '--count', 'HEAD..upstream/main'], { cwd });
   if (!behindResult.success) {
     return {
       success: false,
@@ -123,7 +198,7 @@ function getDivergence(cwd) {
   const behind = parseInt(behindResult.stdout) || 0;
 
   // Get commits ahead
-  const aheadResult = exec('git rev-list --count upstream/main..HEAD', { cwd });
+  const aheadResult = exec('git', ['rev-list', '--count', 'upstream/main..HEAD'], { cwd });
   if (!aheadResult.success) {
     return {
       success: false,
@@ -138,11 +213,11 @@ function getDivergence(cwd) {
   // Check for potential conflicts
   const conflicts = [];
   if (behind > 0) {
-    const diffResult = exec('git diff --name-only HEAD upstream/main', { cwd });
+    const diffResult = exec('git', ['diff', '--name-only', 'HEAD', 'upstream/main'], { cwd });
     if (diffResult.success) {
       const changedFiles = diffResult.stdout.split('\n').filter(f => f.trim());
       // Check if any of these files have local changes
-      const statusResult = exec('git diff --name-only HEAD', { cwd });
+      const statusResult = exec('git', ['diff', '--name-only', 'HEAD'], { cwd });
       if (statusResult.success) {
         const localChanges = statusResult.stdout.split('\n').filter(f => f.trim());
         const potentialConflicts = changedFiles.filter(f => localChanges.includes(f));
@@ -184,7 +259,7 @@ function showDivergence(divergence) {
  * @returns {Promise<string>} 'rebase'|'merge'|'cancel'
  */
 async function promptSyncStrategy() {
-  if (!process.stdin.isTTY) {
+  if (!isInteractiveTerminal()) {
     return 'cancel';
   }
 
@@ -220,11 +295,11 @@ function performRebase(cwd) {
   console.log('');
   console.log('Rebasing onto upstream/main...');
 
-  const result = exec('git rebase upstream/main', { cwd });
+  const result = exec('git', ['rebase', 'upstream/main'], { cwd });
 
   if (!result.success) {
     // Check if it's a conflict
-    const statusResult = exec('git status', { cwd });
+    const statusResult = exec('git', ['status'], { cwd });
     if (statusResult.stdout.includes('both modified') || statusResult.stdout.includes('rebase in progress')) {
       return {
         success: false,
@@ -252,11 +327,11 @@ function performMerge(cwd) {
   console.log('');
   console.log('Merging upstream/main...');
 
-  const result = exec('git merge upstream/main', { cwd });
+  const result = exec('git', ['merge', 'upstream/main'], { cwd });
 
   if (!result.success) {
     // Check if it's a conflict
-    const statusResult = exec('git status', { cwd });
+    const statusResult = exec('git', ['status'], { cwd });
     if (statusResult.stdout.includes('both modified') || statusResult.stdout.includes('Unmerged paths')) {
       return {
         success: false,
@@ -281,7 +356,7 @@ function performMerge(cwd) {
  * @returns {Array<string>} List of conflicted files
  */
 function getConflictedFiles(cwd) {
-  const result = exec('git diff --name-only --diff-filter=U', { cwd });
+  const result = exec('git', ['diff', '--name-only', '--diff-filter=U'], { cwd });
   if (!result.success) {
     return [];
   }
@@ -319,15 +394,114 @@ function showConflictOptions(conflicts, strategy) {
   console.log('');
 }
 
+/** Split EDITOR's executable and quoted arguments without invoking a shell. */
+function editorArgs(editor) {
+  const args = [];
+  let value = '';
+  let quote = '';
+  let started = false;
+  for (let i = 0; i < editor.length; i++) {
+    const char = editor[i];
+    if (char === '\\' && quote !== "'" && i + 1 < editor.length &&
+        /[\s\\"']/.test(editor[i + 1])) {
+      value += editor[++i];
+      started = true;
+    } else if (quote && char === quote) {
+      quote = '';
+    } else if (!quote && (char === '"' || char === "'")) {
+      quote = char;
+      started = true;
+    } else if (!quote && /\s/.test(char)) {
+      if (started) args.push(value);
+      value = '';
+      started = false;
+    } else {
+      value += char;
+      started = true;
+    }
+  }
+  if (quote) throw new Error('Unclosed quote in EDITOR');
+  if (started) args.push(value);
+  if (!args[0]) throw new Error('EDITOR must name an executable');
+  return args;
+}
+
 /**
- * Prompt for conflict handling
+ * Apply one numbered conflict-resolution choice (shared by the interactive
+ * prompt and the headless `--on-conflict` path below). Choice `1` (open
+ * $EDITOR) is interactive by nature regardless of how it was selected;
+ * callers MUST NOT invoke it without a terminal attached.
+ *
+ * @param {string} choice - '1'|'2'|'3'|'4'
  * @param {Array<string>} conflicts - List of conflicted files
  * @param {string} strategy - 'rebase' or 'merge'
  * @param {string} cwd - Working directory
+ */
+function applyConflictChoice(choice, conflicts, strategy, cwd) {
+  const firstFile = conflicts[0];
+
+  if (choice === '1') {
+    const editor = process.env.EDITOR || 'vi';
+    console.log(`Opening ${firstFile} in ${editor}...`);
+    try {
+      const [file, ...args] = editorArgs(editor);
+      const invocation = resolveManagerCommand(resolveExecutable(file, undefined, undefined, undefined, cwd), [...args, firstFile]);
+      // sync-spawn: interactive conflict-editor-launch — opens $EDITOR on
+      // the conflicted file; the user interacts with it directly (see
+      // tools/testing/sync-spawn-allowlist.json). Callers of this function
+      // only reach choice '1' when a terminal is attached (#3062) — see
+      // `handleConflicts` below. Not a candidate for a bounded timeout.
+      execFileSync(invocation.file, invocation.args, {
+        stdio: 'inherit', cwd,
+        ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+      });
+    } catch (err) {
+      console.log(`${colors.red}✗${colors.reset} Failed to open editor`);
+    }
+  } else if (choice === '2') {
+    const diffResult = exec('git', ['diff', '--', firstFile], { cwd });
+    console.log(diffResult.stdout);
+  } else if (choice === '3') {
+    const abortArgs = [strategy === 'rebase' ? 'rebase' : 'merge', '--abort'];
+    console.log(`Aborting ${strategy}...`);
+    exec('git', abortArgs, { cwd });
+    console.log(`${colors.green}✓${colors.reset} ${strategy} aborted`);
+  }
+  // choice === '4' (or anything else reaching here): no-op — resolve manually.
+}
+
+/**
+ * Prompt for conflict handling, or apply `onConflictChoice` headlessly
+ * when given (#3062 review item 10: the interactive "Choice [1-4]" prompt
+ * previously had no argument at all).
+ *
+ * @param {Array<string>} conflicts - List of conflicted files
+ * @param {string} strategy - 'rebase' or 'merge'
+ * @param {string} cwd - Working directory
+ * @param {string|undefined} onConflictChoice - `--on-conflict` value, if given
  * @returns {Promise<void>}
  */
-async function handleConflicts(conflicts, strategy, cwd) {
-  if (!process.stdin.isTTY) {
+async function handleConflicts(conflicts, strategy, cwd, onConflictChoice) {
+  const interactive = isInteractiveTerminal();
+
+  if (onConflictChoice !== undefined) {
+    // Headless answer already given — never prompt, regardless of whether
+    // a terminal happens to be attached (#3062 review item 12: "with a
+    // terminal we can skip steps for any params provided"). Choice '1'
+    // (open $EDITOR) is still interactive by nature: refuse it specifically
+    // without a terminal instead of spawning an editor that would hang.
+    if (onConflictChoice === '1' && !interactive) {
+      console.error(
+        `${colors.red}✗${colors.reset} --on-conflict 1 opens $EDITOR, which requires an interactive terminal.`,
+      );
+    } else {
+      applyConflictChoice(onConflictChoice, conflicts, strategy, cwd);
+    }
+    showConflictOptions(conflicts, strategy);
+    return;
+  }
+
+  if (!interactive) {
     showConflictOptions(conflicts, strategy);
     return;
   }
@@ -355,23 +529,11 @@ async function handleConflicts(conflicts, strategy, cwd) {
       rl.close();
       const choice = answer.trim();
 
-      if (choice === '1') {
-        const editor = process.env.EDITOR || 'vi';
-        console.log(`Opening ${firstFile} in ${editor}...`);
-        try {
-          execSync(`${editor} ${firstFile}`, { stdio: 'inherit', cwd });
-        } catch (err) {
-          console.log(`${colors.red}✗${colors.reset} Failed to open editor`);
-        }
-      } else if (choice === '2') {
-        const diffResult = exec(`git diff ${firstFile}`, { cwd });
-        console.log(diffResult.stdout);
-      } else if (choice === '3') {
-        const abortCommand = strategy === 'rebase' ? 'git rebase --abort' : 'git merge --abort';
-        console.log(`Aborting ${strategy}...`);
-        exec(abortCommand, { cwd });
-        console.log(`${colors.green}✓${colors.reset} ${strategy} aborted`);
-      }
+      // Choice '1' here reaches `applyConflictChoice`'s editor launch (see
+      // its own `sync-spawn: interactive conflict-editor-launch` marker)
+      // only when a terminal is attached — the no-terminal path above
+      // returns before this `rl.question` is ever set up (#3062).
+      applyConflictChoice(choice, conflicts, strategy, cwd);
 
       showConflictOptions(conflicts, strategy);
       resolve();
@@ -389,8 +551,9 @@ function pushToOrigin(cwd, force = false) {
   console.log('');
   console.log('Pushing changes to origin...');
 
-  const forceFlag = force ? '--force-with-lease' : '';
-  const result = exec(`git push origin HEAD ${forceFlag}`, { cwd });
+  const forceArgs = force ? ['--force-with-lease'] : [];
+  // Network call (#3062 review item 6) — not the default 'quick' tier.
+  const result = exec('git', ['push', 'origin', 'HEAD', ...forceArgs], { cwd, tier: 'network' });
 
   if (!result.success) {
     return {
@@ -433,9 +596,17 @@ async function main() {
 
   // Parse arguments
   if (args.length === 0 || args[0] === '-h' || args[0] === '--help') {
-    console.log('Usage: aiwg -contribute-sync <feature-name>');
+    console.log('Usage: aiwg -contribute-sync <feature-name> [--on-conflict 1-4]');
     console.log('');
     console.log('Sync fork with upstream changes using rebase or merge strategy.');
+    console.log('');
+    console.log('Options:');
+    console.log('  --on-conflict 1-4  Answer the conflict-resolution prompt headlessly:');
+    console.log('                     1=open $EDITOR (requires a terminal), 2=show diff,');
+    console.log('                     3=abort, 4=exit (resolve manually).');
+    console.log('');
+    console.log('Without an interactive terminal and without --on-conflict, a conflict');
+    console.log('prints its resolution options and stops before changing anything.');
     console.log('');
     console.log('Example:');
     console.log('  aiwg -contribute-sync cursor-integration');
@@ -444,6 +615,17 @@ async function main() {
 
   const feature = args[0];
   const cwd = process.cwd();
+
+  // #3062 review item 10: `--on-conflict <choice>` answers the interactive
+  // "Choice [1-4]" conflict-resolution prompt directly. Parsed before any
+  // git command runs, so a bad/missing value never gets past this point.
+  let onConflictChoice;
+  try {
+    onConflictChoice = parseOnConflictArg(args);
+  } catch (err) {
+    console.error(`${colors.red}✗${colors.reset} ${err.message}`);
+    process.exit(2);
+  }
 
   console.log('Syncing with upstream...');
   console.log('Feature:', feature);
@@ -492,7 +674,7 @@ async function main() {
     // Get conflicted files
     const conflicts = getConflictedFiles(cwd);
     if (conflicts.length > 0) {
-      await handleConflicts(conflicts, stateCheck.inProgress, cwd);
+      await handleConflicts(conflicts, stateCheck.inProgress, cwd, onConflictChoice);
       process.exit(1);
     } else {
       console.log('');
@@ -551,7 +733,7 @@ async function main() {
   if (!syncResult.success) {
     if (syncResult.conflicts) {
       const conflicts = getConflictedFiles(cwd);
-      await handleConflicts(conflicts, strategy, cwd);
+      await handleConflicts(conflicts, strategy, cwd, onConflictChoice);
       process.exit(1);
     } else {
       console.error(`${colors.red}✗${colors.reset} ${syncResult.error}`);
@@ -595,7 +777,11 @@ async function main() {
 }
 
 // Run main function
-main().catch(err => {
-  console.error('Fatal error:', err.message);
-  process.exit(1);
-});
+if (isMain(import.meta.url)) {
+  main().catch(err => {
+    console.error('Fatal error:', err.message);
+    process.exit(1);
+  });
+}
+
+export { applyConflictChoice, pushToOrigin };

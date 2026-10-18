@@ -28,6 +28,8 @@ import { getLoggerInfo } from '../log.js';
 import { readAiwgConfig, getProjectDir } from '../../config/aiwg-config.js';
 import { getLogger } from '../log.js';
 import { spawnSync } from 'child_process';
+import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
+import { exitCodeForSpawnResult } from '../child-process-result.js';
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, mkdtempSync, rmSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -92,9 +94,14 @@ export const diagnoseHandler: CommandHandler = {
 
       // tar it up via system tar. We rely on GNU/BSD tar being present;
       // degrade gracefully if not.
-      const tar = spawnSync('tar', ['-czf', outPath, '-C', stage, '.'], { stdio: 'pipe' });
+      // Packaging a small local diagnostics bundle; quick tier (#3062).
+      const tar = boundedSpawnSync('tar', ['-czf', outPath, '-C', stage, '.'], 'quick', { stdio: 'pipe' });
       if (tar.status !== 0) {
-        ui.error(`tar failed: ${tar.stderr?.toString() ?? '(no stderr)'}`);
+        // #3062 review item 7: already correctly treats a null status
+        // (timeout/signal) as failure; surface the bounded helper's
+        // diagnostic (e.g. the enriched timeout message) ahead of stderr.
+        const detail = exitCodeForSpawnResult(tar).message ?? tar.stderr?.toString() ?? '(no stderr)';
+        ui.error(`tar failed: ${detail}`);
         ui.info(`Bundle contents staged at: ${stage}`);
         ui.info(`You can tar it manually: tar -czf ${outName} -C ${stage} .`);
         return { exitCode: 1, error: new Error('tar failed') };
@@ -234,9 +241,9 @@ function redactSecretsInObject(obj: unknown): Record<string, unknown> {
 
 function collectGitInfo(cwd: string): string | null {
   try {
-    const branch = spawnSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], { stdio: 'pipe', timeout: 5000 });
-    const log = spawnSync('git', ['-C', cwd, 'log', '-10', '--oneline'], { stdio: 'pipe', timeout: 5000 });
-    const remote = spawnSync('git', ['-C', cwd, 'remote', '-v'], { stdio: 'pipe', timeout: 5000 });
+    const branch = spawnSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], { stdio: 'pipe', timeout: 5000, killSignal: 'SIGKILL' });
+    const log = spawnSync('git', ['-C', cwd, 'log', '-10', '--oneline'], { stdio: 'pipe', timeout: 5000, killSignal: 'SIGKILL' });
+    const remote = spawnSync('git', ['-C', cwd, 'remote', '-v'], { stdio: 'pipe', timeout: 5000, killSignal: 'SIGKILL' });
     if (branch.status !== 0) return null;
     return [
       `branch: ${branch.stdout.toString().trim()}`,
@@ -258,6 +265,7 @@ function collectDoctorOutput(): string | null {
       stdio: 'pipe',
       timeout: 30_000,
       env: { ...process.env, AIWG_LOG_DISABLE: '1', NO_COLOR: '1' },
+      killSignal: 'SIGKILL',
     });
     const out = r.stdout?.toString() ?? '';
     const err = r.stderr?.toString() ?? '';

@@ -1,8 +1,10 @@
+import { importImpl } from '../_resolve-impl.mjs';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 export const DSH_SUPPORTED_VERSIONS = Object.freeze(['0.1.1-rc.2', '0.1.2-rc.1', '0.1.3-alpha.1']);
 export const DSH_MAX_FRAME_BYTES = 1024 * 1024;
@@ -240,9 +242,9 @@ export class DshJsonRpcClient {
   shutdown() { return this.request('shutdown', {}); }
   abort(error = new Error('DeepSeek Harness JSON-RPC client closed')) {
     if (this.child && !this.child.killed) {
-      this.child.kill('SIGTERM');
+      signalChild(this.child, 'SIGTERM');
       const child = this.child;
-      const escalation = setTimeout(() => { if (child.exitCode === null) child.kill('SIGKILL'); }, 1_000);
+      const escalation = setTimeout(() => { if (child.exitCode === null) signalChild(child, 'SIGKILL'); }, 1_000);
       child.once('exit', () => clearTimeout(escalation));
     }
     this.rejectAll(error);
@@ -327,10 +329,10 @@ function runBounded(binary, args, { cwd, env, timeoutMs, terminateGraceMs = 1_00
         finish(error);
         return;
       }
-      child.kill('SIGTERM');
+      signalChild(child, 'SIGTERM');
       if (settled) return;
       escalation = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        if (child.exitCode === null && child.signalCode === null) signalChild(child, 'SIGKILL');
       }, terminateGraceMs);
     };
     const cancel = () => terminate(new Error('DeepSeek Harness run cancelled'));

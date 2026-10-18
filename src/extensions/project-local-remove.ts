@@ -13,8 +13,10 @@
  * @implements #1037
  */
 
-import { lstat, readdir, stat, unlink, rmdir } from 'fs/promises';
+import { lstat, readdir, readFile, stat, unlink, rmdir } from 'fs/promises';
 import { resolve, join, relative, dirname, isAbsolute } from 'path';
+import { deployedSkillRoots } from '../providers/deployed-skill-roots.js';
+import { releaseSkillOwnership } from '../providers/skill-ownership.mjs';
 import type { AiwgConfig, InstalledEntry } from '../config/aiwg-config.js';
 import { appendProjectLocalActivity } from './project-local-activity.js';
 import { sha256OfFileNormalized } from './managed-marker.js';
@@ -383,7 +385,33 @@ export async function removeProjectLocalBundle(
     const providerHashes = removalHashesForProvider(installedEntry, provider);
     const sourceRels = Object.keys(providerHashes);
 
-    if (sourceRels.length === 0) {
+    // Receipts cover the complete transformed skill and support tree, including
+    // retired skills no longer present in the source inventory.
+    const receiptSkills = new Set<string>();
+    const sourceRoot = installedEntry.localPath ? resolve(projectDir, installedEntry.localPath) : undefined;
+    for (const root of deployedSkillRoots(projectDir, provider)) {
+      for (const name of await readdir(root).catch(() => [] as string[])) {
+        const skillDir = join(root, name);
+        try { await readFile(join(skillDir, '.aiwg-manifest.json'), 'utf8'); } catch { continue; }
+        receiptSkills.add(name);
+        const removed = releaseSkillOwnership(skillDir, {
+          frameworkSlug: bundleId,
+          skillSource: sourceRoot ? join(sourceRoot, 'skills', name) : undefined,
+          sourceRoot,
+        }, { dryRun });
+        if (removed === null) {
+          // Unrelated receipts are outside this bundle's removal inventory.
+          if (!sourceRels.some(sourceRel => sourceRel.startsWith(`skills/${name}/`))) continue;
+          providerHadSkip = true;
+        }
+        outcomes.push({ provider, artifactPath: `skills/${name}/SKILL.md`, deployedAbsPath: skillDir,
+          case: removed === null ? 'replaced' : 'pristine', reverted: removed !== null && !dryRun,
+          message: removed === null ? 'owned by another source — preserved' : dryRun
+            ? '[dry-run] would release skill ownership' : 'released skill ownership; operator files preserved' });
+      }
+    }
+
+    if (sourceRels.length === 0 && receiptSkills.size === 0) {
       providerHadSkip = true;
       outcomes.push({
         provider,
@@ -396,6 +424,7 @@ export async function removeProjectLocalBundle(
     }
 
     for (const sourceRel of sourceRels) {
+      if (sourceRel.startsWith('skills/') && receiptSkills.has(sourceRel.split('/')[1])) continue;
       const owner = resolveOwnership(config, bundleId, provider, sourceRel);
       if (owner) {
         providerHadSkip = true;

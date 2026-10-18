@@ -570,14 +570,14 @@ This avoids building a new full runtime while closing the actual gap: explicit, 
 
 ### Local research corpus
 
-- [Graph Engineering vs Loop Engineering synthesis](../../../research/research-papers/.aiwg/research/synthesis/graph-engineering-vs-loop-engineering-agentic-control-2026-08-17.md)
-- [REF-2220: LangChain/LangGraph graph engineering](../../../research/research-papers/documentation/references/REF-2220-runkle-chase-2026-graph-engineering-langgraph.md)
-- [REF-2221: Loop Engineering](../../../research/research-papers/documentation/references/REF-2221-osmani-2026-loop-engineering.md)
-- [REF-2228: Apache Airflow DAG workflow orchestration](../../../research/research-papers/documentation/references/REF-2228-apache-airflow-2026-dag-workflow-orchestration.md)
-- [REF-2229: Prefect loops vs graphs](../../../research/research-papers/documentation/references/REF-2229-prefect-2026-loops-vs-graphs.md)
-- [REF-2230: Microsoft AutoGen GraphFlow](../../../research/research-papers/documentation/references/REF-2230-microsoft-2026-autogen-graphflow.md)
-- [REF-2231: Temporal fallacy of the graph](../../../research/research-papers/documentation/references/REF-2231-temporal-2025-fallacy-of-the-graph.md)
-- [REF-2232: Temporal durable multi-agent systems](../../../research/research-papers/documentation/references/REF-2232-temporal-2026-durable-flexible-multi-agent-systems.md)
+- Graph Engineering vs Loop Engineering synthesis (research-papers/.aiwg/research/synthesis/graph-engineering-vs-loop-engineering-agentic-control-2026-08-17.md)
+- REF-2220: LangChain/LangGraph graph engineering (research-papers/documentation/references/REF-2220-runkle-chase-2026-graph-engineering-langgraph.md)
+- REF-2221: Loop Engineering (research-papers/documentation/references/REF-2221-osmani-2026-loop-engineering.md)
+- REF-2228: Apache Airflow DAG workflow orchestration (research-papers/documentation/references/REF-2228-apache-airflow-2026-dag-workflow-orchestration.md)
+- REF-2229: Prefect loops vs graphs (research-papers/documentation/references/REF-2229-prefect-2026-loops-vs-graphs.md)
+- REF-2230: Microsoft AutoGen GraphFlow (research-papers/documentation/references/REF-2230-microsoft-2026-autogen-graphflow.md)
+- REF-2231: Temporal fallacy of the graph (research-papers/documentation/references/REF-2231-temporal-2025-fallacy-of-the-graph.md)
+- REF-2232: Temporal durable multi-agent systems (research-papers/documentation/references/REF-2232-temporal-2026-durable-flexible-multi-agent-systems.md)
 
 ### Current external primary/current references checked on 2026-08-21
 

@@ -77,7 +77,7 @@ Check each live worker every 15s; confirm startup within 60s. Quiet limit 90s an
 
 ## Bounded decisions: Jev first, LLM fallback
 
-Before worker/model/effort picks and before classifying a failure as environmental or real, call `aiwg decision ask ... --json` and use the answer when `status` is `answered`. On `fallback`, decide normally — fallback never stops the run. Without Jev setup this skill runs unchanged. Never send secrets in the question or context; Jev output is advisory data, never authorization. See the `decision-offload` skill for the exact command shape.
+Before worker/model/effort picks (`--caller aiwg-mission:worker-pick`) and before classifying a failure as environmental or real (`--caller aiwg-mission:failure-triage`), call `aiwg decision ask ... --json` and use the answer when `status` is `answered`. On `fallback`, decide normally — fallback never stops the run. Without Jev setup this skill runs unchanged. Never send secrets in the question or context; Jev output is advisory data, never authorization. See the `decision-offload` skill for the exact command shape and the full caller-tag table.
 
 ## Discover before improvising
 

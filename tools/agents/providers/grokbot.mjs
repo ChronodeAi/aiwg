@@ -1,5 +1,5 @@
 /**
- * Grok Bot provider (experimental).
+ * Grok Bot provider (stable).
  *
  * Discover-first project bridge + fail-closed user skill root.
  * Never targets `.cursor/**` or invents `~/.grokbot`.

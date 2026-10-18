@@ -1,7 +1,12 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { UserConfig } from '../../../src/config/user-config.js';
+import { main as configMain } from '../../../src/config/cli.js';
+import { readAiwgConfig } from '../../../src/config/aiwg-config.js';
+import { lookupJevCredential, writeJevCredentialFile } from '../../../src/decision/jev-credentials.js';
+import { mkdtemp } from '../../helpers/temp-dir.js';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   decisionCapabilities,
   evaluateMcpProfile,
@@ -251,5 +256,74 @@ describe('decision driver', () => {
       env: { AIWG_DECISION_ENABLED: '1', AIWG_DECISION_MCP_REQUESTS: 'demo=/trusted/request.json' },
     });
     expect(unavailable).toMatchObject({ status: 'unavailable', reason: 'unknown-request-profile' });
+  });
+});
+
+
+describe('decision enablement configuration', () => {
+  async function fixture(project?: boolean, user?: boolean) {
+    const cwd = await mkdtemp(path.join(tmpdir(), 'aiwg-decision-config-'));
+    const userDir = path.join(cwd, 'user');
+    await mkdir(userDir);
+    if (user !== undefined) await new UserConfig(userDir).set('decision.enabled', String(user));
+    if (project !== undefined) {
+      await mkdir(path.join(cwd, '.aiwg'));
+      await writeFile(path.join(cwd, '.aiwg', 'aiwg.config'), JSON.stringify({ decision: { enabled: project } }));
+    }
+    return { cwd, env: { AIWG_CONFIG: userDir } };
+  }
+
+  it.each([
+    [undefined, undefined, undefined, false, 'default'],
+    [undefined, true, undefined, true, 'user'],
+    [undefined, false, undefined, false, 'user'],
+    [true, false, undefined, true, 'project'],
+    [false, true, undefined, false, 'project'],
+    [true, true, '0', false, 'env'],
+    [false, false, '1', true, 'env'],
+    [true, false, 'invalid', true, 'project'],
+  ] as const)('project=%s user=%s env=%s resolves to %s (%s)', async (project, user, forced, enabled, source) => {
+    const options = await fixture(project, user);
+    const env = { ...options.env, AIWG_DECISION_ENABLED: forced };
+    expect(decisionCapabilities({ ...options, env })).toMatchObject({ enabled, enabledSource: source });
+    // Use only synthetic credentials in the file-owned temporary directory.
+    const credentialPath = path.join(options.cwd, 'credentials', 'jev.json');
+    await writeJevCredentialFile({ token: 'fixture-token', region: 'us', enabled: true }, { credentialPath });
+    await expect(lookupJevCredential({ ...options, env, credentialPath })).resolves.toMatchObject({
+      enabled: source === 'default' ? true : enabled,
+    });
+  });
+
+  it.each(['project', 'user'] as const)('allows evaluation from %s config and passes enablement to the dispatcher', async layer => {
+    const options = await fixture(layer === 'project' ? true : undefined, layer === 'user' ? true : undefined);
+    const written = await materializeSyntheticClassificationSetup(options.cwd, {}, { frameworkRoot: process.cwd() });
+    const result = (await runOfflinePattern('bounded-classification', 'classification-known')).receipt.result;
+    const dispatcher = { runDecisionEvaluate: vi.fn(async ({ env, stdout }: any) => {
+      expect(env.AIWG_DECISION_ENABLED).toBe('1');
+      stdout.write(JSON.stringify(result));
+      return 0;
+    }) };
+    const requestPath = written.files['dispatcher-request.json']!;
+    await expect(evaluateRequestPath(requestPath, { ...options, dispatcher, runtime: {} })).resolves.toMatchObject({ status: 'success' });
+    await expect(evaluateRequestPath(requestPath, {
+      ...options, env: { ...options.env, AIWG_DECISION_ENABLED: '0' }, dispatcher, runtime: {},
+    })).resolves.toMatchObject({ status: 'denied', reason: 'explicit-enable-required' });
+    expect(dispatcher.runDecisionEvaluate).toHaveBeenCalledTimes(1);
+    expect(options.env).not.toHaveProperty('AIWG_DECISION_ENABLED');
+  });
+
+  it('supports the documented project config command and rejects non-booleans', async () => {
+    const options = await fixture();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await configMain(['set', '--project', '--target', options.cwd, 'decision.enabled', 'true']);
+    } finally {
+      log.mockRestore();
+    }
+    expect(decisionCapabilities(options)).toMatchObject({ enabled: true, enabledSource: 'project' });
+    await expect(readAiwgConfig(options.cwd)).resolves.toMatchObject({ decision: { enabled: true } });
+    await writeFile(path.join(options.cwd, '.aiwg', 'aiwg.config'), JSON.stringify({ decision: { enabled: 'false' } }));
+    expect(() => decisionCapabilities(options)).toThrow('decision.enabled must be a boolean');
+    await expect(readAiwgConfig(options.cwd)).rejects.toThrow('decision.enabled must be a boolean');
   });
 });

@@ -345,7 +345,7 @@ function openLedger(session: Session, registry?: EffectVerifierRegistry): Effect
  * `kinds`, `record`, `reconcile` and `probe` all use it, so `kinds` lists
  * exactly what the registry contains. Tracker authority is resolved lazily at
  * verification time, so a project without tracker configuration still lists
- * the tracker kinds and answers `unknown` / `tracker-blocked`.
+ * the tracker kinds and answers `unknown` with a tracker precondition reason.
  */
 export function buildCliVerifierRegistry(
   projectRoot: string,
@@ -532,7 +532,9 @@ type Output = { schema: string; exitCode: number } & Record<string, unknown>;
 interface Rendered { output: Output; text: string }
 
 function emit(rendered: Rendered, format: 'json' | 'text'): HandlerResult {
-  const message = format === 'text' ? rendered.text : effectOutputJson(rendered.output);
+  const evidence = rendered.output.evidence as { hint?: unknown } | undefined;
+  const hint = typeof evidence?.hint === 'string' ? `\n${evidence.hint}` : '';
+  const message = format === 'text' ? rendered.text + hint : effectOutputJson(rendered.output);
   return { exitCode: rendered.output.exitCode, message, rawOutput: true };
 }
 

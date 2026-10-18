@@ -8,30 +8,58 @@
  *   MCPSMITH_INTEGRATION=1 npx vitest run test/integration/mcpsmith-container.test.ts
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { execSync, spawn } from 'child_process';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
 
 const SKIP_INTEGRATION = !process.env.MCPSMITH_INTEGRATION;
 const TEST_TOOL_NAME = 'echo-test';
 const TEST_IMAGE_NAME = `aiwg-mcp/${TEST_TOOL_NAME}:test`;
 const TEST_DIR = path.join(process.cwd(), '.aiwg/smiths/mcpsmith/implementations', TEST_TOOL_NAME);
 
+function buildImage(context = TEST_DIR) {
+  execFileSync('docker', ['build', '-t', TEST_IMAGE_NAME, context], { timeout: 60_000, stdio: 'inherit' });
+}
+
 // Helper to run container with single message and get response
 function runMcpCommand(message: object): string {
-  const result = execSync(
-    `echo '${JSON.stringify(message)}' | docker run -i --rm ${TEST_IMAGE_NAME}`,
-    { encoding: 'utf8', timeout: 15000 }
+  const result = execFileSync(
+    'docker', ['run', '-i', '--rm', TEST_IMAGE_NAME],
+    { input: `${JSON.stringify(message)}\n`, encoding: 'utf8', timeout: 15000 }
   );
   return result.trim();
 }
+
+describe('MCPSmith command transport', () => {
+  it('passes the Docker build context as a literal path', () => {
+    const execute = vi.mocked(execFileSync);
+    execute.mockReturnValueOnce('');
+    const context = 'context with spaces;$(echo expanded)';
+    buildImage(context);
+    expect(execute).toHaveBeenLastCalledWith('docker', ['build', '-t', TEST_IMAGE_NAME, context], { timeout: 60_000, stdio: 'inherit' });
+  });
+  it('sends quotes and shell metacharacters as JSON stdin', () => {
+    const message = { message: "it's literal; $(echo expanded) \"quoted\"" };
+    const execute = vi.mocked(execFileSync);
+    execute.mockReturnValueOnce('response\n');
+    expect(runMcpCommand(message)).toBe('response');
+    expect(execute).toHaveBeenLastCalledWith('docker', ['run', '-i', '--rm', TEST_IMAGE_NAME], {
+      input: `${JSON.stringify(message)}\n`, encoding: 'utf8', timeout: 15000,
+    });
+  });
+});
 
 describe.skipIf(SKIP_INTEGRATION)('MCPSmith Container Integration', () => {
   beforeAll(() => {
     // Check Docker is available
     try {
-      execSync('docker info', { timeout: 60_000, stdio: 'pipe' });
+      execFileSync('docker', ['info'], { timeout: 60_000, stdio: 'pipe' });
     } catch {
       throw new Error('Docker is not running. Start Docker and try again.');
     }
@@ -115,15 +143,13 @@ CMD ["node", "index.mjs"]
 
     // Build the image
     console.log('Building test container...');
-    execSync(`docker build -t ${TEST_IMAGE_NAME} ${TEST_DIR}`, { timeout: 60_000,
-      stdio: 'inherit',
-    });
+    buildImage();
   });
 
   afterAll(() => {
     // Cleanup: remove test image
     try {
-      execSync(`docker rmi ${TEST_IMAGE_NAME}`, { timeout: 60_000, stdio: 'pipe' });
+      execFileSync('docker', ['rmi', TEST_IMAGE_NAME], { timeout: 60_000, stdio: 'pipe' });
     } catch {
       // Ignore if image doesn't exist
     }
@@ -135,7 +161,7 @@ CMD ["node", "index.mjs"]
   });
 
   it('should build a Docker image successfully', () => {
-    const result = execSync(`docker image ls ${TEST_IMAGE_NAME} --format '{{.Repository}}:{{.Tag}}'`, { timeout: 60_000,
+    const result = execFileSync('docker', ['image', 'ls', TEST_IMAGE_NAME, '--format', '{{.Repository}}:{{.Tag}}'], { timeout: 60_000,
       encoding: 'utf8',
     });
     expect(result.trim()).toBe(TEST_IMAGE_NAME);

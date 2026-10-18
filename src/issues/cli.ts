@@ -335,9 +335,9 @@ async function handleClose(issues: LocalIssueProviderCore, rest: string[], args:
 }
 
 async function handleIndex(issues: LocalIssueProviderCore, rest: string[], args: ParsedArgs): Promise<void> {
-  if (rest[0] !== 'rebuild') throw new Error('Usage: aiwg issue index rebuild');
-  const index = await issues.rebuildIssueIndex();
-  printJsonOrText(args, index, `Rebuilt local issue index (${index.issues.length} issues)`);
+  if (rest[0] !== 'rebuild') throw new Error('Usage: aiwg issue index rebuild [--force]');
+  const index = await issues.rebuildIssueIndex({ force: args.flags.has('force') });
+  printJsonOrText(args, index, `Local issue index ready (${index.issues.length} issues)`);
 }
 
 function requiredStringFlag(args: ParsedArgs, flag: string): string {
@@ -432,5 +432,5 @@ function printUsage(): void {
   aiwg issue sync map-comments <KEY> --map-file path [--json]
   aiwg issue comment <KEY> --body "..." [--author name]
   aiwg issue close <KEY> [--reason "..."]
-  aiwg issue index rebuild`);
+  aiwg issue index rebuild [--force]`);
 }

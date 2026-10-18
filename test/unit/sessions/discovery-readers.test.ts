@@ -1,20 +1,26 @@
+import { mkdtemp } from '../../helpers/temp-dir.js';
 import { execFile } from 'node:child_process';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { open, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createSessionAdapterRegistry } from '../../../src/sessions/adapter-registry.js';
+import { resolveImportLimits } from '../../../src/sessions/import-limits.js';
 import {
   SessionSourceAdapterRegistry,
   fingerprintSourceFile,
   readBoundedJsonLines,
+  readBoundedJson,
+  readBoundedText,
   streamBoundedJsonLines,
   redactSourceLocator,
   type SessionSourceAdapter,
 } from '../../../src/sessions/index.js';
 
 const execFileAsync = promisify(execFile);
+afterEach(() => vi.unstubAllEnvs());
 
 function fixtureAdapter(overrides: Partial<SessionSourceAdapter> = {}): SessionSourceAdapter {
   return {
@@ -37,6 +43,29 @@ function fixtureAdapter(overrides: Partial<SessionSourceAdapter> = {}): SessionS
 }
 
 describe('session source adapter registry', () => {
+  it.each(['config', 'env'] as const)('passes %s limits to Codex inspection and streaming', async (origin) => {
+    const root = await mkdtemp(join(tmpdir(), 'session-registry-limit-'));
+    const locator = join(root, 'session.jsonl');
+    await writeFile(locator, '{"type":"session_meta","payload":{"id":"synthetic"}}\n');
+    const limits = origin === 'config' ? resolveImportLimits({ max_record_bytes: 1 }) : undefined;
+    if (origin === 'env') vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES', '1');
+    const adapter = createSessionAdapterRegistry(limits).get('codex');
+    const selected = { provider: 'codex' as const, locator, locatorClass: 'codex-rollout-jsonl',
+      sourceId: 'synthetic', authorizedScope: { workspaceId: root, allowedRoots: [root] } };
+    const expected = { code: 'RESOURCE_LIMIT_EXCEEDED', detail: {
+      setting: 'sessions.import.max_record_bytes', configured: 1, origin,
+    } };
+    await expect(adapter.inspect(selected)).rejects.toMatchObject(expected);
+    await expect(collect(adapter.stream(selected))).rejects.toMatchObject(expected);
+  });
+
+  it('keeps resolved flag limits ahead of invalid env values in the registry', () => {
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES', 'invalid');
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES', 'invalid');
+    const limits = resolveImportLimits(undefined, { maxRecordBytes: '1024', maxSourceBytes: '0' });
+    expect(() => createSessionAdapterRegistry(limits)).not.toThrow();
+  });
+
   it('discovers only within explicitly authorized roots', async () => {
     const registry = new SessionSourceAdapterRegistry();
     registry.register(fixtureAdapter());
@@ -107,6 +136,119 @@ describe('session source adapter registry', () => {
 });
 
 describe('bounded session readers', () => {
+  it.each(['max_record_bytes', 'max_source_bytes'] as const)('applies configured %s to every reader', async (setting) => {
+    const root = await mkdtemp(join(tmpdir(), 'session-reader-config-'));
+    const path = join(root, 'session.jsonl');
+    await writeFile(path, '{"id":1}\n');
+    const authorization = { selectedPath: path, allowedRoots: [root] };
+    const limits = resolveImportLimits({ [setting]: 1 });
+    const expected = { code: 'RESOURCE_LIMIT_EXCEEDED', detail: {
+      setting: `sessions.import.${setting}`, configured: 1, origin: 'config',
+    } };
+    for (const read of [readBoundedJson, readBoundedText]) {
+      await expect(read(authorization, limits)).rejects.toMatchObject(expected);
+    }
+    await expect(readBoundedJsonLines(authorization, { consistency: 'complete', limits }))
+      .rejects.toMatchObject(expected);
+    const stream = await streamBoundedJsonLines(authorization, { consistency: 'complete', limits });
+    await expect(collect(stream)).rejects.toMatchObject(expected);
+  });
+
+  it('streams JSONL with an explicit unlimited env source cap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-reader-unlimited-env-'));
+    const path = join(root, 'session.jsonl');
+    await writeFile(path, '{"id":1}\n{"id":2}\n');
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES', '0');
+    const limits = resolveImportLimits({ max_source_bytes: 1 });
+    const stream = await streamBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, {
+      consistency: 'complete', limits,
+    });
+    expect((await collect(stream)).map(record => record.value)).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(stream.bytesRead).toBe(18);
+  });
+
+  it.each([
+    ['maxRecordBytes', 1, 40],
+    ['maxTotalBytes', 1, 40],
+    ['maxRecords', 1, 2],
+    ['maxNestingDepth', 0, 1],
+  ] as const)('identifies the configured and observed %s JSONL limit', async (limit, configured, observed) => {
+    const root = await mkdtemp(join(tmpdir(), 'session-reader-limit-'));
+    const path = join(root, 'session.jsonl');
+    const content = JSON.stringify({ text: 'synthetic-transcript-marker' }) + '\n';
+    await writeFile(path, content.repeat(2));
+    await expect(readBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, {
+      consistency: 'complete', limits: { [limit]: configured },
+    })).rejects.toMatchObject({
+      code: 'RESOURCE_LIMIT_EXCEEDED',
+      detail: { limit, configured, observed: limit.endsWith('Bytes') ? Buffer.byteLength(content) : observed },
+    });
+  });
+
+  it.each([readBoundedJson, readBoundedText])('reports whole-document byte limits without source text', async (read) => {
+    const root = await mkdtemp(join(tmpdir(), 'session-document-limit-'));
+    const path = join(root, 'session.json');
+    const content = JSON.stringify({ text: 'synthetic-transcript-marker' });
+    await writeFile(path, content);
+    await expect(read({ selectedPath: path, allowedRoots: [root] }, { maxTotalBytes: 1 }))
+      .rejects.toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED', detail: {
+        limit: 'maxTotalBytes', configured: 1, observed: Buffer.byteLength(content),
+      } });
+  });
+
+  it.each([readBoundedJson, readBoundedText])('caps buffered documents even with raised import limits', async (read) => {
+    const root = await mkdtemp(join(tmpdir(), 'session-buffered-limit-'));
+    const path = join(root, 'large.json');
+    const file = await open(path, 'w');
+    try { await file.truncate(64 * 1024 * 1024 + 1); } finally { await file.close(); }
+    await expect(read({ selectedPath: path, allowedRoots: [root] }, { maxRecordBytes: 128 * 1024 * 1024 }))
+      .rejects.toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED', detail: {
+        limit: 'maxBufferedSourceBytes', configured: 64 * 1024 * 1024, observed: 64 * 1024 * 1024 + 1,
+      } });
+  });
+
+  it('accepts records above the former 8 MiB default with the default source cap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-default-limit-'));
+    const path = join(root, 'large.jsonl');
+    await writeFile(path, JSON.stringify({ text: 'x'.repeat(9 * 1024 * 1024) }) + '\n');
+    const stream = await streamBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, {
+      consistency: 'complete',
+    });
+    let count = 0;
+    for await (const record of stream) {
+      expect(record.byteLength).toBeGreaterThan(8 * 1024 * 1024);
+      count++;
+    }
+    expect(count).toBe(1);
+  });
+
+  it('counts the consumed prefix against the per-source cap when resuming', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-resumed-limit-'));
+    const path = join(root, 'session.jsonl');
+    await writeFile(path, '{"id":1}\n{"id":2}\n');
+    await expect(readBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, {
+      consistency: 'complete', cursor: '9', limits: { maxTotalBytes: 10,
+        limitOrigins: { maxTotalBytes: 'config' } },
+    })).rejects.toMatchObject({ detail: {
+      limit: 'maxTotalBytes', setting: 'sessions.import.max_source_bytes',
+      configured: 10, observed: 18, origin: 'config',
+    } });
+  });
+
+  it('reports malformed JSON at the root without including parser input', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-json-rejection-'));
+    const path = join(root, 'session.json');
+    await writeFile(path, '{"text":"synthetic-transcript-marker"');
+    for (const read of [
+      () => readBoundedJson({ selectedPath: path, allowedRoots: [root] }),
+      () => readBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, { consistency: 'complete' }),
+    ]) {
+      await expect(read()).rejects.toMatchObject({ code: 'SCHEMA_DRIFT', detail: {
+        issues: [{ path: '<root>', code: 'invalid_json' }],
+      } });
+    }
+  });
+
   it('reads complete JSONL records with stable byte cursors and fingerprints', async () => {
     const root = await mkdtemp(join(tmpdir(), 'aiwg-reader-'));
     const path = join(root, 'session.jsonl');
@@ -120,6 +262,122 @@ describe('bounded session readers', () => {
       digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       size: 18,
     });
+  });
+
+  it.each(['complete', 'provisional'] as const)(
+    'preserves raw U+2028 and U+2029 across chunks with byte-exact cursors in %s mode',
+    async (consistency) => {
+      const root = await mkdtemp(join(tmpdir(), 'session-reader-unicode-'));
+      const path = join(root, 'session.jsonl');
+      const prefix = '\r\n \t\n';
+      // Put the first separator across the stream's 64 KiB chunk boundary.
+      const values = [
+        { text: 'x'.repeat(64 * 1024 - Buffer.byteLength(prefix + '{"text":"') - 1) + '\u2028\u2029é' },
+        { text: 'a\u2028b\u2029c' },
+      ];
+      const lines = values.map((value, index) => JSON.stringify(value) + (index === 0 ? '\r\n' : ''));
+      const bytes = prefix + lines.join('');
+      expect(bytes).toContain('\u2028');
+      expect(bytes).toContain('\u2029');
+      await writeFile(path, bytes);
+      const authorization = { selectedPath: path, allowedRoots: [root] };
+      const result = await readBoundedJsonLines(authorization, {
+        consistency,
+        limits: {
+          maxRecordBytes: Math.max(...lines.map((line) => Buffer.byteLength(line))),
+          maxTotalBytes: Buffer.byteLength(bytes),
+        },
+      });
+      let offset = Buffer.byteLength(prefix);
+      expect(result.records).toEqual(lines.map((line, sequence) => {
+        const record = {
+          value: values[sequence], sequence, byteOffset: offset, byteLength: Buffer.byteLength(line),
+        };
+        offset += record.byteLength;
+        return record;
+      }));
+      expect(result.bytesRead).toBe(Buffer.byteLength(bytes));
+      expect(result.nextCursor).toBe(String(Buffer.byteLength(bytes)));
+      expect(result.incompleteTail).toBe(false);
+      const resumed = await readBoundedJsonLines(authorization, {
+        consistency, cursor: String(Buffer.byteLength(prefix + lines[0])),
+      });
+      expect(resumed.records).toEqual([{ ...result.records[1], sequence: 0 }]);
+      expect(resumed.bytesRead).toBe(Buffer.byteLength(lines[1]));
+      expect(resumed.nextCursor).toBe(result.nextCursor);
+      await expect(readBoundedJsonLines(authorization, {
+        consistency, cursor: result.nextCursor,
+      })).resolves.toMatchObject({ records: [], bytesRead: 0, nextCursor: result.nextCursor });
+    },
+  );
+
+  it.each(['complete', 'provisional'] as const)('treats lone CR as JSON whitespace in %s mode', async (consistency) => {
+    const root = await mkdtemp(join(tmpdir(), 'session-reader-cr-'));
+    const path = join(root, 'session.jsonl');
+    const content = '{"id":\r1}\n';
+    await writeFile(path, content);
+    await expect(readBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, { consistency }))
+      .resolves.toMatchObject({
+        records: [{ value: { id: 1 }, byteOffset: 0, byteLength: Buffer.byteLength(content) }],
+        nextCursor: String(Buffer.byteLength(content)), incompleteTail: false,
+      });
+  });
+
+  it.each(['maxRecordBytes', 'maxTotalBytes'] as const)(
+    'counts CRLF bytes toward %s', async (limit) => {
+      const root = await mkdtemp(join(tmpdir(), 'session-reader-crlf-limit-'));
+      const path = join(root, 'session.jsonl');
+      const content = JSON.stringify({ text: 'a\u2028b\u2029c' }) + '\r\n';
+      const observed = Buffer.byteLength(content);
+      await writeFile(path, content);
+      await expect(readBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, {
+        consistency: 'complete', limits: { [limit]: observed - 1 },
+      })).rejects.toMatchObject({
+        code: 'RESOURCE_LIMIT_EXCEEDED', detail: { limit, configured: observed - 1, observed },
+      });
+    },
+  );
+
+  it.each(['maxRecordBytes', 'maxTotalBytes'] as const)(
+    'enforces %s before assembling an oversized unterminated line', async (limit) => {
+      const root = await mkdtemp(join(tmpdir(), 'session-reader-unbounded-'));
+      const path = join(root, 'session.jsonl');
+      const content = JSON.stringify({ text: 'x'.repeat(1024 * 1024) });
+      await writeFile(path, content);
+      await expect(readBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, {
+        consistency: 'complete', limits: { [limit]: 64 * 1024 },
+      })).rejects.toSatisfy((error: { code: string; detail: { limit: string; observed: number } }) => {
+        expect(error.code).toBe('RESOURCE_LIMIT_EXCEEDED');
+        expect(error.detail.limit).toBe(limit);
+        expect(error.detail.observed).toBeGreaterThan(64 * 1024);
+        expect(error.detail.observed).toBeLessThanOrEqual(128 * 1024);
+        return true;
+      });
+    },
+  );
+
+  it('resumes an incomplete provisional tail after Unicode records and CRLF blank lines', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-reader-unicode-tail-'));
+    const path = join(root, 'session.jsonl');
+    const prefix = JSON.stringify({ text: 'a\u2028b\u2029c' }) + '\r\n\r\n';
+    const tail = '{"text":"d\u2028e\u2029f';
+    await writeFile(path, prefix + tail);
+    const authorization = { selectedPath: path, allowedRoots: [root] };
+    const result = await readBoundedJsonLines(authorization, { consistency: 'provisional' });
+    expect(result.records.map((record) => record.value)).toEqual([{ text: 'a\u2028b\u2029c' }]);
+    expect(result.bytesRead).toBe(Buffer.byteLength(prefix));
+    expect(result.nextCursor).toBe(String(Buffer.byteLength(prefix)));
+    expect(result.incompleteTail).toBe(true);
+    await writeFile(path, '"}\r\n', { flag: 'a' });
+    const resumed = await readBoundedJsonLines(authorization, {
+      consistency: 'provisional', cursor: result.nextCursor,
+    });
+    expect(resumed.records).toEqual([{
+      value: { text: 'd\u2028e\u2029f' }, sequence: 0,
+      byteOffset: Buffer.byteLength(prefix), byteLength: Buffer.byteLength(tail + '"}\r\n'),
+    }]);
+    expect(resumed.nextCursor).toBe(String(Buffer.byteLength(prefix + tail + '"}\r\n')));
+    expect(resumed.incompleteTail).toBe(false);
   });
 
   it('pulls records on demand and stops source consumption on cancellation', async () => {
@@ -151,11 +409,12 @@ describe('bounded session readers', () => {
     const path = join(root, 'million.jsonl');
     await writeFile(path, '{"ok":1}\n'.repeat(1_000_000));
     const probe = fileURLToPath(new URL('../../fixtures/sessions/reader-retained-memory.ts', import.meta.url));
-    const { stdout } = await execFileAsync(
+    const { stdout, stderr } = await execFileAsync(
       process.execPath,
       ['--expose-gc', '--import', 'tsx', probe, path, root],
       { timeout: 20_000, maxBuffer: 64 * 1024 },
     );
+    expect(stdout, stderr || 'reader memory probe exited without a result').not.toBe('');
     const result = JSON.parse(stdout) as {
       count: number;
       recordsRead: number;

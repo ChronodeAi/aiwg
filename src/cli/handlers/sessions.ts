@@ -96,7 +96,10 @@ import {
   type SelectedSource,
   type SourceProbe,
 } from '../../sessions/index.js';
+import { resolveImportExclusions } from '../../sessions/import-exclusions.js';
+import { resolveImportLimits } from '../../sessions/import-limits.js';
 import { classifyGrokbotBlobName } from '../../sessions/adapters/grokbot-locator.js';
+import { readAiwgConfig } from '../../config/aiwg-config.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 
 const JSON_CONTRACT_VERSION = '1.0.0';
@@ -168,7 +171,7 @@ Commands:
   promote <id> <version>          Preview promotion; use --confirm to write
   tag <session-id> <tag>          Add a catalog tag
   relocate <source-id> <file>     Update AIWG source-location metadata
-  reindex                         Rebuild catalog indexes
+  reindex --workspace <path-or-id> | --all-workspaces  Rebuild catalog indexes
   delete <session-id>             Preview deletion; use --confirm to tombstone
   restore <session-id>            Restore a reversible catalog tombstone
   purge <session-id>              Preview terminal AIWG-copy purge
@@ -180,6 +183,7 @@ Commands:
 Options:
   --json          Emit the versioned JSON contract
   --dry-run       Preview a mutation without changing state
+  --all-workspaces  Reindex every workspace in the selected catalog (reindex only)
   --db <path>     Select a catalog; relative paths resolve from cwd
   --workspace <path-or-id>  Select the workspace within that catalog for reads
                    (default: current project, matching cwd, or sole catalog workspace)
@@ -189,7 +193,7 @@ Options:
   --expected-providers <ids>  Comma-separated authorized scope, independent of runtime inventory
   --manifest <path>  Override the discovery manifest path
   --provider-home <path>  Override the provider home root (testing/portable homes)
-  --codex-root <path>  Explicitly authorize a shared Codex sessions/export root
+  --codex-root <path>  Authorize a shared Codex sessions/export root (repeatable)
   --omp-root <path>  Explicitly authorize an OMP profile sessions root
   --muse-root <path>  Explicitly authorize a Muse Code sessions root
   --dsh-root <path>  Explicitly authorize a DeepSeek Harness sessions root
@@ -198,6 +202,10 @@ Options:
                    (default: grok on PATH, then $GROK_HOME/bin/grok)
   --confirm, --yes  Confirm a persistent discovered batch import
   --lock-wait-ms <n>  Maximum import-lease wait (default 5000)
+  --exclude <id-or-glob>  Skip a session ID or absolute path glob (repeatable); adds to sessions.import.exclude and AIWG_SESSIONS_IMPORT_EXCLUDE
+  --max-record-bytes <n>  Import record limit (default 67108864); overrides AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES and sessions.import.max_record_bytes
+  --max-source-bytes <n>  Import source limit (default 1073741824, 1 GiB; 0 unlimited); overrides AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES and sessions.import.max_source_bytes
+  Import limit precedence: CLI flag > env var > workspace config > default.
   --inactivity-threshold <duration>  Historical inactivity threshold (default 24h)
   --min-coverage <0..1>  Fail list/report commands below a coverage ratio
   --provider <id> Filter list or select an import adapter
@@ -231,8 +239,8 @@ Analytics / forensics:
   --authorize-forensics  Required for each authorized forensic invocation
   --markdown      Render a sanitized forensic timeline table`;
 
-function printHelp(ctx: HandlerContext, exitCode: number = EXIT.ok): HandlerResult {
-  if (ctx.args.includes('--json')) emit(envelope('sessions.help', 'ok', { usage: HELP }, null));
+async function printHelp(ctx: HandlerContext, exitCode: number = EXIT.ok): Promise<HandlerResult> {
+  if (ctx.args.includes('--json')) await emit(envelope('sessions.help', 'ok', { usage: HELP }, null));
   else console.log(HELP);
   return { exitCode };
 }
@@ -256,7 +264,7 @@ export const sessionsHandler: CommandHandler = {
     } catch (error) {
       const normalized = normalizeError(error);
       const output = envelope('sessions', 'error', null, normalized.error);
-      if (json) emit(output);
+      if (json) await emit(output);
       else console.error(`${normalized.error.code}: ${normalized.error.message}`);
       return { exitCode: normalized.exitCode, message: normalized.error.message };
     }
@@ -266,13 +274,13 @@ export const sessionsHandler: CommandHandler = {
     }
     try {
       const result = await executeCommand(ctx, parsed);
-      if (json) emit(result.envelope);
+      if (json) await emit(result.envelope);
       else printHuman(result.envelope);
       return { exitCode: result.exitCode };
     } catch (error) {
       const normalized = normalizeError(error);
       const output = envelope(`sessions.${parsed.command}`, 'error', null, normalized.error);
-      if (json) emit(output);
+      if (json) await emit(output);
       else console.error(`${normalized.error.code}: ${normalized.error.message}`);
       return { exitCode: normalized.exitCode, message: normalized.error.message };
     }
@@ -284,6 +292,8 @@ interface ParsedArgs {
   positionals: string[];
   flags: Set<string>;
   values: Map<string, string>;
+  codexRoots: string[];
+  exclude: string[];
 }
 
 async function executeCommand(
@@ -764,10 +774,25 @@ async function executeCommand(
         return ok(command, { sourceId, redactedLocator });
       }
       case 'reindex': {
-        const { workspaceId } = authorizationContext(ctx, args, command);
-        if (isDryRun(ctx, args)) return preview(command, { operation: 'reindex' });
+        const allWorkspaces = args.flags.has('--all-workspaces');
+        if (allWorkspaces && args.values.has('--workspace')) {
+          throw new CliError(
+            'INVALID_ARGUMENT',
+            '--all-workspaces cannot be combined with --workspace',
+            EXIT.usage,
+          );
+        }
+        const workspaceId = allWorkspaces
+          ? undefined
+          : authorizationContext(ctx, args, command).workspaceId;
+        const data = {
+          operation: 'reindex',
+          allWorkspaces,
+          workspaceIds: allWorkspaces ? repository.listWorkspaceIds() : [workspaceId!],
+        };
+        if (isDryRun(ctx, args)) return preview(command, data);
         repository.reindex(workspaceId);
-        return ok(command, { operation: 'reindex' });
+        return ok(command, data);
       }
       case 'audit': {
         const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
@@ -896,6 +921,7 @@ async function importSource(
   ctx: HandlerContext,
   args: ParsedArgs,
 ): Promise<{ envelope: Envelope; exitCode: number }> {
+  const limits = await configuredImportLimits(ctx, args);
   const input = resolve(ctx.cwd, requiredPositional(args, 0, 'file'));
   const providerInput = args.values.get('--provider') ?? 'generic';
   const provider = assertSessionProviderId(providerInput);
@@ -928,37 +954,37 @@ async function importSource(
   const isDsh = provider === 'deepseek-harness';
   const isWarp = provider === 'warp';
   const isDevinDesktop = provider === 'devin-desktop';
-  const adapter: SessionSourceAdapter = isDsh ? new DeepSeekHarnessSessionAdapter() : isOmp ? new OmpSessionAdapter() : isClaude
-    ? new ClaudeSessionAdapter()
+  const adapter: SessionSourceAdapter = isDsh ? new DeepSeekHarnessSessionAdapter(limits) : isOmp ? new OmpSessionAdapter(limits) : isClaude
+    ? new ClaudeSessionAdapter(limits)
     : isCodex
-      ? new CodexSessionAdapter()
+      ? new CodexSessionAdapter(limits)
       : isCopilot
-        ? new CopilotSessionAdapter()
+        ? new CopilotSessionAdapter(limits)
         : isCursor
-          ? new CursorSessionAdapter()
+          ? new CursorSessionAdapter(limits)
           : isFactory
-            ? new FactorySessionAdapter()
+            ? new FactorySessionAdapter(limits)
             : isHermes
-              ? new HermesSessionAdapter()
+              ? new HermesSessionAdapter(limits)
               : isOpenCode
-                ? new OpenCodeSessionAdapter()
+                ? new OpenCodeSessionAdapter(limits)
                 : isOpenClaw
-                  ? new OpenClawSessionAdapter()
+                  ? new OpenClawSessionAdapter(limits)
                   : isOpenHuman
-                    ? new OpenHumanSessionAdapter()
+                    ? new OpenHumanSessionAdapter(limits)
                     : isGrokbot
-                      ? new GrokbotSessionAdapter()
+                      ? new GrokbotSessionAdapter(limits)
                       : isGrokBuild
-                        ? new GrokBuildSessionAdapter()
+                        ? new GrokBuildSessionAdapter(limits)
                       : isMuse
-                        ? new MuseSessionAdapter()
+                        ? new MuseSessionAdapter(limits)
                       : isPi
-                        ? new PiSessionAdapter()
+                        ? new PiSessionAdapter(limits)
                     : isWarp
-                      ? new WarpSessionAdapter()
+                      ? new WarpSessionAdapter(limits)
                       : isDevinDesktop
-                        ? new DevinDesktopSessionAdapter()
-                        : new GenericSessionInterchangeAdapter();
+                        ? new DevinDesktopSessionAdapter(limits)
+                        : new GenericSessionInterchangeAdapter(limits);
   const locatorClass = isDsh ? 'deepseek-harness-session-v2-jsonl' : isOmp ? 'omp-session-v3-jsonl' : isClaude
     ? claudeLocatorClass(input)
     : isCodex
@@ -1117,8 +1143,9 @@ async function importSource(
   try {
     const repository = openRepository(ctx, args);
     try {
+      const interruptedRuns = repository.interruptRunningBatchImports();
       const receipts = await new IncrementalSessionImporter(repository).import({
-        source, selectedSource, adapter, workspaceId, policyVersion: '1.0.0',
+        source, selectedSource, adapter, workspaceId, policyVersion: '1.0.0', limits,
         inactivityThresholdMs: inactivityThreshold(args.values.get('--inactivity-threshold')),
       });
       for (const warning of workspaceReport.warnings) console.error(`WARNING ${warning}`);
@@ -1126,6 +1153,7 @@ async function importSource(
         sourceId,
         ...workspaceReport,
         receipts,
+        interruptedRuns,
         totals: {
           sessionsInserted: receipts.reduce((sum, item) => sum + item.sessionsInserted, 0),
           eventsInserted: receipts.reduce((sum, item) => sum + item.eventsInserted, 0),
@@ -1471,8 +1499,18 @@ async function discoverWorkspace(
   args: ParsedArgs,
 ): Promise<{ envelope: Envelope; exitCode: number }> {
   const workspace = resolve(ctx.cwd, requiredValue(args, '--workspace'));
+  const config = await readAiwgConfig(workspace);
+  const canonicalWorkspace = realpathSync(workspace);
+  const manifestPath = resolve(
+    ctx.cwd,
+    args.values.get('--manifest') ?? defaultDiscoveryManifestPath(canonicalWorkspace),
+  );
+  const exclude = resolveImportExclusions(config?.sessions?.import, args.exclude);
+  const previous = exclude.length > 0 && existsSync(manifestPath) ? await readDiscoveryManifest(manifestPath) : undefined;
   const manifest = await discoverWorkspaceHistories({
     workspace,
+    knownSources: previous?.workspaceId === canonicalWorkspace ? previous.sources : undefined,
+    exclude,
     expectedProviders: requestedProviders(args),
     providerHome: args.values.has('--provider-home')
       ? resolve(ctx.cwd, args.values.get('--provider-home')!)
@@ -1485,14 +1523,11 @@ async function discoverWorkspace(
       ? resolve(ctx.cwd, args.values.get('--dsh-root')!) : undefined,
     grokbotRoot: args.values.has('--grokbot-root')
       ? resolve(ctx.cwd, args.values.get('--grokbot-root')!) : undefined,
-    codexRoot: args.values.has('--codex-root')
-      ? resolve(ctx.cwd, args.values.get('--codex-root')!)
-      : undefined,
+    codexRoots: [
+      ...(config?.sessions?.codex_roots ?? []).map((root) => resolve(workspace, root)),
+      ...args.codexRoots.map((root) => resolve(ctx.cwd, root)),
+    ],
   });
-  const manifestPath = resolve(
-    ctx.cwd,
-    args.values.get('--manifest') ?? defaultDiscoveryManifestPath(manifest.workspacePath),
-  );
   const data = {
     manifest: publicDiscoveryManifest(manifest),
     manifestPath: redactSourceLocator(manifestPath),
@@ -1511,6 +1546,9 @@ async function importDiscovered(
 ): Promise<{ envelope: Envelope; exitCode: number }> {
   const workspace = resolve(ctx.cwd, requiredValue(args, '--workspace'));
   const canonicalWorkspace = realpathSync(workspace);
+  const limits = await configuredImportLimits(ctx, args, canonicalWorkspace);
+  const config = await readAiwgConfig(canonicalWorkspace);
+  const exclude = resolveImportExclusions(config?.sessions?.import, args.exclude);
   const manifestPath = resolve(
     ctx.cwd,
     args.values.get('--manifest') ?? defaultDiscoveryManifestPath(canonicalWorkspace),
@@ -1543,7 +1581,7 @@ async function importDiscovered(
     }
     return preview('import-discovered', {
       manifest: publicDiscoveryManifest(manifest),
-      receipt: previewDiscoveryImport(manifest, existing),
+      receipt: previewDiscoveryImport(manifest, existing, new Date(), exclude),
       confirmationRequired: !isDryRun(ctx, args),
       wouldPersist: false,
     });
@@ -1565,12 +1603,16 @@ async function importDiscovered(
   try {
     const repository = openRepository(ctx, args);
     try {
+      const interruptedRuns = repository.interruptRunningBatchImports();
       const receipt = await importDiscoveryManifest({
         manifest,
         repository,
+        limits,
+        exclude,
         signal: ctx.signal,
         inactivityThresholdMs: inactivityThreshold(args.values.get('--inactivity-threshold')),
       });
+      receipt.interruptedRuns = interruptedRuns;
       return ok('import-discovered', {
         manifestId: manifest.manifestId,
         receipt,
@@ -1920,9 +1962,25 @@ function catalogScope(
   };
 }
 
+async function configuredImportLimits(ctx: HandlerContext, args: ParsedArgs, workspace?: string) {
+  const selectedWorkspace = workspace ?? (args.values.has('--workspace')
+    ? resolve(ctx.cwd, args.values.get('--workspace')!) : ctx.cwd);
+  try {
+    const config = await readAiwgConfig(selectedWorkspace);
+    return resolveImportLimits(config?.sessions?.import, {
+      maxRecordBytes: args.values.get('--max-record-bytes'),
+      maxSourceBytes: args.values.get('--max-source-bytes'),
+    });
+  } catch (error) {
+    throw new CliError('INVALID_ARGUMENT', error instanceof Error ? error.message : String(error), EXIT.usage);
+  }
+}
+
 function parseArgs(argv: string[]): ParsedArgs {
   const flags = new Set<string>();
   const values = new Map<string, string>();
+  const codexRoots: string[] = [];
+  const exclude: string[] = [];
   const positionals: string[] = [];
   const valueFlags = new Set([
     '--db', '--provider', '--workspace', '--tag', '--limit', '--cursor', '--source-id',
@@ -1931,7 +1989,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
     '--consumer', '--actor-class', '--reason-code', '--dependent-action', '--basis',
     '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--grokbot-root', '--lock-wait-ms', '--min-coverage', '--gap',
-    '--inactivity-threshold', '--expected-providers',
+    '--inactivity-threshold', '--expected-providers', '--exclude', '--max-record-bytes', '--max-source-bytes',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',
     '--out', '--plan', '--input', '--shard-name', '--max-attachment-bytes', '--format', '--grok-bin',
@@ -1945,6 +2003,8 @@ function parseArgs(argv: string[]): ParsedArgs {
         throw new CliError('MISSING_OPTION_VALUE', `missing value for ${arg}`, EXIT.usage);
       }
       values.set(arg, value);
+      if (arg === '--codex-root') codexRoots.push(value);
+      if (arg === '--exclude') exclude.push(value);
       index += 1;
     } else if (arg.startsWith('-')) {
       flags.add(arg);
@@ -1954,7 +2014,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       positionals.push(arg);
     }
   }
-  return { command, positionals, flags, values };
+  return { command, positionals, flags, values, codexRoots, exclude };
 }
 
 function requestedProviders(args: ParsedArgs): string[] | undefined {
@@ -2286,8 +2346,13 @@ function envelope(
   return { contractVersion: JSON_CONTRACT_VERSION, command, status, data, error };
 }
 
-function emit(value: Envelope): void {
+async function emit(value: Envelope): Promise<void> {
   console.log(JSON.stringify(value, null, 2));
+  // The launcher and router may force exit after the handler returns. A write
+  // callback waits for the JSON already queued on stdout, including on pipes.
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write('', (error) => error ? reject(error) : resolve());
+  });
 }
 
 function printHuman(value: Envelope): void {
@@ -2346,7 +2411,7 @@ function normalizeError(error: unknown): {
   }
   if (error instanceof SessionContractError) {
     const exitCode = error.code === 'UNSUPPORTED_OPERATION' ? EXIT.unsupported : EXIT.contract;
-    return { error: { code: error.code, message: error.message }, exitCode };
+    return { error: { code: error.code, message: error.message, ...(error.detail ? { details: error.detail } : {}) }, exitCode };
   }
   if (error instanceof ImportLeaseContentionError) {
     return {

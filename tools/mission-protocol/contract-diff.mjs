@@ -22,6 +22,15 @@ export function classifyContractChanges(previous, next, pointer = '') {
     else changes.push(...classifyContractChanges(oldProps[field], newProps[field], `${pointer}/properties/${field}`));
   }
   for (const field of Object.keys(newProps)) if (!(field in oldProps)) changes.push({ kind: newRequired.has(field) ? 'breaking' : 'additive', path: `${pointer}/properties/${field}`, detail: newRequired.has(field) ? 'new required property' : 'new optional property' });
+  const oldDefs = previous?.$defs ?? {};
+  const newDefs = next?.$defs ?? {};
+  for (const name of Object.keys(oldDefs)) {
+    if (!(name in newDefs)) changes.push({ kind: 'breaking', path: `${pointer}/$defs/${name}`, detail: 'definition removed or renamed' });
+    else changes.push(...classifyContractChanges(oldDefs[name], newDefs[name], `${pointer}/$defs/${name}`));
+  }
+  for (const name of Object.keys(newDefs)) if (!(name in oldDefs)) changes.push({ kind: 'additive', path: `${pointer}/$defs/${name}`, detail: 'new definition' });
+  // Invocation artifacts are array items; walking only properties misses their fields.
+  if (previous?.items && next?.items) changes.push(...classifyContractChanges(previous.items, next.items, `${pointer}/items`));
   if (previous?.type !== undefined && !same(previous.type, next?.type)) changes.push({ kind: 'breaking', path: `${pointer}/type`, detail: 'type changed' });
   if (Array.isArray(previous?.enum) && Array.isArray(next?.enum)) {
     for (const value of previous.enum) if (!next.enum.some(item => same(item, value))) changes.push({ kind: 'breaking', path: `${pointer}/enum`, detail: `enum value removed: ${JSON.stringify(value)}` });

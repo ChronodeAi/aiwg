@@ -9,9 +9,12 @@ import { existsSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import { execFileSync, execSync } from 'child_process';
 import chalk from 'chalk';
 import { importImpl } from '../_resolve-impl.mjs';
+import { isMain } from '../_is-main.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { cliCommand } = await importImpl(import.meta.url, 'process/cli-command.mjs');
 import { scanStartupContext,
   subagentDispatchHeadroom,
   SUBAGENT_AGENT_DEF_TOKENS,
@@ -24,7 +27,7 @@ const { getFrameworkRoot, getPackageRoot, getVersionInfo, loadConfig, resolveMcp
   import.meta.url,
   'channel/manager.mjs'
 );
-const { inspectInstallation } = await importImpl(
+const { inspectInstallation, inspectInstallationCopies, formatInstallationDiagnostic } = await importImpl(
   import.meta.url,
   'installation/manager.mjs'
 );
@@ -61,6 +64,25 @@ const { readAiwgConfig, getProviderParallelismDefaults, validateParallelismConfi
   import.meta.url,
   'config/aiwg-config.js'
 );
+
+export function checkNodeVersion(version) {
+  const major = parseInt(version.replace(/^v/, '').split('.')[0]);
+  return major >= 24
+    ? { status: 'ok', message: version }
+    : { status: 'warn', message: `${version} (requires >= 24)` };
+}
+
+// Shared strict flag parsing (#3062). doctor.mjs is plain JS shipped to npm,
+// so this resolves through importImpl like every other src/ import above:
+// dist/src/cli/flag-parsing.js when installed, src/cli/flag-parsing.ts in a
+// checkout (Node's type stripping handles the erasable-syntax-only module).
+const {
+  requireFlagValue: requireDoctorFlagValue,
+  hasPositionalOrSwitch: hasDoctorFlagSwitch,
+  argsTerminatorIndex: doctorArgsTerminatorIndex,
+  valueTokenIndexes: doctorValueTokenIndexes,
+  MissingFlagValueError: DoctorMissingFlagValueError,
+} = await importImpl(import.meta.url, 'cli/flag-parsing.js');
 const { validateThreatAssessmentConfig } = await importImpl(
   import.meta.url,
   'security/threat-assessment-config.js'
@@ -124,6 +146,7 @@ const PROVIDER_LABELS = {
   omp: 'Oh My Pi',
   hermes:   'Hermes',
   grokbot:  'Grok Bot',
+  'grok-build': 'Grok Build',
   muse:     'Muse Code',
 };
 
@@ -145,35 +168,103 @@ const PROVIDER_AGENT_DIRS = {
   // openclaw/hermes deploy to ~/.{provider}/ — handled separately
 };
 
-// Parse doctor-specific flags from process.argv (no commander dependency).
+// Parse doctor-specific flags through the shared strict parser
+// (src/cli/flag-parsing.ts, #3062) instead of a hand-rolled loop: value
+// flags accept `--flag value` and `--flag=value`, stop at a bare `--`
+// terminator, and a present-but-valueless flag is a usage error rather than
+// a silent default. Unknown `--flags` are rejected (exit 2, naming the
+// flag) instead of being silently ignored — previously an extra `--json`
+// was swallowed here with no effect.
+//
+// Known flags are the union of what this script parses and what `aiwg
+// doctor` (src/cli/handlers/utilities.ts) consumes upstream and passes
+// through: --deployment/--bundle/--scope/--user/--verbose/-v/--project-local/
+// --quiet/--help/-h never change this script's behavior but remain accepted
+// so existing invocations keep working.
+const DOCTOR_VALUE_FLAGS = ['--provider', '--bundle', '--scope', '--context-baseline', '--context-budget-tokens', '--cli'];
+const DOCTOR_KNOWN_FLAGS = new Set([
+  ...DOCTOR_VALUE_FLAGS,
+  '--all-providers', '--probe-workers', '--qualify', '--yes', '--dry-run', '--no-budget-check', '--strict-context', '--json',
+  '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
+]);
+
+// Refuse the first unknown `--flag` before the `--` terminator, skipping
+// the consumed values of known value-taking flags. The `--flag=value`
+// one-token form can never collide with a separate token, so only its flag
+// part is checked.
+function assertNoUnknownDoctorFlags(argv) {
+  const consumed = doctorValueTokenIndexes(argv, DOCTOR_VALUE_FLAGS);
+  const limit = doctorArgsTerminatorIndex(argv);
+  for (let i = 0; i < limit; i += 1) {
+    if (consumed.has(i)) continue;
+    const token = argv[i];
+    if (token === undefined || !token.startsWith('-')) continue;
+    const name = token.includes('=') ? token.slice(0, token.indexOf('=')) : token;
+    if (!DOCTOR_KNOWN_FLAGS.has(name) || (token.includes('=') && !DOCTOR_VALUE_FLAGS.includes(name))) {
+      throw new Error(`Unknown flag: ${name}. See 'aiwg doctor --help'.`);
+    }
+  }
+}
+
 function parseDoctorArgs(argv) {
   const out = {
     provider: null,
     allProviders: false,
     probeWorkers: false,
+    json: false,
     noBudgetCheck: false,
     strictContext: false,
     contextBaseline: '.aiwg/context-memory-firewall-baseline.json',
     contextBudgetTokens: 200_000,
   };
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
-    if (a === '--provider' && argv[i + 1]) { out.provider = argv[i + 1]; i += 1; continue; }
-    if (a.startsWith('--provider=')) { out.provider = a.slice('--provider='.length); continue; }
-    if (a === '--all-providers') { out.allProviders = true; continue; }
-    if (a === '--probe-workers') { out.probeWorkers = true; continue; }
-    if (a === '--no-budget-check') { out.noBudgetCheck = true; continue; }
-    if (a === '--strict-context') { out.strictContext = true; continue; }
-    if (a === '--context-baseline' && argv[i + 1]) { out.contextBaseline = argv[i + 1]; i += 1; continue; }
-    if (a.startsWith('--context-baseline=')) { out.contextBaseline = a.slice('--context-baseline='.length); continue; }
-    if (a === '--context-budget-tokens' && argv[i + 1]) {
-      out.contextBudgetTokens = Number(argv[i + 1]); i += 1; continue;
-    }
-    if (a.startsWith('--context-budget-tokens=')) {
-      out.contextBudgetTokens = Number(a.slice('--context-budget-tokens='.length)); continue;
-    }
+  // Strict value flags (#3062 review item 11): present without a usable
+  // value is a usage error, raised before any check, spawn, or write.
+  // --bundle/--scope are validated here for the same reason but otherwise
+  // handled upstream by `aiwg doctor --deployment` / `--scope user`.
+  try {
+    // Preserve the previous parser's last-occurrence-wins behavior.
+    const valueOptions = { rejectEmpty: true, precedence: 'last' };
+    out.cli = requireDoctorFlagValue(argv, valueOptions, '--cli');
+    out.provider = requireDoctorFlagValue(argv, valueOptions, '--provider') ?? null;
+    requireDoctorFlagValue(argv, valueOptions, '--bundle');
+    requireDoctorFlagValue(argv, valueOptions, '--scope');
+    const baseline = requireDoctorFlagValue(argv, valueOptions, '--context-baseline');
+    if (baseline !== undefined) out.contextBaseline = baseline;
+    const budget = requireDoctorFlagValue(argv, valueOptions, '--context-budget-tokens');
+    if (budget !== undefined) out.contextBudgetTokens = Number(budget);
+  } catch (error) {
+    if (error instanceof DoctorMissingFlagValueError) throw new Error(`${error.message}. See 'aiwg doctor --help'.`);
+    throw error;
+  }
+  out.allProviders = hasDoctorFlagSwitch(argv, '--all-providers', DOCTOR_VALUE_FLAGS);
+  out.probeWorkers = hasDoctorFlagSwitch(argv, '--probe-workers', DOCTOR_VALUE_FLAGS);
+  out.qualify = hasDoctorFlagSwitch(argv, '--qualify', DOCTOR_VALUE_FLAGS);
+  out.yes = hasDoctorFlagSwitch(argv, '--yes', DOCTOR_VALUE_FLAGS);
+  out.dryRun = hasDoctorFlagSwitch(argv, '--dry-run', DOCTOR_VALUE_FLAGS);
+  out.json = hasDoctorFlagSwitch(argv, '--json', DOCTOR_VALUE_FLAGS);
+  out.noBudgetCheck = hasDoctorFlagSwitch(argv, '--no-budget-check', DOCTOR_VALUE_FLAGS);
+  out.strictContext = hasDoctorFlagSwitch(argv, '--strict-context', DOCTOR_VALUE_FLAGS);
+  assertNoUnknownDoctorFlags(argv);
+  // --json only shapes the worker-probe report; without --probe-workers
+  // there is nothing machine-readable to emit.
+  if (out.json && !out.probeWorkers) {
+    throw new Error('Unknown flag combination: --json requires --probe-workers. See \'aiwg doctor --help\'.');
+  }
+  if ((out.qualify || out.cli || out.dryRun || out.yes) && !out.probeWorkers) {
+    throw new Error('--qualify, --cli, --yes and --dry-run require --probe-workers');
   }
   return out;
+}
+
+// Parse-or-exit wrapper: usage errors name the flag on stderr and exit 2
+// (EXIT_CODES.USAGE), before any check, spawn, or write.
+function parseDoctorArgsOrExit(argv) {
+  try {
+    return parseDoctorArgs(argv);
+  } catch (error) {
+    process.stderr.write(`aiwg doctor: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(2);
+  }
 }
 
 // ---- Skill listing budget check (#1150) -------------------------------
@@ -586,6 +677,90 @@ function check(name, status, message) {
   checks.push({ name, status, message });
 }
 
+// Empty-state guidance for the worker-probe report (#3066). Names the real
+// configuration command and key: `aiwg config set --project` writes dotted
+// keys into .aiwg/aiwg.config (src/config/cli.ts projectConfigSet), and
+// each parallelism.clis entry binds a provider adapter reference
+// (src/config/aiwg-config.ts validation).
+const WORKER_PROBE_EMPTY_MESSAGE =
+  `No worker CLIs are configured (parallelism.clis in .aiwg/aiwg.config is empty); add a complete cli entry, e.g. \`aiwg config set --project parallelism.clis.codex '{"adapter":"providers:codex","accountScope":"local-account","quotaScope":"local-quota"}'\`, then rerun with --probe-workers.`;
+const WORKER_PROBE_DISABLED_MESSAGE =
+  'Group dispatch is disabled (parallelism.worker_dispatch is not true); no version probes were run. Enable it with `aiwg config set --project parallelism.worker_dispatch true`, then rerun with --probe-workers.';
+
+// One machine-readable record per CLI for `aiwg doctor --probe-workers
+// --json`, mapped from the install-kind readiness finding (one per
+// configured cli, untruncated — see buildDirectWorkerDoctorSection's
+// installFindings):
+// - installed: the executable ran and produced output (a matched version,
+//   an out-of-range version, or an unmatched banner from something present);
+// - version: the identified version, or null when none was identified;
+// - inRange: true/false once a version was identified, else null;
+// - ready: true only for WORKER_DIRECT_READY;
+// - reason: the stable finding code (see src/models/worker-direct-readiness.ts).
+function toWorkerProbeRecord(finding) {
+  const version = finding.installedVersion ?? null;
+  return {
+    cli: finding.cli,
+    installed: version !== null || finding.code === 'WORKER_DIRECT_BANNER_UNMATCHED',
+    version,
+    inRange: finding.code === 'WORKER_DIRECT_READY' ? true : (version !== null ? false : null),
+    ready: finding.code === 'WORKER_DIRECT_READY',
+    reason: finding.code,
+  };
+}
+
+// Machine-readable worker-probe report (#3066). Prints exactly one JSON
+// document on stdout and nothing else: no announce lines (announce is
+// omitted), no buffered checks, no footer. Dispatch eligibility comes from
+// the binding-level fallback (no resolver snapshot is resolved here) — the
+// records only speak to installation readiness, so the snapshot would add
+// resolution cost without changing them.
+async function runWorkerProbeJson(projectDir, options = {}) {
+  let workerConfig;
+  try {
+    workerConfig = await readAiwgConfig(projectDir);
+  } catch (error) {
+    process.stderr.write(`aiwg doctor: cannot read .aiwg/aiwg.config: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
+  const parallelism = workerConfig?.parallelism;
+  if (options.cli) {
+    const ids = new Set([...Object.keys(parallelism?.clis ?? {}), ...Object.values(parallelism?.groups ?? {}).flatMap(group => group.members.map(member => member.cli))]);
+    if (!ids.has(options.cli)) throw new Error(`Unknown configured worker CLI: ${options.cli}`);
+  }
+  const workerDispatch = parallelism?.worker_dispatch === true;
+  const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
+  const { buildDirectWorkerDoctorSection } = await importImpl(import.meta.url, 'models/worker-direct-readiness.js');
+  const registry = loadProviderModelCapabilities();
+  const section = await buildDirectWorkerDoctorSection({
+    parallelism,
+    registry,
+    cli: options.cli,
+    probeWorkers: true,
+    projectRoot: projectDir,
+  });
+  const workers = section.installFindings.map(toWorkerProbeRecord);
+  const payload = {
+    probeWorkers: true,
+    workerDispatch,
+    workersConfigured: section.workersConfigured,
+    workers,
+  };
+  if (!section.workersConfigured) payload.message = WORKER_PROBE_EMPTY_MESSAGE;
+  else if (!workerDispatch) payload.message = WORKER_PROBE_DISABLED_MESSAGE;
+  if (options.qualify) {
+    const { qualifyProbedWorkers } = await import('./worker-qualification.mjs');
+    payload.qualification = await qualifyProbedWorkers({ projectDir, packageRoot: getPackageRoot(), config: workerConfig,
+      registry, section, ...options });
+    if (['failed', 'partial'].includes(payload.qualification.status)) process.exitCode = 1;
+  }
+  if (options.json !== false) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else {
+    for (const worker of workers) console.log(`Direct Worker ${worker.cli}: ${worker.reason}`);
+    if (payload.qualification) console.log(`Worker qualification: ${JSON.stringify(payload.qualification)}`);
+  }
+}
+
 function hasSigningMaterial(signing) {
   return Boolean(signing && (signing.key || signing.key_file));
 }
@@ -595,7 +770,12 @@ function hasTrackerRemote(remotes) {
 }
 
 function childProcessSucceeded(err) {
-  return Boolean(err && err.status === 0);
+  // err.code !== 'ETIMEDOUT' guards the same pattern as #3062 B/C finding
+  // 13: a surviving descendant holding the pipe can produce ETIMEDOUT
+  // with status 0 (the direct child itself exited fine) — status alone
+  // would then read a real timeout as the sandbox-EPERM-but-really-fine
+  // case this function exists to recognize.
+  return Boolean(err && err.code !== 'ETIMEDOUT' && err.status === 0);
 }
 
 async function fileExists(filePath) {
@@ -695,7 +875,32 @@ async function checkOpenHumanHarnessTier2() {
 
 const BRAND_HEX = '#818CF8';
 
-async function runDoctor() {
+export async function runDoctor() {
+  // Usage errors (unknown flags, valueless value flags, --json without
+  // --probe-workers) exit 2 here, before any check, spawn, or write.
+  const options = parseDoctorArgsOrExit(process.argv.slice(2));
+  const {
+    provider: providerArg,
+    allProviders,
+    probeWorkers,
+    json: jsonMode,
+    noBudgetCheck,
+    strictContext,
+    contextBaseline,
+    contextBudgetTokens,
+  } = options;
+
+  // Machine-readable worker probes: exactly one JSON document on stdout
+  // and nothing else — the full diagnostic run (and its footer) is skipped.
+  if (jsonMode || options.qualify || options.cli || options.dryRun) {
+    try { await runWorkerProbeJson(process.cwd(), { ...options, json: jsonMode }); }
+    catch (error) {
+      process.stderr.write(`aiwg doctor: ${error.message}\n`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   const isTTY = Boolean(process.stdout.isTTY);
   const mark = isTTY ? chalk.hex(BRAND_HEX)('◆') : '◆';
   const rule = isTTY ? chalk.dim('  ' + '─'.repeat(42)) : '  ' + '-'.repeat(42);
@@ -727,8 +932,20 @@ async function runDoctor() {
   check(
     'Installation Identity',
     installation.state === 'aligned' ? 'ok' : 'error',
-    installation.state === 'aligned' ? installationDetail : `${installationDetail}. ${installation.drift.join('; ')}`,
+    installation.state === 'aligned' ? installationDetail : `${installationDetail}. ${formatInstallationDiagnostic(installation)}`,
   );
+
+  const foreignCopies = inspectInstallationCopies({
+    actualRoot: installation.actualRoot,
+    identity: installation.identity,
+  }).filter(copy => !copy.registered);
+  if (foreignCopies.length > 0) {
+    check('Installation Copies', 'warn', [
+      `Registered install: ${installation.identity?.root ?? '(none)'}. Other executable copies found:`,
+      ...foreignCopies.map(copy => `${copy.root} (${copy.onPath ? 'on PATH' : 'other nvm Node version, off PATH'}; executables: ${copy.executables.join(', ')})`),
+      'Run aiwg installation show from the intended copy; register it deliberately with aiwg installation adopt --yes, or put the registered executable first on PATH and remove unwanted copies with their Node prefix\'s npm uninstall -g aiwg.',
+    ].join('\n        '));
+  }
 
   // 1a. Warn when test-only user-registry override is active (#246)
   if (process.env.AIWG_USER_REGISTRY_PATH && String(process.env.AIWG_USER_REGISTRY_PATH).trim()) {
@@ -772,9 +989,20 @@ async function runDoctor() {
     versionInfo = await getVersionInfo();
     const channelLabel = versionInfo.channel !== 'stable' ? ` [${versionInfo.channel}]` : '';
     check('AIWG Version', 'ok', `${versionInfo.version}${channelLabel}`);
+    if (versionInfo.launcherVersion && versionInfo.runtimeVersion) {
+      const message = `launcher ${versionInfo.launcherVersion}; runtime ${versionInfo.runtimeVersion} at ${versionInfo.runtimePath}`;
+      if (versionInfo.launcherVersion === '(unknown)' || versionInfo.runtimeVersion === '(unknown)') {
+        check('Launcher/Runtime Versions', 'warn', `Could not determine both versions: ${message}`);
+      } else if (versionInfo.launcherVersion !== versionInfo.runtimeVersion) {
+        check('Launcher/Runtime Versions', 'warn', `Version skew: ${message}`);
+      } else {
+        check('Launcher/Runtime Versions', 'ok', message);
+      }
+    }
   } catch {
     try {
-      const version = execSync('aiwg -version 2>/dev/null', { encoding: 'utf-8' }).trim();
+      const [file, args] = cliCommand('aiwg', ['-version']);
+      const version = boundedExecFileSync(file, args, 'quick', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
       check('AIWG Version', 'ok', version.split('\n')[0]);
     } catch {
       check('AIWG Version', 'warn', 'Could not determine version');
@@ -785,14 +1013,14 @@ async function runDoctor() {
   if (versionInfo?.devMode && versionInfo?.edgePath) {
     try {
       // Check if upstream remote exists (fork mode)
-      const remotes = execSync('git remote', { cwd: versionInfo.edgePath, encoding: 'utf-8' }).trim().split('\n');
+      const remotes = boundedExecFileSync('git', ['remote'], 'quick', { cwd: versionInfo.edgePath, encoding: 'utf-8' }).trim().split('\n');
       if (remotes.includes('upstream')) {
         // Count commits upstream has that we don't
         let aheadCount = 0;
         try {
-          execSync('git fetch upstream --dry-run', { cwd: versionInfo.edgePath, stdio: 'pipe' });
+          boundedExecFileSync('git', ['fetch', 'upstream', '--dry-run'], 'network', { cwd: versionInfo.edgePath, stdio: 'pipe' });
           aheadCount = parseInt(
-            execSync('git rev-list HEAD..upstream/main --count', {
+            boundedExecFileSync('git', ['rev-list', 'HEAD..upstream/main', '--count'], 'quick', {
               cwd: versionInfo.edgePath, encoding: 'utf-8'
             }).trim(), 10
           ) || 0;
@@ -860,15 +1088,6 @@ async function runDoctor() {
   //   --provider <name>  → just that one
   //   --all-providers    → every supported provider
   //   (default)          → auto-detect deployed providers via PROVIDER_AGENT_DIRS
-  const {
-    provider: providerArg,
-    allProviders,
-    probeWorkers,
-    noBudgetCheck,
-    strictContext,
-    contextBaseline,
-    contextBudgetTokens,
-  } = parseDoctorArgs(process.argv.slice(2));
   let providersToCheck = [];
   if (providerArg) {
     providersToCheck = [providerArg];
@@ -1118,7 +1337,7 @@ async function runDoctor() {
   if (!noBudgetCheck) {
     try {
       const supported = providersToCheck.filter((name) =>
-        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman', 'grokbot', 'muse'].includes(name),
+        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman', 'grokbot', 'grok-build', 'muse'].includes(name),
       );
       const firewall = await scanContextMemoryFirewall({
         rootDir: process.cwd(),
@@ -1354,7 +1573,8 @@ async function runDoctor() {
   // failure it prints shell-specific guidance and the `npx aiwg` fallback.
   // Doctor's exit code is not affected (PATH guidance is informational).
   try {
-    execSync('aiwg --version', { stdio: 'ignore' });
+    const [file, args] = cliCommand('aiwg', ['--version']);
+    boundedExecFileSync(file, args, 'quick', { stdio: 'ignore' });
     // aiwg is callable — no PATH issue to report.
   } catch {
     const isTTY = Boolean(process.stdout.isTTY);
@@ -1379,13 +1599,8 @@ async function runDoctor() {
   }
 
   // 7. Check Node.js version
-  const nodeVersion = process.version;
-  const major = parseInt(nodeVersion.slice(1).split('.')[0]);
-  if (major >= 18) {
-    check('Node.js', 'ok', nodeVersion);
-  } else {
-    check('Node.js', 'error', `${nodeVersion} (requires >= 18.0.0)`);
-  }
+  const nodeCheck = checkNodeVersion(process.version);
+  check('Node.js', nodeCheck.status, nodeCheck.message);
 
   // 8. Check MCP server — resolve the exact compiled entrypoint the
   // production launcher loads (bin/aiwg.mjs's resolveRouterPath always
@@ -1450,6 +1665,7 @@ async function runDoctor() {
         // integration runner budget so doctor does not report a false outage.
         timeout: 30_000,
         shell: process.platform === 'win32',
+        killSignal: 'SIGKILL',
       });
       if (r.error || r.status !== 0) {
         const detail = r.error
@@ -1716,7 +1932,7 @@ async function runDoctor() {
         // Collect actual git remote names; tolerate non-git directories.
         let gitRemotes = [];
         try {
-          gitRemotes = execSync('git remote', { cwd: projectDir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] })
+          gitRemotes = boundedExecFileSync('git', ['remote'], 'quick', { cwd: projectDir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] })
             .trim()
             .split('\n')
             .filter(Boolean);
@@ -1831,7 +2047,7 @@ async function runDoctor() {
         // default_branch existence — best effort, only when in a git repo
         const defaultBranch = d.default_branch || 'main';
         try {
-          execFileSync('git', ['-C', projectDir, 'rev-parse', '--verify', '--quiet', defaultBranch], {
+          boundedExecFileSync('git', ['-C', projectDir, 'rev-parse', '--verify', '--quiet', defaultBranch], 'quick', {
             stdio: 'pipe',
           });
         } catch (err) {
@@ -2030,7 +2246,7 @@ async function runDoctor() {
         if (report.contextDigest) check('Worker Health Context', 'info',
           `offline context digest=${report.contextDigest}; actual task context must be resolved before launch`);
         for (const finding of report.findings.slice(0, 32)) {
-          check(`Worker Health${finding.role ? ` (${finding.role})` : ''}`, finding.status,
+          check(`Worker Health${finding.role ? ` (${finding.role})` : finding.roles?.length ? ` (${finding.roles.join(', ')})` : ''}`, finding.status,
             `${finding.code}: ${finding.message} [next: ${finding.nextAction}]`);
         }
         if (report.findings.length > 32) check('Worker Health', 'warn',
@@ -2055,13 +2271,16 @@ async function runDoctor() {
   // or mutation). Decision 17 dropped qualification runners and evidence
   // files, so this reports installation readiness and resolver dispatch
   // eligibility only, and never claims a profile is "qualified" — profiles
-  // stay unqualified until an authenticated smoke run (#3005). No workers
+  // require explicit doctor --probe-workers --qualify approval. No workers
   // configured (explicitly or implicitly through a group member) means no
-  // section at all, and a failed/unavailable shared config read means this
-  // section stays silent too — it never adds its own warning on top of
-  // whatever the config read failure already surfaced above, so a project
-  // with no workers configured sees unchanged output even when the config
-  // has unrelated warnings or fails to load.
+  // section at all unless --probe-workers was passed (#3066: an explicit
+  // probe ask with nothing configured renders one visible line instead of
+  // silence, so an empty run cannot be mistaken for "all workers ready").
+  // A failed/unavailable shared config read means this section stays silent
+  // too — it never adds its own warning on top of whatever the config read
+  // failure already surfaced above, so a project with no workers configured
+  // sees unchanged output even when the config has unrelated warnings or
+  // fails to load.
   try {
     if (workerSectionsConfigFailed) throw new Error('worker-sections config unavailable');
     const directConfig = workerSectionsConfig;
@@ -2069,6 +2288,9 @@ async function runDoctor() {
     const directCliIds = new Set(Object.keys(directParallelism?.clis ?? {}));
     for (const group of Object.values(directParallelism?.groups ?? {})) {
       for (const member of group?.members ?? []) directCliIds.add(member.cli);
+    }
+    if (!directCliIds.size && probeWorkers) {
+      check('Direct Worker', 'info', WORKER_PROBE_EMPTY_MESSAGE);
     }
     if (directCliIds.size) {
       const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
@@ -2101,6 +2323,24 @@ async function runDoctor() {
     if (!workerSectionsConfigFailed) {
       check('Direct Worker', 'warn',
         'direct readiness inputs are invalid or unavailable; review parallelism.clis and the provider registry');
+    }
+  }
+
+  // #3050: direct-worker dispatch opt-in next step. Only on --probe-workers
+  // (an explicit ask), presence-only PATH scan (no spawn beyond what the
+  // section above already does), silent unless dispatch is off and two or
+  // more worker CLIs are detected (and silent after a previous decline).
+  if (probeWorkers) {
+    try {
+      if (workerSectionsConfigFailed) throw new Error('worker-sections config unavailable');
+      const { detectInstalledWorkerClis, evaluateWorkerDispatchOffer, workerDispatchOfferHint } =
+        await importImpl(import.meta.url, 'models/worker-dispatch-offer.js');
+      const offer = evaluateWorkerDispatchOffer(workerSectionsConfig?.parallelism, workerSectionsConfig?.setup, detectInstalledWorkerClis());
+      if (offer.shouldOffer) {
+        check('Direct Worker Dispatch Offer', 'info', workerDispatchOfferHint(offer.detected));
+      }
+    } catch {
+      // Non-fatal — this is an informational nudge, never a diagnostic gate.
     }
   }
 
@@ -2549,7 +2789,9 @@ async function runDoctor() {
   console.log('');
 }
 
-runDoctor().catch(error => {
-  console.error('Doctor failed:', error.message);
-  process.exit(1);
-});
+if (isMain(import.meta.url)) {
+  runDoctor().catch(error => {
+    console.error('Doctor failed:', error.message);
+    process.exit(1);
+  });
+}

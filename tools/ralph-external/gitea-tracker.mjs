@@ -7,10 +7,12 @@
  * @implements @.aiwg/requirements/design-ralph-external.md
  */
 
-import { execSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync, boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const GITEA_TOKEN_PATH = join(homedir(), '.config', 'gitea', 'token');
 const GITEA_API_BASE = 'https://git.integrolabs.net/api/v1';
@@ -42,7 +44,7 @@ export class GiteaTracker {
   }
 
   /**
-   * Make API call using heredoc pattern for token security
+   * Make API call passing the token through stdin
    * @param {string} method - HTTP method
    * @param {string} endpoint - API endpoint
    * @param {Object} [data] - Request body
@@ -54,19 +56,21 @@ export class GiteaTracker {
     }
 
     const url = `${GITEA_API_BASE}${endpoint}`;
-    const dataArg = data ? `-d '${JSON.stringify(data)}'` : '';
-
-    // Use heredoc pattern for secure token handling
-    const script = `bash <<'EOF'
-TOKEN=$(cat ${this.tokenPath})
-curl -s -X ${method} \\
-  -H "Authorization: token \${TOKEN}" \\
-  -H "Content-Type: application/json" \\
-  "${url}" ${dataArg}
-EOF`;
+    const args = [
+      '-s', '-X', method,
+      '-H', '@-',
+      '-H', 'Content-Type: application/json',
+      url,
+    ];
+    if (data) args.push('-d', JSON.stringify(data));
 
     try {
-      const result = execSync(script, { encoding: 'utf8' });
+      // Keep the token out of argv and shell commands.
+      const token = readFileSync(this.tokenPath, 'utf8').replace(/\n+$/, '');
+      const result = boundedExecFileSync('curl', args, 'network', {
+        encoding: 'utf8',
+        input: `Authorization: token ${token}\n`,
+      });
       return JSON.parse(result);
     } catch (error) {
       throw new Error(`Gitea API call failed: ${error.message}`);
@@ -186,7 +190,7 @@ Loop completed at ${new Date().toISOString()}
  */
 export function detectGiteaRepo(cwd) {
   try {
-    const remote = execSync('git remote get-url origin', {
+    const remote = boundedExecSync('git remote get-url origin', 'quick', {
       cwd,
       encoding: 'utf8',
     }).trim();

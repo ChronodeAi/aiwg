@@ -9,13 +9,15 @@
  * @version 2024.12.0
  */
 
+import { signalChild } from '../process/signal-child.mjs';
 import fs from 'fs/promises';
 import { readFileSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execFileSync, execSync, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import os from 'os';
 import { resolveUserConfigDir } from '../config/user-config-dir.mjs';
+import { boundedExecFileSync } from '../process/bounded-child-process.mjs';
 import {
   assertCanonicalInstallation,
   createInstallationIdentity,
@@ -52,9 +54,9 @@ async function runWithTimeout(cmd, args, options = {}) {
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
-      try { child.kill('SIGTERM'); } catch { /* already exited */ }
+      try { signalChild(child, 'SIGTERM'); } catch { /* already exited */ }
       const kill9 = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch { /* already exited */ }
+        try { signalChild(child, 'SIGKILL'); } catch { /* already exited */ }
       }, 5_000);
       kill9.unref?.();
       settled = true;
@@ -281,6 +283,9 @@ export async function getFrameworkRoot(options = {}) {
  */
 export async function switchToEdge() {
   const config = await loadConfig();
+  if (typeof config.edgePath !== 'string' || !path.isAbsolute(config.edgePath)) {
+    throw new Error('Edge installation path must be absolute');
+  }
 
   console.log('Switching to edge channel (bleeding edge from main branch)...');
   console.log('');
@@ -300,8 +305,8 @@ export async function switchToEdge() {
         const sparseConfig = path.join(config.edgePath, '.git', 'info', 'sparse-checkout');
         const hasSparse = await fs.access(sparseConfig).then(() => true).catch(() => false);
         if (!hasSparse) {
-          execSync('git sparse-checkout init --cone', { cwd: config.edgePath, stdio: 'pipe' });
-          execSync('git sparse-checkout set --no-cone "/*" "!/.aiwg"', { cwd: config.edgePath, stdio: 'pipe' });
+          boundedExecFileSync('git', ['sparse-checkout', 'init', '--cone'], 'quick', { cwd: config.edgePath, stdio: 'pipe' });
+          boundedExecFileSync('git', ['sparse-checkout', 'set', '--no-cone', '/*', '!/.aiwg'], 'quick', { cwd: config.edgePath, stdio: 'pipe' });
         }
       } catch {
         // Sparse checkout is optional — older git may not support it
@@ -319,11 +324,12 @@ export async function switchToEdge() {
     console.log(`Cloning repository to ${config.edgePath}...`);
     await fs.mkdir(path.dirname(config.edgePath), { recursive: true });
     try {
-      execSync(`git clone --branch main ${REPO_URL} "${config.edgePath}"`, { stdio: 'inherit' });
+      // Cloning the full repository; long tier (#3062).
+      boundedExecFileSync('git', ['clone', '--branch', 'main', '--', REPO_URL, config.edgePath], 'long', { stdio: 'inherit' });
       // Exclude dogfooding artifacts from edge clones — users want framework source only
       try {
-        execSync('git sparse-checkout init --cone', { cwd: config.edgePath, stdio: 'pipe' });
-        execSync('git sparse-checkout set --no-cone "/*" "!/.aiwg"', { cwd: config.edgePath, stdio: 'pipe' });
+        boundedExecFileSync('git', ['sparse-checkout', 'init', '--cone'], 'quick', { cwd: config.edgePath, stdio: 'pipe' });
+        boundedExecFileSync('git', ['sparse-checkout', 'set', '--no-cone', '/*', '!/.aiwg'], 'quick', { cwd: config.edgePath, stdio: 'pipe' });
       } catch {
         // Sparse checkout is optional — older git versions may not support it
         console.log('Note: sparse checkout not available, .aiwg/ will be present in edge install.');
@@ -419,7 +425,7 @@ export async function switchToNext() {
   console.log('');
 
   try {
-    execFileSync(status.identity.managerExecutable, ['install', '--global', 'aiwg@next'], { stdio: 'inherit' });
+    boundedExecFileSync(status.identity.managerExecutable, ['install', '--global', 'aiwg@next'], 'long', { stdio: 'inherit' });
   } catch (error) {
     console.error('Failed to install aiwg@next:', error.message);
     console.error('Check that npm is available and you have write access to the global prefix.');
@@ -453,7 +459,7 @@ export async function switchToNightly() {
   console.log('');
 
   try {
-    execFileSync(status.identity.managerExecutable, ['install', '--global', 'aiwg@nightly'], { stdio: 'inherit' });
+    boundedExecFileSync(status.identity.managerExecutable, ['install', '--global', 'aiwg@nightly'], 'long', { stdio: 'inherit' });
   } catch (error) {
     console.error('Failed to install aiwg@nightly:', error.message);
     console.error('Check that npm is available and you have write access to the global prefix.');
@@ -535,6 +541,19 @@ export async function getVersionInfo() {
   const packageJsonPath = path.join(packageRoot, 'package.json');
   const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
 
+  const launcherRoot = process.env.AIWG_LAUNCHER_ROOT || packageRoot;
+  const runtimePath = resolveEffectiveInstallationRoot(launcherRoot, config);
+  const readVersion = async (root) => {
+    try {
+      const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+      return typeof pkg.version === 'string' ? pkg.version : '(unknown)';
+    } catch {
+      return '(unknown)';
+    }
+  };
+  const launcherVersion = await readVersion(launcherRoot);
+  const runtimeVersion = await readVersion(runtimePath);
+
   // Detect pre-release channel from version string when channel.json says 'stable'
   // This handles the case where a user ran `npm install -g aiwg@next` directly —
   // npm updates the binary but channel.json stays as 'stable'.
@@ -554,6 +573,9 @@ export async function getVersionInfo() {
 
   const info = {
     version,
+    launcherVersion,
+    runtimeVersion,
+    runtimePath,
     channel,
     packageRoot,
     installation,
@@ -570,11 +592,11 @@ export async function getVersionInfo() {
   if (config.channel === 'edge') {
     // Get git info for edge channel
     try {
-      const gitHash = execSync('git rev-parse --short HEAD', {
+      const gitHash = boundedExecFileSync('git', ['rev-parse', '--short', 'HEAD'], 'quick', {
         cwd: config.edgePath,
         encoding: 'utf8',
       }).trim();
-      const gitBranch = execSync('git branch --show-current', {
+      const gitBranch = boundedExecFileSync('git', ['branch', '--show-current'], 'quick', {
         cwd: config.edgePath,
         encoding: 'utf8',
       }).trim();

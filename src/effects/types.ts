@@ -52,7 +52,11 @@ export const UNKNOWN_REASONS = [
   'container-unreadable',
   'paging-incomplete',
   'consistency-lag',
-  'tracker-blocked',
+  'tracker-blocked', // Retained for existing ledger records.
+  'tracker-provider-unresolved',
+  'tracker-repository-mismatch',
+  'tracker-credential-missing',
+  'tracker-no-access-route',
   'malformed-response',
   'evidence-conflict',
 ] as const;

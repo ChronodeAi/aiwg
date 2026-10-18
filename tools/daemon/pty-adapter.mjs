@@ -247,7 +247,7 @@ export class PTYAdapter extends EventEmitter {
       })
       .filter(Boolean)
       .filter((s) => {
-        if (!s.pid) return false;
+        if (!Number.isSafeInteger(s.pid) || s.pid <= 0) return false;
         try {
           process.kill(s.pid, 0);   // signal 0 = existence check
           return true;
@@ -269,7 +269,7 @@ export class PTYAdapter extends EventEmitter {
     if (!fs.existsSync(p)) return null;
     try {
       const s = JSON.parse(fs.readFileSync(p, 'utf8'));
-      if (!s.pid) return null;
+      if (!Number.isSafeInteger(s.pid) || s.pid <= 0) return null;
       process.kill(s.pid, 0);
       return s;
     } catch {

@@ -36,10 +36,10 @@ describe('load CPU bound source gate', () => {
     expect(cpu?.pass).toBe(false);
   });
 
-  it('omits the CPU comparison for the wall-clock upper-bound fallback', () => {
-    // The fallback is process-wide wall time (runner + sibling workers), so it
-    // cannot bound harness CPU. Gating on it fails conforming code on shared
-    // runners (observed 100 vs limit 80 across repeated CI runs).
+  it('does not treat historical wall-clock evidence as thread CPU', () => {
+    // Historical records can contain wall time (runner + sibling workers),
+    // which cannot bound harness CPU. New Node 24 harness runs always
+    // produce thread CPU evidence.
     const comparisons = compareDecisionLoadBounds(manifest, observations, resources('wall-clock-upper-bound', 100));
     expect(comparisons.find(comparison => comparison.bound === 'maximumCpuPercentOneCore')).toBeUndefined();
     expect(comparisons.every(comparison => comparison.pass)).toBe(true);

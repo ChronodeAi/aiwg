@@ -654,8 +654,9 @@ async function startStatusServer(options) {
       });
       res.end(JSON.stringify(payload, null, 2));
     } catch (error) {
+      console.error('[workspace-status] status request failed', error);
       res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: error.message || String(error) }));
+      res.end(JSON.stringify({ error: 'status_unavailable', message: 'Workspace status is unavailable.' }));
     }
   });
 

@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync, boundedSpawnSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 export const SANDBOX_BASELINE = Object.freeze({
   tag: 'v2026.8.3',
@@ -17,7 +19,7 @@ export function validateSandboxIdentity({ tag, commit }) {
 }
 
 function git(root, ...args) {
-  return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
+  return boundedExecFileSync('git', ['-C', root, ...args], 'quick', { encoding: 'utf8' }).trim();
 }
 
 function argument(name, fallback) {
@@ -34,8 +36,19 @@ export function main() {
   const managementRoot = resolve(sandboxRoot, 'management');
   const binary = resolve(managementRoot, 'target/debug/agentic-mgmt');
   if (!process.argv.includes('--skip-build')) {
-    const build = spawnSync('cargo', ['build', '--bin', 'agentic-mgmt'], { cwd: managementRoot, stdio: 'inherit' });
-    if (build.status !== 0) process.exit(build.status ?? 1);
+    const build = boundedSpawnSync('cargo', ['build', '--bin', 'agentic-mgmt'], 'long', { cwd: managementRoot, stdio: 'inherit' });
+    // `build.error ||`, not just `status !== 0` (#3062 B/C finding 13): a
+    // surviving descendant holding the pipe can produce ETIMEDOUT with
+    // status 0 (direct child exited fine) — status alone would then read
+    // as success and skip this whole block.
+    if (build.error || build.status !== 0) {
+      // A `long`-tier timeout (#3062 finding 17) can kill a legitimate cold
+      // Cargo build after 10 minutes; without this, the process just exits
+      // non-zero with no indication that it was a bound, not a build
+      // failure, or how to raise/disable it via AIWG_SYNC_LONG_TIMEOUT_MS.
+      if (build.error) console.error(build.error.message);
+      process.exit(build.status || 1);
+    }
   }
   if (!existsSync(binary)) throw new Error(`exact-baseline management binary is missing: ${binary}`);
   if (process.argv.includes('--check-only')) {
@@ -44,7 +57,7 @@ export function main() {
   }
 
   const aiwgCommit = git(process.cwd(), 'rev-parse', 'HEAD');
-  const result = spawnSync('npm', ['run', 'uat:fleet-sandbox-live'], {
+  const result = boundedSpawnSync('npm', ['run', 'uat:fleet-sandbox-live'], 'long', {
     cwd: process.cwd(),
     stdio: 'inherit',
     env: {
@@ -56,7 +69,12 @@ export function main() {
       AIWG_QUALIFICATION_COMMIT: aiwgCommit,
     },
   });
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  if (result.error || result.status !== 0) {
+    // Same reasoning as the Cargo build above: a live UAT run can
+    // legitimately take close to the `long`-tier bound.
+    if (result.error) console.error(result.error.message);
+    process.exit(result.status || 1);
+  }
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : '';

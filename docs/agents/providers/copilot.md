@@ -142,7 +142,7 @@ Once configured, Copilot agent mode can call AIWG MCP tools (`discover`, `comman
 
 The coding agent supports MCP servers configured via GitHub.com Settings > Copilot > Coding agent. This is a UI-based JSON configuration, not a committed file.
 
-See [Copilot MCP Integration](copilot-mcp-sidecar.md) for full details.
+See [Copilot MCP Integration](../../integrations/copilot-mcp-sidecar.md) for full details.
 
 ---
 
@@ -154,7 +154,7 @@ Agent loops support multi-provider execution. While Copilot agents are deployed 
 aiwg ralph "Fix all tests" --completion "npm test passes"
 ```
 
-See [Al Guide](../ralph-guide.md) for full documentation including `--provider` options.
+See [Agent Loop Guide](../../agent-loop-guide.md) for full documentation including `--provider` options.
 
 ---
 
@@ -235,4 +235,4 @@ aiwg mcp serve
 
 ## Platform Reference
 
-For the full capability reference including all Copilot features, field schemas, and tool mappings, see the [Copilot Quickstart](copilot-quickstart.md).
+For the full capability reference including all Copilot features, field schemas, and tool mappings, see the [Copilot Quickstart](../../integrations/copilot-quickstart.md).

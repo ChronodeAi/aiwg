@@ -74,6 +74,9 @@ export const uhpHandler: CommandHandler = {
   description: 'Inspect and smoke-test an explicitly selected experimental UHP endpoint profile',
   category: 'toolsmith',
   aliases: [],
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: usage(), rawOutput: true };
+  },
   async execute(ctx) {
     try { return await executeUhp(ctx); }
     catch (error) {

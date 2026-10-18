@@ -1,6 +1,6 @@
 {
   "name": "@aiwg/cli",
-  "version": "2026.10.1",
+  "version": "2026.10.3",
   "description": "Lightweight AIWG CLI for signed, versioned web-backed resources.",
   "type": "module",
   "license": "MIT",
@@ -41,6 +41,16 @@
     "dist/src/resources/web-release.d.ts",
     "dist/src/dataset/**/*.d.ts",
     "tools/_resolve-impl.mjs",
+    "tools/ralph-external/session-launcher.mjs",
+    "tools/ralph-external/process-monitor.mjs",
+    "tools/ralph-external/lib/session-environment.mjs",
+    "tools/ralph-external/lib/worker-isolation.mjs",
+    "tools/ralph-external/lib/systemd-client.mjs",
+    "tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs",
+    "tools/ralph-external/lib/launcher-recovery-evidence.mjs",
+    "tools/ralph-external/lib/recovery-probe.mjs",
+    "tools/ralph-external/lib/worker-overflow.mjs",
+    "tools/scripts/resource-preflight.mjs",
     "tools/ralph-external/lib/provider-adapter.mjs",
     "tools/ralph-external/lib/worker-health.mjs",
     "tools/ralph-external/lib/claude-adapter.mjs",
@@ -59,6 +69,7 @@
     "tools/providers/antigravity-transport.mjs",
     "tools/commands/deploy-prompts-codex.mjs",
     "tools/plugin/package-plugins.mjs",
+    "tools/plugin/plugin-links.mjs",
     "tools/skills/deploy-skills-codex.mjs",
     "README.md"
   ],
@@ -82,7 +93,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24"
   },
   "dependencies": {
     "@fortemi/core": "2026.7.15",

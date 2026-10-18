@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 /** D17-MF calibrated multi-fact probe (#2850). Offline by default; collection uses tools/decision/heldout-study.mjs. */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile, readdir, mkdir, writeFile, realpath } from 'node:fs/promises';
 import { resolve, join, relative, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { register } from 'tsx/esm/api';
+import { importImpl } from '../_resolve-impl.mjs';
+import { decisionRefusalCode } from './refusal-code.mjs';
+
 register();
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const ownPath = fileURLToPath(import.meta.url);
 const byteDigest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -74,7 +77,7 @@ export async function assertD17SealedSource(sourceRoot, sealedCommit) {
     throw new Error('D17 sealed source');
   }
   const directory = await realpath(resolve(sourceRoot));
-  const git = args => execFileSync('git', ['-C', directory, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const git = args => boundedExecFileSync('git', ['-C', directory, ...args], 'quick', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   let head, status;
   try {
     head = git(['rev-parse', '--verify', 'HEAD^{commit}']).trim();
@@ -170,22 +173,26 @@ export async function runLedgerDryRun([bundlePath, approvalDigest, artifactRoot,
   if (!bundlePath || !approvalDigest || !artifactRoot || !calibrationContext || extra.length) throw new Error('usage');
   const bundle = await json(bundlePath);
   const study = await import('../../src/decision/ensemble-study/multifact-study.ts');
-  const { planHeldoutCollection } = await import('../../src/decision/heldout/contract.ts');
+  const { planHeldoutCollection, validateHeldoutBundle } = await import('../../src/decision/heldout/contract.ts');
   const { scanHeldoutSpend, heldoutCollectionAllowance } = await import('../../src/decision/heldout/journal.ts');
   const { assertD17SeedUnused } = await import('../../src/decision/ensemble-study/staged.ts');
   const { assertContextArtifactRoot } = await import('../../src/decision/context-live-qualification.ts');
   study.assertD17MultifactPrivateSeed(bundle?.corpus?.provenance?.seed);
   await assertContextArtifactRoot(root, resolve(artifactRoot));
-  const estimate = await planHeldoutCollection(bundle, approvalDigest);
+  validateHeldoutBundle(bundle, approvalDigest);
   const prior = await scanHeldoutSpend(resolve(artifactRoot), 'D17', bundle.approval);
+  const estimate = await planHeldoutCollection(bundle, approvalDigest, prior.attempts);
   assertD17SeedUnused(prior.attempts, bundle.approval);
   await deriveD17Calibration(await json(calibrationContext), bundle.approval.calibration.calibrationArtifactDigest, Date.now());
-  const fit = study.d17MultifactFit(await study.d17MultifactPlan(bundle, bundle.approval), heldoutCollectionAllowance(bundle.approval, prior));
+  const fit = study.d17MultifactFit(estimate, heldoutCollectionAllowance(bundle.approval, prior));
   // The collector refuses a session whose window (start plus the preregistered session limit) passes the calibrator expiry.
   const windowOpen = Date.now() + bundle.preregistration.sessionLimitMs <= Date.parse(study.D17MF_ARTIFACT_EXPIRY);
-  const ready = windowOpen && fit.fits && estimate.fitsBeforeStop && !prior.counterBlocked && !prior.attempts.some(a => !a.result || a.result.disposition === 'stop');
+  const reason = !windowOpen ? 'calibration-expired'
+    : prior.counterBlocked || prior.attempts.some(a => !a.result || a.result.disposition === 'stop') ? 'prior-stop'
+    : !fit.fits || !estimate.fitsBeforeStop ? 'budget-exceeded' : null;
+  const ready = reason === null;
   return { providerCalls: 0, plan: { maximumAttempts: estimate.maximumAttempts, reservedTokens: estimate.reservedTokens, reservedUsdMicros: estimate.reservedUsdMicros },
-    ledger: fit, sessionWindowOpen: windowOpen, prior: { studyUsdMicros: prior.studyUsdMicros, portfolioUsdMicros: prior.portfolioUsdMicros, studyCalls: prior.studyCalls }, ready };
+    ledger: fit, sessionWindowOpen: windowOpen, prior: { studyUsdMicros: prior.studyUsdMicros, portfolioUsdMicros: prior.portfolioUsdMicros, studyCalls: prior.studyCalls }, ready, reason };
 }
 
 /**
@@ -230,7 +237,8 @@ async function main() {
   if (mode === '--score') { process.stdout.write(`${JSON.stringify(await runScore(args.slice(1)))}\n`); return; }
   if (mode === '--dry-run-ledger') {
     const result = await runLedgerDryRun(args.slice(1));
-    process.stdout.write(`${JSON.stringify(result)}\n`); if (!result.ready) process.exitCode = 1; return;
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if (!result.ready) { process.stderr.write(`D17-MF refused (${result.reason}).\n`); process.exitCode = 1; } return;
   }
   if (!['--dry-run', '--prepare'].includes(mode) || args.length !== (mode === '--prepare' ? 3 : 2)) throw new Error('usage');
   const prepared = await prepare(args[1]);
@@ -249,6 +257,6 @@ async function main() {
     goldDigest: heldoutDigest(prepared.gold), auditDigest: prepared.analysis.auditDigest, approvalTemplateDigest: heldoutDigest(prepared.approvalTemplate),
     reviewTemplateDigest: heldoutDigest(prepared.reviewTemplate) }) + '\n');
 }
-if (process.argv[1] && resolve(process.argv[1]) === ownPath) main().catch(() => {
-  process.stderr.write('D17-MF refused: source pins, seed, audit, review, calibration, budget or artifact root failed.\n'); process.exitCode = 1;
+if (process.argv[1] && resolve(process.argv[1]) === ownPath) main().catch(error => {
+  process.stderr.write(`D17-MF refused (${decisionRefusalCode(error)}).\n`); process.exitCode = 1;
 });

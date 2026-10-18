@@ -60,6 +60,15 @@ describe('storage/backends/fs', () => {
     });
   });
 
+  describe('append', () => {
+    it('creates nested files and preserves every concurrent appended record', async () => {
+      const records = Array.from({ length: 32 }, (_, index) => `record-${index}\n`);
+      await Promise.all(records.map(record => adapter.append('new/deep/events', record)));
+      expect((await adapter.read('new/deep/events'))!.trim().split('\n').sort())
+        .toEqual(records.map(record => record.trim()).sort());
+    });
+  });
+
   describe('list', () => {
     it('returns empty array on empty subsystem root', async () => {
       const out = await adapter.list('');

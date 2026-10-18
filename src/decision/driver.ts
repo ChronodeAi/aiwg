@@ -1,3 +1,4 @@
+import { resolveDecisionEnablement } from '../config/decision-config.js';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -14,6 +15,39 @@ import {
   readDecisionContextFile,
   validateDecisionAskInput,
 } from './ask.js';
+import {
+  recordDecisionAsk,
+  decisionLedgerHistory,
+  decisionLedgerStats,
+  resolveDecisionSessionId,
+  parseDecisionLedgerSince,
+  DecisionLedgerSinceError,
+  DECISION_LEDGER_SCHEMA,
+  ATTRIBUTION_FIELD_PATTERN,
+  MAX_ATTRIBUTION_FIELD_LENGTH,
+  MAX_RECORDED_CHOICE_IDS,
+  MAX_RECORD_TEXT_BYTES,
+  MAX_LEDGER_RECORD_BYTES,
+  DECISION_LEDGER_RECORD_TIMEOUT_MS,
+  DECISION_SAVINGS_REASONING_ALLOWANCE_TOKENS,
+  DECISION_SAVINGS_ESTIMATION_METHOD,
+  buildDecisionLedgerRecord,
+  appendDecisionLedgerRecord,
+  filterDecisionLedgerRecords,
+  type DecisionLedgerRecord,
+  type DecisionLedgerFilters,
+  type DecisionLedgerStatsFilters,
+  type DecisionLedgerGroupBy,
+  type DecisionLedgerKind,
+  type DecisionLedgerHistoryResult,
+  type DecisionLedgerStatsResult,
+  type DecisionLedgerStatsGroup,
+  type DecisionLedgerTransport,
+  type DecisionLedgerBuildContext,
+  type RecordDecisionAskOptions,
+  type LedgerWriteChunk,
+} from './ledger.js';
+import { resolveActiveProvider } from '../cli/provider-resolution.js';
 import {
   assertDecisionEvaluateDispatcherConfig,
   decisionPatternPacks,
@@ -74,6 +108,25 @@ export {
   readDecisionContextFile,
   validateDecisionAskInput,
   DecisionAskUsageError,
+  recordDecisionAsk,
+  decisionLedgerHistory,
+  decisionLedgerStats,
+  resolveDecisionSessionId,
+  parseDecisionLedgerSince,
+  DecisionLedgerSinceError,
+  DECISION_LEDGER_SCHEMA,
+  ATTRIBUTION_FIELD_PATTERN,
+  MAX_ATTRIBUTION_FIELD_LENGTH,
+  MAX_RECORDED_CHOICE_IDS,
+  MAX_RECORD_TEXT_BYTES,
+  MAX_LEDGER_RECORD_BYTES,
+  DECISION_LEDGER_RECORD_TIMEOUT_MS,
+  DECISION_SAVINGS_REASONING_ALLOWANCE_TOKENS,
+  DECISION_SAVINGS_ESTIMATION_METHOD,
+  buildDecisionLedgerRecord,
+  appendDecisionLedgerRecord,
+  filterDecisionLedgerRecords,
+  resolveActiveProvider,
 };
 export type {
   DecisionAskInput,
@@ -81,6 +134,18 @@ export type {
   DecisionSetupInput,
   DecisionAskResult,
   DecisionSetupResult,
+  DecisionLedgerRecord,
+  DecisionLedgerFilters,
+  DecisionLedgerStatsFilters,
+  DecisionLedgerGroupBy,
+  DecisionLedgerKind,
+  DecisionLedgerHistoryResult,
+  DecisionLedgerStatsResult,
+  DecisionLedgerStatsGroup,
+  DecisionLedgerTransport,
+  DecisionLedgerBuildContext,
+  RecordDecisionAskOptions,
+  LedgerWriteChunk,
 };
 
 const DECISION_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -285,9 +350,11 @@ export function decisionCapabilities(options: DecisionDriverOptions = {}) {
   const env = driverEnv(options);
   const profiles = parseMcpRequestProfiles(env.AIWG_DECISION_MCP_REQUESTS, options.cwd ?? process.cwd());
   const packs = decisionPatternPacks;
+  const enablement = resolveDecisionEnablement(options);
   return {
     schema: 'aiwg-decision-driver-capabilities/v1',
-    enabled: env.AIWG_DECISION_ENABLED === '1',
+    enabled: enablement.enabled,
+    enabledSource: enablement.source,
     offlineReady: true,
     primitives: [...new Set(packs.map(pack => pack.primitive))].sort(),
     patterns: {
@@ -299,19 +366,19 @@ export function decisionCapabilities(options: DecisionDriverOptions = {}) {
     features: {
       patterns: ['list', 'show', 'offline-run', 'live-plan'],
       validation: [...VALIDATION_TARGETS],
-      evaluate: { requiresEnv: 'AIWG_DECISION_ENABLED=1', mcpRequiresOptIn: true, mcpProfiles: profiles.map(profile => profile.name) },
+      evaluate: { requiresEnablement: true, mcpRequiresOptIn: true, mcpProfiles: profiles.map(profile => profile.name) },
       setup: ['synthetic-classification'],
       experimental: packs.filter(pack => pack.status === 'experimental').map(pack => pack.id),
     },
     backend: {
-      configured: env.AIWG_DECISION_ENABLED === '1',
+      configured: enablement.enabled,
       probed: false,
       status: 'not-probed',
       note: 'Capabilities do not infer credential, network, dispatcher, or backend readiness.',
     },
     configuration: {
       env: {
-        AIWG_DECISION_ENABLED: env.AIWG_DECISION_ENABLED === '1' ? 'set' : 'unset',
+        AIWG_DECISION_ENABLED: ['0', '1'].includes(env.AIWG_DECISION_ENABLED ?? '') ? 'set' : 'unset',
         AIWG_DECISION_MCP_REQUESTS: profiles.length ? 'configured' : 'unset',
       },
     },
@@ -385,7 +452,7 @@ export async function validateDecisionInput(target: ValidationTarget, filePath: 
 export async function evaluateRequestPath(requestPath: string, options: DecisionDriverOptions = {}, evaluateOptions: DecisionEvaluateOptions = {}) {
   const env = driverEnv(options);
   const resolved = resolvePath(requestPath, options.cwd ?? process.cwd());
-  if (env.AIWG_DECISION_ENABLED !== '1') {
+  if (!resolveDecisionEnablement(options).enabled) {
     return { schema: 'aiwg-decision-evaluate/v1', status: 'denied' as EvaluationStatus, reason: 'explicit-enable-required', exitCode: 2, result: null };
   }
   const validation = await validateDecisionInput('request', resolved, options);
@@ -398,7 +465,7 @@ export async function evaluateRequestPath(requestPath: string, options: Decision
   if (evaluateOptions.hostPolicyModulePath) argv.push('--host-policy-module', resolvePath(evaluateOptions.hostPolicyModulePath, options.cwd ?? process.cwd()));
   const exitCode = await dispatcher.runDecisionEvaluate({
     argv,
-    env,
+    env: { ...env, AIWG_DECISION_ENABLED: '1' },
     runtime,
     stdout: { write(chunk: string | Uint8Array) { stdout += String(chunk); return true; } },
     stderr: { write(chunk: string | Uint8Array) { stderr += String(chunk); return true; } },

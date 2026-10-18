@@ -14,6 +14,10 @@
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { cliCommand } = await importImpl(import.meta.url, 'process/cli-command.mjs');
 
 /**
  * Source definition for a single provider watch target.
@@ -301,12 +305,11 @@ export class ProviderWatcher extends EventEmitter {
    * Uses `npm view` to avoid needing an npm token.
    */
   async checkNpm(providerId, source, providerState) {
-    const { execSync } = await import('child_process');
     const pkg = source.url;
 
     try {
-      const output = execSync(`npm view ${pkg} version dist-tags --json`, {
-        timeout: 30000,
+      const [file, args] = cliCommand('npm', ['view', pkg, 'version', 'dist-tags', '--json']);
+      const output = boundedExecFileSync(file, args, 'quick', {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
       });

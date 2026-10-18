@@ -71,16 +71,17 @@ the adapter's stored boolean metadata, within the same provider and workspace.
 aiwg sessions sources [--expected-providers <comma-separated-ids>] [--json]
 aiwg sessions discover --workspace <path>
                        [--expected-providers <comma-separated-ids>]
-                       [--codex-root <authorized-path>] [--muse-root <authorized-path>]
+                       [--codex-root <authorized-path>]... [--muse-root <authorized-path>]
                        [--omp-root <authorized-path>] [--dsh-root <authorized-path>]
                        [--manifest <path>] [--dry-run] [--json]
 aiwg sessions import-discovered --workspace <path>
                                 [--manifest <path>] [--confirm|--yes]
+                                [--expected-providers <comma-separated-ids>]
                                 [--resume] [--lock-wait-ms <n>]
                                 [--dry-run] [--json]
 aiwg sessions import <file> --source-id <id> [--workspace <id>] [--dry-run] [--json]
 aiwg sessions list [--provider <id>] [--workspace <id>] [--tag <tag>]
-                   [--limit <1..500>] [--cursor <offset>]
+                   [--limit <1..500>] [--cursor <opaque>]
                    [--min-coverage <0..1>] [--json]
 aiwg sessions timeline [--workspace <id>] [--gap <duration>]
                        [--min-coverage <0..1>] [--json]
@@ -109,7 +110,8 @@ aiwg sessions promote <candidate-id> <version> --consumer <id>
                       --reviewer <id> [--confirm] [--dry-run] [--json]
 aiwg sessions tag <session-id> <tag> [--dry-run] [--json]
 aiwg sessions relocate <source-id> <file> [--dry-run] [--json]
-aiwg sessions reindex [--dry-run] [--json]
+aiwg sessions reindex (--workspace <path-or-id> | --all-workspaces)
+                      [--db <catalog.sqlite>] [--dry-run] [--json]
 aiwg sessions delete <session-id> [--confirm] [--dry-run] [--json]
 aiwg sessions restore <session-id> [--dry-run] [--json]
 aiwg sessions purge <session-id> [--confirm] --actor-class <class>
@@ -132,17 +134,79 @@ aiwg sessions forensics evidence <event-id|fact-id|candidate-id>
 aiwg sessions doctor [--json]
 ```
 
+Reindex requires an explicit `--workspace` or `--all-workspaces`. The latter
+rebuilds search indexes and analytics for every workspace in the selected catalog;
+it does not scan for other catalogs or discover provider histories. Use `--db`
+to select a catalog outside the current project. These scope options cannot be
+combined. JSON receipts include `operation`, `allWorkspaces`, and sorted
+`workspaceIds`; dry runs list the same planned scopes with status `preview` and
+do not rebuild indexes. An empty catalog reports `workspaceIds: []` when all
+workspaces are selected.
+
+`aiwg sessions list` returns sessions newest first by `updatedAt`, with session
+IDs descending to break timestamp ties. Sessions without an update timestamp
+appear last. `--limit N` returns the N most recently updated sessions; pass the
+opaque `page.nextCursor` as `--cursor` with the same filters to continue through
+older sessions.
+
 ## Discover and import a workspace history
 
 Discovery scans only provider roots associated with the explicitly authorized
 workspace. Claude, Cursor, and Factory have workspace-keyed local roots. Codex
-rollouts use a shared root, so AIWG does not inspect `CODEX_HOME` implicitly:
-pass `--codex-root` to authorize that root, or leave Codex reported as
-`SHARED_ROOT_AUTHORIZATION_REQUIRED`. OMP and DeepSeek Harness also require an
+rollouts use shared roots. Repeat `--codex-root` to authorize multiple roots,
+or configure `sessions.codex_roots` in the workspace's `.aiwg/aiwg.config`:
+
+```json
+{
+  "sessions": {
+    "codex_roots": ["/home/operator/.codex/sessions", "./exported-codex"]
+  }
+}
+```
+
+Configured paths resolve relative to the workspace; CLI paths resolve relative
+to the current directory. Both lists are combined. When neither list supplies
+roots, `--provider-home <home>` authorizes discovery of `<home>/.codex/sessions`,
+`<home>/.codex/roles-runtime/*/.codex/sessions`, and `$CODEX_HOME/sessions` when
+set. Without explicit roots or provider-home authorization, Codex remains
+`SHARED_ROOT_AUTHORIZATION_REQUIRED`. Explicit lists restrict scanning to those
+roots. Maintenance refreshes scan only the roots saved in the manifest.
+
+Canonical root aliases are scanned once. Matching Codex rollouts are deduplicated
+by their `session_meta` ID (falling back to the filename UUID, then content digest).
+The Codex provider's `rootCounts` reports each root's status, retained
+`sourceCount`, and skipped `duplicateCount`; counts apply after workspace matching.
+Unavailable roots have zero counts. Root reports redact paths and include
+a `rootId` hash to distinguish roots with the same leaf name; exact roots remain
+in the persisted manifest's `authorizedRoots`.
+
+OMP and DeepSeek Harness also require an
 explicit authorized root through `--omp-root` or `--dsh-root`. Harness imports
 raw v2 JSONL; compressed histories require a reviewed raw export. Providers that
 require an API or manual
 export remain visible as `export-required`.
+
+Codex, Muse, and OMP match recorded workspace/cwd evidence to the workspace
+itself or its subfolders after resolving symlinks, using directory boundaries
+(`/work/foo` does not include `/work/foobar`). Linked Git worktrees outside the
+workspace are also included by default when their `.git` file, reciprocal
+`gitdir`, and `commondir` identify the main repository's `.git` directory inside
+the workspace. Missing cwd paths cannot establish a match, and unresolved Git
+metadata cannot establish worktree attribution. Provider root authorization
+still applies.
+
+Discovery runs one workspace at a time. A directory containing its own
+`.aiwg/sessions` directory owns its subtree: enclosing workspaces exclude those
+sessions, so the deepest initialized catalog wins. Initialize nested catalogs
+before discovering their parents. A catalog enclosing the physical worktree
+takes precedence over attribution to a separate repository workspace. When a
+catalog encloses both paths, a deeper catalog enclosing the main repository
+owns its worktree sessions. This rule uses the conventional catalog directory
+even when `--db` selects an external database.
+The discovery JSON includes `matchedBySubfolder` and `matchedByWorktree` in each
+provider report and in public `totals`, counting selected sources after
+deduplication. Exact matches are included in `sourceCount` but not these two
+counts. Muse inspection receipts also include `matchKind` for positive matches.
 
 ```sh
 aiwg sessions discover --workspace "$PWD" --codex-root ~/.codex/sessions --json
@@ -165,16 +229,32 @@ failed process leaves a resumable run; repeat `import-discovered --resume
 --confirm` to process only incomplete or rejected sources. Repeated resume is
 idempotent.
 
+Batch receipts and newly saved runs use schema `2.0.0`. A finished run reports
+`run.status: complete` when all discovered sources were accepted (including
+duplicates and previously committed sources), even if other providers are
+unavailable or require exports. Rejected or skipped sources make the run
+`partial`; pending work leaves it `interrupted`. An empty manifest completes
+acquisition unless an explicitly expected provider remains unresolved.
+When discovery used `--expected-providers`, unresolved providers in that saved
+scope also make the run `partial`.
+
 Single and batch imports acquire `<catalog>.import.lock`. The lease records run
-ID, PID, host, start time, and heartbeat. A second writer waits up to
+ID, PID, host, start time, heartbeat, and (on Linux) boot ID and process start
+ticks to distinguish a reused PID. A second writer waits up to
 `--lock-wait-ms` (default 5000) and then returns `IMPORT_LOCKED` with safe owner
-metadata and recovery guidance. AIWG auto-recovers only a stale same-host lease
-whose process is confirmed dead; foreign-host ownership is never broken
-automatically. WAL readers remain available while an importer owns the lease.
+metadata and recovery guidance. A same-host lease is reclaimed immediately when
+its process is confirmed dead or its recorded process identity no longer matches.
+Live or unverifiable owners and foreign-host leases are never broken automatically.
+After acquiring the lease, either import command marks orphaned `running` batch
+runs as `interrupted` and records `interruptedAt` (the recovery timestamp). The
+batch receipt's `interruptedRuns` lists their run IDs and timestamps; single-source
+imports report the same list beside `receipts`. A resumed batch retains
+`run.interruptedAt` after completion. WAL readers remain available while an
+importer owns the lease.
 
 ## Coverage and timeline
 
-`list` and `timeline` include coverage schema `1.0.0`. Coverage distinguishes
+`list` and `timeline` include coverage schema `2.0.0`. Coverage distinguishes
 checked, unavailable, export-required, and not-checked providers and reconciles
 discovered, accepted, rejected, skipped, duplicate, previously committed, and
 pending sources. It also reports event/session totals, source/import date
@@ -182,13 +262,19 @@ ranges, manifest age, stable rejection counts, and remediation commands.
 Status is `complete`, `partial`, `stale`, or `unknown`. The independent
 `acquisitionStatus` is `complete`, `partial`, or `unknown`; database/index health
 is reported separately by `doctor`, and semantic review is `not-assessed`.
+`coverage.unresolvedProviders` lists provider gaps independently of acquisition.
+`coverage.status` retains the broader provider/runtime coverage assessment and
+manifest freshness, so it can remain `partial` or `stale` after a complete
+acquisition. Installation drift affects that coverage assessment independently
+of source acquisition.
 
 Use `--expected-providers claude,codex,muse` on `sources` and `discover` to declare
 the authorized investigation scope independently of the running adapter registry.
 Unknown provider IDs are retained as `missing-adapter` entries, not discarded.
-Without this flag the declared canonical provider set is inventoried, but complete
-acquisition requires an explicit set. Supplying the flag on `import-discovered`
-must match the saved scope; changing it requires new discovery.
+Without this flag the declared canonical provider set is inventoried; unresolved
+providers remain visible without making source acquisition partial. Supplying
+the flag on `import-discovered` must match the saved scope; changing it requires
+new discovery.
 
 `preflight` records expected/supported sets, runtime version, loaded package root,
 executable and installation identity, plus one coverage disposition per expected
@@ -196,10 +282,14 @@ provider. The manifest identity binds this preflight; batch runs retain discover
 runtime identity and recheck the current import runtime. Missing adapters or
 installation drift require deliberate runtime selection or a supported authorized
 export, never an automatic upgrade or source switch. Old manifests remain readable
-but cannot prove complete coverage without a new explicit preflight.
+but cannot prove complete provider coverage without a new explicit preflight.
+Stored `1.0.0` runs remain readable; coverage is calculated using the `2.0.0`
+semantics, and replay saves the run with the new version.
 
 Unavailable/unauthorized roots, missing exports, zero sources, empty/rejected
-imports and omitted scope keep acquisition partial. Muse's explicit `--muse-root`
+imports and omitted scope remain provider coverage gaps. They keep acquisition
+partial when those providers are explicitly expected; rejected, pending or
+skipped sources always keep acquisition partial. Muse's explicit `--muse-root`
 discovery covers matching parent logs only: nested subagent logs and full
 approval-review scope remain unresolved even when parent import succeeds. A source
 coverage ratio of 1 does not establish complete provider or session-tree coverage.
@@ -316,6 +406,14 @@ safe locator-class identity. They never store transcript text, command
 arguments, URLs, secret values, or native payloads. Provider extensions are
 already allowlisted/redacted before classification; opaque or malformed
 extensions yield indicators rather than executable content.
+
+Import redacts credential patterns in all canonical string fields and object
+keys before persistence or indexing. Events record classification counts in
+`extensions["native.redaction"].decisions` as `{ classification, count }` entries;
+matched values are never recorded. Native content, including attachment byte
+arrays and data URLs, is replaced by policy markers. Export omits these removed
+attachments and does not reopen redacted file URLs. Separately registered output
+files retain their explicit export workflow.
 
 Forensic views require `--authorize-forensics` on every invocation. This is an
 explicit local-operator authorization boundary, not a persistent preference.
@@ -501,11 +599,12 @@ event text, identifiers (native session/event id, source id, provider,
 model, tool-call id), and timestamps are preserved and verified lossless by a
 build/recover round-trip test against the real `@fortemi/core` library.
 
-Byte embedding is explicit rather than automatic. Without `--include-bytes`,
-session-event attachments and registered outputs remain reference records with
-their locator, digest, and media type. With `--include-bytes`, locally present
-OpenCode data-URL attachments and registered-output files are packed into the
-native `blobs/<blake3>` sidecar and linked from the owning Fortemi note.
+Byte embedding requires `--include-bytes`. New imports remove provider-native
+attachment payloads and file URLs before storage; export omits those removed
+attachments. Registered outputs remain reference records with their locator,
+digest, and media type by default. With `--include-bytes`, registered-output
+files and available legacy catalog attachments are packed into the native
+`blobs/<blake3>` sidecar and linked from the owning Fortemi note.
 Remote URLs are never fetched. Build re-hashes every selected output and local
 attachment against the reviewed plan, rejects drift, rejects symlinks and
 paths outside the project, and enforces `--max-attachment-bytes` (64 MiB by

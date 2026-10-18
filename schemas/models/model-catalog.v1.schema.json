@@ -292,7 +292,7 @@
           "type": "array",
           "items": { "$ref": "#/$defs/discoveredModel" }
         },
-        "errorKind": { "enum": ["authentication", "rate-limit", "timeout", "unsupported", "invalid-output", "command"] },
+        "errorKind": { "enum": ["authentication", "rate-limit", "timeout", "unsupported", "invalid-output", "environment", "command"] },
         "error": { "type": "string" },
         "policy": { "type": "object" }
       }

@@ -23,6 +23,8 @@ import { sessionHandler } from "./session.js";
 import { feedbackHandler } from "./feedback.js";
 import { handlerResultFromError } from "../errors.js";
 import { getProjectDir } from "../../config/aiwg-config.js";
+import { deployedSkillRoots } from "../../providers/deployed-skill-roots.js";
+import { releaseSkillOwnership } from "../../providers/skill-ownership.mjs";
 import { formatDeployedWorkspaceSignalPlan, readWorkspaceSignalPlan } from "../workspace-signals.js";
 import * as path from "node:path";
 import * as fsSync from "node:fs";
@@ -35,6 +37,10 @@ export const quickrefHandler: CommandHandler = {
   description: 'Generate and deploy an always-visible project quickref',
   category: 'project',
   aliases: [],
+
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: 'Usage: aiwg quickref generate|deploy --project [--provider <id>] [--dry-run]', rawOutput: true };
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const action = ctx.args.find(arg => !arg.startsWith('-')) ?? 'generate';
@@ -178,6 +184,12 @@ export const mcpHandler: CommandHandler = {
   description: "AIWG MCP server commands (serve, install, add, remove, update, list, inject, info)",
   category: "mcp",
   aliases: ["mcp", "aiwg-mcp"],
+
+  async help(): Promise<HandlerResult> {
+    const { main } = await import("../../mcp/cli.mjs");
+    await main(["--help"]);
+    return { exitCode: 0 };
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {
@@ -730,7 +742,13 @@ async function removeUserScopeDeploy(args: ReadonlyArray<string>): Promise<Handl
           continue;
         }
         try {
-          await fs.rm(target, { recursive: true, force: true });
+          if (type === 'skills') {
+            const { resolveFrameworkDir } = await import('./use.js');
+            const released = releaseSkillOwnership(target, { frameworkSlug: resolveFrameworkDir(positional) ?? positional });
+            if (released === null) continue;
+          } else {
+            await fs.rm(target, { recursive: true, force: true });
+          }
           deletedHere++;
           totalDeleted++;
         } catch (err) {
@@ -782,7 +800,9 @@ export const removeHandler: CommandHandler = {
     // adapter validates receipt hashes and preserves operator modifications.
     const nativeRemovalProvider = parseRemoveProvider(ctx.args);
     if (firstRemovePositional(ctx.args) === 'omp' && nativeRemovalProvider.provider === 'omp') {
-      const { uninstall } = await import('../../../tools/agents/providers/omp.mjs');
+      // Loaded from the package root, not by a path relative to this file: the
+      // compiled handler sits one directory deeper than its source.
+      const { uninstall } = (await import(pathToFileURL(path.join(await getFrameworkRoot(), 'tools/agents/providers/omp.mjs')).href)) as typeof import('../../../tools/agents/providers/omp.mjs');
       const { getProjectDir } = await import('../../config/aiwg-config.js');
       const dryRun = ctx.args.includes('--dry-run');
       const scope = ctx.args.includes('--user') || isScopeUser(ctx.args) ? 'user' : 'project';
@@ -857,6 +877,30 @@ export const removeHandler: CommandHandler = {
         const projectDir = getProjectDir({ cwd: ctx.cwd }, ctx.args);
         const config = await readAiwgConfig(projectDir);
         const entry = config?.installed?.[positionalArg];
+        if (config && entry && entry.source !== 'project-local') {
+          const fs = await import('node:fs/promises');
+          const { resolveFrameworkDir } = await import('./use.js');
+          const frameworkSlug = resolveFrameworkDir(positionalArg) ?? positionalArg;
+          const dryRun = ctx.args.includes('--dry-run');
+          const providers = Object.keys(entry.deployedTo).filter(p => !providerParse.provider || p === providerParse.provider);
+          if (providerParse.provider && providers.length === 0) {
+            return { exitCode: 1, message: `Error: '${positionalArg}' is not deployed for provider '${providerParse.provider}'.` };
+          }
+          let released = 0;
+          for (const provider of providers) {
+            for (const root of deployedSkillRoots(projectDir, provider)) {
+              for (const name of await fs.readdir(root).catch(() => [] as string[])) {
+                if (releaseSkillOwnership(path.join(root, name), { frameworkSlug }, { dryRun }) !== null) released++;
+              }
+            }
+            if (!dryRun && !ctx.args.includes('--keep-registry')) delete entry.deployedTo[provider];
+          }
+          if (!dryRun && !ctx.args.includes('--keep-registry')) {
+            if (Object.keys(entry.deployedTo).length === 0) delete config.installed[positionalArg];
+            await writeAiwgConfig(projectDir, config);
+          }
+          return { exitCode: 0, message: `${dryRun ? 'Would release' : 'Released'} ${released} skill ownership receipt(s); operator files preserved.` };
+        }
         if (config && entry?.source === 'project-local') {
           const force = ctx.args.includes('--force');
           const dryRun = ctx.args.includes('--dry-run');
@@ -1433,13 +1477,19 @@ export const indexHandler: CommandHandler = {
   category: "index",
   aliases: [],
 
+  async help(): Promise<HandlerResult> {
+    const { printIndexUsage } = await import("../../artifacts/cli.js");
+    printIndexUsage();
+    return { exitCode: 0 };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {
       const { main } = await import("../../artifacts/cli.js");
       await main(ctx.args);
 
       return {
-        exitCode: 0,
+        exitCode: Number(process.exitCode ?? 0),
       };
     } catch (error) {
       const result = handlerResultFromError(error);
@@ -1458,6 +1508,12 @@ export const corpusHandler: CommandHandler = {
   description: "Research-corpus tools (radar-init, radar-status, radar-report)",
   category: "index",
   aliases: [],
+
+  async help(): Promise<HandlerResult> {
+    const { corpusMain } = await import("../../artifacts/corpus-tools/cli.js");
+    await corpusMain(["--help"]);
+    return { exitCode: 0 };
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {

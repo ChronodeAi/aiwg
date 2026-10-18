@@ -26,10 +26,38 @@ export class EntryAdmissionError extends Error {
   }
 }
 
+/**
+ * An admission-budget clock reading: per-thread CPU time
+ * (`process.threadCpuUsage()`) on the required Node 24 runtime.
+ * Opaque to callers -- always pass it straight to `elapsedAdmissionMs`.
+ */
+export type AdmissionClock = NodeJS.CpuUsage;
+
+/**
+ * Starts an admission-budget clock using per-thread CPU time.
+ *
+ * Per-thread CPU time measures only the work the admitting call itself did
+ * on this thread, so it is immune both to host scheduling contention
+ * pausing this thread between reads (the root cause of #3047's false
+ * `time-budget` rejections of legitimate input under host load) and to
+ * other threads' or background GC's CPU time landing on this same process
+ * (which a process-wide `process.cpuUsage()` clock would still charge here
+ * -- not a safe substitute for the same reason `performance.now()` was not).
+ */
+export function admissionClockStart(): AdmissionClock {
+  return process.threadCpuUsage();
+}
+
+/** Elapsed time since `start` (from `admissionClockStart`), in milliseconds. */
+export function elapsedAdmissionMs(start: AdmissionClock): number {
+  const diff = process.threadCpuUsage(start);
+  return (diff.user + diff.system) / 1000;
+}
+
 /** Check the object graph before JSON serialization, schema validation or digesting. */
 export function admitEntry(value: unknown, limits: Readonly<EntryLimits> = DEFAULT_ENTRY_LIMITS): void {
   const counts = { entries: 0, properties: 0, bytes: 0, estimatedMemoryBytes: 0 };
-  const started = performance.now();
+  const started = admissionClockStart();
   const encoder = new TextEncoder();
   const stack = new Set<object>();
   const fail = (reason: string): never => { throw new EntryAdmissionError(reason, counts); };
@@ -40,7 +68,7 @@ export function admitEntry(value: unknown, limits: Readonly<EntryLimits> = DEFAU
     if (counts.estimatedMemoryBytes > limits.memoryBytes) fail('memory-budget');
   };
   const visit = (item: unknown, depth: number): void => {
-    if (performance.now() - started > limits.timeMs) fail('time-budget');
+    if (elapsedAdmissionMs(started) > limits.timeMs) fail('time-budget');
     if (++counts.entries > limits.entries) fail('entry-count');
     if (counts.bytes + counts.entries * 64 + counts.properties * 48 > limits.memoryBytes) fail('memory-budget');
     if (depth > limits.depth) fail('nesting-depth');
@@ -93,13 +121,13 @@ export function parseDecisionJson(source: string, limits: Readonly<EntryLimits> 
   const bytes = Buffer.byteLength(source, 'utf8');
   if (bytes > limits.serializedBytes) throw new EntryAdmissionError('serialized-bytes', { bytes });
   if (bytes * 4 > limits.memoryBytes) throw new EntryAdmissionError('memory-budget', { bytes });
-  const started = performance.now();
+  const started = admissionClockStart();
   let value: unknown;
   try { value = JSON.parse(source) as unknown; }
   catch { throw new EntryAdmissionError('invalid-json', { bytes }); }
   const document = parseDocument(source, { uniqueKeys: true });
   if (document.errors.length) throw new EntryAdmissionError('duplicate-or-invalid-key', { bytes });
-  if (performance.now() - started > limits.timeMs) throw new EntryAdmissionError('time-budget', { bytes });
+  if (elapsedAdmissionMs(started) > limits.timeMs) throw new EntryAdmissionError('time-budget', { bytes });
   admitEntry(value, limits);
   return value;
 }
@@ -109,7 +137,7 @@ export function parseDecisionYaml(source: string, limits: Readonly<EntryLimits> 
   const bytes = Buffer.byteLength(source, 'utf8');
   if (bytes > limits.serializedBytes) throw new EntryAdmissionError('serialized-bytes', { bytes });
   if (bytes * 4 > limits.memoryBytes) throw new EntryAdmissionError('memory-budget', { bytes });
-  const started = performance.now();
+  const started = admissionClockStart();
   const document = parseDocument(source, { uniqueKeys: true });
   if (document.errors.length) throw new EntryAdmissionError('duplicate-or-invalid-key', { bytes });
   let entries = 0;
@@ -131,7 +159,7 @@ export function parseDecisionYaml(source: string, limits: Readonly<EntryLimits> 
     }
   };
   inspect(document.contents, 0);
-  if (performance.now() - started > limits.timeMs) throw new EntryAdmissionError('time-budget', { bytes, entries });
+  if (elapsedAdmissionMs(started) > limits.timeMs) throw new EntryAdmissionError('time-budget', { bytes, entries });
   const value = document.toJS();
   admitEntry(value, limits);
   return value;

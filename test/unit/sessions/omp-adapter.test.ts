@@ -1,7 +1,8 @@
+import * as sessionReaders from '../../../src/sessions/readers.js';
 import { appendFile, cp, mkdtemp, open, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OmpSessionAdapter, PiSessionAdapter, IncrementalSessionImporter, SessionRepository, SessionSourceSchema, stableSessionId, discoverWorkspaceHistories, importDiscoveryManifest, type SelectedSource } from '../../../src/sessions/index.js';
 import { itWithSqlite } from '../../helpers/sqlite.js';
 const fixtures = resolve('test/fixtures/sessions/omp');
@@ -11,6 +12,25 @@ const selected = (name = 'title-slot.jsonl', root = fixtures): SelectedSource =>
 async function collect(source: SelectedSource, cursor?: string, adapter = new OmpSessionAdapter()) { const rows = []; for await (const row of adapter.stream(source, cursor ? { value: cursor } : undefined)) rows.push(row); return rows; }
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 describe('OMP native sessions', () => {
+
+  it('inspects and streams JSONL without collecting the source', async () => {
+    const buffered = vi.spyOn(sessionReaders, 'readBoundedJsonLines')
+      .mockRejectedValue(new Error('JSONL import must stream'));
+    try {
+      const adapter = new OmpSessionAdapter();
+      const selection = selected();
+      await expect(adapter.inspect(selection)).resolves.toMatchObject({ operationalState: 'available' });
+      let records = 0;
+      for await (const record of adapter.stream(selection)) {
+        expect(record.nativeSessionId).toBeTruthy();
+        records += 1;
+      }
+      expect(records).toBeGreaterThan(0);
+      expect(buffered).not.toHaveBeenCalled();
+    } finally {
+      buffered.mockRestore();
+    }
+  });
   it('reads title-prefixed and legacy header-first v3 files with distinct Pi fingerprint', async () => {
     const adapter = new OmpSessionAdapter();
     expect(await adapter.inspect(selected())).toMatchObject({ sourceSchemaVersion: '3.0.0' });

@@ -7,16 +7,58 @@
  * @implements @.aiwg/requirements/use-cases/UC-273-multi-loop-supervisor.md
  */
 
+import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'events';
+import { execFileSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readlinkSync, readdirSync } from 'fs';
 import { hostname } from 'node:os';
 import { join, dirname } from 'path';
-import { execFileSync } from 'child_process';
 import { constants } from 'node:fs';
 import { open, opendir, rename, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createWorkerHealthObserver } from './lib/worker-health.mjs';
+
+// This module is loaded standalone in some contexts (e.g. staged/partial
+// installs, or copied in isolation for a test) without its sibling
+// tools/_resolve-impl.mjs, or without src/dist/ nearby for it to resolve.
+// boundedExecFileSync is only needed by getProcessHealth()'s `ps` sampling
+// below; degrade that one feature instead of failing to load this module
+// at all for everything else (#3062 finding 1 — regression covered by
+// `WS19 staged installed monitor loads with no src/dist or MC state` in
+// test/conformance/orchestration-v1/worker-status.test.ts). The
+// `../_resolve-impl.mjs` import itself must be dynamic here, not a
+// top-level static import: a missing *static* import specifier fails
+// module linking before any of this module's own code (including a
+// try/catch) ever runs.
+//
+// Only the specific "this dependency is genuinely missing" error is
+// tolerated (#3062 B/C finding 12): a bare `catch {}` here would also
+// swallow a real defect in bounded-child-process.mjs itself (a syntax
+// error, a thrown assertion, ...) and silently report every live-process
+// health query as unavailable instead of surfacing the actual failure.
+let boundedExecFileSync = null;
+let processHealthUnavailableReason = null;
+let importImpl;
+try {
+  ({ importImpl } = await import('../_resolve-impl.mjs'));
+} catch (error) {
+  // Only a missing resolver is tolerated. Loaders report its location as a
+  // file URL (Node) or a path in the message (Vitest), so check both forms.
+  const resolverUrl = new URL('../_resolve-impl.mjs', import.meta.url);
+  const missingResolver = error?.code === 'ERR_MODULE_NOT_FOUND'
+    && (error.url === resolverUrl.href || String(error.message).includes(fileURLToPath(resolverUrl)));
+  if (!missingResolver) throw error;
+  processHealthUnavailableReason = 'bounded-child-process helper unavailable: resolver missing (tools/_resolve-impl.mjs)';
+}
+if (importImpl) {
+  try {
+    ({ boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs'));
+  } catch (error) {
+    if (!['AIWG_IMPLEMENTATION_MISSING', 'AIWG_PACKAGE_ROOT_MISSING'].includes(error?.code)) throw error;
+    processHealthUnavailableReason = `bounded-child-process helper unavailable: implementation missing: ${error.message}`;
+  }
+}
 
 /** Side-effect-free Linux sample. Unknown identity never grants signal authority. */
 export function sampleWorkerIdentity(pid) {
@@ -39,6 +81,13 @@ export function sampleWorkerIdentity(pid) {
 export function sameWorkerIdentity(expected, actual) {
   return !!expected && !!actual && ['pid', 'pgid', 'uid', 'parentPid', 'sessionId', 'host', 'bootId', 'startTicks', 'executable']
     .every(key => expected[key] === actual[key]);
+}
+
+/** A negative PID must name a worker group, never broadcast or select our own. */
+export function isSafeWorkerGroupTarget(pgid, supervisor = sampleWorkerIdentity(process.pid)) {
+  return Number.isSafeInteger(pgid) && pgid > 1 && pgid !== process.pid
+    && (supervisor ? Number.isSafeInteger(supervisor.pgid) && supervisor.pgid >= 0
+      && pgid !== supervisor.pgid : process.platform !== 'linux');
 }
 
 /** Two matching kernel observations, bounded from the first visible candidate.
@@ -120,7 +169,8 @@ export function sampleWorkerGroup(pgid) {
       if (!identity) {
         try {
           const stat = readFileSync(`/proc/${entry}/stat`, 'utf8');
-          if (Number(stat.slice(stat.lastIndexOf(')') + 2).split(/\s+/)[2]) === pgid) return null;
+          const fields = stat.slice(stat.lastIndexOf(')') + 2).split(/\s+/);
+          if (Number(fields[2]) === pgid && fields[0] !== 'Z') return null;
         } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ESRCH') return null; }
       } else if (identity.pgid === pgid && identity.state !== 'Z') members.push(identity);
     }
@@ -267,7 +317,7 @@ export class ProcessMonitor extends EventEmitter {
    * @returns {boolean}
    */
   isProcessAlive(pid) {
-    if (!pid || pid <= 0) {
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
       return false;
     }
 
@@ -312,12 +362,20 @@ export class ProcessMonitor extends EventEmitter {
       };
     }
 
+    if (!boundedExecFileSync) {
+      // #3062 B/C finding 12: surface *why* no metrics are available
+      // (module header) instead of returning a bare `null` indistinguishable
+      // from "process not monitored"/"ps produced nothing useful".
+      return { pid, cpu: null, memory: null, uptime: null, status: 'unavailable', unavailableReason: processHealthUnavailableReason };
+    }
+
     try {
       // Use ps command to get process stats
       // RSS is reported in KiB; unlike %mem it does not lose small readings
       // to percentage rounding or require an assumed host memory capacity.
-      const output = execFileSync(
+      const output = boundedExecFileSync(
         'ps', ['-p', String(pid), '-o', '%cpu,rss,etime,stat', '--no-headers'],
+        'quick',
         { encoding: 'utf8' }
       ).trim();
 

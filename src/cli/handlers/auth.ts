@@ -50,6 +50,10 @@ export function createAuthHandler(dependencies: AuthHandlerDependencies = {}): C
     category: "maintenance",
     aliases: [],
 
+    async help(): Promise<HandlerResult> {
+      return { exitCode: 0, message: usage(), rawOutput: true };
+    },
+
     async execute(ctx: HandlerContext): Promise<HandlerResult> {
       if (!ctx.args.length || ["help", "--help", "-h"].includes(ctx.args[0])) {
         console.log(usage());
