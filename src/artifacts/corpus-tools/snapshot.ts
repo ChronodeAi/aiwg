@@ -302,7 +302,7 @@ export function computeSnapshot(root: string, options: SnapshotOptions = {}): Sn
     for (const t of r.topics) topics.add(t);
     if (r.year) years.push(r.year);
     inc(sourceTypes, r.sourceType || 'other');
-    const grade = r.radar?.gradeCurrent?.trim().toUpperCase();
+    const grade = r.grade?.trim().toUpperCase();
     if (!grade) grades.Missing++;
     else if (CONTROLLED_GRADES.includes(grade)) grades[grade] = (grades[grade] ?? 0) + 1;
     else offVocab++;
