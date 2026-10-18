@@ -4,7 +4,7 @@
   "schema": "directory-file-list/v1",
   "files": [
     "README.md",
-    "citation-sidecar.schema.json",
+    "citation-sidecar-contract.json",
     "conditional.md",
     "mixed.md",
     "relationship-notes.md",

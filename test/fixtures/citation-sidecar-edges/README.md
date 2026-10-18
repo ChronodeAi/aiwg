@@ -20,7 +20,7 @@ Minimal downstream table shapes for issue #3186:
   linked and backtick-wrapped IDs, embedded mentions and qualified exclusions.
 - `header-variants.md`: corpus header aliases and extra metadata columns before
   and after the resolution column.
-- `citation-sidecar.schema.json`: schema version 1 from research-papers, retained
+- `citation-sidecar-contract.json` (research-papers' `citation-sidecar.schema.json`): schema version 1 from research-papers, retained
   as an independent inventory of corpus forms and aliases. Graph extraction uses
   a unique resolution header in Incoming/Outgoing, or whole-cell REF IDs when
   no resolution header exists;

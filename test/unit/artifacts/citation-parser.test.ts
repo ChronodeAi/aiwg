@@ -405,7 +405,7 @@ No citations found.
     );
 
     const schema = JSON.parse(fs.readFileSync(
-      path.join(import.meta.dirname, '../../fixtures/citation-sidecar-edges/citation-sidecar.schema.json'), 'utf-8',
+      path.join(import.meta.dirname, '../../fixtures/citation-sidecar-edges/citation-sidecar-contract.json'), 'utf-8',
     )) as {
       headerAliases: Record<string, string[]>;
       variants: { id: string; kind: string; roles: string[] }[];
