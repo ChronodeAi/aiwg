@@ -629,6 +629,41 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it('lists an imported provisional session as inactive after 24 hours without re-import', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const now = new Date('2026-10-18T12:00:00.000Z');
+    vi.setSystemTime(now);
+    try {
+      const transcript = resolve(root, 'active.jsonl');
+      writeFileSync(transcript, JSON.stringify({
+        type: 'user', uuid: 'event-active', sessionId: 'session-active', cwd: root,
+        timestamp: now.toISOString(),
+        message: { role: 'user', content: 'Synthetic request.' },
+      }) + '\n');
+      const scope = ['--workspace', root, '--db', resolve(root, 'catalog.sqlite'), '--json'];
+      expect((await sessionsHandler.execute(context([
+        'import', transcript, '--provider', 'claude', '--source-id', 'active-source', ...scope,
+      ], root))).exitCode).toBe(0);
+      expect((await sessionsHandler.execute(context(['list', ...scope], root))).exitCode).toBe(0);
+      expect(jsonOutput(log).data.items).toMatchObject([{
+        nativeSessionId: 'session-active', lifecycle: 'active',
+      }]);
+
+      vi.setSystemTime(now.getTime() + 24 * 60 * 60 * 1_000 + 1);
+      expect((await sessionsHandler.execute(context(['list', ...scope], root))).exitCode).toBe(0);
+      expect(jsonOutput(log).data.items).toMatchObject([{
+        nativeSessionId: 'session-active', lifecycle: 'inactive',
+        extensions: {
+          'native.claude': {
+            lifecycleEvidence: { basis: 'inactivity-threshold', state: 'inactive' },
+          },
+        },
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   async function importOtherWorkspace(nativeId = '00000000-0000-4000-8000-000000002820') {
     const project = resolve(root, 'project');
     const other = resolve(root, 'other');

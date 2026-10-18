@@ -20,6 +20,7 @@ import {
 } from './batch-contracts.js';
 import { redactSessionText, sanitizeNativeExtensions } from './policy.js';
 import type { TimelineInput } from './timeline.js';
+import { effectiveSessionLifecycle } from './lifecycle.js';
 import {
   deriveSessionAnalytics,
   type SessionAnalyticsCategory,
@@ -1132,7 +1133,7 @@ export class SessionRepository {
        ${workspaceId ? 'AND s.workspace_id=?' : ''}`,
     )
       .get(...(workspaceId ? [id, workspaceId] : [id]));
-    return row ? JSON.parse(String(row.data)) as Session : null;
+    return row ? effectiveSessionLifecycle(JSON.parse(String(row.data)) as Session) : null;
   }
 
   findSessionsByReference(reference: string, workspaceId?: string): Session[] {
@@ -1143,7 +1144,7 @@ export class SessionRepository {
        WHERE ${workspaceId ? 's.workspace_id=? AND' : ''} ${VISIBLE_SESSION_PREDICATE} AND (${predicate})
        ORDER BY s.session_id`,
     ).all(...(workspaceId ? [workspaceId, reference] : [reference]))
-      .map((row) => JSON.parse(String(row.data)) as Session);
+      .map((row) => effectiveSessionLifecycle(JSON.parse(String(row.data)) as Session));
     const exact = query('s.native_session_id=?');
     if (exact.length === 1) return exact;
     if (exact.length > 1) {
@@ -1175,7 +1176,7 @@ export class SessionRepository {
        ORDER BY s.session_id`,
     ).all(...(workspaceId ? [workspaceId, reference, reference, reference, reference]
       : [reference, reference, reference, reference]))
-      .map((row) => JSON.parse(String(row.data)) as Session);
+      .map((row) => effectiveSessionLifecycle(JSON.parse(String(row.data)) as Session));
   }
 
   listWorkspaceSessionCounts(): Array<{ workspaceId: string; count: number }> {
@@ -1305,7 +1306,7 @@ export class SessionRepository {
        ORDER BY COALESCE(json_extract(s.data, '$.updatedAt'), ''), s.session_id
        LIMIT ?${options.offset ? ' OFFSET ?' : ''}`,
     ).all(...pageParams, options.limit + 1, ...(options.offset ? [options.offset] : []))
-      .map((row) => JSON.parse(String(row.data)) as Session);
+      .map((row) => effectiveSessionLifecycle(JSON.parse(String(row.data)) as Session));
     const page = items.slice(0, options.limit);
     const last = page.at(-1);
     return {
@@ -1381,7 +1382,7 @@ export class SessionRepository {
          e.sequence_no,
          e.event_id`,
     ).all(workspaceId).map((row) => ({
-      session: JSON.parse(String(row.session_data)) as Session,
+      session: effectiveSessionLifecycle(JSON.parse(String(row.session_data)) as Session),
       event: JSON.parse(String(row.event_data)) as SessionEvent,
     }));
   }
