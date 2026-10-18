@@ -1200,8 +1200,11 @@ export async function buildIndex(
 
   // Reuse derived indexes only when their complete input set is unchanged.
   // Supplements can live outside the scanned files, so they must still be read.
+  // Configured edge extractors must run to discard stale cached edges even
+  // when source checksums match.
   const total = Object.keys(entries).length;
   if (canReuseExisting && !useFilenameMetadata && !graphConfig?.metadataSupplements?.length
+    && !graphConfig?.edgeExtraction
     && newCount === 0 && updatedCount === 0
     && total === Object.keys(existingEntries).length
     && manifest.generated && total === Object.keys(manifest.entries).length
