@@ -143,7 +143,7 @@ export async function discoverWorkspaceHistories(
     {
       provider: 'claude',
       roots: providerHomes.map(
-        (providerHome) => join(providerHome, '.claude', 'projects', keyWithLeadingDash),
+        (providerHome) => join(providerHome, '.claude', 'projects', claudeProjectKey(workspacePath)),
       ),
     },
     {
@@ -274,6 +274,8 @@ export async function discoverWorkspaceHistories(
         (root) => locator === root || locator.startsWith(`${root}/`),
       );
       if (!authorizedRoot) continue;
+      if (entry.provider === 'claude'
+        && !await claudeSourceMatchesWorkspace(locator, workspacePath)) continue;
       const fingerprint = await fingerprintSourceFile({
         selectedPath: locator,
         allowedRoots: [authorizedRoot],
@@ -629,6 +631,50 @@ function asObject(value: unknown): Record<string, unknown> {
 
 async function canonicalPath(path: string): Promise<string> {
   return realpath(resolve(path));
+}
+
+async function claudeSourceMatchesWorkspace(
+  locator: string,
+  workspacePath: string,
+): Promise<boolean> {
+  const input = createReadStream(locator, { encoding: 'utf8', end: 1024 * 1024 - 1 });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  let count = 0;
+  try {
+    for await (const line of lines) {
+      if (++count > 50) break;
+      let value: unknown;
+      try {
+        value = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const cwd = asObject(value).cwd;
+      if (typeof cwd !== 'string' || cwd.length === 0) continue;
+      try {
+        return await canonicalPath(cwd) === workspacePath;
+      } catch {
+        return resolve(cwd) === workspacePath;
+      }
+    }
+    // Older transcripts without cwd still use the selected project folder.
+    return true;
+  } finally {
+    lines.close();
+    input.destroy();
+  }
+}
+
+export function claudeProjectKey(path: string): string {
+  // Claude Code 2.1.302 replaces each character, then caps keys at 200
+  // characters with a base-36 suffix from the original path's 32-bit hash.
+  const key = path.replace(/[^A-Za-z0-9-]/g, '-');
+  if (key.length <= 200) return key;
+  let hash = 0;
+  for (let index = 0; index < path.length; index += 1) {
+    hash = ((hash << 5) - hash + path.charCodeAt(index)) | 0;
+  }
+  return `${key.slice(0, 200)}-${Math.abs(hash).toString(36)}`;
 }
 
 function workspaceKey(path: string, retainLeadingSeparator: boolean): string {
