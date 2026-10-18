@@ -1,5 +1,5 @@
 import {
-  mkdir, mkdtemp, readFile, rm, writeFile,
+  copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -8,10 +8,13 @@ import {
   SessionRepository,
   discoverWorkspaceHistories,
   importDiscoveryManifest,
+  publicDiscoveryManifest,
   readDiscoveryManifest,
   writeDiscoveryManifest,
 } from '../../../src/sessions/index.js';
 import { itWithSqlite } from '../../helpers/sqlite.js';
+import { writeMuseLog } from '../../helpers/muse-native.js';
+import { createSessionWorktree } from '../../helpers/session-worktree.js';
 
 const roots: string[] = [];
 
@@ -20,6 +23,106 @@ afterEach(async () => {
 });
 
 describe('workspace session discovery and batch import', () => {
+  it.each(['codex', 'muse', 'omp'] as const)(
+    'discovers %s exact, subfolder, symlink, and worktree sessions without sibling-prefix matches',
+    async (provider) => {
+      const root = await mkdtemp(join(tmpdir(), 'session-matching-discovery-'));
+      roots.push(root);
+      const workspace = join(root, 'foo');
+      const subfolder = join(workspace, 'sub');
+      const sibling = join(root, 'foobar');
+      const alias = join(root, 'alias');
+      const worktree = join(root, 'worktree');
+      const sessions = join(root, 'sessions');
+      await Promise.all([subfolder, sibling, sessions].map((path) => mkdir(path, { recursive: true })));
+      await createSessionWorktree(workspace, worktree);
+      await mkdir(join(worktree, 'sub'));
+      await symlink(workspace, alias);
+      await symlink(sibling, join(workspace, 'escape'));
+      const paths = [workspace, subfolder, join(alias, 'sub'), worktree, join(worktree, 'sub'), sibling, join(workspace, 'escape')];
+      const locators = await Promise.all(paths.map((cwd, index) =>
+        writeMatchingSession(provider, sessions, `session-${index}`, cwd)));
+      // Counts describe selected sources, after content deduplication.
+      const duplicate = provider === 'muse'
+        ? await writeMuseLog(sessions, 'duplicate', 1) : join(sessions, 'duplicate.jsonl');
+      await copyFile(locators[1], duplicate);
+      const manifest = await discoverWorkspaceHistories({
+        workspace, expectedProviders: [provider],
+        codexRoot: sessions, museRoot: sessions, ompRoot: sessions,
+      });
+      expect(manifest.sources).toHaveLength(5);
+      expect(manifest.providers[0]).toMatchObject({
+        sourceCount: 5, matchedBySubfolder: 2, matchedByWorktree: 2,
+      });
+      expect(publicDiscoveryManifest(manifest).totals).toMatchObject({
+        sources: 5, matchedBySubfolder: 2, matchedByWorktree: 2,
+      });
+      const path = join(root, 'manifest.json');
+      await writeDiscoveryManifest(path, manifest);
+      expect(await readDiscoveryManifest(path)).toEqual(manifest);
+      manifest.providers[0].matchedByWorktree = 3;
+      await writeDiscoveryManifest(path, manifest);
+      await expect(readDiscoveryManifest(path)).rejects.toThrow('identity');
+    },
+  );
+
+  it.each(['codex', 'muse', 'omp'] as const)(
+    'assigns %s sessions only to the deepest enclosing catalog',
+    async (provider) => {
+      const root = await mkdtemp(join(tmpdir(), 'session-nearest-discovery-'));
+      roots.push(root);
+      const workspace = join(root, 'workspace');
+      const nested = join(workspace, 'nested');
+      const cwd = join(nested, 'sub');
+      const sessions = join(root, 'sessions');
+      for (const path of [workspace, nested]) {
+        await mkdir(join(path, '.aiwg', 'sessions'), { recursive: true });
+      }
+      await mkdir(cwd);
+      await mkdir(sessions);
+      await writeMatchingSession(provider, sessions, 'nested-session', cwd);
+      const options = { expectedProviders: [provider], codexRoot: sessions, museRoot: sessions, ompRoot: sessions };
+      const parent = await discoverWorkspaceHistories({ ...options, workspace });
+      const child = await discoverWorkspaceHistories({ ...options, workspace: nested });
+      expect(parent.sources).toHaveLength(0);
+      expect(parent.providers[0]).toMatchObject({ matchedBySubfolder: 0, matchedByWorktree: 0 });
+      expect(child.sources).toHaveLength(1);
+      expect(child.providers[0]).toMatchObject({ matchedBySubfolder: 1, matchedByWorktree: 0 });
+    },
+  );
+
+  itWithSqlite.each(['codex', 'muse', 'omp'] as const)(
+    'imports %s subfolder and external worktree sessions into the selected workspace',
+    async (provider) => {
+      const root = await mkdtemp(join(tmpdir(), 'session-workspace-import-'));
+      roots.push(root);
+      const workspace = join(root, 'workspace');
+      const subfolder = join(workspace, 'sub');
+      const worktree = join(root, 'worktree');
+      const sessions = join(root, 'sessions');
+      await mkdir(subfolder, { recursive: true });
+      await mkdir(sessions);
+      await createSessionWorktree(workspace, worktree);
+      await writeMatchingSession(provider, sessions, 'subfolder-session', subfolder);
+      await writeMatchingSession(provider, sessions, 'worktree-session', worktree);
+      const manifest = await discoverWorkspaceHistories({
+        workspace, expectedProviders: [provider],
+        codexRoot: sessions, museRoot: sessions, ompRoot: sessions,
+      });
+      const repository = new SessionRepository(':memory:');
+      try {
+        const receipt = await importDiscoveryManifest({ manifest, repository });
+        expect(receipt.totals).toMatchObject({ discovered: 2, accepted: 2, rejected: 0 });
+        const imported = repository.listSessions({ workspaceId: manifest.workspaceId, limit: 20 });
+        expect(imported.total).toBe(2);
+        expect(imported.items.map((session) => session.nativeSessionId).sort())
+          .toEqual(['subfolder-session', 'worktree-session']);
+      } finally {
+        repository.close();
+      }
+    },
+  );
+
   it('inventories only matching known roots, persists the exact manifest, and exposes export gaps', async () => {
     const fixture = await providerFixture();
     const manifest = await discoverWorkspaceHistories({
@@ -250,6 +353,29 @@ describe('workspace session discovery and batch import', () => {
     }
   });
 });
+
+async function writeMatchingSession(
+  provider: 'codex' | 'muse' | 'omp',
+  root: string,
+  id: string,
+  cwd: string,
+): Promise<string> {
+  if (provider === 'muse') return writeMuseLog(root, id, 1, cwd);
+  const locator = join(root, `${id}.jsonl`);
+  const timestamp = '2026-10-18T12:00:00Z';
+  const header = provider === 'codex'
+    ? { type: 'session_meta', timestamp, payload: { id, cwd } }
+    : { type: 'session', version: 3, id, timestamp, cwd };
+  const message = provider === 'codex'
+    ? { type: 'response_item', timestamp, payload: {
+      id: `${id}-message`, type: 'message', role: 'user',
+      content: [{ type: 'input_text', text: 'Synthetic request.' }],
+    } }
+    : { type: 'message', id: `${id}-message`, parentId: null, timestamp,
+      message: { role: 'user', content: 'Synthetic request.' } };
+  await writeFile(locator, [header, message].map((record) => JSON.stringify(record)).join('\n') + '\n');
+  return locator;
+}
 
 async function providerFixture(): Promise<{ root: string; workspace: string; providerHome: string }> {
   const root = await mkdtemp(join(tmpdir(), 'aiwg-session-discovery-'));

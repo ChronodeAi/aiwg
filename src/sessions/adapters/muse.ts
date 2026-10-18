@@ -43,6 +43,7 @@
 import { opendir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import { matchSessionWorkspace, WORKSPACE_MATCH_KINDS } from '../workspace-matching.js';
 import {
   SessionContractError,
   SessionErrorCodeSchema,
@@ -592,6 +593,7 @@ async function* museNativeSessionLogs(root: string): AsyncGenerator<string> {
 
 export const MuseWorkspaceInspectionSchema = z.object({
   outcome: z.enum(['matched', 'mismatch', 'inconclusive']),
+  matchKind: z.enum(WORKSPACE_MATCH_KINDS).optional(),
   reasonCode: z.string().nullable(),
   recordsInspected: z.number().int().nonnegative(),
   bytesInspected: z.number().int().nonnegative(),
@@ -634,7 +636,8 @@ export async function inspectMuseNativeWorkspace(
         const candidate = workspaceEvidenceOf(envelope);
         if (!candidate) continue;
         sawWorkspaceEvidence = true;
-        if (workspacePathEquals(candidate, workspacePath)) return receipt('matched', null);
+        const matchKind = await matchSessionWorkspace(candidate, workspacePath);
+        if (matchKind) return { ...receipt('matched', null), matchKind };
       }
     }
     return sawWorkspaceEvidence
@@ -706,10 +709,6 @@ function workspaceEvidenceOf(envelope: MuseEnvelope): string | null {
     if (typeof candidate === 'string' && candidate.length > 0) return candidate;
   }
   return null;
-}
-
-function workspacePathEquals(candidate: string, workspacePath: string): boolean {
-  return resolve(candidate) === workspacePath;
 }
 
 function nativeSessionIdFromLocator(locator: string): string | null {

@@ -144,6 +144,28 @@ raw v2 JSONL; compressed histories require a reviewed raw export. Providers that
 require an API or manual
 export remain visible as `export-required`.
 
+Codex, Muse, and OMP match recorded workspace/cwd evidence to the workspace
+itself or its subfolders after resolving symlinks, using directory boundaries
+(`/work/foo` does not include `/work/foobar`). Linked Git worktrees outside the
+workspace are also included by default when their `.git` file, reciprocal
+`gitdir`, and `commondir` identify the main repository's `.git` directory inside
+the workspace. Missing cwd paths cannot establish a match, and unresolved Git
+metadata cannot establish worktree attribution. Provider root authorization
+still applies.
+
+Discovery runs one workspace at a time. A directory containing its own
+`.aiwg/sessions` directory owns its subtree: enclosing workspaces exclude those
+sessions, so the deepest initialized catalog wins. Initialize nested catalogs
+before discovering their parents. A catalog enclosing the physical worktree
+takes precedence over attribution to a separate repository workspace. When a
+catalog encloses both paths, a deeper catalog enclosing the main repository
+owns its worktree sessions. This rule uses the conventional catalog directory
+even when `--db` selects an external database.
+The discovery JSON includes `matchedBySubfolder` and `matchedByWorktree` in each
+provider report and in public `totals`, counting selected sources after
+deduplication. Exact matches are included in `sourceCount` but not these two
+counts. Muse inspection receipts also include `matchKind` for positive matches.
+
 ```sh
 aiwg sessions discover --workspace "$PWD" --codex-root ~/.codex/sessions --json
 aiwg sessions import-discovered --workspace "$PWD" --dry-run --json

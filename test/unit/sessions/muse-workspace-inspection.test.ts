@@ -10,6 +10,7 @@ import { discoverWorkspaceHistories, readDiscoveryManifest, writeDiscoveryManife
 import { coverageFromBatchRun } from '../../../src/sessions/batch-contracts.js';
 import type { SelectedSource } from '../../../src/sessions/contracts.js';
 import { museMetadata, writeMuseLog } from '../../helpers/muse-native.js';
+import { createSessionWorktree } from '../../helpers/session-worktree.js';
 
 let root: string;
 let workspace: string;
@@ -32,6 +33,32 @@ function selected(locator: string): SelectedSource {
 }
 
 describe('bounded Muse workspace inspection', () => {
+  it('reports canonical subfolder and worktree match kinds from metadata', async () => {
+    const subfolder = join(workspace, 'sub');
+    await mkdir(subfolder);
+    const alias = join(root, 'workspace-alias');
+    await symlink(workspace, alias);
+    const worktree = join(root, 'worktree');
+    await createSessionWorktree(workspace, worktree);
+    for (const [id, cwd, matchKind] of [
+      ['exact', workspace, 'exact'],
+      ['subfolder', subfolder, 'subfolder'],
+      ['symlink', join(alias, 'sub'), 'subfolder'],
+      ['worktree', worktree, 'worktree'],
+    ]) {
+      const locator = await writeMuseLog(museRoot, id, 1, cwd);
+      expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({ outcome: 'matched', matchKind });
+    }
+    const sibling = `${workspace}-sibling`;
+    await mkdir(sibling);
+    const mismatch = await writeMuseLog(museRoot, 'sibling', 1, sibling);
+    expect(await inspectMuseNativeWorkspace(selected(mismatch), workspace)).toMatchObject({ outcome: 'mismatch' });
+    await mkdir(join(subfolder, '.aiwg', 'sessions'), { recursive: true });
+    const nested = await writeMuseLog(museRoot, 'nested', 1, subfolder);
+    expect(await inspectMuseNativeWorkspace(selected(nested), workspace)).toMatchObject({ outcome: 'mismatch' });
+    expect(await inspectMuseNativeWorkspace(selected(nested), subfolder)).toMatchObject({ outcome: 'matched', matchKind: 'exact' });
+  });
+
   it.each([100, 101, 5000, 20_000])('selects %i-record logs on early evidence', async (count) => {
     const locator = await writeMuseLog(museRoot, `session-${count}`, count, workspace);
     expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({
