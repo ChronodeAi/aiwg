@@ -67,7 +67,7 @@ describe('session refresh integration boundaries', () => {
       expect(await readDiscoveryManifest(defaultDiscoveryManifestPath(workspace))).toEqual(manifest);
       return { totals: { rejected: 0, pending: 0 } };
     });
-    expect(await refreshSessionCatalog(workspace, false, 0)).toBeUndefined();
+    expect(await refreshSessionCatalog(workspace, false, 0)).toEqual({ totals: { rejected: 0, pending: 0 } });
     const imported = mocks.importBatch.mock.calls[0][0].manifest;
     expect(imported.sources).toHaveLength(2);
     expect(imported.authorizedRoots).toEqual({ claude: [authorized] });
@@ -112,10 +112,29 @@ describe('session refresh integration boundaries', () => {
     } finally { await lease.release(); }
   });
 
-  it('treats rejected imports as errors and releases the catalog lease', async () => {
+  it('returns partial import receipts with rejection details and releases the catalog lease', async () => {
     await saveAuthorization();
-    mocks.importBatch.mockResolvedValueOnce({ totals: { rejected: 1, pending: 0 } });
-    await expect(refreshSessionCatalog(workspace, false, 0)).rejects.toThrow('1 rejected');
+    const receipt = { run: { status: 'partial', sources: [{ status: 'rejected',
+      errorCode: 'RESOURCE_LIMIT_EXCEEDED', detail: { limit: 'maxRecords', configured: 1, observed: 2 },
+    }] }, totals: { rejected: 1, pending: 0 } };
+    mocks.importBatch.mockResolvedValueOnce(receipt);
+    expect(await refreshSessionCatalog(workspace, false, 0)).toEqual(receipt);
+    expect(fs.existsSync(`${database}.import.lock`)).toBe(false);
+    expect(mocks.close).toHaveBeenCalledOnce();
+  });
+
+  it('propagates operational import failures and releases the catalog lease', async () => {
+    await saveAuthorization();
+    mocks.importBatch.mockRejectedValueOnce(new Error('catalog write failed'));
+    await expect(refreshSessionCatalog(workspace, false, 0)).rejects.toThrow('catalog write failed');
+    expect(fs.existsSync(`${database}.import.lock`)).toBe(false);
+    expect(mocks.close).toHaveBeenCalledOnce();
+  });
+
+  it('keeps pending imports as incomplete failures and releases the catalog lease', async () => {
+    await saveAuthorization();
+    mocks.importBatch.mockResolvedValueOnce({ totals: { rejected: 0, pending: 1 } });
+    await expect(refreshSessionCatalog(workspace, false, 0)).rejects.toThrow('1 pending');
     expect(fs.existsSync(`${database}.import.lock`)).toBe(false);
     expect(mocks.close).toHaveBeenCalledOnce();
   });

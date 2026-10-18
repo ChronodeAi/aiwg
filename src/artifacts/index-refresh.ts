@@ -9,6 +9,7 @@ import { collectGraphIndexFiles } from './index-files.js';
 import { collectIndexStatus } from './index-status.js';
 import { getFortemiCoreSyncStatus, syncFortemiCoreIndex } from './fortemi-core-sync.js';
 import { acquireDirectoryLock, DirectoryLockContentionError } from './prebuilt-build-lock.js';
+import type { BatchImportReceipt } from '../sessions/batch-import.js';
 import {
   BUILTIN_GRAPH_CONFIGS, GRAPH_CONFIGS, INDEX_EXTRACTOR_VERSION, INDEX_VERSION,
   getGraphIndexDir, graphBuildOrder, loadGlobalGraphConfigs, loadUserGraphConfigs,
@@ -34,6 +35,7 @@ export interface RefreshJob {
   wallMs: number;
   reason?: string;
   error?: string;
+  sessionImport?: BatchImportReceipt;
 }
 
 export interface RefreshReport {
@@ -226,11 +228,17 @@ async function executeJob(job: RefreshJob, options: RefreshOptions): Promise<voi
     syncFortemiCoreIndex(workspace, { graph: job.graph });
   } else {
     const { refreshSessionCatalog } = await import('../sessions/refresh.js');
-    const reason = await refreshSessionCatalog(workspace, Boolean(options.full), options.lockWaitMs ?? 0, options.signal);
-    if (reason) {
+    const result = await refreshSessionCatalog(workspace, Boolean(options.full), options.lockWaitMs ?? 0, options.signal);
+    if (typeof result === 'string') {
       job.status = 'skipped';
-      job.reason = reason;
+      job.reason = result;
       return;
+    }
+    if (result) {
+      job.sessionImport = result;
+      if (result.run.status === 'partial') {
+        job.reason = `session import partial: ${result.totals.rejected} rejected, ${result.totals.pending} pending`;
+      }
     }
   }
   job.status = 'ok';
@@ -325,11 +333,14 @@ export async function refreshIndexes(
       writeJson(checkpointPath, checkpoint);
       dependencies.afterJob?.(job, checkpoint.completed.length);
     }
+    options.signal?.throwIfAborted();
+    const deferred = jobs.some(job => job.status === 'deferred');
+    if (!deferred) fs.rmSync(checkpointPath, { force: true });
     const errors = jobs.filter(job => job.status === 'error').length;
     if (errors) report.status = errors === jobs.length ? 'error' : 'partial';
-    else if (report.status !== 'deferred') {
-      fs.rmSync(checkpointPath, { force: true });
-      if (jobs.some(job => job.reason === 'sqlite unavailable' || job.reason?.startsWith('no authorized'))) report.status = 'partial';
+    else if (!deferred) {
+      if (jobs.some(job => job.sessionImport?.run.status === 'partial'
+        || job.reason === 'sqlite unavailable' || job.reason?.startsWith('no authorized'))) report.status = 'partial';
     }
     return finish();
   } finally {

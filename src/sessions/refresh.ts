@@ -3,7 +3,7 @@ import path from 'node:path';
 import { requireFeaturePackage } from '../features/runtime.js';
 import { acquireImportLease } from './import-lease.js';
 import { SessionRepository } from './repository.js';
-import { importDiscoveryManifest } from './batch-import.js';
+import { importDiscoveryManifest, type BatchImportReceipt } from './batch-import.js';
 import {
   defaultDiscoveryManifestPath,
   discoverWorkspaceHistories,
@@ -29,7 +29,7 @@ export async function refreshSessionCatalog(
   full: boolean,
   waitMs: number,
   signal?: AbortSignal,
-): Promise<string | undefined> {
+): Promise<string | BatchImportReceipt | undefined> {
   const canonicalWorkspace = realpathSync(workspace);
   const database = path.join(workspace, '.aiwg/sessions/catalog.sqlite');
   const manifestPath = defaultDiscoveryManifestPath(canonicalWorkspace);
@@ -64,9 +64,10 @@ export async function refreshSessionCatalog(
         // Persist the exact discovered batch before its confirmed import.
         await writeDiscoveryManifest(manifestPath, manifest!);
         const receipt = await importDiscoveryManifest({ manifest: manifest!, repository, signal });
-        if (receipt.totals.rejected || receipt.totals.pending) {
+        if (receipt.totals.pending) {
           throw new Error(`session import incomplete: ${receipt.totals.rejected} rejected, ${receipt.totals.pending} pending`);
         }
+        return receipt;
       }
     } finally {
       repository.close();

@@ -7,6 +7,8 @@ import { acquireDirectoryLock } from '../../../src/artifacts/prebuilt-build-lock
 import { getGraphIndexDir, loadUserGraphConfigs } from '../../../src/artifacts/types.js';
 import { syncFortemiCoreIndex } from '../../../src/artifacts/fortemi-core-sync.js';
 import { discoverWorkspaceHistories, readDiscoveryManifest, writeDiscoveryManifest } from '../../../src/sessions/workspace-discovery.js';
+import { SessionRepository } from '../../../src/sessions/repository.js';
+import { itWithSqlite } from '../../helpers/sqlite.js';
 
 let root: string;
 let workspace: string;
@@ -257,12 +259,95 @@ describe('index refresh', () => {
     expect(snapshot(directory)).toEqual(before);
   });
 
-  it('keeps job failures resumable and emits the versioned JSON contract with a failing exit code', async () => {
+  itWithSqlite('reports rejected sources as partial without job errors and executes every job on the next run', async () => {
+    fs.mkdirSync(path.join(workspace, '.aiwg/sessions'), { recursive: true });
+    const repository = new SessionRepository(path.join(workspace, '.aiwg/sessions/catalog.sqlite'));
+    repository.close();
+    const authorized = path.join(root, 'authorized-claude');
+    write(path.join(authorized, 'valid.jsonl'), JSON.stringify({ type: 'user', sessionId: 'valid', cwd: workspace,
+      message: { role: 'user', content: 'hello' } }) + '\n');
+    write(path.join(authorized, 'invalid.jsonl'), JSON.stringify({ type: 42, cwd: workspace }) + '\n');
+    const manifest = await discoverWorkspaceHistories({
+      workspace, expectedProviders: ['claude'], authorizedRoots: { claude: [authorized] },
+    });
+    await writeDiscoveryManifest(path.join(workspace, '.aiwg/sessions/discovery-manifest.json'), manifest);
+    write(path.join(workspace, '.aiwg/.index/fortemi-core/project/manifest.json'), '{}');
+    const other = path.join(root, 'other');
+    config(other);
+    write(path.join(other, '.aiwg/requirements/UC-001.md'), '# Other requirement\n');
+    write(path.join(other, 'src/example.ts'), 'export const other = 1;\n');
+    const gate = vi.fn(admitted.gate);
+    const options = { workspaces: [workspace, other] };
+    const first = await refreshIndexes(options, { gate });
+    expect(first).toMatchObject({ status: 'partial', totals: { errors: 0, ok: first.jobs.length } });
+    const session = first.jobs.find(job => job.kind === 'sessions')!;
+    expect(session).toMatchObject({ status: 'ok', sessionImport: {
+      run: { status: 'partial' }, totals: { discovered: 2, rejected: 1, pending: 0, accepted: 1 },
+    } });
+    expect(session.error).toBeUndefined();
+    expect(session.sessionImport?.run.sources.find(source => source.status === 'rejected')).toMatchObject({
+      errorCode: 'MALFORMED_SOURCE', detail: { issues: [{ path: 'type', code: 'invalid_type' }] },
+    });
+    const checkpointPath = path.join(state, 'index-refresh-checkpoint.json');
+    expect(fs.existsSync(checkpointPath)).toBe(false);
+    gate.mockClear();
+    const next = await refreshIndexes(options, { gate });
+    expect(next).toMatchObject({ status: 'partial', totals: { errors: 0 } });
+    expect(gate).toHaveBeenCalledTimes(next.jobs.length);
+    expect(next.jobs.every(job => job.reason !== 'checkpoint')).toBe(true);
+    expect(next.jobs.find(job => job.kind === 'sessions')?.sessionImport?.run.sources
+      .find(source => source.status === 'rejected')?.attempts).toBe(2);
+    expect(fs.existsSync(checkpointPath)).toBe(false);
+  });
+
+  it.each([false, true])('clears the checkpoint after a completed run with operational errors (all jobs fail: %s)', async (allFail) => {
+    const gate = vi.fn().mockRejectedValueOnce(new Error('operational failure'));
+    if (allFail) gate.mockRejectedValue(new Error('operational failure'));
+    else gate.mockResolvedValue({ ok: true });
+    const report = await refreshIndexes({ cwd: workspace, full: true }, { gate });
+    expect(report).toMatchObject({ status: allFail ? 'error' : 'partial',
+      totals: { errors: allFail ? 2 : 1, ok: allFail ? 0 : 1 } });
+    expect(report.jobs[0].error).toBe('operational failure');
+    expect(fs.existsSync(path.join(state, 'index-refresh-checkpoint.json'))).toBe(false);
+    const next = await refreshIndexes({ cwd: workspace, full: true }, admitted);
+    expect(next.jobs.every(job => job.status === 'ok')).toBe(true);
+  });
+
+  it('keeps a deferred checkpoint even after an operational error', async () => {
+    const gate = vi.fn().mockRejectedValueOnce(new Error('operational failure'))
+      .mockResolvedValue({ ok: false, reason: 'memory pressure' });
+    const report = await refreshIndexes({ cwd: workspace }, { gate });
+    expect(report.totals).toMatchObject({ errors: 1, deferred: 1 });
+    const checkpointPath = path.join(state, 'index-refresh-checkpoint.json');
+    expect(fs.existsSync(checkpointPath)).toBe(true);
+    expect((await refreshIndexes({ cwd: workspace }, admitted)).totals.errors).toBe(0);
+    expect(fs.existsSync(checkpointPath)).toBe(false);
+  });
+
+  it('resumes a run aborted during its last job', async () => {
+    const controller = new AbortController();
+    const gate = vi.fn().mockResolvedValueOnce({ ok: true }).mockImplementationOnce(async () => {
+      controller.abort();
+      controller.signal.throwIfAborted();
+      return { ok: true };
+    });
+    await expect(refreshIndexes({ cwd: workspace, full: true, signal: controller.signal }, {
+      gate,
+    })).rejects.toThrow();
+    const checkpointPath = path.join(state, 'index-refresh-checkpoint.json');
+    expect(JSON.parse(fs.readFileSync(checkpointPath, 'utf8')).completed).toHaveLength(1);
+    const next = await refreshIndexes({ cwd: workspace, full: true }, admitted);
+    expect(next.jobs[0].reason).toBe('checkpoint');
+    expect(next.jobs[1].status).toBe('ok');
+    expect(fs.existsSync(checkpointPath)).toBe(false);
+  });
+
+  it('records graph failures and emits the versioned JSON contract with a failing exit code', async () => {
     write(path.join(workspace, '.aiwg/.index/project'), 'blocks graph output');
     const report = await refreshIndexes({ cwd: workspace }, admitted);
     expect(report).toMatchObject({ status: 'partial', totals: { errors: 1, ok: 1 } });
     expect(report.jobs[0].error).toBeTypeOf('string');
-    expect(JSON.parse(fs.readFileSync(path.join(state, 'index-refresh-checkpoint.json'), 'utf8')).completed).toHaveLength(1);
+    expect(fs.existsSync(path.join(state, 'index-refresh-checkpoint.json'))).toBe(false);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const cli = await runIndexRefresh(['--only', 'invalid', '--json'], workspace);
     expect(cli.status).toBe('error');
