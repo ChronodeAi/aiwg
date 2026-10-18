@@ -12,6 +12,7 @@ import {
   writeDiscoveryManifest,
 } from '../../../src/sessions/index.js';
 import { itWithSqlite } from '../../helpers/sqlite.js';
+import { claudeProjectKey } from '../../../src/sessions/workspace-discovery.js';
 
 const roots: string[] = [];
 
@@ -20,6 +21,77 @@ afterEach(async () => {
 });
 
 describe('workspace session discovery and batch import', () => {
+  it.each([
+    ['/tmp/x/site.example', '-tmp-x-site-example'],
+    ['/tmp/x/site example', '-tmp-x-site-example'],
+    ['/tmp/x/site_example', '-tmp-x-site-example'],
+    ['/tmp/x/site..__ example', '-tmp-x-site-----example'],
+    ['C:\\Users\\Test User\\site.example', 'C--Users-Test-User-site-example'],
+    ['C:/Users/Test_User/site.example', 'C--Users-Test-User-site-example'],
+    ['/tmp/café/😀', '-tmp-caf----'],
+  ])('encodes the Claude project folder for %s', (workspace, expected) => {
+    expect(claudeProjectKey(workspace)).toBe(expected);
+  });
+
+  it('caps long Claude project keys at 200 characters with the original path hash', () => {
+    const boundary = `/${'a'.repeat(199)}`;
+    expect(claudeProjectKey(boundary)).toBe(`-${'a'.repeat(199)}`);
+    expect(claudeProjectKey(`/tmp/${'a'.repeat(210)}`))
+      .toBe(`-tmp-${'a'.repeat(195)}-de6m7t`);
+  });
+
+  it.each(['site.example', 'site example', 'site_example', 'site..__ example'])(
+    'discovers the Claude project folder for workspace %s', async (name) => {
+      const root = await mkdtemp(join(tmpdir(), 'aiwg-claude-discovery-'));
+      roots.push(root);
+      const workspace = join(root, name);
+      const providerHome = join(root, 'home');
+      const suffix = name === 'site..__ example' ? 'site-----example' : 'site-example';
+      const key = `${root.replace(/\//g, '-')}-${suffix}`;
+      const project = join(providerHome, '.claude', 'projects', key);
+      await Promise.all([workspace, project].map((path) => mkdir(path, { recursive: true })));
+      const locator = join(project, 'session.jsonl');
+      await writeFile(locator, JSON.stringify({ type: 'user', cwd: workspace }) + '\n');
+
+      const manifest = await discoverWorkspaceHistories({
+        workspace, providerHome, expectedProviders: ['claude'],
+      });
+      expect(manifest.sources.map((source) => source.locator)).toEqual([locator]);
+    },
+  );
+
+  it('uses transcript cwd to disambiguate colliding Claude project folders', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-claude-collision-'));
+    roots.push(root);
+    const workspace = join(root, 'site.example');
+    const otherWorkspace = join(root, 'site-example');
+    const providerHome = join(root, 'home');
+    const project = join(providerHome, '.claude', 'projects', `${root.replace(/\//g, '-')}-site-example`);
+    await Promise.all([workspace, otherWorkspace, project].map((path) => mkdir(path, { recursive: true })));
+    await writeFile(join(project, 'matching.jsonl'), [
+      'not-json',
+      JSON.stringify({ type: 'file-history-snapshot' }),
+      JSON.stringify({ type: 'user', cwd: workspace }),
+    ].join('\n') + '\n');
+    await writeFile(join(project, 'other.jsonl'), JSON.stringify({ type: 'user', cwd: otherWorkspace }) + '\n');
+
+    const manifest = await discoverWorkspaceHistories({
+      workspace, providerHome, expectedProviders: ['claude'],
+    });
+    expect(manifest.sources.map((source) => source.locator)).toEqual([join(project, 'matching.jsonl')]);
+  });
+
+  it('keeps other provider folder encodings and legacy Claude transcripts without cwd', async () => {
+    const fixture = await providerFixture('site.example');
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace,
+      providerHome: fixture.providerHome,
+      expectedProviders: ['claude', 'codex', 'cursor', 'factory'],
+    });
+    expect(manifest.sources.map((source) => source.provider))
+      .toEqual(['claude', 'codex', 'cursor', 'factory']);
+  });
+
   it('inventories only matching known roots, persists the exact manifest, and exposes export gaps', async () => {
     const fixture = await providerFixture();
     const manifest = await discoverWorkspaceHistories({
@@ -251,16 +323,17 @@ describe('workspace session discovery and batch import', () => {
   });
 });
 
-async function providerFixture(): Promise<{ root: string; workspace: string; providerHome: string }> {
+async function providerFixture(name = 'workspace'): Promise<{ root: string; workspace: string; providerHome: string }> {
   const root = await mkdtemp(join(tmpdir(), 'aiwg-session-discovery-'));
   roots.push(root);
-  const workspace = join(root, 'workspace');
+  const workspace = join(root, name);
   const providerHome = join(root, 'home');
   await mkdir(workspace, { recursive: true });
   const key = workspace.replace(/\\/g, '/').replace(/[/:]+/g, '-');
   const cursorKey = workspace.replace(/\\/g, '/').replace(/^\/+/, '').replace(/[/:]+/g, '-');
 
-  const claude = join(providerHome, '.claude', 'projects', key, 'claude.jsonl');
+  const claudeKey = workspace.replace(/[^A-Za-z0-9-]/g, '-');
+  const claude = join(providerHome, '.claude', 'projects', claudeKey, 'claude.jsonl');
   const factory = join(providerHome, '.factory', 'sessions', key, 'factory.jsonl');
   const cursor = join(
     providerHome,
