@@ -23,8 +23,10 @@ const __dirname = dirname(__filename);
  * RuntimeDiscovery - Discovers and catalogs installed system tools
  */
 export class RuntimeDiscovery {
-  constructor(basePath = null) {
-    this.basePath = basePath || projectAiwgPath(process.cwd(), 'smiths', 'toolsmith');
+  constructor(basePath = null, { cwd = process.cwd(), quiet = false } = {}) {
+    this.cwd = cwd;
+    this.quiet = quiet;
+    this.basePath = basePath || projectAiwgPath(this.cwd, 'smiths', 'toolsmith');
     this.knownTools = this.#loadKnownTools();
   }
 
@@ -33,7 +35,7 @@ export class RuntimeDiscovery {
    * @returns {Promise<Object>} RuntimeCatalog
    */
   async discover({ force = false } = {}) {
-    console.log('Starting runtime discovery...');
+    if (!this.quiet) console.log('Starting runtime discovery...');
 
     const loaded = await this.#loadCatalog().catch(error => {
       if (error instanceof SyntaxError) return null;
@@ -49,12 +51,12 @@ export class RuntimeDiscovery {
       inputs.push([name, toolPath, metadata && [metadata.mtimeMs, metadata.ctimeMs, metadata.size, metadata.mode]]);
     }
     const inputFingerprint = createHash('sha256').update(JSON.stringify([
-      1, this.knownTools, inputs, platform(), arch(), homedir(), process.cwd(),
+      1, this.knownTools, inputs, platform(), arch(), homedir(), this.cwd,
       process.env.PATH, process.env.PATHEXT, process.env.SHELL, process.env.ComSpec,
     ])).digest('hex');
     if (!force && previous?.inputFingerprint === inputFingerprint
       && existsSync(join(this.basePath, 'runtime-info.md'))) {
-      console.log(`Discovery skipped: unchanged (${previous.tools.length} tools)`);
+      if (!this.quiet) console.log(`Discovery skipped: unchanged (${previous.tools.length} tools)`);
       return previous;
     }
 
@@ -84,10 +86,10 @@ export class RuntimeDiscovery {
     await this.#writeCatalog(catalog);
     await this.#writeRuntimeInfo(catalog);
 
-    console.log(`Discovery complete: ${catalog.tools.length} tools found`);
-    console.log(`Tool delta: +${delta.added.length} added, -${delta.removed.length} removed`);
+    if (!this.quiet) console.log(`Discovery complete: ${catalog.tools.length} tools found`);
+    if (!this.quiet) console.log(`Tool delta: +${delta.added.length} added, -${delta.removed.length} removed`);
     if (delta.removed.length) {
-      console.warn(`Previously cataloged tools no longer available: ${delta.removed.join(', ')}`);
+      if (!this.quiet) console.warn(`Previously cataloged tools no longer available: ${delta.removed.join(', ')}`);
     }
     return catalog;
   }
@@ -182,7 +184,7 @@ export class RuntimeDiscovery {
         osVersion = boundedExecSync('ver', 'quick', { encoding: 'utf-8' }).trim();
       }
     } catch (error) {
-      console.warn('Could not detect OS version:', error.message);
+      if (!this.quiet) console.warn('Could not detect OS version:', error.message);
     }
 
     return {
@@ -191,7 +193,7 @@ export class RuntimeDiscovery {
       arch: arch(),
       shell: process.env.SHELL || process.env.ComSpec || '/bin/sh',
       homeDir: homedir(),
-      workingDir: process.cwd()
+      workingDir: this.cwd
     };
   }
 
@@ -220,7 +222,7 @@ export class RuntimeDiscovery {
         diskFreeGb = Math.round((totalFree / (1024 ** 3)) * 10) / 10;
       } else {
         // Unix: use df
-        const output = boundedExecFileSync('df', ['-k', '.'], 'quick', { encoding: 'utf-8' });
+        const output = boundedExecFileSync('df', ['-k', '.'], 'quick', { encoding: 'utf-8', cwd: this.cwd });
         const lines = output.trim().split('\n');
         if (lines.length > 1) {
           const parts = lines[1].trim().split(/\s+/);
@@ -235,7 +237,7 @@ export class RuntimeDiscovery {
       memoryTotalGb = Math.round((totalMem / (1024 ** 3)) * 10) / 10;
       memoryAvailableGb = Math.round((freeMem / (1024 ** 3)) * 10) / 10;
     } catch (error) {
-      console.warn('Could not get resource info:', error.message);
+      if (!this.quiet) console.warn('Could not get resource info:', error.message);
     }
 
     return {

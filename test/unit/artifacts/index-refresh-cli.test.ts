@@ -38,6 +38,7 @@ describe('index refresh CLI routing', () => {
     const help = output.mock.calls.map(call => call[0]).join('\n');
     expect(help).toContain('refresh');
     expect(help).toContain('[--root <dir>]...');
+    expect(help).toContain('--only graphs|sessions|caches|runtime|models|issues');
     for (const flag of ['--full', '--workspace', '--root', '--only', '--dry-run', '--json', '--lock-wait-ms']) expect(help).toContain(flag);
   });
 

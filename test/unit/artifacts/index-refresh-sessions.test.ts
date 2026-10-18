@@ -107,7 +107,9 @@ describe('session refresh integration boundaries', () => {
     const unauthorized = path.join(process.env.HOME!, '.claude/projects', alias.replace(/[^A-Za-z0-9-]/g, '-'));
     fs.mkdirSync(unauthorized, { recursive: true });
     fs.writeFileSync(path.join(unauthorized, 'outside.jsonl'), '{}\n');
-    expect(await refreshSessionCatalog(workspace, false, 0, undefined, [alias])).toBeUndefined();
+    expect(await refreshSessionCatalog(workspace, false, 0, undefined, [alias])).toEqual({
+      run: { status: 'complete' }, totals: { rejected: 0, pending: 0 },
+    });
     const imported = mocks.importBatch.mock.calls[0][0].manifest;
     expect(imported.sources).toHaveLength(2);
     expect(imported.authorizedRoots).toEqual({ claude: [authorized] });
