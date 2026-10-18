@@ -31,40 +31,50 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, '..');
 
-function readPackageVersion() {
+function readPackageVersion(root = packageRoot) {
   try {
-    const pkg = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+    const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
     return typeof pkg.version === 'string' ? pkg.version : '(unknown)';
   } catch {
     return '(unknown)';
   }
 }
 
-function detectVersionChannel(version) {
-  if (version.includes('-rc.')) return 'rc';
-  if (version.includes('-beta.')) return 'beta';
-  if (version.includes('-alpha.')) return 'alpha';
-  if (version.includes('-nightly.')) return 'nightly';
+function readVersionConfig() {
   try {
     const legacyDir = path.join(os.homedir(), '.aiwg');
     const xdgDir = path.join(os.homedir(), '.config', 'aiwg');
     const configDir = process.env.AIWG_CONFIG
       ? path.resolve(process.env.AIWG_CONFIG)
       : existsSync(legacyDir) ? legacyDir : existsSync(xdgDir) ? xdgDir : legacyDir;
+    let config = {};
+    try {
+      config = JSON.parse(readFileSync(path.join(configDir, 'channel.json'), 'utf8'));
+    } catch { /* Legacy config is optional. */ }
     const installationFile = path.join(configDir, 'installation.json');
     if (existsSync(installationFile)) {
       const installation = JSON.parse(readFileSync(installationFile, 'utf8'));
-      if (installation?.runMode === 'development') return 'dev';
-      if (typeof installation?.channel === 'string') return installation.channel;
+      return {
+        ...config,
+        devMode: installation?.runMode === 'development',
+        channel: installation?.channel,
+        edgePath: installation?.edgePath ?? config.edgePath,
+      };
     }
-    const raw = readFileSync(path.join(configDir, 'channel.json'), 'utf8');
-    const cfg = JSON.parse(raw);
-    if (cfg?.devMode) return 'dev';
-    if (typeof cfg?.channel === 'string') return cfg.channel;
+    return config;
   } catch {
     // Default below.
   }
-  return 'stable';
+  return {};
+}
+
+function detectVersionChannel(version, config) {
+  if (config.devMode) return 'dev';
+  if (version.includes('-rc.')) return 'rc';
+  if (version.includes('-beta.')) return 'beta';
+  if (version.includes('-alpha.')) return 'alpha';
+  if (version.includes('-nightly.')) return 'nightly';
+  return config.channel || 'stable';
 }
 
 function maybeHandleFastVersion(args) {
@@ -72,8 +82,15 @@ function maybeHandleFastVersion(args) {
   if (args[0] !== '--version' && args[0] !== '-version') return false;
 
   const version = readPackageVersion();
-  const channel = detectVersionChannel(version);
+  const config = readVersionConfig();
+  const channel = detectVersionChannel(version, config);
+  const runtimePath = config.devMode && config.edgePath ? config.edgePath : packageRoot;
   console.log(`  aiwg  ${version}  [${channel}]`);
+  if (config.devMode) {
+    console.log(`    launcher: ${version}`);
+    console.log(`    runtime: ${readPackageVersion(runtimePath)}`);
+    console.log(`    runtime path: ${runtimePath}`);
+  }
   console.log(`    path: ${packageRoot}`);
   return true;
 }
@@ -332,6 +349,7 @@ async function runUpdateNotifierBootstrap() {
 }
 
 const cliArgs = process.argv.slice(2);
+process.env['AIWG_LAUNCHER_ROOT'] = packageRoot;
 const indexRefresh = cliArgs[0] === 'index' && cliArgs[1] === 'refresh';
 if (indexRefresh) {
   trace('notifier:skip (index refresh)');
