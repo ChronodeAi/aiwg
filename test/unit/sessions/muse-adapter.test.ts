@@ -193,6 +193,26 @@ describe('Muse Code session adapter', () => {
     await expect(collect(adapter.stream(source))).rejects.toMatchObject({ code: 'MALFORMED_SOURCE' });
   });
 
+  it.each(['envelope', 'retained-child', 'retained-frame'] as const)(
+    'reports content-free native schema paths for a malformed %s', async (shape) => {
+      const root = mkdtempSync(resolve(tmpdir(), 'muse-schema-detail-'));
+      temporaryRoots.push(root);
+      const locator = resolve(root, 'session.jsonl');
+      const invalid = { sequence: 'synthetic-transcript-marker' };
+      const value = shape === 'envelope' ? invalid : {
+        retained_frame: 'synthetic-frame', children: [
+          { record_json: shape === 'retained-child' ? JSON.stringify(invalid) : 42 },
+        ],
+      };
+      writeFileSync(locator, JSON.stringify(value) + '\n');
+      await expect(adapter.inspect(selectedPath(locator, 'synthetic', root))).rejects.toMatchObject({
+        code: 'MALFORMED_SOURCE', detail: { issues: [{
+          path: shape === 'retained-frame' ? 'children.0.record_json' : 'sequence', code: 'invalid_type',
+        }] },
+      });
+    },
+  );
+
   it('preserves approval, tool, and model-lifecycle events with provenance', async () => {
     const events = await collect(adapter.stream(selected('valid-v1.json', 'muse-fixture-v1')));
     const byKind = new Map(events.map((event) => [event.kind, event]));

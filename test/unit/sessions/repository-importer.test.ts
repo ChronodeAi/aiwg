@@ -10,6 +10,7 @@ import {
   IncrementalSessionImporter,
   GenericSessionInterchangeAdapter,
   SessionImportFailure,
+  SessionContractError,
   MemoryPromotionGateway,
   SESSION_CONTRACT_VERSION,
   SESSION_PROVIDER_IDS,
@@ -76,6 +77,44 @@ const records: ProviderRecord[] = [
 ];
 
 describeWithSqlite('transactional session repository and importer', () => {
+  it.each(['maxRecordBytes', 'maxTotalBytes', 'maxRecords'] as const)(
+    'preserves configured and observed %s in import failure details', async (limit) => {
+      const repository = new SessionRepository();
+      const record = { nativeSessionId: 'session', sequence: 0, kind: 'message',
+        text: 'synthetic-transcript-marker', rawReference: { locatorClass: 'fixture' } };
+      try {
+        await expect(new IncrementalSessionImporter(repository).import({
+          source, adapter: adapter([record]), workspaceId: 'workspace-1', policyVersion: '1.0.0',
+          selectedSource: { provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+            sourceId: source.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+          limits: { [limit]: 0 },
+        })).rejects.toMatchObject({
+          name: 'SessionImportFailure', code: 'RESOURCE_LIMIT_EXCEEDED',
+          detail: { limit, configured: 0, observed: limit === 'maxRecords' ? 1 : Buffer.byteLength(JSON.stringify(record)) },
+          failureReceipt: { detail: {
+            limit, configured: 0, observed: limit === 'maxRecords' ? 1 : Buffer.byteLength(JSON.stringify(record)),
+          } },
+        });
+      } finally { repository.close(); }
+    },
+  );
+
+  it('preserves adapter validator detail through an import failure', async () => {
+    const repository = new SessionRepository();
+    const detail = { issues: [{ path: 'message.role', code: 'invalid_type' }] };
+    const failing = adapter([]);
+    failing.stream = async function* () {
+      throw new SessionContractError('MALFORMED_SOURCE', 'invalid synthetic record', detail);
+    };
+    try {
+      await expect(new IncrementalSessionImporter(repository).import({
+        source, adapter: failing, workspaceId: 'workspace-1', policyVersion: '1.0.0',
+        selectedSource: { provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+          sourceId: source.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+      })).rejects.toMatchObject({ name: 'SessionImportFailure', detail, failureReceipt: { detail } });
+    } finally { repository.close(); }
+  });
+
   it.each(['source', 'batch'] as const)(
     'rebuilds only affected session analytics when committing staged %s imports',
     async (commitScope) => {

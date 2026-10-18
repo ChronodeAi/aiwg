@@ -3,9 +3,11 @@ import { symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
   SESSION_PROVIDER_IDS,
   SessionContractError,
+  schemaRejectionDetail,
   SessionEventSchema,
   assertSessionProviderId,
   assertSupportedSchemaMajor,
@@ -20,6 +22,22 @@ import {
 } from '../../../src/sessions/index.js';
 
 describe('session contracts', () => {
+  it('extracts bounded paths and codes from nested validator failures without input values', () => {
+    const schema = z.object({ events: z.array(z.union([
+      z.object({ role: z.literal('user') }), z.object({ role: z.literal('assistant') }),
+    ])) });
+    const result = schema.safeParse({ events: [{ role: 'synthetic-transcript-marker' }] });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(schemaRejectionDetail(result.error)).toEqual({ issues: [
+      { path: 'events.0.role', code: 'invalid_literal' },
+      { path: 'events.0.role', code: 'invalid_literal' },
+    ] });
+    const many = z.array(z.string()).safeParse(Array(30).fill(null));
+    if (many.success) throw new Error('expected validator failure');
+    expect(schemaRejectionDetail(many.error)).toHaveProperty('issues.length', 20);
+  });
+
   it('asserts every canonical provider ID with documented compatibility aliases', () => {
     expect(SESSION_PROVIDER_IDS).toEqual([
       'claude', 'codex', 'copilot', 'cursor', 'factory', 'hermes',
@@ -70,6 +88,18 @@ describe('session contracts', () => {
 });
 
 describe('session source and content policy', () => {
+  it('reports the authorized byte limit and observed source size without content', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-policy-limit-'));
+    const file = join(root, 'session.jsonl');
+    const content = 'synthetic-transcript-marker';
+    await writeFile(file, content);
+    await expect(authorizeSourceFile({ selectedPath: file, allowedRoots: [root], maxBytes: 1 }))
+      .rejects.toMatchObject({
+        code: 'RESOURCE_LIMIT_EXCEEDED',
+        detail: { limit: 'maxBytes', configured: 1, observed: Buffer.byteLength(content) },
+      });
+  });
+
   it('authorizes only explicitly selected regular files under canonical roots', async () => {
     const root = await mkdtemp(join(tmpdir(), 'aiwg-session-root-'));
     const outside = await mkdtemp(join(tmpdir(), 'aiwg-session-outside-'));

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
@@ -135,14 +137,18 @@ export class OpenClawSessionAdapter implements SessionSourceAdapter {
         sawRecord = true;
         const parsed = SnapshotSchema.safeParse(line.value);
         if (!parsed.success) {
-          throw new SessionContractError('MALFORMED_SOURCE', 'OpenClaw snapshot is malformed');
+          throw new SessionContractError('MALFORMED_SOURCE', 'OpenClaw snapshot is malformed', schemaRejectionDetail(parsed.error));
         }
         const snapshot = parsed.data;
         const currentNative = nativeVersion(snapshot.schemaVersion);
         const currentEvent = nativeVersion(snapshot.eventVersion);
         if ((nativeSchema && nativeSchema !== currentNative)
           || (eventSchema && eventSchema !== currentEvent)) {
-          throw new SessionContractError('SCHEMA_DRIFT', 'mixed OpenClaw snapshot schemas');
+          throw new SessionContractError(
+            'SCHEMA_DRIFT',
+            'mixed OpenClaw snapshot schemas',
+            { issues: [{ path: nativeSchema && nativeSchema !== currentNative ? 'schemaVersion' : 'eventVersion', code: 'custom' }] },
+          );
         }
         nativeSchema = currentNative;
         eventSchema = currentEvent;
@@ -153,6 +159,7 @@ export class OpenClawSessionAdapter implements SessionSourceAdapter {
           throw new SessionContractError(
             'SCHEMA_DRIFT',
             'OpenClaw snapshot lacks sqlite3.backup() consistency evidence',
+            schemaIssueDetail('snapshotConsistency'),
           );
         }
         if (snapshot.incognito) {
@@ -172,7 +179,7 @@ export class OpenClawSessionAdapter implements SessionSourceAdapter {
           if (outputIndex++ >= start) yield record;
         }
       }
-      if (!sawRecord) throw new SessionContractError('MALFORMED_SOURCE', 'OpenClaw source is empty');
+      if (!sawRecord) throw new SessionContractError('MALFORMED_SOURCE', 'OpenClaw source is empty', schemaIssueDetail('<root>'));
       if (input.incompleteTail && source.locatorClass === 'openclaw-consistent-snapshot-jsonl') {
         throw new SessionContractError('TRUNCATED_SOURCE', 'OpenClaw consistent snapshot is truncated');
       }
@@ -223,16 +230,24 @@ export class OpenClawSessionAdapter implements SessionSourceAdapter {
     } else {
       throw new SessionContractError('UNSUPPORTED_OPERATION', 'unsupported OpenClaw source class');
     }
-    if (input.length === 0) throw new SessionContractError('MALFORMED_SOURCE', 'OpenClaw source is empty');
+    if (input.length === 0) throw new SessionContractError('MALFORMED_SOURCE', 'OpenClaw source is empty', schemaIssueDetail('<root>'));
     const parsed = input.map(({ value, ...line }) => {
       const result = SnapshotSchema.safeParse(value);
-      if (!result.success) throw new SessionContractError('MALFORMED_SOURCE', 'OpenClaw snapshot is malformed');
+      if (!result.success) throw new SessionContractError(
+        'MALFORMED_SOURCE',
+        'OpenClaw snapshot is malformed',
+        schemaRejectionDetail(result.error),
+      );
       return { value: result.data, ...line };
     });
     const nativeSchemas = new Set(parsed.map(({ value }) => nativeVersion(value.schemaVersion)));
     const eventSchemas = new Set(parsed.map(({ value }) => nativeVersion(value.eventVersion)));
     if (nativeSchemas.size !== 1 || eventSchemas.size !== 1) {
-      throw new SessionContractError('SCHEMA_DRIFT', 'mixed OpenClaw snapshot schemas');
+      throw new SessionContractError(
+        'SCHEMA_DRIFT',
+        'mixed OpenClaw snapshot schemas',
+        { issues: [{ path: nativeSchemas.size !== 1 ? 'schemaVersion' : 'eventVersion', code: 'custom' }] },
+      );
     }
     assertSupportedSchemaMajor([...nativeSchemas][0], 16);
     assertSupportedSchemaMajor([...eventSchemas][0], 3);
@@ -241,6 +256,7 @@ export class OpenClawSessionAdapter implements SessionSourceAdapter {
       throw new SessionContractError(
         'SCHEMA_DRIFT',
         'OpenClaw snapshot lacks sqlite3.backup() consistency evidence',
+        schemaIssueDetail('snapshotConsistency'),
       );
     }
     const incognito = parsed.some(({ value }) => value.incognito);
@@ -426,7 +442,7 @@ function unknownFields(value: Record<string, unknown>, keys: ReadonlySet<string>
 
 function parseCursor(value?: string): number {
   if (!value) return 0;
-  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid OpenClaw cursor');
+  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid OpenClaw cursor', schemaIssueDetail('cursor'));
   return Number(value);
 }
 

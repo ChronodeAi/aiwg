@@ -68,6 +68,16 @@ If inference reports multiple workspace candidates, rerun with the exact
 
 The catalog contains normalized AIWG copies. Discovery and import never modify
 provider histories, and source paths are redacted from public command output.
+Rejected entries in `import-discovered --json` include an optional `detail`:
+resource limits report `limit`, `configured`, and `observed`; schema failures
+report `issues` containing only `path` and validator `code`. Paths use dotted
+field names and array indexes, with `<root>` for document-level failures.
+Hand-written checks use `custom`; invalid JSON uses `invalid_json`. At most
+20 validator issues are included. The same detail appears in the diagnostic
+string and is preserved in stored batch runs and import failure receipts.
+For example, `{"limit":"maxBytes","configured":1024,"observed":2048}`
+identifies an authorized byte-limit rejection without exposing source content.
+Muse workspace inspection failures also retain this detail when available.
 Use `aiwg sessions --help` for the complete command and JSON contracts.
 
 ## Ask questions about collected history

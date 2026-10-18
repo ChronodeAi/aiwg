@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
@@ -126,11 +128,11 @@ export class HermesSessionAdapter implements SessionSourceAdapter {
         sawRecord = true;
         const parsed = ExportSchema.safeParse(line.value);
         if (!parsed.success) {
-          throw new SessionContractError('MALFORMED_SOURCE', 'Hermes export is malformed');
+          throw new SessionContractError('MALFORMED_SOURCE', 'Hermes export is malformed', schemaRejectionDetail(parsed.error));
         }
         const currentSchema = declaredSchema(parsed.data);
         if (schema && schema !== currentSchema) {
-          throw new SessionContractError('SCHEMA_DRIFT', 'mixed Hermes export schemas');
+          throw new SessionContractError('SCHEMA_DRIFT', 'mixed Hermes export schemas', schemaIssueDetail('schemaVersion'));
         }
         schema = currentSchema;
         assertSupportedSchemaMajor(schema, 23);
@@ -139,13 +141,14 @@ export class HermesSessionAdapter implements SessionSourceAdapter {
           throw new SessionContractError(
             'SCHEMA_DRIFT',
             'Hermes snapshot lacks sqlite3.backup() consistency evidence',
+            schemaIssueDetail('snapshotConsistency'),
           );
         }
         for (const record of normalizeSession(parsed.data, line, source.locatorClass)) {
           if (outputIndex++ >= start) yield record;
         }
       }
-      if (!sawRecord) throw new SessionContractError('MALFORMED_SOURCE', 'Hermes source is empty');
+      if (!sawRecord) throw new SessionContractError('MALFORMED_SOURCE', 'Hermes source is empty', schemaIssueDetail('<root>'));
       if (input.incompleteTail && source.locatorClass !== 'hermes-export-jsonl') {
         throw new SessionContractError('TRUNCATED_SOURCE', 'Hermes consistent snapshot is truncated');
       }
@@ -197,10 +200,14 @@ export class HermesSessionAdapter implements SessionSourceAdapter {
     } else {
       throw new SessionContractError('UNSUPPORTED_OPERATION', 'unsupported Hermes source class');
     }
-    if (input.length === 0) throw new SessionContractError('MALFORMED_SOURCE', 'Hermes source is empty');
+    if (input.length === 0) throw new SessionContractError('MALFORMED_SOURCE', 'Hermes source is empty', schemaIssueDetail('<root>'));
     const parsed = input.map((line) => {
       const result = ExportSchema.safeParse(line.value);
-      if (!result.success) throw new SessionContractError('MALFORMED_SOURCE', 'Hermes export is malformed');
+      if (!result.success) throw new SessionContractError(
+        'MALFORMED_SOURCE',
+        'Hermes export is malformed',
+        schemaRejectionDetail(result.error),
+      );
       return { line, value: result.data };
     });
     const schemaVersion = declaredVersion(parsed.map(({ value }) => value));
@@ -210,6 +217,7 @@ export class HermesSessionAdapter implements SessionSourceAdapter {
       throw new SessionContractError(
         'SCHEMA_DRIFT',
         'Hermes snapshot lacks sqlite3.backup() consistency evidence',
+        schemaIssueDetail('snapshotConsistency'),
       );
     }
     return {
@@ -344,7 +352,7 @@ function ended(value: HermesExport): boolean {
 
 function declaredVersion(values: HermesExport[]): string {
   const versions = new Set(values.map(declaredSchema));
-  if (versions.size !== 1) throw new SessionContractError('SCHEMA_DRIFT', 'mixed Hermes export schemas');
+  if (versions.size !== 1) throw new SessionContractError('SCHEMA_DRIFT', 'mixed Hermes export schemas', schemaIssueDetail('schemaVersion'));
   return [...versions][0];
 }
 
@@ -388,7 +396,7 @@ function unknownFields(value: Record<string, unknown>, keys: ReadonlySet<string>
 
 function parseCursor(value?: string): number {
   if (!value) return 0;
-  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid Hermes cursor');
+  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid Hermes cursor', schemaIssueDetail('cursor'));
   return Number(value);
 }
 

@@ -44,8 +44,11 @@ import { opendir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   SessionErrorCodeSchema,
+  SessionRejectionDetailSchema,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
   type ImportCursor,
@@ -238,6 +241,7 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
           throw new SessionContractError(
             'RESOURCE_LIMIT_EXCEEDED',
             'Muse native session discovery exceeded the authorized file limit',
+            { limit: 'maxFiles', configured: this.maxFiles, observed: count },
           );
         }
         yield { provider: 'muse', locator, locatorClass: MUSE_NATIVE_LOCATOR_CLASS };
@@ -328,7 +332,7 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
       ));
     } catch (error) {
       if (error instanceof SessionContractError && error.code === 'SCHEMA_DRIFT') {
-        throw new SessionContractError('MALFORMED_SOURCE', 'muse export document is not valid JSON');
+        throw new SessionContractError('MALFORMED_SOURCE', 'muse export document is not valid JSON', error.detail);
       }
       throw error;
     }
@@ -337,6 +341,7 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
       throw new SessionContractError(
         'MALFORMED_SOURCE',
         'input is not a declared muse export trajectory document',
+        schemaRejectionDetail(parsed.error),
       );
     }
     assertSupportedSchemaMajor(`${parsed.data.export_schema_version}.0.0`, MUSE_EXPORT_SCHEMA_MAJOR);
@@ -431,7 +436,7 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
       );
     } catch (error) {
       if (error instanceof SessionContractError && error.code === 'SCHEMA_DRIFT') {
-        throw new SessionContractError('MALFORMED_SOURCE', 'Muse native session log contains malformed JSONL');
+        throw new SessionContractError('MALFORMED_SOURCE', 'Muse native session log contains malformed JSONL', error.detail);
       }
       throw error;
     }
@@ -456,12 +461,21 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
           try {
             decoded = JSON.parse(child.record_json);
           } catch {
-            throw new SessionContractError('MALFORMED_SOURCE', 'Muse retained frame child record is malformed JSON');
+            throw new SessionContractError(
+              'MALFORMED_SOURCE',
+              'Muse retained frame child record is malformed JSON',
+              schemaIssueDetail('children.record_json', 'invalid_json'),
+            );
           }
-          const event = recordEventFromEnvelope(decoded);
-          if (!event) {
-            throw new SessionContractError('MALFORMED_SOURCE', 'Muse retained frame child record is malformed');
+          const envelope = MuseEnvelopeSchema.safeParse(decoded);
+          if (!envelope.success) {
+            throw new SessionContractError(
+              'MALFORMED_SOURCE',
+              'Muse retained frame child record is malformed',
+              schemaRejectionDetail(envelope.error),
+            );
           }
+          const event: MuseRecordEvent = { kind: 'record', envelope: envelope.data };
           fallbackSessionId = streamSessionIdOf(event.envelope) ?? fallbackSessionId;
           complete ||= event.envelope.payload_type === 'session.end';
           diagnostics.retained_frame_children = (diagnostics.retained_frame_children ?? 0) + 1;
@@ -474,16 +488,25 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
         }
         continue;
       }
-      const event = recordEventFromEnvelope(value);
-      if (!event) {
-        throw new SessionContractError('MALFORMED_SOURCE', 'Muse native session log line is not a supported record shape');
+      const envelope = MuseEnvelopeSchema.safeParse(value);
+      if (!envelope.success) {
+        throw new SessionContractError(
+          'MALFORMED_SOURCE',
+          'Muse native session log line is not a supported record shape',
+          schemaRejectionDetail('retained_frame' in asObject(value) ? retained.error : envelope.error),
+        );
       }
+      const event: MuseRecordEvent = { kind: 'record', envelope: envelope.data };
       fallbackSessionId = streamSessionIdOf(event.envelope) ?? fallbackSessionId;
       complete ||= event.envelope.payload_type === 'session.end';
       records.push({ event, line });
     }
     if (records.length === 0) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Muse native session log contains no record envelopes');
+      throw new SessionContractError(
+        'MALFORMED_SOURCE',
+        'Muse native session log contains no record envelopes',
+        schemaIssueDetail('<root>'),
+      );
     }
     return {
       records,
@@ -596,6 +619,7 @@ export const MuseWorkspaceInspectionSchema = z.object({
   recordsInspected: z.number().int().nonnegative(),
   bytesInspected: z.number().int().nonnegative(),
   completeInspection: z.boolean(),
+  detail: SessionRejectionDetailSchema.optional(),
 });
 
 export type MuseWorkspaceInspection = z.infer<typeof MuseWorkspaceInspectionSchema>;
@@ -627,7 +651,11 @@ export async function inspectMuseNativeWorkspace(
       const envelopes = nativeEnvelopesFromLine(value, limits, (count) => {
         retainedChildren += count;
         if (retainedChildren > limits.maxRecords) {
-          throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'Muse retained child inspection limit exceeded');
+          throw new SessionContractError(
+            'RESOURCE_LIMIT_EXCEEDED',
+            'Muse retained child inspection limit exceeded',
+            { limit: 'maxRecords', configured: limits.maxRecords, observed: retainedChildren },
+          );
         }
       });
       for (const envelope of envelopes) {
@@ -641,8 +669,11 @@ export async function inspectMuseNativeWorkspace(
       ? receipt('mismatch', 'MUSE_WORKSPACE_MISMATCH', true)
       : receipt('inconclusive', 'MUSE_WORKSPACE_EVIDENCE_ABSENT', true);
   } catch (error) {
-    return receipt('inconclusive', error instanceof SessionContractError
-      ? error.code : 'MUSE_SOURCE_UNREADABLE');
+    return {
+      ...receipt('inconclusive', error instanceof SessionContractError
+        ? error.code : 'MUSE_SOURCE_UNREADABLE'),
+      ...(error instanceof SessionContractError && error.detail ? { detail: error.detail } : {}),
+    };
   }
 }
 
@@ -653,8 +684,11 @@ export async function museNativeSourceMatchesWorkspace(
   const result = await inspectMuseNativeWorkspace(source, workspacePath);
   if (result.outcome === 'inconclusive') {
     const code = SessionErrorCodeSchema.safeParse(result.reasonCode);
-    throw new SessionContractError(code.success ? code.data : 'SCHEMA_DRIFT',
-      `Muse workspace inspection inconclusive: ${result.reasonCode}`);
+    throw new SessionContractError(
+      code.success ? code.data : 'SCHEMA_DRIFT',
+      `Muse workspace inspection inconclusive: ${result.reasonCode}`,
+      result.detail,
+    );
   }
   return result.outcome === 'matched';
 }
@@ -668,7 +702,11 @@ function nativeEnvelopesFromLine(
   const retained = MuseRetainedFrameSchema.safeParse(value);
   if (!retained.success) {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Muse inspection encountered a non-object native record');
+      throw new SessionContractError(
+        'MALFORMED_SOURCE',
+        'Muse inspection encountered a non-object native record',
+        schemaIssueDetail('<root>'),
+      );
     }
     // Native logs carry record kinds the envelope schema does not model (for
     // example runtime.session mode changes without payload.event.kind). They
@@ -680,7 +718,11 @@ function nativeEnvelopesFromLine(
   const envelopes: MuseEnvelope[] = [];
   for (const child of retained.data.children) {
     if (Buffer.byteLength(child.record_json) > limits.maxRecordBytes) {
-      throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'Muse retained child inspection byte limit exceeded');
+      throw new SessionContractError(
+        'RESOURCE_LIMIT_EXCEEDED',
+        'Muse retained child inspection byte limit exceeded',
+        { limit: 'maxRecordBytes', configured: limits.maxRecordBytes, observed: Buffer.byteLength(child.record_json) },
+      );
     }
     const childEvent = recordEventFromEnvelope(parseMuseScanJson(child.record_json, limits.maxNestingDepth));
     if (childEvent) envelopes.push(childEvent.envelope);
@@ -879,6 +921,6 @@ function compactObject(value: Record<string, unknown>): Record<string, unknown> 
 
 function parseEventCursor(value?: string): number {
   if (value === undefined || value === '') return 0;
-  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'muse event cursor is invalid');
+  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'muse event cursor is invalid', schemaIssueDetail('cursor'));
   return Number(value);
 }
