@@ -8,6 +8,7 @@ import { lstat, mkdir, open, readFile, readdir, realpath, rename, writeFile } fr
 import { dirname, join, relative } from 'node:path';
 import { constants } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
+import { stripVTControlCharacters } from 'node:util';
 import type { ProviderInventory } from '../providers/provider-inventory.js';
 
 export type ModelCatalogSource = 'native' | 'remote' | 'cache' | 'static';
@@ -178,7 +179,7 @@ export interface ProviderModelDiscovery {
   models: DiscoveredModel[];
   /** Absent only for a successful, completely parsed refresh. Invalid rows/files
    * make the refresh partial even when valid models survive normalization. */
-  errorKind?: 'authentication' | 'rate-limit' | 'timeout' | 'unsupported' | 'invalid-output' | 'command';
+  errorKind?: 'authentication' | 'rate-limit' | 'timeout' | 'unsupported' | 'invalid-output' | 'environment' | 'command';
   error?: string;
   policy?: ProviderModelPolicyReport;
 }
@@ -248,6 +249,12 @@ const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 export function classifyDiscoveryError(
   message: string,
 ): ProviderModelDiscovery['errorKind'] {
+  message = stripVTControlCharacters(message);
+  if (/\b(?:EROFS|EACCES|EPERM)\b|read-only file system/i.test(message)
+    || (/FileSystem\.open|permission denied|operation not permitted/i.test(message)
+      && /[\\/]opencode[\\/]log[\\/]|[\\/]\.pi[\\/]agent(?:[\\/]|$)/i.test(message))) {
+    return 'environment';
+  }
   if (/(?:401|403|unauth|forbidden|credential|login|required auth)/i.test(message)) {
     return 'authentication';
   }
@@ -261,7 +268,7 @@ const BEARER_SECRET = /(bearer\s+)[A-Za-z0-9._~+/=-]+/gi;
 
 /** Keep native diagnostics useful without ever echoing credential material. */
 export function redactModelDiscoveryText(value: string): string {
-  return value
+  return stripVTControlCharacters(value)
     .replace(SECRET_ASSIGNMENT, '$1[REDACTED]')
     .replace(BEARER_SECRET, '$1[REDACTED]')
     .slice(0, 4096);
@@ -808,6 +815,7 @@ export async function resolveDynamicModelCatalog(
         };
       }
       const next = providerDiscovery[provider];
+      if (next.error) next.error = stripVTControlCharacters(next.error);
       const instanceId = discoveryInstanceId(next);
       const prior = cached?.discovery?.instances?.[instanceId]
         ?? cached?.discovery?.providers[provider];

@@ -4337,6 +4337,12 @@ optional, not a runtime dependency. Account-specific native results are marked
 `--drift` compares resolved role mappings with the committed catalog and emits
 a reviewable, non-mutating provider/role before-and-after report.
 
+Native discovery reports local filesystem access failures such as `EROFS`,
+`EACCES`, and `EPERM` as `errorKind: environment`. Stored native error diagnostics
+have ANSI controls stripped. A failed refresh retains the
+last good models, role mappings, and observation time for the same account and
+scope while recording the current error and fetch time.
+
 AIWG does not currently operate a built-in public feed. See
 [the feed decision record](../architecture/adr-optional-model-catalog-feed.md)
 and the
