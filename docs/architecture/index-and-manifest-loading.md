@@ -235,12 +235,18 @@ SQLite support skips sessions with `aiwg features install sqlite` as the remedy.
 A host lease prevents overlapping runs; `--lock-wait-ms <n>` optionally waits
 (default: zero). A same-host dead PID lease is reclaimed. Checkpoints in
 `$XDG_STATE_HOME/aiwg` (default `~/.local/state/aiwg`) resume matching interrupted
-plans. The dispatch resource gate runs before each job, requiring at least 8 GiB
-available memory and load per core at most 0.8, plus the dispatch PSI/disk limits
+or resource-deferred plans. A finished run clears its checkpoint even when jobs
+failed, so the next scheduled run considers every job again. The dispatch resource
+gate runs before each job, requiring at least 8 GiB available memory and load per
+core at most 0.8, plus the dispatch PSI/disk limits
 and any stricter project thresholds. A locked or resource-deferred run exits zero;
 job errors exit nonzero. JSON reports use `contractVersion: "1.0.0"`, command
-`index.refresh`, job outcomes and durations, and totals. Refresh does not deploy,
-check for updates, log commands, or regenerate corpus views.
+`index.refresh`, job outcomes and durations, and totals. Session jobs include the
+batch import receipt in `sessionImport`, retaining rejection counts and per-source
+details. A completed import with rejected sources has job status `ok` and overall
+status `partial`, with zero job errors and a zero exit status. Operational failures
+remain job errors. Refresh does not deploy, check for updates, log commands, or
+regenerate corpus views.
 
 For a systemd user timer, save `~/.config/systemd/user/aiwg-index-refresh.service`
 (replace `/home/you/.local/bin/aiwg` with the absolute path from `command -v aiwg`;
