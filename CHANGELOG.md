@@ -9,6 +9,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Session import size limits are configurable: `sessions.import.max_record_bytes`
+  (default 64 MiB) and `sessions.import.max_source_bytes` (default 1 GiB, `0` means
+  unlimited), via config, `AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES` /
+  `AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES`, or `--max-record-bytes` / `--max-source-bytes`
+  (flag > env > config > default). JSONL sources are streamed with bounded memory,
+  and limit diagnostics name the setting that was hit (#340, Gitea #3264).
+- Add `sessions.import.exclude` (session IDs or absolute/`~` path globs, also
+  `AIWG_SESSIONS_IMPORT_EXCLUDE` and repeatable `--exclude`). Matching sources are
+  skipped before they are read and reported as `excluded`, not rejected (#340, Gitea #3264).
+
 - `aiwg index refresh` also refreshes the runtime (toolsmith), models and local issues
   indexes, selectable with `--only runtime|models|issues` (#330, Gitea #3251).
 - Add design documents for account-scoped Grok Bot sessions (#316, Gitea #3232),
@@ -23,6 +33,15 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Credentials are redacted on import before anything is stored or indexed, across
+  every catalog sink (events, sessions, sources, extensions, FTS, analytics, receipts,
+  checkpoints, diagnostics, candidates, audit and export plans). Detection now also
+  covers JWTs, Google, Slack webhook, Stripe, GitLab, xAI, npm, Hugging Face,
+  Anthropic and AWS secrets, extra private-key formats and netrc entries (#340, Gitea #3264).
+- Codex child and forked rollouts keep their own session ID instead of taking the
+  ID of the parent `session_meta` they replay. Lineage and inherited-record markers
+  are recorded. Existing catalogs need a fresh import to drop duplicates that are
+  already stored (#339, Gitea #3263).
 - `aiwg index refresh` runs the host-scoped models job once per refresh and probes
   the runtime once, publishing each workspace's runtime catalog from that result
   instead of re-running both for every workspace (#338, Gitea #3261).
