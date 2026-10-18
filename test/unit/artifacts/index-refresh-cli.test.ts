@@ -77,6 +77,18 @@ describe('index refresh CLI routing', () => {
     expect(help).toContain('[--root <dir>]...');
     expect(help).toContain('--only graphs|sessions|caches|runtime|models|issues');
     for (const flag of ['--full', '--workspace', '--root', '--only', '--dry-run', '--json', '--lock-wait-ms', '--max-record-bytes', '--max-source-bytes']) expect(help).toContain(flag);
+    expect(help).toContain('2147483648 bytes (2 GiB)');
+    expect(help).toContain('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES');
+    expect(help).toContain('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES');
+  });
+
+  it.each(['MAX_RECORD_BYTES', 'MAX_SOURCE_BYTES'])('rejects invalid env %s during refresh planning', async setting => {
+    vi.stubEnv(`AIWG_SESSIONS_IMPORT_${setting}`, 'invalid');
+    await main(['refresh', '--workspace', root, '--dry-run', '--json']);
+    const report = JSON.parse(output.mock.calls[0][0]);
+    expect(report.status).toBe('error');
+    expect(report.messages[0]).toMatch(/env.*safe integer/);
+    expect(process.exitCode).toBe(1);
   });
 
   it('accepts import byte flags for refresh planning', async () => {

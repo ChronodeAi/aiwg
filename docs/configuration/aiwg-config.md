@@ -68,7 +68,7 @@ Valid `providers` values: `antigravity` (alias `agy`), `claude`, `codex`,
     "discovery_manifests": ["additional-discovery.json"],
     "import": {
       "max_record_bytes": 67108864,
-      "max_source_bytes": 0
+      "max_source_bytes": 2147483648
     }
   }
 }
@@ -81,12 +81,16 @@ workspace or absolute.
 | Setting | Default | Accepted values |
 | --- | --- | --- |
 | `sessions.import.max_record_bytes` | `67108864` (64 MiB) | Positive safe integer, in bytes |
-| `sessions.import.max_source_bytes` | `0` (unlimited) | Non-negative safe integer, in bytes |
+| `sessions.import.max_source_bytes` | `2147483648` (2 GiB) | Non-negative safe integer, in bytes; `0` means unlimited |
 
 `aiwg sessions import`, `aiwg sessions import-discovered`, and `aiwg index refresh`
 accept `--max-record-bytes <n>` and `--max-source-bytes <n>`. Precedence is CLI
-flag, then the selected workspace's config, then the defaults above. An omitted
-source cap or `0` removes the source byte cap. Codex and Claude JSONL imports
+flag, then environment variable, then the selected workspace's config, then the
+defaults above. The environment variables are
+`AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES` and `AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES`.
+They accept decimal byte counts with the same integer ranges as the corresponding
+config values. Only an explicit source cap of `0` (in a flag, env var, or config)
+removes the source byte cap. Codex and Claude JSONL imports
 stream with bounded memory; the run resource gate still applies. Record-count
 and nesting limits remain unchanged. Muse workspace inspection uses its separate
 discovery limits.
@@ -98,7 +102,7 @@ Markdown. A smaller configured source cap also applies. Raising import limits
 does not raise this safety cap.
 
 Resource rejection diagnostics include the setting name, configured bytes,
-observed bytes, and origin (`flag`, `config`, or `default`).
+observed bytes, and origin (`flag`, `env`, `config`, or `default`).
 
 ## UHP Client Profiles
 

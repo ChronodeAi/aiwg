@@ -201,8 +201,9 @@ Options:
                    (default: grok on PATH, then $GROK_HOME/bin/grok)
   --confirm, --yes  Confirm a persistent discovered batch import
   --lock-wait-ms <n>  Maximum import-lease wait (default 5000)
-  --max-record-bytes <n>  Import record limit (default 67108864); overrides sessions.import.max_record_bytes
-  --max-source-bytes <n>  Import source limit (default 0, unlimited); overrides sessions.import.max_source_bytes
+  --max-record-bytes <n>  Import record limit (default 67108864); overrides AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES and sessions.import.max_record_bytes
+  --max-source-bytes <n>  Import source limit (default 2147483648, 2 GiB; 0 unlimited); overrides AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES and sessions.import.max_source_bytes
+  Import limit precedence: CLI flag > env var > workspace config > default.
   --inactivity-threshold <duration>  Historical inactivity threshold (default 24h)
   --min-coverage <0..1>  Fail list/report commands below a coverage ratio
   --provider <id> Filter list or select an import adapter

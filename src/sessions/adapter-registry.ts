@@ -1,4 +1,5 @@
 import type { ReaderLimits } from './readers.js';
+import { resolveImportLimits } from './import-limits.js';
 import { ClaudeSessionAdapter } from './adapters/claude.js';
 import { CodexSessionAdapter } from './adapters/codex.js';
 import { CopilotSessionAdapter } from './adapters/copilot.js';
@@ -20,6 +21,9 @@ import { GenericSessionInterchangeAdapter } from './adapters/generic.js';
 import { SessionSourceAdapterRegistry } from './discovery.js';
 
 export function createSessionAdapterRegistry(limits?: Partial<ReaderLimits>): SessionSourceAdapterRegistry {
+  limits = { ...resolveImportLimits(undefined, {
+    maxRecordBytes: limits?.maxRecordBytes, maxSourceBytes: limits?.maxTotalBytes,
+  }), ...limits };
   const registry = new SessionSourceAdapterRegistry();
   for (const adapter of [
     new ClaudeSessionAdapter(limits),

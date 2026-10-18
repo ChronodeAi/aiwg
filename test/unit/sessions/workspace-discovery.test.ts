@@ -23,6 +23,8 @@ import { itWithSqlite } from '../../helpers/sqlite.js';
 import { writeMuseLog } from '../../helpers/muse-native.js';
 import { createSessionWorktree } from '../../helpers/session-worktree.js';
 import { claudeProjectKey } from '../../../src/sessions/workspace-discovery.js';
+import { resolveImportLimits } from '../../../src/sessions/import-limits.js';
+import { IncrementalSessionImporter } from '../../../src/sessions/importer.js';
 
 const roots: string[] = [];
 
@@ -33,6 +35,40 @@ afterEach(async () => {
 });
 
 describe('workspace session discovery and batch import', () => {
+  itWithSqlite.each(['config', 'env'] as const)('passes %s limits through batch adapters and importers', async (origin) => {
+    const fixture = await providerFixture();
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders: ['codex'],
+    });
+    const repository = new SessionRepository(':memory:');
+    const importer = vi.spyOn(IncrementalSessionImporter.prototype, 'import');
+    try {
+      for (const setting of ['max_record_bytes', 'max_source_bytes'] as const) {
+        if (origin === 'env') vi.stubEnv(`AIWG_SESSIONS_IMPORT_${setting.toUpperCase()}`, '1');
+        const receipt = await importDiscoveryManifest({ manifest, repository,
+          limits: origin === 'config' ? resolveImportLimits({ [setting]: 1 }) : undefined });
+        expect(receipt.totals.rejected).toBe(1);
+        expect(receipt.run.sources[0].detail).toMatchObject({
+          setting: `sessions.import.${setting}`, configured: 1, origin,
+        });
+        expect(repository.getBatchImportRun(receipt.run.runId)?.sources[0].detail)
+          .toEqual(receipt.run.sources[0].detail);
+        vi.unstubAllEnvs();
+      }
+      if (origin === 'env') {
+        vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES', '65536');
+        vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES', '131072');
+      }
+      const expected = { maxRecordBytes: 65536, maxTotalBytes: 131072,
+        limitOrigins: { maxRecordBytes: origin, maxTotalBytes: origin } };
+      const receipt = await importDiscoveryManifest({ manifest, repository,
+        limits: origin === 'config'
+          ? resolveImportLimits({ max_record_bytes: 65536, max_source_bytes: 131072 }) : undefined });
+      expect(receipt.totals.accepted).toBe(1);
+      expect(importer).toHaveBeenCalledWith(expect.objectContaining({ limits: expected }));
+    } finally { importer.mockRestore(); repository.close(); }
+  });
+
   it('matches Codex workspace metadata with raw U+2028 and U+2029 and deduplicates rollout IDs', async () => {
     const fixture = await providerFixture('workspace\u2028a\u2029b');
     const first = join(fixture.root, 'first');

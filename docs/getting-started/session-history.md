@@ -70,7 +70,7 @@ The catalog contains normalized AIWG copies. Discovery and import never modify
 provider histories, and source paths are redacted from public command output.
 Rejected entries in `import-discovered --json` include an optional `detail`:
 resource limits report `limit`, `configured`, and `observed`; byte limits also
-report `setting` and `origin` (`flag`, `config`, or `default`); schema failures
+report `setting` and `origin` (`flag`, `env`, `config`, or `default`); schema failures
 report `issues` containing only `path` and validator `code`. Paths use dotted
 field names and array indexes, with `<root>` for document-level failures.
 Hand-written checks use `custom`; invalid JSON uses `invalid_json`. At most
@@ -79,11 +79,14 @@ string and is preserved in stored batch runs and import failure receipts.
 For example, `{"limit":"maxBytes","configured":1024,"observed":2048}`
 identifies an authorized byte-limit rejection without exposing source content.
 Muse workspace inspection failures also retain this detail when available.
-Imports default to 64 MiB per record and no source byte cap. Configure
+Imports default to 64 MiB per record and 2 GiB (2,147,483,648 bytes) per source. Configure
 `sessions.import.max_record_bytes` and `sessions.import.max_source_bytes`, or
 pass `--max-record-bytes` and `--max-source-bytes` to `sessions import`,
-`sessions import-discovered`, or `index refresh`. Flags override workspace
-config; `--max-source-bytes 0` means unlimited. See the [config reference](../configuration/aiwg-config.md#sessions).
+`sessions import-discovered`, or `index refresh`. You can also set
+`AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES` and `AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES`
+to decimal byte counts, using the same integer ranges as config. Precedence is
+CLI flag > env var > workspace config > default. A source cap of `0` from any
+origin means unlimited and still streams JSONL imports. See the [config reference](../configuration/aiwg-config.md#sessions).
 Use `aiwg sessions --help` for the complete command and JSON contracts.
 
 ## Ask questions about collected history

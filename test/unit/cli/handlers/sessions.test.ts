@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildHandlerMap } from '../../../../src/cli/handlers/index.js';
 import { sessionsHandler } from '../../../../src/cli/handlers/sessions.js';
-import { acquireImportLease, GrokbotSessionAdapter, SessionRepository } from '../../../../src/sessions/index.js';
+import { acquireImportLease, GrokbotSessionAdapter, IncrementalSessionImporter, SessionRepository } from '../../../../src/sessions/index.js';
 import {
   encodeGrokbotKey, grokbotTranscriptReplicaFilename,
 } from '../../../../src/sessions/adapters/grokbot-locator.js';
@@ -108,7 +108,10 @@ describe('sessions CLI contracts', () => {
     expect(usage).toContain('--max-record-bytes <n>');
     expect(usage).toContain('--max-source-bytes <n>');
     expect(usage).toContain('default 67108864');
-    expect(usage).toContain('default 0, unlimited');
+    expect(usage).toContain('default 2147483648, 2 GiB; 0 unlimited');
+    expect(usage).toContain('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES');
+    expect(usage).toContain('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES');
+    expect(usage).toContain('CLI flag > env var > workspace config > default');
     expect(usage).toContain('relative paths resolve from cwd');
     expect(usage).toContain('provider-native IDs');
     expect(usage).toContain('Imports for other workspaces stay in the selected catalog');
@@ -688,12 +691,14 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     rmSync(root, { recursive: true, force: true });
+    vi.unstubAllEnvs();
   });
 
   it.each([
     ['max_record_bytes', '--max-record-bytes', '4096'],
     ['max_source_bytes', '--max-source-bytes', '0'],
   ])('applies workspace %s config to import inspection and lets its flag override it', async (setting, flag, value) => {
+    const importer = vi.spyOn(IncrementalSessionImporter.prototype, 'import');
     mkdirSync(resolve(root, '.aiwg'));
     writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { [setting]: 1 } } }));
     const transcript = resolve(root, 'synthetic.jsonl');
@@ -709,6 +714,53 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
     });
     expect((await sessionsHandler.execute(context([...args, flag, value], root))).exitCode).toBe(0);
     expect(jsonOutput(log).data.totals.eventsInserted).toBe(1);
+    expect(importer).toHaveBeenCalledWith(expect.objectContaining({ limits: expect.objectContaining({
+      [setting === 'max_record_bytes' ? 'maxRecordBytes' : 'maxTotalBytes']: Number(value),
+    }) }));
+  });
+
+  it.each(['claude', 'codex'])('passes env limits to %s CLI readers and importer ahead of config', async provider => {
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({
+      sessions: { import: { max_record_bytes: 2, max_source_bytes: 1 } },
+    }));
+    const transcript = resolve(root, 'synthetic.jsonl');
+    writeFileSync(transcript, JSON.stringify(provider === 'claude' ? {
+      type: 'user', uuid: 'event', sessionId: 'synthetic', cwd: root,
+      message: { role: 'user', content: 'hello' },
+    } : { type: 'session_meta', payload: { id: 'synthetic', cwd: root } }) + '\n');
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES', '1');
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES', '0');
+    const args = ['import', transcript, '--provider', provider, '--source-id', 'synthetic',
+      '--workspace', root, '--db', resolve(root, 'catalog.sqlite'), '--json'];
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).not.toBe(0);
+    expect(jsonOutput(log).error).toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED', details: {
+      setting: 'sessions.import.max_record_bytes', configured: 1, origin: 'env',
+    } });
+    const importer = vi.spyOn(IncrementalSessionImporter.prototype, 'import');
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES', 'invalid');
+    expect((await sessionsHandler.execute(context([...args, '--max-record-bytes', '4096'], root))).exitCode).toBe(0);
+    expect(importer).toHaveBeenCalledWith(expect.objectContaining({ limits: {
+      maxRecordBytes: 4096, maxTotalBytes: 0,
+      limitOrigins: { maxRecordBytes: 'flag', maxTotalBytes: 'env' },
+    } }));
+  });
+
+  it('passes workspace config limits to the single CLI importer', async () => {
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({
+      sessions: { import: { max_record_bytes: 4096, max_source_bytes: 8192 } },
+    }));
+    const transcript = resolve(root, 'synthetic.jsonl');
+    writeFileSync(transcript, JSON.stringify({ type: 'session_meta', payload: { id: 'synthetic', cwd: root } }) + '\n');
+    const importer = vi.spyOn(IncrementalSessionImporter.prototype, 'import');
+    const args = ['import', transcript, '--provider', 'codex', '--source-id', 'synthetic',
+      '--workspace', root, '--db', resolve(root, 'catalog.sqlite'), '--json'];
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).toBe(0);
+    expect(importer).toHaveBeenCalledWith(expect.objectContaining({ limits: {
+      maxRecordBytes: 4096, maxTotalBytes: 8192,
+      limitOrigins: { maxRecordBytes: 'config', maxTotalBytes: 'config' },
+    } }));
   });
 
   it('threads config and flag source limits through discovered batch import', async () => {
@@ -732,6 +784,11 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
     expect(jsonOutput(log).data.receipt.totals.rejected).toBe(1);
     expect(jsonOutput(log).data.receipt.run.sources[0].detail).toMatchObject({
       setting: 'sessions.import.max_source_bytes', configured: 1, origin: 'config',
+    });
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES', '2');
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.receipt.run.sources[0].detail).toMatchObject({
+      setting: 'sessions.import.max_source_bytes', configured: 2, origin: 'env',
     });
     expect((await sessionsHandler.execute(context([...args, '--max-source-bytes', '0'], root))).exitCode).toBe(0);
     expect(jsonOutput(log).data.receipt.totals.rejected).toBe(0);

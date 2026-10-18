@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resolveImportLimits } from '../../../src/sessions/import-limits.js';
 import { requireFeaturePackage } from '../../../src/features/runtime.js';
 import {
   appendFile, readFile, rename, rm, stat, utimes, writeFile,
@@ -28,6 +29,8 @@ import {
 import { describeWithSqlite } from '../../helpers/sqlite.js';
 // File-owned temp dirs are removed after the file, even when a test fails (#3018).
 import { mkdtemp } from '../../helpers/temp-dir.js';
+
+afterEach(() => vi.unstubAllEnvs());
 
 function adapter(records: ProviderRecord[]): SessionSourceAdapter {
   return {
@@ -78,6 +81,26 @@ const records: ProviderRecord[] = [
 ];
 
 describeWithSqlite('transactional session repository and importer', () => {
+  it.each(['config', 'env'] as const)('enforces %s byte limits at the importer boundary', async (origin) => {
+    for (const setting of ['max_record_bytes', 'max_source_bytes'] as const) {
+      const repository = new SessionRepository();
+      if (origin === 'env') vi.stubEnv(`AIWG_SESSIONS_IMPORT_${setting.toUpperCase()}`, '1');
+      try {
+        await expect(new IncrementalSessionImporter(repository).import({
+          source, adapter: adapter(records), workspaceId: 'workspace-1', policyVersion: '1.0.0',
+          selectedSource: { provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+            sourceId: source.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+          limits: origin === 'config' ? resolveImportLimits({ [setting]: 1 }) : { batchSize: 1 },
+        })).rejects.toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED', detail: {
+          setting: `sessions.import.${setting}`, configured: 1, origin,
+        }, failureReceipt: { detail: { setting: `sessions.import.${setting}`, configured: 1, origin } } });
+      } finally {
+        repository.close();
+        vi.unstubAllEnvs();
+      }
+    }
+  });
+
   it.each(['maxRecordBytes', 'maxTotalBytes', 'maxRecords'] as const)(
     'preserves configured and observed %s in import failure details', async (limit) => {
       const repository = new SessionRepository();
@@ -112,6 +135,7 @@ describeWithSqlite('transactional session repository and importer', () => {
         source, adapter: adapter(large), workspaceId: 'workspace-1', policyVersion: '1.0.0',
         selectedSource: { provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
           sourceId: source.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+        limits: { maxTotalBytes: 0 },
       });
       expect(receipts).toHaveLength(3);
       expect(apply.mock.calls.map(([batch]) => batch.events.length)).toEqual([1, 1, 1]);

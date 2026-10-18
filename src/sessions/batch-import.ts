@@ -20,6 +20,7 @@ import {
   type SessionCoverageReport,
 } from './batch-contracts.js';
 import { IncrementalSessionImporter, SessionImportFailure, type ImportLimits } from './importer.js';
+import { resolveImportLimits } from './import-limits.js';
 import { fingerprintSourceFile } from './readers.js';
 import type { SessionRepository } from './repository.js';
 import type {
@@ -62,6 +63,9 @@ export interface BatchImportReceipt {
 export async function importDiscoveryManifest(
   options: BatchImportOptions,
 ): Promise<BatchImportReceipt> {
+  const limits = { ...resolveImportLimits(undefined, {
+    maxRecordBytes: options.limits?.maxRecordBytes, maxSourceBytes: options.limits?.maxTotalBytes,
+  }), ...options.limits };
   const now = options.now ?? (() => new Date());
   const runId = sha256([
     'workspace-import-v1',
@@ -136,7 +140,7 @@ export async function importDiscoveryManifest(
           allowedRoots: [manifestSource.authorizedRoot],
         },
       };
-      const adapter = adapterFor(manifestSource.provider, options.limits);
+      const adapter = adapterFor(manifestSource.provider, limits);
       const source = await sessionSource(selectedSource, adapter);
       const receipts = await new IncrementalSessionImporter(options.repository).import({
         source,
@@ -148,7 +152,7 @@ export async function importDiscoveryManifest(
         publish: false,
         signal: options.signal,
         inactivityThresholdMs: options.inactivityThresholdMs,
-        limits: options.limits,
+        limits,
       });
       await assertManifestSourceUnchanged(manifestSource);
       const totals = options.repository.sourceImportTotals(

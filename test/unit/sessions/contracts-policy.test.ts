@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { SessionRejectionDetailSchema } from '../../../src/sessions/contracts.js';
 import {
   SESSION_PROVIDER_IDS,
   SessionContractError,
@@ -22,6 +23,12 @@ import {
 } from '../../../src/sessions/index.js';
 
 describe('session contracts', () => {
+  it.each(['flag', 'env', 'config', 'default'])('preserves %s byte-limit origin in rejection details', origin => {
+    const detail = { limit: 'maxTotalBytes', configured: 1, observed: 2,
+      setting: 'sessions.import.max_source_bytes', origin };
+    expect(SessionRejectionDetailSchema.parse(detail)).toEqual(detail);
+  });
+
   it('extracts bounded paths and codes from nested validator failures without input values', () => {
     const schema = z.object({ events: z.array(z.union([
       z.object({ role: z.literal('user') }), z.object({ role: z.literal('assistant') }),

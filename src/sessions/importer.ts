@@ -8,7 +8,7 @@ import {
   type SelectedSource, type Session, type SessionEvent, type SessionSource,
   type SessionSourceAdapter,
 } from './contracts.js';
-import { assertImportByteLimit, DEFAULT_IMPORT_BYTE_LIMITS, type ImportByteLimits } from './import-limits.js';
+import { assertImportByteLimit, DEFAULT_IMPORT_BYTE_LIMITS, resolveImportLimits, type ImportByteLimits } from './import-limits.js';
 import { redactSessionText, sanitizeNativeExtensions } from './policy.js';
 import type { ImportReceipt } from './repository.js';
 import type { SessionRepositoryPort } from './ports.js';
@@ -90,7 +90,9 @@ export class IncrementalSessionImporter {
         'session import workspace is outside the authorized source scope',
       );
     }
-    const limits = { ...DEFAULT_IMPORT_LIMITS, ...request.limits };
+    const limits = { ...DEFAULT_IMPORT_LIMITS, ...resolveImportLimits(undefined, {
+      maxRecordBytes: request.limits?.maxRecordBytes, maxSourceBytes: request.limits?.maxTotalBytes,
+    }), ...request.limits };
     const previous = request.batchRunId
       ? this.repository.getBatchCheckpoint(
           request.source.sourceId,

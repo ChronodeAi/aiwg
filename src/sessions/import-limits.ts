@@ -1,6 +1,6 @@
 import { SessionContractError } from './contracts.js';
 
-export type LimitOrigin = 'flag' | 'config' | 'default';
+export type LimitOrigin = 'flag' | 'env' | 'config' | 'default';
 export interface ImportByteLimits {
   maxRecordBytes: number;
   /** Zero means no per-source cap. */
@@ -10,17 +10,20 @@ export interface ImportByteLimits {
 
 export const DEFAULT_IMPORT_BYTE_LIMITS = Object.freeze({
   maxRecordBytes: 64 * 1024 * 1024,
-  maxTotalBytes: 0,
+  maxTotalBytes: 2 * 1024 * 1024 * 1024,
 });
 
 export function resolveImportLimits(
   config?: { max_record_bytes?: number; max_source_bytes?: number },
   flags?: { maxRecordBytes?: string | number; maxSourceBytes?: string | number },
+  env: NodeJS.ProcessEnv = process.env,
 ): ImportByteLimits {
   const resolve = (setting: 'max_record_bytes' | 'max_source_bytes', flag: string | number | undefined,
     fallback: number): { value: number; origin: LimitOrigin } => {
-    const origin = flag !== undefined ? 'flag' : config?.[setting] !== undefined ? 'config' : 'default';
-    const input = flag ?? config?.[setting] ?? fallback;
+    const environmentValue = env[`AIWG_SESSIONS_IMPORT_${setting.toUpperCase()}`];
+    const origin = flag !== undefined ? 'flag' : environmentValue !== undefined ? 'env'
+      : config?.[setting] !== undefined ? 'config' : 'default';
+    const input = flag ?? environmentValue ?? config?.[setting] ?? fallback;
     const value = typeof input === 'string' && /^\d+$/.test(input) ? Number(input) : input;
     if (typeof value !== 'number' || !Number.isSafeInteger(value)
       || value < (setting === 'max_source_bytes' ? 0 : 1)) {

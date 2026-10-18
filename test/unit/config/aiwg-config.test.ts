@@ -147,6 +147,15 @@ describe('aiwg-config', () => {
   // ── readAiwgConfig / writeAiwgConfig ───────────────────────────────────────
 
   describe('readAiwgConfig', () => {
+    it('keeps session import editor defaults and env overrides aligned with the contract', () => {
+      const schema = JSON.parse(readFileSync(resolve('vscode-extension/schemas/aiwg.config.v1.json'), 'utf8'));
+      const limits = schema.properties.sessions.properties.import.properties;
+      expect(limits.max_record_bytes).toMatchObject({ default: 67108864, minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
+      expect(limits.max_source_bytes).toMatchObject({ default: 2147483648, minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+      expect(limits.max_record_bytes.description).toContain('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES');
+      expect(limits.max_source_bytes.description).toContain('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES');
+    });
+
     it('reads session import byte limits including an unlimited source cap', async () => {
       mkdirSync(join(tmpDir, '.aiwg'));
       writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({

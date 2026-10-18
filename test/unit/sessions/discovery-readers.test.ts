@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createSessionAdapterRegistry } from '../../../src/sessions/adapter-registry.js';
+import { resolveImportLimits } from '../../../src/sessions/import-limits.js';
 import {
   SessionSourceAdapterRegistry,
   fingerprintSourceFile,
@@ -18,6 +20,7 @@ import {
 } from '../../../src/sessions/index.js';
 
 const execFileAsync = promisify(execFile);
+afterEach(() => vi.unstubAllEnvs());
 
 function fixtureAdapter(overrides: Partial<SessionSourceAdapter> = {}): SessionSourceAdapter {
   return {
@@ -40,6 +43,29 @@ function fixtureAdapter(overrides: Partial<SessionSourceAdapter> = {}): SessionS
 }
 
 describe('session source adapter registry', () => {
+  it.each(['config', 'env'] as const)('passes %s limits to Codex inspection and streaming', async (origin) => {
+    const root = await mkdtemp(join(tmpdir(), 'session-registry-limit-'));
+    const locator = join(root, 'session.jsonl');
+    await writeFile(locator, '{"type":"session_meta","payload":{"id":"synthetic"}}\n');
+    const limits = origin === 'config' ? resolveImportLimits({ max_record_bytes: 1 }) : undefined;
+    if (origin === 'env') vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES', '1');
+    const adapter = createSessionAdapterRegistry(limits).get('codex');
+    const selected = { provider: 'codex' as const, locator, locatorClass: 'codex-rollout-jsonl',
+      sourceId: 'synthetic', authorizedScope: { workspaceId: root, allowedRoots: [root] } };
+    const expected = { code: 'RESOURCE_LIMIT_EXCEEDED', detail: {
+      setting: 'sessions.import.max_record_bytes', configured: 1, origin,
+    } };
+    await expect(adapter.inspect(selected)).rejects.toMatchObject(expected);
+    await expect(collect(adapter.stream(selected))).rejects.toMatchObject(expected);
+  });
+
+  it('keeps resolved flag limits ahead of invalid env values in the registry', () => {
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES', 'invalid');
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES', 'invalid');
+    const limits = resolveImportLimits(undefined, { maxRecordBytes: '1024', maxSourceBytes: '0' });
+    expect(() => createSessionAdapterRegistry(limits)).not.toThrow();
+  });
+
   it('discovers only within explicitly authorized roots', async () => {
     const registry = new SessionSourceAdapterRegistry();
     registry.register(fixtureAdapter());
@@ -110,6 +136,37 @@ describe('session source adapter registry', () => {
 });
 
 describe('bounded session readers', () => {
+  it.each(['max_record_bytes', 'max_source_bytes'] as const)('applies configured %s to every reader', async (setting) => {
+    const root = await mkdtemp(join(tmpdir(), 'session-reader-config-'));
+    const path = join(root, 'session.jsonl');
+    await writeFile(path, '{"id":1}\n');
+    const authorization = { selectedPath: path, allowedRoots: [root] };
+    const limits = resolveImportLimits({ [setting]: 1 });
+    const expected = { code: 'RESOURCE_LIMIT_EXCEEDED', detail: {
+      setting: `sessions.import.${setting}`, configured: 1, origin: 'config',
+    } };
+    for (const read of [readBoundedJson, readBoundedText]) {
+      await expect(read(authorization, limits)).rejects.toMatchObject(expected);
+    }
+    await expect(readBoundedJsonLines(authorization, { consistency: 'complete', limits }))
+      .rejects.toMatchObject(expected);
+    const stream = await streamBoundedJsonLines(authorization, { consistency: 'complete', limits });
+    await expect(collect(stream)).rejects.toMatchObject(expected);
+  });
+
+  it('streams JSONL with an explicit unlimited env source cap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-reader-unlimited-env-'));
+    const path = join(root, 'session.jsonl');
+    await writeFile(path, '{"id":1}\n{"id":2}\n');
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES', '0');
+    const limits = resolveImportLimits({ max_source_bytes: 1 });
+    const stream = await streamBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, {
+      consistency: 'complete', limits,
+    });
+    expect((await collect(stream)).map(record => record.value)).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(stream.bytesRead).toBe(18);
+  });
+
   it.each([
     ['maxRecordBytes', 1, 40],
     ['maxTotalBytes', 1, 40],
@@ -150,7 +207,7 @@ describe('bounded session readers', () => {
       } });
   });
 
-  it('accepts records above the former 8 MiB default with an unlimited source cap', async () => {
+  it('accepts records above the former 8 MiB default with the default source cap', async () => {
     const root = await mkdtemp(join(tmpdir(), 'session-default-limit-'));
     const path = join(root, 'large.jsonl');
     await writeFile(path, JSON.stringify({ text: 'x'.repeat(9 * 1024 * 1024) }) + '\n');
