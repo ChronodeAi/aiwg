@@ -9,6 +9,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Accept null Grok Bot replica hints and skip unknown send-message types while
+  retaining validation for known types; include field paths and codes in malformed
+  source diagnostics without exposing transcript values (#307, Gitea #3224).
 - Extract citation-sidecar graph edges from the resolution column of registered
   bibliographic and relationship tables in Incoming/Outgoing sections. Skip explicitly
   topical/thematic, related, conditional, or non-citation declarations and ambiguous
