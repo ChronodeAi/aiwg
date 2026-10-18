@@ -1,8 +1,9 @@
 import { opendir } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { z } from 'zod';
 import {
   schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError, type AuthorizedScope, type ImportCursor,
   type ProviderRecord, type SelectedSource, type SessionSourceAdapter,
   type SourceDescriptor, type SourceProbe,
@@ -49,19 +50,28 @@ export class PiSessionAdapter implements SessionSourceAdapter {
     let input;
     try {
       input = await streamBoundedJsonLines({ selectedPath: source.locator,
-        allowedRoots: source.authorizedScope.allowedRoots }, { cursor: cursor?.value, consistency: 'provisional', limits: this.limits });
+        allowedRoots: source.authorizedScope.allowedRoots }, { consistency: 'provisional', limits: this.limits });
     } catch (error) { throw normalizeAuthorizationError(error); }
     let sessionId = '';
-    let index = 0;
+    const value = cursor?.value || '0';
+    const byteCursor = value.startsWith('byte:');
+    const position = value.replace(/^byte:/, '');
+    if (!/^\d+$/.test(position)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid Pi cursor', schemaIssueDetail('cursor'));
+    const start = Number(position);
+    let end = 0;
     const ids = new Set<string>();
     for await (const line of input) {
-      if (index++ === 0 && !cursor) { sessionId = parseHeader(line.value).id; continue; }
-      if (!sessionId) sessionId = basename(source.locator, '.jsonl');
+      end = line.byteOffset + line.byteLength;
+      if (byteCursor && start > line.byteOffset && start < end) {
+        throw new SessionContractError('SCHEMA_DRIFT', 'Pi cursor is not a record boundary', schemaIssueDetail('cursor'));
+      }
+      if (line.sequence === 0) { sessionId = parseHeader(line.value).id; continue; }
       const parsed = Entry.safeParse(line.value);
       if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'Pi session entry is malformed', schemaRejectionDetail(parsed.error));
       const entry = parsed.data as Record<string, unknown> & z.infer<typeof Entry>;
       if (ids.has(entry.id)) throw new SessionContractError('DUPLICATE_NATIVE_ID', 'Pi session contains a duplicate entry id');
       ids.add(entry.id);
+      if (byteCursor ? end <= start : line.sequence <= start) continue;
       const message = object(entry.message);
       const role = string(message.role) ?? roleFor(entry.type);
       const sensitive = role === 'toolResult' || entry.type === 'custom';
@@ -69,7 +79,7 @@ export class PiSessionAdapter implements SessionSourceAdapter {
       yield { nativeSessionId: sessionId, nativeEventId: entry.id, sequence: line.sequence,
         kind: kindFor(entry.type, role), role, toolName: sensitive ? string(message.toolName) : undefined,
         toolCallId: sensitive ? string(message.toolCallId) : undefined,
-        occurredAt: entry.timestamp, text, sourceCursor: String(line.byteOffset + line.byteLength),
+        occurredAt: entry.timestamp, text, sourceCursor: `byte:${end}`,
         sourceBytes: line.byteLength, rawReference: { locatorClass: 'pi-session-v3-jsonl', offset: line.byteOffset },
         activityBoundary: entry.type === 'compaction' ? 'continuation' : undefined,
         activityBoundaryBasis: entry.type === 'compaction' ? 'pi-session:compaction' : undefined,
@@ -78,6 +88,7 @@ export class PiSessionAdapter implements SessionSourceAdapter {
           opaque: !KNOWN.has(entry.type), redacted: sensitive,
           nativeType: entry.type, parentId: entry.parentId } };
     }
+    if (byteCursor && start > end) throw new SessionContractError('SCHEMA_DRIFT', 'Pi cursor exceeds source size', schemaIssueDetail('cursor'));
     if (input.incompleteTail) throw new SessionContractError('TRUNCATED_SOURCE', 'Pi session has a truncated JSONL tail');
   }
 }

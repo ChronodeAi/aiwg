@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { open, readFile } from 'node:fs/promises';
-import { createInterface } from 'node:readline';
 import { assertSessionResourceLimit, schemaIssueDetail, SessionContractError, type ConsistencyStateSchema } from './contracts.js';
 import { authorizeSourceFile, type SourceAuthorization } from './policy.js';
 import type { z } from 'zod';
@@ -40,6 +39,51 @@ export const DEFAULT_READER_LIMITS: ReaderLimits = Object.freeze({
   maxTotalBytes: 1024 * 1024 * 1024,
   maxNestingDepth: 64,
 });
+
+export async function* streamJsonLines(
+  path: string,
+  options: {
+    start?: number;
+    end?: number;
+    limits?: Pick<ReaderLimits, 'maxRecordBytes' | 'maxTotalBytes'>;
+  } = {},
+): AsyncGenerator<{ line: string; byteLength: number }> {
+  const input = createReadStream(path, { start: options.start, end: options.end });
+  let parts: Buffer[] = [];
+  let length = 0;
+  let total = 0;
+  try {
+    for await (const chunk of input) {
+      const buffer = chunk as Buffer;
+      let start = 0;
+      while (start < buffer.length) {
+        const newline = buffer.indexOf(10, start);
+        const end = newline === -1 ? buffer.length : newline + 1;
+        const segment = buffer.subarray(start, end);
+        if (options.limits) {
+          assertSessionResourceLimit('maxRecordBytes', options.limits.maxRecordBytes, length + segment.length);
+          assertSessionResourceLimit('maxTotalBytes', options.limits.maxTotalBytes, total + segment.length);
+        }
+        // Bound the raw bytes before copying or decoding a record. Only LF
+        // separates records; CRLF and Unicode separators remain JSON input.
+        parts.push(segment);
+        length += segment.length;
+        total += segment.length;
+        start = end;
+        if (newline !== -1) {
+          const line = Buffer.concat(parts, length).toString('utf8');
+          const byteLength = length;
+          parts = [];
+          length = 0;
+          yield { line, byteLength };
+        }
+      }
+    }
+    if (length > 0) yield { line: Buffer.concat(parts, length).toString('utf8'), byteLength: length };
+  } finally {
+    input.destroy();
+  }
+}
 
 export async function readBoundedJsonLines(
   authorization: SourceAuthorization,
@@ -83,43 +127,33 @@ export async function streamBoundedJsonLines(
   let count = 0;
   let incompleteTail = false;
   const iterate = async function* (): AsyncGenerator<BoundedJsonRecord> {
-    const input = createReadStream(allowed.canonicalPath, { start, encoding: 'utf8' });
-    const lines = createInterface({ input, crlfDelay: Infinity });
-    try {
-      for await (const line of lines) {
-        const bytes = Buffer.byteLength(line) + 1;
-        assertSessionResourceLimit('maxRecordBytes', limits.maxRecordBytes, bytes);
-        assertSessionResourceLimit('maxTotalBytes', limits.maxTotalBytes, total + bytes);
-        assertSessionResourceLimit('maxRecords', limits.maxRecords, count + 1);
-        if (line.trim() === '') {
-          offset += bytes;
-          total += bytes;
-          continue;
-        }
-        let value: unknown;
-        try {
-          value = JSON.parse(line);
-        } catch {
-          if (options.consistency === 'provisional') {
-            incompleteTail = true;
-            break;
-          }
-          throw new SessionContractError(
-            'SCHEMA_DRIFT',
-            'malformed JSONL record in consistent source',
-            schemaIssueDetail('<root>', 'invalid_json'),
-          );
-        }
-        assertSessionResourceLimit('maxNestingDepth', limits.maxNestingDepth, jsonDepth(value));
-        const record = { value, sequence: count, byteOffset: offset, byteLength: bytes };
-        count += 1;
+    for await (const { line, byteLength: bytes } of streamJsonLines(allowed.canonicalPath, { start, limits })) {
+      assertSessionResourceLimit('maxRecords', limits.maxRecords, count + 1);
+      if (line.trim() === '') {
         offset += bytes;
         total += bytes;
-        yield record;
+        continue;
       }
-    } finally {
-      lines.close();
-      input.destroy();
+      let value: unknown;
+      try {
+        value = JSON.parse(line);
+      } catch {
+        if (options.consistency === 'provisional') {
+          incompleteTail = true;
+          break;
+        }
+        throw new SessionContractError(
+          'SCHEMA_DRIFT',
+          'malformed JSONL record in consistent source',
+          schemaIssueDetail('<root>', 'invalid_json'),
+        );
+      }
+      assertSessionResourceLimit('maxNestingDepth', limits.maxNestingDepth, jsonDepth(value));
+      const record = { value, sequence: count, byteOffset: offset, byteLength: bytes };
+      count += 1;
+      offset += bytes;
+      total += bytes;
+      yield record;
     }
   };
   return {

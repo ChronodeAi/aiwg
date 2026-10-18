@@ -1,10 +1,8 @@
-import { createReadStream } from 'node:fs';
 import {
   access, mkdir, readFile, readdir, realpath, rename, stat, writeFile,
 } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { createInterface } from 'node:readline';
 import { inspectMuseNativeWorkspace, type MuseWorkspaceInspection } from './adapters/muse.js';
 import { readOmpSessionHeader } from './adapters/omp.js';
 import { grokbotConversationIdFromLocator } from './adapters/grokbot-locator.js';
@@ -23,7 +21,7 @@ import {
 import { redactSourceLocator, type SessionSourceAdapterRegistry } from './discovery.js';
 import { createSessionAdapterRegistry } from './adapter-registry.js';
 import { coveragePreflight, expectedSessionProviders } from './coverage-preflight.js';
-import { fingerprintSourceFile } from './readers.js';
+import { fingerprintSourceFile, streamJsonLines } from './readers.js';
 import { matchSessionWorkspace, type WorkspaceMatchKind } from './workspace-matching.js';
 
 export const DISCOVERY_MANIFEST_VERSION = '1.0.0' as const;
@@ -571,51 +569,37 @@ async function codexDiscoveryRoots(options: DiscoverWorkspaceOptions): Promise<s
 }
 
 async function codexRolloutId(locator: string): Promise<string | undefined> {
-  const input = createReadStream(locator, { encoding: 'utf8' });
-  const lines = createInterface({ input, crlfDelay: Infinity });
   let count = 0;
-  try {
-    for await (const line of lines) {
-      if (++count > 50) break;
-      let value: unknown;
-      try { value = JSON.parse(line); } catch { continue; }
-      const record = asObject(value);
-      const id = asObject(record.payload).id;
-      if (record.type === 'session_meta' && typeof id === 'string' && id.length > 0) return id;
-    }
-    return /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
-      .exec(basename(locator))?.[1];
-  } finally {
-    lines.close();
-    input.destroy();
+  for await (const { line } of streamJsonLines(locator)) {
+    if (++count > 50) break;
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { continue; }
+    const record = asObject(value);
+    const id = asObject(record.payload).id;
+    if (record.type === 'session_meta' && typeof id === 'string' && id.length > 0) return id;
   }
+  return /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
+    .exec(basename(locator))?.[1];
 }
 
 async function codexSourceWorkspaceMatch(
   locator: string,
   workspacePath: string,
 ): Promise<WorkspaceMatchKind | null> {
-  const input = createReadStream(locator, { encoding: 'utf8' });
-  const lines = createInterface({ input, crlfDelay: Infinity });
   let count = 0;
-  try {
-    for await (const line of lines) {
-      if (++count > 50) break;
-      let value: unknown;
-      try {
-        value = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      const cwd = codexWorkspaceField(value);
-      if (!cwd) continue;
-      return await matchSessionWorkspace(cwd, workspacePath);
+  for await (const { line } of streamJsonLines(locator)) {
+    if (++count > 50) break;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
     }
-    return null;
-  } finally {
-    lines.close();
-    input.destroy();
+    const cwd = codexWorkspaceField(value);
+    if (!cwd) continue;
+    return await matchSessionWorkspace(cwd, workspacePath);
   }
+  return null;
 }
 
 function codexWorkspaceField(value: unknown): string | null {
@@ -647,32 +631,25 @@ async function claudeSourceMatchesWorkspace(
   locator: string,
   workspacePath: string,
 ): Promise<boolean> {
-  const input = createReadStream(locator, { encoding: 'utf8', end: 1024 * 1024 - 1 });
-  const lines = createInterface({ input, crlfDelay: Infinity });
   let count = 0;
-  try {
-    for await (const line of lines) {
-      if (++count > 50) break;
-      let value: unknown;
-      try {
-        value = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      const cwd = asObject(value).cwd;
-      if (typeof cwd !== 'string' || cwd.length === 0) continue;
-      try {
-        return await canonicalPath(cwd) === workspacePath;
-      } catch {
-        return resolve(cwd) === workspacePath;
-      }
+  for await (const { line } of streamJsonLines(locator, { end: 1024 * 1024 - 1 })) {
+    if (++count > 50) break;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
     }
-    // Older transcripts without cwd still use the selected project folder.
-    return true;
-  } finally {
-    lines.close();
-    input.destroy();
+    const cwd = asObject(value).cwd;
+    if (typeof cwd !== 'string' || cwd.length === 0) continue;
+    try {
+      return await canonicalPath(cwd) === workspacePath;
+    } catch {
+      return resolve(cwd) === workspacePath;
+    }
   }
+  // Older transcripts without cwd still use the selected project folder.
+  return true;
 }
 
 export function claudeProjectKey(path: string): string {

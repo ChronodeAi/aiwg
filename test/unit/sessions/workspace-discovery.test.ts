@@ -33,6 +33,40 @@ afterEach(async () => {
 });
 
 describe('workspace session discovery and batch import', () => {
+  it('matches Codex workspace metadata with raw U+2028 and U+2029 and deduplicates rollout IDs', async () => {
+    const fixture = await providerFixture('workspace\u2028a\u2029b');
+    const first = join(fixture.root, 'first');
+    const second = join(fixture.root, 'second');
+    await writeCodexRollout(first, fixture.workspace, 'shared');
+    await writeCodexRollout(second, fixture.workspace, 'shared', 'copy.jsonl');
+    await writeFile(join(second, 'copy.jsonl'), '\r\n', { flag: 'a' });
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, codexRoots: [first, second], expectedProviders: ['codex'],
+    });
+    expect(manifest.sources.map((source) => source.locator)).toEqual([join(first, 'shared.jsonl')]);
+    expect(manifest.providers[0].rootCounts?.reduce((sum, root) => sum + root.duplicateCount, 0)).toBe(1);
+  });
+
+  it('uses Claude cwd with raw U+2028 and U+2029 to reject a colliding project folder', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-claude-unicode-'));
+    roots.push(root);
+    const workspace = join(root, 'site\u2028a\u2029b');
+    const otherWorkspace = join(root, 'site-a-b');
+    const providerHome = join(root, 'home');
+    const project = join(providerHome, '.claude/projects', claudeProjectKey(workspace));
+    expect(claudeProjectKey(workspace)).toBe(claudeProjectKey(otherWorkspace));
+    await Promise.all([workspace, otherWorkspace, project].map((path) => mkdir(path, { recursive: true })));
+    const matching = join(project, 'matching.jsonl');
+    await writeFile(matching, JSON.stringify({ type: 'user', cwd: workspace }) + '\r\n');
+    await writeFile(join(project, 'other.jsonl'), JSON.stringify({
+      type: 'user', cwd: otherWorkspace, text: 'a\u2028b\u2029c',
+    }) + '\n');
+    const manifest = await discoverWorkspaceHistories({
+      workspace, providerHome, expectedProviders: ['claude'],
+    });
+    expect(manifest.sources.map((source) => source.locator)).toEqual([matching]);
+  });
+
   it.each(['claude', 'cursor', 'factory', 'pi'] as const)(
     'discovers %s sessions under canonical and logical project keys with one workspace identity',
     async (provider) => {
