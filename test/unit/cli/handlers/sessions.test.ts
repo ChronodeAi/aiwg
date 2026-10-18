@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildHandlerMap } from '../../../../src/cli/handlers/index.js';
 import { sessionsHandler } from '../../../../src/cli/handlers/sessions.js';
-import { acquireImportLease, GrokbotSessionAdapter } from '../../../../src/sessions/index.js';
+import { acquireImportLease, GrokbotSessionAdapter, SessionRepository } from '../../../../src/sessions/index.js';
 import {
   encodeGrokbotKey, grokbotTranscriptReplicaFilename,
 } from '../../../../src/sessions/adapters/grokbot-locator.js';
@@ -1043,6 +1043,34 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
       });
     } finally {
       await lease.release();
+    }
+  });
+
+  it('records orphaned batch recovery on a single-source import and leaves previews read-only', async () => {
+    const database = resolve(root, 'orphaned-batch.sqlite');
+    const timestamp = '2026-10-01T00:00:00.000Z';
+    const repository = new SessionRepository(database);
+    try {
+      repository.saveBatchImportRun({
+        schemaVersion: '1.0.0', runId: 'orphan', manifestId: 'manifest',
+        manifestCreatedAt: timestamp, workspaceId: 'workspace-fixture', status: 'running',
+        startedAt: timestamp, updatedAt: timestamp, completedAt: null,
+        providers: [], sources: [],
+      });
+      const args = ['import', resolve('test/fixtures/sessions/generic/valid-v1.jsonl'),
+        '--source-id', 'generic-fixture-v1', '--workspace', 'workspace-fixture',
+        '--db', database, '--json'];
+      expect((await sessionsHandler.execute(context([...args, '--dry-run']))).exitCode).toBe(0);
+      expect(repository.getBatchImportRun('orphan')?.status).toBe('running');
+      expect((await sessionsHandler.execute(context(args))).exitCode).toBe(0);
+      const interruptedRuns = jsonOutput(log).data.interruptedRuns;
+      expect(interruptedRuns).toEqual([{ runId: 'orphan', interruptedAt: expect.any(String) }]);
+      expect(repository.getBatchImportRun('orphan')).toMatchObject({
+        status: 'interrupted', updatedAt: interruptedRuns[0].interruptedAt,
+        interruptedAt: interruptedRuns[0].interruptedAt, completedAt: null,
+      });
+    } finally {
+      repository.close();
     }
   });
 

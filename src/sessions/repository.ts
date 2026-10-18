@@ -1235,6 +1235,25 @@ export class SessionRepository {
     return row ? JSON.parse(String(row.data)) as BatchImportRun : null;
   }
 
+  /** Call only while holding the catalog import lease, before starting a new import. */
+  interruptRunningBatchImports(now = new Date()): Array<{ runId: string; interruptedAt: string }> {
+    const interruptedAt = now.toISOString();
+    return this.db.transaction(() => {
+      const rows = this.db.prepare(
+        "SELECT data FROM batch_import_runs WHERE status='running'",
+      ).all();
+      return rows.map((row) => {
+        const run = JSON.parse(String(row.data)) as BatchImportRun;
+        run.status = 'interrupted';
+        run.interruptedAt = interruptedAt;
+        run.updatedAt = interruptedAt;
+        run.completedAt = null;
+        this.saveBatchImportRun(run);
+        return { runId: run.runId, interruptedAt };
+      });
+    })();
+  }
+
   getBatchImportRunForManifest(
     manifestId: string,
     workspaceId: string,

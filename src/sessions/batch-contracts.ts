@@ -36,6 +36,7 @@ export interface BatchImportRun {
   startedAt: string;
   updatedAt: string;
   completedAt: string | null;
+  interruptedAt?: string;
   preflight?: SessionCoveragePreflight;
   discoveryRuntime?: SessionRuntimeIdentity;
   providers: DiscoveryProviderReport[];
