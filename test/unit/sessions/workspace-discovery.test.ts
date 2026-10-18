@@ -326,6 +326,7 @@ describe('workspace session discovery and batch import', () => {
     ['/tmp/x/site example', '-tmp-x-site-example'],
     ['/tmp/x/site_example', '-tmp-x-site-example'],
     ['/tmp/x/site..__ example', '-tmp-x-site-----example'],
+    ['/tmp/aiwg-x.y_z with spaces/site.example', '-tmp-aiwg-x-y-z-with-spaces-site-example'],
     ['C:\\Users\\Test User\\site.example', 'C--Users-Test-User-site-example'],
     ['C:/Users/Test_User/site.example', 'C--Users-Test-User-site-example'],
     ['/tmp/café/😀', '-tmp-caf----'],
@@ -342,12 +343,11 @@ describe('workspace session discovery and batch import', () => {
 
   it.each(['site.example', 'site example', 'site_example', 'site..__ example'])(
     'discovers the Claude project folder for workspace %s', async (name) => {
-      const root = await mkdtemp(join(tmpdir(), 'aiwg-claude-discovery-'));
+      const root = await mkdtemp(join(tmpdir(), 'aiwg-claude.discovery with_spaces-'));
       roots.push(root);
       const workspace = join(root, name);
       const providerHome = join(root, 'home');
-      const suffix = name === 'site..__ example' ? 'site-----example' : 'site-example';
-      const key = `${root.replace(/\//g, '-')}-${suffix}`;
+      const key = claudeProjectKey(workspace);
       const project = join(providerHome, '.claude', 'projects', key);
       await Promise.all([workspace, project].map((path) => mkdir(path, { recursive: true })));
       const locator = join(project, 'session.jsonl');
@@ -366,7 +366,7 @@ describe('workspace session discovery and batch import', () => {
     const workspace = join(root, 'site.example');
     const otherWorkspace = join(root, 'site-example');
     const providerHome = join(root, 'home');
-    const project = join(providerHome, '.claude', 'projects', `${root.replace(/\//g, '-')}-site-example`);
+    const project = join(providerHome, '.claude', 'projects', claudeProjectKey(workspace));
     await Promise.all([workspace, otherWorkspace, project].map((path) => mkdir(path, { recursive: true })));
     await writeFile(join(project, 'matching.jsonl'), [
       'not-json',
@@ -801,7 +801,7 @@ async function providerFixture(name = 'workspace'): Promise<{ root: string; work
   const key = workspace.replace(/\\/g, '/').replace(/[/:]+/g, '-');
   const cursorKey = workspace.replace(/\\/g, '/').replace(/^\/+/, '').replace(/[/:]+/g, '-');
 
-  const claudeKey = workspace.replace(/[^A-Za-z0-9-]/g, '-');
+  const claudeKey = claudeProjectKey(workspace);
   const claude = join(providerHome, '.claude', 'projects', claudeKey, 'claude.jsonl');
   const factory = join(providerHome, '.factory', 'sessions', key, 'factory.jsonl');
   const cursor = join(
