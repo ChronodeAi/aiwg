@@ -1757,13 +1757,21 @@ function findShowMatches(entries: MetadataEntry[], types: string[], needle: stri
 }
 
 /** Resolve exact rule binding IDs using the same precedence and ambiguity as show.
- * Titles and filesystem path guesses are deliberately excluded (#2938).
+ * Canonical layout slugs remain valid when frontmatter names are display names.
+ * Titles and filesystem paths are deliberately excluded (#2938).
  */
 export function resolveRuleBindingTarget(
   entries: MetadataEntry[], type: 'skill' | 'agent' | 'flow', id: string,
 ): MetadataEntry {
-  const exact = entries.filter(entry => entry.type === type
-    && (entry.name === id || discoveryIdForEntry(entry) === id));
+  const exact = entries.filter(entry => {
+    if (entry.type !== type) return false;
+    const normalized = normalizeIndexedPath(entry.path);
+    const basename = path.posix.basename(normalized);
+    const slug = /^(?:SKILL|AGENT|FLOW)\.md$/i.test(basename)
+      ? path.posix.basename(path.posix.dirname(normalized))
+      : basename.replace(/\.[^.]+$/, '');
+    return entry.name === id || discoveryIdForEntry(entry) === id || slug === id;
+  });
   const matches = findShowMatches(exact, [type], id);
   if (matches.length === 0) throw new Error(`Missing ${type} binding target: ${id}`);
   if (matches.length > 1) throw new Error(`Ambiguous ${type} binding target: ${id}: ${matches.map(entry => entry.path).join(', ')}`);

@@ -51,24 +51,37 @@ export async function prepareRuleDelivery(opts) {
   if (rules.some(rule => Object.values(rule.bound_to).some(ids => ids.length))) {
     const { loadLocalCapabilityEntries, resolveRuleBindingTarget } = await importImpl(import.meta.url, 'artifacts/query-engine.js');
     const root = resolveAiwgRoot(opts.srcRoot) || opts.srcRoot;
-    const entries = opts.bindingEntries || loadLocalCapabilityEntries(opts.target);
+    const buildSourceEntries = async () => {
+      const indexTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rule-index-'));
+      try {
+        const { buildIndex } = await importImpl(import.meta.url, 'artifacts/index-builder.js');
+        await buildIndex(root, { scope: root === opts.srcRoot && !fs.existsSync(path.join(root, 'agentic')) ? '.' : 'agentic/code', outputDir: indexTemp, force: true, quiet: true });
+        const index = JSON.parse(read(path.join(indexTemp, '.aiwg', '.index', 'metadata.json')));
+        return Object.values(index.entries).map(entry => ({ ...entry, path: path.resolve(root, entry.path) }));
+      } finally { fs.rmSync(indexTemp, { recursive: true, force: true }); }
+    };
+    let entries = opts.bindingEntries || loadLocalCapabilityEntries(opts.target);
+    let rebuilt = false;
     if (!opts.bindingEntries) {
       const sourceEntries = loadLocalCapabilityEntries(root);
       entries.push(...sourceEntries);
-      if (!sourceEntries.length) {
-        const indexTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rule-index-'));
-        try {
-          const { buildIndex } = await importImpl(import.meta.url, 'artifacts/index-builder.js');
-          await buildIndex(root, { scope: root === opts.srcRoot && !fs.existsSync(path.join(root, 'agentic')) ? '.' : 'agentic/code', outputDir: indexTemp, force: true, quiet: true });
-          const index = JSON.parse(read(path.join(indexTemp, '.aiwg', '.index', 'metadata.json')));
-          entries.push(...Object.values(index.entries).map(entry => ({ ...entry, path: path.resolve(root, entry.path) })));
-        } finally { fs.rmSync(indexTemp, { recursive: true, force: true }); }
-      }
+      if (!sourceEntries.length) { entries.push(...await buildSourceEntries()); rebuilt = true; }
     }
+    // A stored index can predate the source tree (edge/dev checkouts). Rebuild once from source
+    // before reporting a binding target as missing.
+    const resolveTarget = async (type, id) => {
+      try { return resolveRuleBindingTarget(entries, type, id); }
+      catch (error) {
+        if (rebuilt || opts.bindingEntries || !/^Missing /.test(error.message)) throw error;
+        entries = [...loadLocalCapabilityEntries(opts.target), ...await buildSourceEntries()];
+        rebuilt = true;
+        return resolveRuleBindingTarget(entries, type, id);
+      }
+    };
     for (const rule of rules.filter(rule => rule.tagged)) {
       for (const [key, type] of Object.entries(RULE_BINDING_TYPES)) {
         for (const id of rule.bound_to[key]) {
-          const target = resolveRuleBindingTarget(entries, type, id);
+          const target = await resolveTarget(type, id);
           const source = path.isAbsolute(target.path) ? target.path : path.resolve(target.path.startsWith('agentic/code/') ? root : opts.target, target.path);
           if (!fs.existsSync(source)) throw new Error(`${rule.file}: binding target content missing: ${source}`);
           bindings.set(source, [...(bindings.get(source) || []), rule]);

@@ -1,5 +1,15 @@
 ---
 enforcement: high
+activation: paths
+summary: "Locate and fix canonical source before changing generated output; regenerate and verify the result."
+bound_to:
+  agents: [debugger, self-debug]
+  skills: [debug-memory]
+paths: ["tools/**", "src/**", "agentic/**", "dist/**", "build/**", "node_modules/**"]
+triggers:
+  - "debug generated output or canonical source"
+  - "stack trace points to dist or node_modules"
+  - "fix source before rebuilding generated files"
 ---
 
 # Debug Source Not Output Rules

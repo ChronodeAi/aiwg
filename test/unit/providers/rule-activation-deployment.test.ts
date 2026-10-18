@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync, cpSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync, cpSync, statSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -109,7 +109,21 @@ describe('activation-selected provider deployment (#2939)', () => {
   }, 90_000);
   it('preserves the untagged SDLC/Claude tier-fallback snapshot, including restored demotions', () => {
     const root = setup();
-    deploy(root, 'claude', { srcRoot: repo, mode: 'sdlc', deploySkills: false, deployCommands: false, rulesOnly: true, deployVersion: 'fixture', deploySource: 'bundled' });
+    // Freeze the legacy delivery input independently of later corpus migrations
+    // and #3222's tagged behaviors; this fixture tests untagged tier fallback.
+    const legacy = join(root, 'legacy');
+    cpSync(join(repo, 'agentic/code'), join(legacy, 'agentic/code'), { recursive: true,
+      filter: file => !file.includes('/plugins/') &&
+        (statSync(file).isDirectory() || file.includes('/rules/') || file.endsWith('/manifest.json') || file.endsWith('/RULES-INDEX.md')) });
+    for (const file of walk(legacy).filter(file => file.endsWith('.md'))) {
+      const content = readFileSync(file, 'utf8');
+      const match = content.match(/^---\n([\s\S]*?)\n---/);
+      if (!match || !/^activation:/m.test(match[1])) continue;
+      const header = match[1].replace(/^(?:activation|summary|paths):[^\n]*(?:\n|$)|^bound_to:\n(?:[ \t]+[^\n]*(?:\n|$))*/gm, '').trimEnd();
+      writeFileSync(file, content.replace(match[0], `---\n${header}\n---`));
+    }
+    deploy(root, 'claude', { srcRoot: legacy, mode: 'sdlc', deploySkills: false, deployCommands: false,
+      rulesOnly: true, bindingEntries: [], deployVersion: 'fixture', deploySource: 'bundled' });
     const dir = join(root, 'target/.claude/rules');
     const files = Object.fromEntries(readdirSync(dir).filter(name => name.endsWith('.md')).sort().map(name => {
       const buffer = readFileSync(join(dir, name));
@@ -124,6 +138,29 @@ describe('activation-selected provider deployment (#2939)', () => {
     const root = setup();
     deploy(root, 'claude', { bindingEntries: undefined });
     expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).toContain('aiwg show rule fixture-bound');
+  }, 90_000);
+
+  it('rebuilds a stale non-empty source index when a bound agent is missing', () => {
+    const root = setup();
+    const source = join(root, 'source');
+    // A relative artifact override resolves separately beneath source and target.
+    // loadLocalCapabilityEntries reads the project graph before its legacy fallback.
+    const indexDir = join(source, 'artifacts/.index/project');
+    mkdirSync(indexDir, { recursive: true });
+    writeFileSync(join(indexDir, 'metadata.json'), JSON.stringify({ entries: {
+      skill: { type: 'skill', name: 'fixture-skill', path: join(source, 'skills/fixture-skill/SKILL.md') },
+      flow: { type: 'flow', name: 'fixture-flow', path: join(source, 'flows/fixture-flow.yaml') },
+    } }));
+
+    deploy(root, 'claude', { bindingEntries: undefined, env: {
+      AIWG_ARTIFACTS_PATH: 'artifacts',
+      XDG_DATA_HOME: join(root, 'xdg-data'),
+      XDG_CONFIG_HOME: join(root, 'xdg-config'),
+    } });
+    const agent = readFileSync(join(root, 'target/.claude/agents/fixture-agent.md'), 'utf8');
+    expect(agent.match(/<!-- AIWG:bound-rules:start -->/g)).toHaveLength(1);
+    expect(agent).toContain('aiwg show rule fixture-bound');
+    expect(agent).not.toContain('FIXTURE_BOUND_BODY');
   }, 90_000);
 
   it('enforces provider hard caps even with a disabled configurable budget', () => {

@@ -1,9 +1,15 @@
 ---
 enforcement: high
+activation: bound
+summary: "Track tool calls in fleet and iterative work; stop repeated calls without progress at the configured quota and report the blocker."
+bound_to:
+  agents: [fleet-quiet-bot, fleet-business-bot, concierge, ralph-loop, ralph-verifier]
+  skills: [ralph, ralph-external, ralph-resume, aiwg-mission, mission-control]
 triggers:
   - "how many times should I retry"
   - "this command keeps failing"
   - "am I in a loop"
+  - "stop retrying failing tool calls in an unattended loop"
 ---
 
 # Tool Quota and Loop Detection

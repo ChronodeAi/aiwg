@@ -61,6 +61,14 @@ describe('activation lint in the existing runner (#2938)', () => {
     const result = await lint(`---\nactivation: paths\nsummary: Fix source.\npaths: [src/**]\nbound_to:\n  agents: [${stableId}]\n  skills: [fix-source]\n  flows: [flow-fix]\n---\nBody`, [canonical, entry('fix-source', 'skill'), entry('flow-fix', 'flow')]);
     expect(result.summary).toMatchObject({ passed: true, errors: 0, warnings: 0 });
   });
+  it('resolves canonical slugs with display-name frontmatter without accepting titles or paths', () => {
+    const agent = { ...entry('Build Engineer', 'agent', 'agentic/code/frameworks/sdlc-complete/agents/build-engineer.md'), title: 'Build automation expert' };
+    const skill = entry('Decision Offload', 'skill', 'agentic/code/addons/decision-engine/skills/decision-offload/SKILL.md');
+    expect(resolveRuleBindingTarget([agent], 'agent', 'build-engineer')).toBe(agent);
+    expect(resolveRuleBindingTarget([skill], 'skill', 'decision-offload')).toBe(skill);
+    expect(() => resolveRuleBindingTarget([agent], 'agent', agent.title)).toThrow('Missing agent');
+    expect(() => resolveRuleBindingTarget([agent], 'agent', agent.path)).toThrow('Missing agent');
+  });
   it('loads binding targets from the existing artifact index when not supplied', async () => {
     const indexDir = join(dir, '.aiwg/.index/project');
     await mkdir(indexDir, { recursive: true });
