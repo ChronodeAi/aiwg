@@ -39,7 +39,69 @@ describe('session workspace matching', () => {
     expect(await matchSessionWorkspace(join(alias, 'sub'), workspace)).toBe('subfolder');
     expect(await matchSessionWorkspace(join(workspace, 'sub'), alias)).toBe('subfolder');
     expect(await matchSessionWorkspace(join(workspace, 'escape'), workspace)).toBeNull();
-    expect(await matchSessionWorkspace(join(alias, 'missing'), workspace)).toBeNull();
+    expect(await matchSessionWorkspace(join(alias, 'missing'), workspace)).toBe('subfolder');
+    expect(await matchSessionWorkspace(join(workspace, 'missing'), alias)).toBe('subfolder');
+    expect(await matchSessionWorkspace(join(workspace, 'escape', 'missing', 'nested'), workspace)).toBeNull();
+  });
+
+  it('matches a deleted nested worktree as a subfolder of its enclosing workspace', async () => {
+    const worktree = join(workspace, '.claude', 'worktrees', 'topic');
+    await createSessionWorktree(workspace, worktree);
+    await rm(worktree, { recursive: true });
+    expect(await matchSessionWorkspace(worktree, workspace)).toBe('subfolder');
+    expect(await matchSessionWorkspace(join(worktree, 'src'), workspace)).toBe('subfolder');
+  });
+
+  it('matches a deleted subfolder by resolving its nearest existing ancestor', async () => {
+    const subfolder = join(workspace, 'src', 'nested', 'deeper');
+    await mkdir(subfolder, { recursive: true });
+    await rm(join(workspace, 'src', 'nested'), { recursive: true });
+    expect(await matchSessionWorkspace(subfolder, workspace)).toBe('subfolder');
+  });
+
+  it('assigns missing subfolders only to their deepest initialized catalog', async () => {
+    const nested = join(workspace, 'nested');
+    const deepest = join(nested, 'deeper');
+    for (const path of [workspace, nested, deepest]) {
+      await mkdir(join(path, '.aiwg', 'sessions'), { recursive: true });
+    }
+    const cwd = join(deepest, 'missing', 'sub');
+    expect(await matchSessionWorkspace(cwd, workspace)).toBeNull();
+    expect(await matchSessionWorkspace(cwd, nested)).toBeNull();
+    expect(await matchSessionWorkspace(cwd, deepest)).toBe('subfolder');
+  });
+
+  it('rejects missing paths outside the workspace and missing workspace roots', async () => {
+    expect(await matchSessionWorkspace(join(root, 'missing', 'sub'), workspace)).toBeNull();
+    expect(await matchSessionWorkspace(join(root, 'foobar', 'missing'), workspace)).toBeNull();
+    const missingWorkspace = join(root, 'missing-workspace');
+    expect(await matchSessionWorkspace(join(missingWorkspace, 'sub'), missingWorkspace)).toBeNull();
+  });
+
+  it('rejects missing subfolders of external worktrees without direct enclosure', async () => {
+    const worktree = join(root, 'worktrees', 'topic');
+    await createSessionWorktree(workspace, worktree);
+    expect(await matchSessionWorkspace(join(worktree, 'missing'), workspace)).toBeNull();
+    expect(await matchSessionWorkspace(join(worktree, 'missing'), worktree)).toBe('subfolder');
+  });
+
+  it('rejects dangling symlinks instead of treating them as missing directories', async () => {
+    const target = join(root, 'outside');
+    const link = join(workspace, 'escape');
+    await mkdir(target);
+    await symlink(target, link);
+    await rm(target, { recursive: true });
+    expect(await matchSessionWorkspace(link, workspace)).toBeNull();
+    expect(await matchSessionWorkspace(join(link, 'missing', 'nested'), workspace)).toBeNull();
+  });
+
+  it('rejects descendants of regular files and symlink loops', async () => {
+    const file = join(workspace, 'file');
+    const loop = join(workspace, 'loop');
+    await writeFile(file, '');
+    await symlink(loop, loop);
+    expect(await matchSessionWorkspace(join(file, 'missing'), workspace)).toBeNull();
+    expect(await matchSessionWorkspace(join(loop, 'missing'), workspace)).toBeNull();
   });
 
   it('assigns a subtree only to its deepest initialized catalog', async () => {
