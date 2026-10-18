@@ -28,7 +28,8 @@ const manifest = decisionGraphToFlow(graph, { resolvedPins: pins, decisionSkillI
 async function run(target: DecisionGraph, targetPlan: typeof plan, flow: any,
   invoke: (request: GraphFlowRequest) => Promise<GraphFlowResponse>) {
   const records: any[] = []; const calls: string[] = [];
-  const invokeNode = admittedDecisionFlowAdapter(new GraphBudgetLedger(target, targetPlan),
+  // A fixed budget clock keeps admission and settlement independent of CI load.
+  const invokeNode = admittedDecisionFlowAdapter(new GraphBudgetLedger(target, targetPlan, [], () => 0),
     () => ({ attempts: 1, tokens: 3, costMicros: 3 }), async request => { calls.push(request.node.id); return invoke(request); },
     undefined, record => records.push(structuredClone(record)));
   const report = await executeFlowGraph(flow, { validation: { catalogIds: new Set([skill]) }, invokeNode, runId: 'outcome-run' });

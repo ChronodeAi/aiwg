@@ -49,7 +49,8 @@ describe('DAG pre-dispatch reservation with fake clock', () => {
   it('DAG-043 rejects invalid estimates and untrusted plan changes before dispatch', () => {
     const ledger = new GraphBudgetLedger(graph, plan, [], () => 0);
     expect(() => ledger.reserve(0, { attempts: 1, tokens: -1, costMicros: 1 })).toThrow(/estimate/);
-    expect(() => new GraphBudgetLedger(graph, { ...plan, edges: [] })).toThrow(/mismatch/);
+    // A fixed budget clock keeps admission and settlement independent of CI load.
+    expect(() => new GraphBudgetLedger(graph, { ...plan, edges: [] }, [], () => 0)).toThrow(/mismatch/);
     ledger.cancel();
     expect(() => ledger.reserve(0, { attempts: 1, tokens: 1, costMicros: 1 })).toThrow(/cancelled/);
   });

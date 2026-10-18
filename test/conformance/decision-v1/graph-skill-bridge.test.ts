@@ -63,7 +63,8 @@ async function host(options: { run?: (run: DecisionSkillRun) => Promise<{ code: 
   const skill = await resolveDecisionEvaluateSkill(root);
   const manifest = decisionGraphToFlow(graph, { resolvedPins: pins, decisionSkillId: skill.id, terminal: 'dependent',
     ...(options.approvalStages ? { approvalStages: options.approvalStages } : {}) });
-  const ledger = new GraphBudgetLedger(graph, plan);
+  // A fixed budget clock keeps admission and settlement independent of CI load.
+  const ledger = new GraphBudgetLedger(graph, plan, [], () => 0);
   const records: any[] = [];
   const invoker = decisionEvaluateSkillFlowInvoker(graph, { skill, request, workDirectory: await workDirectory(),
     project, unknownCostBoundUsd: 0.000001, ...(options.run ? { run: options.run } : {}) });
@@ -161,7 +162,8 @@ describe('decision graph through the shipped decision-evaluate skill (AC13)', ()
     const skill = await resolveDecisionEvaluateSkill(root);
     const invoker = decisionEvaluateSkillFlowInvoker(graph, { skill, request, workDirectory: await workDirectory(), project,
       unknownCostBoundUsd: 0.000001, run: async () => { started++; return { code: 2, stdout: '' }; } });
-    const adapter = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan, [{ tokens: 5 }]),
+    // A fixed budget clock keeps admission and settlement independent of CI load.
+    const adapter = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan, [{ tokens: 5 }], () => 0),
       () => ({ attempts: 4, tokens: 20, costMicros: 10 }), invoker);
     const manifest = decisionGraphToFlow(graph, { resolvedPins: pins, decisionSkillId: skill.id, terminal: 'dependent' });
     const limited = await executeFlowGraph(manifest, { validation: { catalogIds: new Set([skill.id]) }, invokeNode: adapter });
