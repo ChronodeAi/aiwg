@@ -230,12 +230,15 @@ describe.each(['linux', 'darwin', 'win32'])('filesystem containment (%s access)'
     const old = new FilesystemAdapter(missing);
     expect(await old.read('events')).toBeNull();
     await old.append('events', 'old\n');
-    await fs.rm(join(base, 'reusable'), { recursive: true });
+    // Keep the old directories alive so the replacement cannot reuse their inodes.
+    await fs.rename(join(base, 'reusable'), join(base, 'held-reusable'));
     const fresh = new FilesystemAdapter(missing);
     expect(await fresh.read('events')).toBeNull();
     await fresh.append('events', 'fresh\n');
     expect(await fresh.read('events')).toBe('fresh\n');
-    await expect(old.append('events', 'changed')).rejects.toThrow();
+    await expect(old.append('events', 'changed')).rejects.toThrow(/root changed/);
+    expect(await fresh.read('events')).toBe('fresh\n');
+    expect(await fs.readFile(join(base, 'held-reusable/store/events'), 'utf8')).toBe('old\n');
     // Replace a pinned missing-root ancestor before either cohort writes.
     const parent = join(base, 'anchor'); await fs.mkdir(parent);
     const pinned = new FilesystemAdapter(join(parent, 'store'));
