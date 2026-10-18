@@ -100,6 +100,31 @@ remain available when drift blocks ordinary commands. Existing `channel.json`
 state is migrated on first use, including channel, development path, and
 update-check timestamps.
 
+### Duplicate npm and nvm copies
+
+`aiwg doctor` lists executable copies on `PATH` and in other nvm Node versions,
+including versions outside the current `PATH`. It checks the default `~/.nvm`
+home, `NVM_DIR`, and custom nvm homes identified by `NVM_BIN`, PATH entries, or
+the running/registered installation. Copies are inspected without executing them.
+The identity diagnostic names both the running and registered package roots.
+
+An equal package version does not automatically register another copy. To use
+that copy deliberately, invoke its executable by absolute path and adopt it:
+
+```bash
+/absolute/node-prefix/bin/aiwg installation adopt --method npm \
+  --manager /absolute/node-prefix/bin/npm --yes
+/absolute/node-prefix/bin/aiwg installation show
+```
+
+Adoption updates the registration only; it does not change `PATH` or remove any
+copies. To retain the existing registration, put its executable first on the
+caller's `PATH` (including cron's PATH), or use its absolute executable path.
+Remove an unwanted nvm-global copy by selecting that Node version and running
+`npm uninstall -g aiwg` with that version's npm. Check each Node version that
+doctor reports. Doctor diagnoses these copies; it does not adopt or remove them,
+and `doctor --fix` is not an installation-identity repair command.
+
 Exact flags, machine-readable output, and automation contracts belong in the
 [agent and automation CLI reference](https://github.com/jmagly/aiwg/blob/main/docs/cli/reference.md), not in ordinary user
 journeys.
