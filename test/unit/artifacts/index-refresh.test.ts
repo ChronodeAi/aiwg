@@ -68,7 +68,7 @@ afterEach(() => {
 });
 
 describe('index refresh', () => {
-  it('imports multiple configured manifests into the catalog and skips completed batches on the next refresh', async () => {
+  itWithSqlite('imports multiple configured manifests into the catalog and skips completed batches on the next refresh', async () => {
     const database = path.join(workspace, '.aiwg/sessions/catalog.sqlite');
     fs.mkdirSync(path.dirname(database), { recursive: true });
     new SessionRepository(database).close();
@@ -151,7 +151,7 @@ describe('index refresh', () => {
     } finally { repository.close(); }
   });
 
-  it('keeps missing-manifest warnings visible when resuming after another workspace fails', async () => {
+  itWithSqlite('keeps missing-manifest warnings visible when resuming after another workspace fails', async () => {
     const other = path.join(root, 'zz-other');
     config(other);
     for (const ws of [workspace, other]) {

@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { main } from '../../../src/artifacts/cli.js';
 import { run } from '../../../src/cli/router.js';
 import { SessionRepository } from '../../../src/sessions/repository.js';
+import { itWithSqlite } from '../../helpers/sqlite.js';
 
 vi.mock('../../../tools/scripts/resource-preflight.mjs', () => ({
   resolveDispatchThresholds: () => ({}),
@@ -36,7 +37,7 @@ afterEach(() => {
 });
 
 describe('index refresh CLI routing', () => {
-  it('prints a workspace-specific discovery remedy and reports noManifest counts in JSON', async () => {
+  itWithSqlite('prints a workspace-specific discovery remedy and reports noManifest counts in JSON', async () => {
     const workspaces = [root, path.join(root, 'other')];
     for (const workspace of workspaces) {
       fs.mkdirSync(path.join(workspace, '.aiwg/sessions'), { recursive: true });
