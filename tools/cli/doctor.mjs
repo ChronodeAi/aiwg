@@ -27,7 +27,7 @@ const { getFrameworkRoot, getPackageRoot, getVersionInfo, loadConfig, resolveMcp
   import.meta.url,
   'channel/manager.mjs'
 );
-const { inspectInstallation } = await importImpl(
+const { inspectInstallation, inspectInstallationCopies, formatInstallationDiagnostic } = await importImpl(
   import.meta.url,
   'installation/manager.mjs'
 );
@@ -932,8 +932,20 @@ export async function runDoctor() {
   check(
     'Installation Identity',
     installation.state === 'aligned' ? 'ok' : 'error',
-    installation.state === 'aligned' ? installationDetail : `${installationDetail}. ${installation.drift.join('; ')}`,
+    installation.state === 'aligned' ? installationDetail : `${installationDetail}. ${formatInstallationDiagnostic(installation)}`,
   );
+
+  const foreignCopies = inspectInstallationCopies({
+    actualRoot: installation.actualRoot,
+    identity: installation.identity,
+  }).filter(copy => !copy.registered);
+  if (foreignCopies.length > 0) {
+    check('Installation Copies', 'warn', [
+      `Registered install: ${installation.identity?.root ?? '(none)'}. Other executable copies found:`,
+      ...foreignCopies.map(copy => `${copy.root} (${copy.onPath ? 'on PATH' : 'other nvm Node version, off PATH'}; executables: ${copy.executables.join(', ')})`),
+      'Run aiwg installation show from the intended copy; register it deliberately with aiwg installation adopt --yes, or put the registered executable first on PATH and remove unwanted copies with their Node prefix\'s npm uninstall -g aiwg.',
+    ].join('\n        '));
+  }
 
   // 1a. Warn when test-only user-registry override is active (#246)
   if (process.env.AIWG_USER_REGISTRY_PATH && String(process.env.AIWG_USER_REGISTRY_PATH).trim()) {

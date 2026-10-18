@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const mocks = vi.hoisted(() => ({ execFile: vi.fn(), spawn: vi.fn(), version: vi.fn() }));
+const mocks = vi.hoisted(() => ({ execFile: vi.fn(), spawn: vi.fn(), version: vi.fn(), copies: vi.fn() }));
 vi.mock('../../../src/process/bounded-child-process.mjs', async importOriginal => ({
   ...await importOriginal(), boundedExecFileSync: mocks.execFile,
 }));
@@ -16,6 +16,7 @@ vi.mock('../../../src/channel/manager.mjs', async importOriginal => ({
 }));
 vi.mock('../../../src/installation/manager.mjs', async importOriginal => ({
   ...await importOriginal(), inspectInstallation: () => ({ state: 'aligned', drift: [] }),
+  inspectInstallationCopies: mocks.copies,
 }));
 
 let root;
@@ -34,6 +35,7 @@ afterAll(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true
 
 describe('doctor command probe behavior', () => {
   beforeEach(() => {
+    mocks.copies.mockReturnValue([]);
     vi.spyOn(process, 'cwd').mockReturnValue(root);
     vi.spyOn(process, 'exit').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -61,6 +63,7 @@ describe('doctor command probe behavior', () => {
     expect(mocks.execFile).toHaveBeenCalledWith(file, [...prefix, '--version'], 'quick', { stdio: 'ignore' });
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('AIWG Version: aiwg 1.0.0'));
     expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('aiwg installed but may not be in your PATH'));
+    expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('Installation Copies:'));
   });
 
   it('executes the edge and project Git probes with their tiers and working directories', async () => {
@@ -78,6 +81,24 @@ describe('doctor command probe behavior', () => {
     expect(mocks.execFile).toHaveBeenCalledWith('git', ['remote'], 'quick', {
       cwd: root, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
     });
+  });
+
+  it('reports foreign PATH and inactive nvm copies even when the version probe succeeds', async () => {
+    const active = join(root, '.nvm/versions/node/v24/lib/node_modules/aiwg');
+    const inactive = join(root, '.nvm/versions/node/v25/lib/node_modules/aiwg');
+    mocks.copies.mockReturnValue([
+      { root: active, executables: [join(root, 'bin/aiwg')], onPath: true, registered: false },
+      { root: inactive, executables: [join(root, 'v25/bin/aiwg')], onPath: false, registered: false },
+      { root: 'registered-copy', executables: [], onPath: true, registered: true },
+    ]);
+    await runDoctor();
+    const output = console.log.mock.calls.map(([line]) => String(line)).join('\n');
+    expect(output).toContain('Installation Copies:');
+    expect(output).toContain(`${active} (on PATH`);
+    expect(output).toContain(`${inactive} (other nvm Node version, off PATH`);
+    expect(output).toContain('aiwg installation adopt --yes');
+    expect(output).toContain('npm uninstall -g aiwg');
+    expect(output).not.toContain('registered-copy');
   });
 
   it.each([
