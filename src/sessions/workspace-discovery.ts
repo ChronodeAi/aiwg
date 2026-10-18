@@ -67,6 +67,7 @@ export interface DiscoveryProviderReport {
   museSourceInspections?: Array<MuseWorkspaceInspection & {
     sourceKey: string;
     redactedLocator: string;
+    nativeSessionId?: string;
   }>;
 }
 
@@ -254,6 +255,7 @@ export async function discoverWorkspaceHistories(
         museSourceInspections.push({
           sourceKey: sha256(['muse-workspace-inspection-v1', descriptor.locator].join('\0')),
           redactedLocator: redactSourceLocator(descriptor.locator),
+          nativeSessionId: basename(dirname(descriptor.locator)),
           ...inspection,
         });
         if (inspection.outcome !== 'matched') continue;
@@ -327,7 +329,7 @@ export async function discoverWorkspaceHistories(
       incompleteMuseInspection ? 'MUSE_SOURCE_INSPECTION_INCOMPLETE'
         : providerSources.length === 0 ? 'NO_WORKSPACE_SOURCES' : null,
       incompleteMuseInspection
-        ? 'Review museSourceInspections; authorize a supported Muse export for unresolved sources before claiming workspace coverage.'
+        ? 'Review unattributed museSourceInspections and their limit name/value; authorize a supported Muse export for unresolved sources before claiming workspace coverage.'
         : providerSources.length === 0
         ? `The ${entry.provider} root was checked, but no source matched the authorized workspace.`
         : null,

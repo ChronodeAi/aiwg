@@ -67,6 +67,8 @@ import {
 } from '../readers.js';
 import {
   MUSE_WORKSPACE_SCAN_LIMITS,
+  MUSE_WORKSPACE_TAIL_BYTES,
+  MuseWorkspaceLimitError,
   museWorkspaceScanLines,
   parseMuseScanJson,
 } from './muse-workspace-scan.js';
@@ -616,11 +618,17 @@ async function* museNativeSessionLogs(root: string): AsyncGenerator<string> {
 
 export const MuseWorkspaceInspectionSchema = z.object({
   outcome: z.enum(['matched', 'mismatch', 'inconclusive']),
+  attribution: z.enum(['matched', 'mismatch', 'unattributed']),
   matchKind: z.enum(WORKSPACE_MATCH_KINDS).optional(),
   reasonCode: z.string().nullable(),
   recordsInspected: z.number().int().nonnegative(),
   bytesInspected: z.number().int().nonnegative(),
   completeInspection: z.boolean(),
+  limit: z.object({
+    name: z.enum(['maxRecords', 'maxRecordBytes', 'maxTotalBytes', 'maxNestingDepth']),
+    value: z.number().int().positive(),
+  }).optional(),
+  fallback: z.literal('bounded-tail').optional(),
   detail: SessionRejectionDetailSchema.optional(),
 });
 
@@ -636,30 +644,34 @@ export async function inspectMuseNativeWorkspace(
   const progress = { recordsInspected: 0, bytesInspected: 0 };
   let sawWorkspaceEvidence = false;
   let retainedChildren = 0;
+  let limit: MuseWorkspaceInspection['limit'];
+  let fallback: MuseWorkspaceInspection['fallback'];
+  const authorization = { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots };
   const receipt = (
     outcome: MuseWorkspaceInspection['outcome'],
     reasonCode: string | null,
     completeInspection = false,
-  ): MuseWorkspaceInspection => ({ outcome, reasonCode, ...progress, completeInspection });
+  ): MuseWorkspaceInspection => ({
+    outcome, attribution: outcome === 'inconclusive' ? 'unattributed' : outcome,
+    reasonCode, ...progress, completeInspection,
+    ...(limit ? { limit } : {}), ...(fallback ? { fallback } : {}),
+  });
+  const envelopesFromLine = (value: unknown) => nativeEnvelopesFromLine(value, limits, (count) => {
+    retainedChildren += count;
+    if (retainedChildren > limits.maxRecords) {
+      throw new MuseWorkspaceLimitError('maxRecords', limits.maxRecords, retainedChildren);
+    }
+  });
   try {
     if (Object.values(limits).some((limit) => !Number.isSafeInteger(limit) || limit <= 0)) {
       throw new SessionContractError('INVALID_ARGUMENT', 'Muse inspection limits must be positive safe integers');
     }
     for await (const value of museWorkspaceScanLines(
-      { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots },
+      authorization,
       limits,
       progress,
     )) {
-      const envelopes = nativeEnvelopesFromLine(value, limits, (count) => {
-        retainedChildren += count;
-        if (retainedChildren > limits.maxRecords) {
-          throw new SessionContractError(
-            'RESOURCE_LIMIT_EXCEEDED',
-            'Muse retained child inspection limit exceeded',
-            { limit: 'maxRecords', configured: limits.maxRecords, observed: retainedChildren },
-          );
-        }
-      });
+      const envelopes = envelopesFromLine(value);
       for (const envelope of envelopes) {
         const candidate = workspaceEvidenceOf(envelope);
         if (!candidate) continue;
@@ -672,6 +684,32 @@ export async function inspectMuseNativeWorkspace(
       ? receipt('mismatch', 'MUSE_WORKSPACE_MISMATCH', true)
       : receipt('inconclusive', 'MUSE_WORKSPACE_EVIDENCE_ABSENT', true);
   } catch (error) {
+    if (error instanceof MuseWorkspaceLimitError) {
+      limit = { name: error.limitName, value: error.limitValue };
+      fallback = 'bounded-tail';
+      const tailProgress = { recordsInspected: 0, bytesInspected: 0 };
+      const tailBytes = Math.min(MUSE_WORKSPACE_TAIL_BYTES, limits.maxTotalBytes);
+      retainedChildren = 0;
+      let matchKind: MuseWorkspaceInspection['matchKind'] | null;
+      try {
+        for await (const value of museWorkspaceScanLines(
+          authorization, { ...limits, maxTotalBytes: tailBytes }, tailProgress, tailBytes,
+        )) {
+          for (const envelope of envelopesFromLine(value)) {
+            const candidate = workspaceEvidenceOf(envelope);
+            if (!candidate) continue;
+            matchKind = await matchSessionWorkspace(candidate, workspacePath);
+            if (matchKind) break;
+          }
+          if (matchKind) break;
+        }
+      } catch {
+        // Preserve the original limit receipt when the fallback cannot attribute.
+      }
+      progress.recordsInspected += tailProgress.recordsInspected;
+      progress.bytesInspected += tailProgress.bytesInspected;
+      if (matchKind) return { ...receipt('matched', null), matchKind };
+    }
     return {
       ...receipt('inconclusive', error instanceof SessionContractError
         ? error.code : 'MUSE_SOURCE_UNREADABLE'),
@@ -721,10 +759,8 @@ function nativeEnvelopesFromLine(
   const envelopes: MuseEnvelope[] = [];
   for (const child of retained.data.children) {
     if (Buffer.byteLength(child.record_json) > limits.maxRecordBytes) {
-      throw new SessionContractError(
-        'RESOURCE_LIMIT_EXCEEDED',
-        'Muse retained child inspection byte limit exceeded',
-        { limit: 'maxRecordBytes', configured: limits.maxRecordBytes, observed: Buffer.byteLength(child.record_json) },
+      throw new MuseWorkspaceLimitError(
+        'maxRecordBytes', limits.maxRecordBytes, Buffer.byteLength(child.record_json),
       );
     }
     const childEvent = recordEventFromEnvelope(parseMuseScanJson(child.record_json, limits.maxNestingDepth));
