@@ -316,6 +316,9 @@ function normalizeBatch(
   const sessions = new Map<string, Session>();
   const events = records.map((record): SessionEvent => {
     const sessionId = stableSessionId(request.source.provider, request.source.sourceId, record.nativeSessionId);
+    const native = sanitizeNativeExtensions(record.extensions ?? {});
+    const lineage = request.source.provider === 'codex' && native.value.lineage
+      ? { lineage: native.value.lineage } : {};
     const digest = sha256(JSON.stringify(record));
     const origin = classifySessionEventOrigin(request.source.provider, record);
     const lifecycle = sessionLifecycle(request, record, sourceObservedAt);
@@ -359,6 +362,7 @@ function normalizeBatch(
         sourceDigest: sha256(`${sourceGenerationDigest(request)}\0${record.nativeSessionId}`),
         extensions: {
           [`native.${request.source.provider}`]: {
+            ...lineage,
             lifecycleEvidence,
           },
         },
@@ -382,6 +386,7 @@ function normalizeBatch(
       session.lifecycle = selected.lifecycle;
       session.extensions[nativeKey] = {
         ...nativeRecord,
+        ...lineage,
         lifecycleEvidence: selected.evidence,
       };
     }
