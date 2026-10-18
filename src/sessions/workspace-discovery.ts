@@ -86,6 +86,8 @@ export interface SessionDiscoveryManifest {
 
 export interface DiscoverWorkspaceOptions {
   workspace: string;
+  /** Logical paths to the same canonical workspace, used for provider project keys. */
+  workspaceAliases?: readonly string[];
   expectedProviders?: readonly string[];
   registry?: SessionSourceAdapterRegistry;
   runtime?: SessionRuntimeIdentity;
@@ -120,9 +122,14 @@ export async function discoverWorkspaceHistories(
   const supportedProviders = new Set(registry.list().map((adapter) => adapter.provider));
   const workspacePath = await canonicalPath(options.workspace);
   const workspaceId = workspacePath;
+  const workspacePaths = [...new Set([workspacePath, resolve(options.workspace),
+    ...(options.workspaceAliases ?? []).map((alias) => resolve(alias))])];
+  for (const alias of workspacePaths) {
+    if (await canonicalPath(alias) !== workspacePath) {
+      throw new SessionContractError('INVALID_ARGUMENT', 'workspace alias resolves to a different workspace');
+    }
+  }
   const providerHomes = providerHomeCandidates(options.providerHome, options.operatorHome);
-  const keyWithLeadingDash = workspaceKey(workspacePath, true);
-  const keyWithoutLeadingDash = workspaceKey(workspacePath, false);
   const discoverable: DiscoverableProvider[] = [
     { provider: 'deepseek-harness', roots: options.dshRoot
       ? [resolve(options.dshRoot)] : options.providerHome
@@ -143,9 +150,9 @@ export async function discoverWorkspaceHistories(
       ? [resolve(options.grokbotRoot)] : [] },
     {
       provider: 'claude',
-      roots: providerHomes.map(
-        (providerHome) => join(providerHome, '.claude', 'projects', claudeProjectKey(workspacePath)),
-      ),
+      roots: providerHomes.flatMap((providerHome) => workspacePaths.map(
+        (workspace) => join(providerHome, '.claude', 'projects', claudeProjectKey(workspace)),
+      )),
     },
     {
       provider: 'codex',
@@ -154,17 +161,16 @@ export async function discoverWorkspaceHistories(
     },
     {
       provider: 'cursor',
-      roots: providerHomes.map(
-        (providerHome) =>
-          join(providerHome, '.cursor', 'projects', keyWithoutLeadingDash, 'agent-transcripts'),
-      ),
+      roots: providerHomes.flatMap((providerHome) => workspacePaths.map(
+        (workspace) => join(providerHome, '.cursor', 'projects', workspaceKey(workspace, false), 'agent-transcripts'),
+      )),
     },
     {
       provider: 'factory',
-      roots: providerHomes.flatMap((providerHome) => [
-        join(providerHome, '.factory', 'projects', keyWithLeadingDash),
-        join(providerHome, '.factory', 'sessions', keyWithLeadingDash),
-      ]),
+      roots: providerHomes.flatMap((providerHome) => workspacePaths.flatMap((workspace) => [
+        join(providerHome, '.factory', 'projects', workspaceKey(workspace, true)),
+        join(providerHome, '.factory', 'sessions', workspaceKey(workspace, true)),
+      ])),
     },
     {
       // Pi stores every working directory's sessions in its own
@@ -181,7 +187,9 @@ export async function discoverWorkspaceHistories(
         : providerHomes.map(
           (providerHome) => join(providerHome, '.pi', 'agent', 'sessions'),
         )
-      ).map((sessionsRoot) => join(sessionsRoot, `--${keyWithoutLeadingDash}--`)),
+      ).flatMap((sessionsRoot) => workspacePaths.map(
+        (workspace) => join(sessionsRoot, `--${workspaceKey(workspace, false)}--`),
+      )),
     },
   ];
 
@@ -201,7 +209,7 @@ export async function discoverWorkspaceHistories(
         if (options.authorizedRoots && canonical !== root) {
           throw new SessionContractError('INVALID_ARGUMENT', 'previously authorized provider root changed; rediscover with explicit authorization');
         }
-        if (entry.provider !== 'codex' || !availableRoots.includes(canonical)) {
+        if (!availableRoots.includes(canonical)) {
           availableRoots.push(canonical);
           rootCounts.set(canonical, {
             root: redactSourceLocator(canonical), rootId: sha256(canonical),

@@ -97,6 +97,26 @@ describe('session refresh integration boundaries', () => {
     expect(mocks.importBatch).not.toHaveBeenCalled();
   });
 
+  it('accepts logical workspace aliases without authorizing their provider project roots', async () => {
+    await saveAuthorization();
+    const alias = path.join(root, 'logical-workspace');
+    fs.symlinkSync(workspace, alias, 'dir');
+    fs.writeFileSync(path.join(authorized, 'logical.jsonl'), JSON.stringify({
+      type: 'user', sessionId: 'logical', cwd: alias,
+    }) + '\n');
+    const unauthorized = path.join(process.env.HOME!, '.claude/projects', alias.replace(/[^A-Za-z0-9-]/g, '-'));
+    fs.mkdirSync(unauthorized, { recursive: true });
+    fs.writeFileSync(path.join(unauthorized, 'outside.jsonl'), '{}\n');
+    expect(await refreshSessionCatalog(workspace, false, 0, undefined, [alias])).toBeUndefined();
+    const imported = mocks.importBatch.mock.calls[0][0].manifest;
+    expect(imported.sources).toHaveLength(2);
+    expect(imported.authorizedRoots).toEqual({ claude: [authorized] });
+    expect(imported.sources.every((source: { authorizedRoot: string }) => source.authorizedRoot === authorized)).toBe(true);
+    await expect(refreshSessionCatalog(workspace, false, 0, undefined, [authorized]))
+      .rejects.toThrow('workspace alias resolves to a different workspace');
+    expect(mocks.importBatch).toHaveBeenCalledOnce();
+  });
+
   it('reindexes all catalog workspaces with --full under the existing import lease without discovery', async () => {
     mocks.reindex.mockImplementationOnce(() => {
       expect(fs.existsSync(`${database}.import.lock`)).toBe(true);

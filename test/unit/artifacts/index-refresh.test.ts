@@ -7,6 +7,8 @@ import { acquireDirectoryLock } from '../../../src/artifacts/prebuilt-build-lock
 import { getGraphIndexDir, loadUserGraphConfigs } from '../../../src/artifacts/types.js';
 import { syncFortemiCoreIndex } from '../../../src/artifacts/fortemi-core-sync.js';
 import { discoverWorkspaceHistories, readDiscoveryManifest, writeDiscoveryManifest } from '../../../src/sessions/workspace-discovery.js';
+import { SessionRepository } from '../../../src/sessions/repository.js';
+import { itWithSqlite } from '../../helpers/sqlite.js';
 
 let root: string;
 let workspace: string;
@@ -79,6 +81,14 @@ describe('index refresh', () => {
     const nested = path.join(workspace, 'nested');
     fs.mkdirSync(path.join(nested, '.git'), { recursive: true });
     expect(planIndexRefresh({ cwd: nested }).every(job => job.workspace === nested)).toBe(true);
+  });
+
+  it('keeps the physical project boundary when cwd is a symlink into a subdirectory', () => {
+    const alias = path.join(root, 'logical-src');
+    fs.symlinkSync(path.join(workspace, 'src'), alias, 'dir');
+    const jobs = planIndexRefresh({ cwd: alias });
+    expect(jobs).toHaveLength(2);
+    expect(jobs.every(job => job.workspace === workspace)).toBe(true);
   });
 
   it('uses the dispatch gate with 8 GiB memory and 0.8 load per core, including stricter configured limits', async () => {
@@ -214,12 +224,103 @@ describe('index refresh', () => {
     expect(available).toHaveBeenCalledTimes(1);
   });
 
-  it('scans to depth four, excludes caches and symlinks, and deduplicates repeated workspaces', () => {
+  it('scans to depth four, excludes caches, and deduplicates repeated workspaces', () => {
     const tree = path.join(root, 'dev');
     for (const relative of ['a', 'a/b/c/d', 'a/b/c/d/e', 'node_modules/ignored', '.git/ignored', '.worktrees/ignored', 'aiwg-wt/ignored']) config(path.join(tree, relative));
     fs.symlinkSync(workspace, path.join(tree, 'link'), 'dir');
     const jobs = planIndexRefresh({ root: tree, workspaces: [workspace, workspace], only: 'graphs' });
     expect([...new Set(jobs.map(job => job.workspace))]).toEqual([path.join(tree, 'a'), path.join(tree, 'a/b/c/d'), workspace].sort());
+  });
+
+  it('scans two roots and follows symlinked workspaces once across roots and explicit selections', () => {
+    const first = path.join(root, 'first');
+    const second = path.join(root, 'second');
+    const other = path.join(second, 'other');
+    fs.mkdirSync(first);
+    config(other);
+    fs.symlinkSync(workspace, path.join(first, 'linked-workspace'), 'dir');
+    const jobs = planIndexRefresh({ cwd: root, root: ['first', 'second', 'first'], workspaces: [other], only: 'graphs' });
+    expect(jobs.map(job => job.workspace)).toEqual([other, other, workspace, workspace].sort());
+  });
+
+  it('stops symlink cycles and ignores dangling links and links to files', () => {
+    const tree = path.join(root, 'tree');
+    config(path.join(tree, 'project'));
+    fs.symlinkSync(tree, path.join(tree, 'project', 'cycle'), 'dir');
+    fs.symlinkSync(path.join(root, 'missing'), path.join(tree, 'dangling'), 'dir');
+    fs.symlinkSync(path.join(workspace, 'src/example.ts'), path.join(tree, 'file'));
+    fs.symlinkSync('self', path.join(tree, 'self'), 'dir');
+    const jobs = planIndexRefresh({ root: tree, only: 'graphs' });
+    expect(jobs.map(job => job.workspace)).toEqual([path.join(tree, 'project'), path.join(tree, 'project')]);
+  });
+
+  it('preserves the depth limit through directory symlinks', () => {
+    const tree = path.join(root, 'tree');
+    const target = path.join(root, 'target');
+    fs.mkdirSync(tree);
+    config(path.join(target, 'a/b/c'));
+    config(path.join(target, 'a/b/c/d'));
+    fs.symlinkSync(target, path.join(tree, 'link'), 'dir');
+    const jobs = planIndexRefresh({ root: tree, only: 'graphs' });
+    expect(jobs.map(job => job.workspace)).toEqual([path.join(target, 'a/b/c'), path.join(target, 'a/b/c')]);
+  });
+
+  it('accepts repeated root and workspace CLI flags together', async () => {
+    const first = path.join(root, 'first');
+    const second = path.join(root, 'second');
+    const explicit = path.join(root, 'explicit');
+    config(path.join(first, 'one'));
+    config(path.join(second, 'two'));
+    config(explicit);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const report = await runIndexRefresh([
+      '--root', first, '--root', second, '--workspace', workspace, '--workspace', explicit,
+      '--dry-run', '--only', 'graphs', '--json',
+    ]);
+    expect(report.status).toBe('ok');
+    expect([...new Set(report.jobs.map(job => job.workspace))]).toEqual([
+      explicit, path.join(first, 'one'), path.join(second, 'two'), workspace,
+    ].sort());
+    expect(report.jobs).toHaveLength(8);
+  });
+
+  itWithSqlite('imports Claude sessions recorded under a logical path reached through a symlinked scan root', async () => {
+    const tree = path.join(root, 'physical');
+    const project = path.join(tree, 'project');
+    config(project);
+    const logicalTree = path.join(root, 'logical');
+    fs.symlinkSync(tree, logicalTree, 'dir');
+    const logicalProject = path.join(logicalTree, 'project');
+    const home = path.join(root, 'provider-home');
+    const projectKey = (ws: string) => ws.replace(/[^A-Za-z0-9-]/g, '-');
+    for (const [id, cwd] of [['canonical', project], ['logical', logicalProject]]) {
+      write(path.join(home, '.claude/projects', projectKey(cwd), `${id}.jsonl`), JSON.stringify({
+        type: 'user', sessionId: id, uuid: `${id}-message`, cwd,
+        message: { role: 'user', content: 'Synthetic request.' },
+      }) + '\n');
+    }
+    const manifest = await discoverWorkspaceHistories({
+      workspace: logicalProject, providerHome: home, expectedProviders: ['claude'],
+    });
+    expect(manifest.sources).toHaveLength(2);
+    await writeDiscoveryManifest(path.join(project, '.aiwg/sessions/discovery-manifest.json'), manifest);
+    const database = path.join(project, '.aiwg/sessions/catalog.sqlite');
+    new SessionRepository(database).close();
+    const options = { root: [tree, logicalTree], only: 'sessions' as const };
+    const report = await refreshIndexes(options, admitted);
+    expect(report.totals).toMatchObject({ jobs: 1, ok: 1, errors: 0 });
+    expect(report.jobs[0].workspace).toBe(project);
+    const repository = new SessionRepository(database);
+    try {
+      const imported = repository.listSessions({ workspaceId: project, limit: 20 });
+      expect(imported.total).toBe(2);
+      expect(imported.items.map(session => session.nativeSessionId).sort()).toEqual(['canonical', 'logical']);
+    } finally { repository.close(); }
+    await expect(refreshIndexes({ root: tree, only: 'sessions' }, {
+      ...admitted, afterJob: () => { throw new Error('simulated interruption'); },
+    })).rejects.toThrow('simulated interruption');
+    // A completed job for the canonical route must not suppress a new logical route.
+    expect((await refreshIndexes(options, admitted)).jobs[0].reason).toBe('unchanged');
   });
 
   it('isolates graph registrations with the same name across workspaces and honors --only', async () => {

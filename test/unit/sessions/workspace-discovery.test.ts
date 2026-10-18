@@ -33,6 +33,71 @@ afterEach(async () => {
 });
 
 describe('workspace session discovery and batch import', () => {
+  it.each(['claude', 'cursor', 'factory', 'pi'] as const)(
+    'discovers %s sessions under canonical and logical project keys with one workspace identity',
+    async (provider) => {
+      const fixture = await providerFixture();
+      vi.stubEnv('PI_CODING_AGENT_SESSION_DIR', join(fixture.providerHome, '.pi/agent/sessions'));
+      const alias = join(fixture.root, 'logical');
+      await symlink(fixture.workspace, alias);
+      const providerRoot = (workspace: string): string => {
+        const key = workspace.replace(/\\/g, '/').replace(/[/:]+/g, '-');
+        const keyWithoutLeadingDash = key.replace(/^-/, '');
+        if (provider === 'claude') return join(fixture.providerHome, '.claude/projects', claudeProjectKey(workspace));
+        if (provider === 'cursor') return join(fixture.providerHome, '.cursor/projects', keyWithoutLeadingDash, 'agent-transcripts');
+        if (provider === 'factory') return join(fixture.providerHome, '.factory/sessions', key);
+        return join(fixture.providerHome, '.pi/agent/sessions', `--${keyWithoutLeadingDash}--`);
+      };
+      const canonicalRoot = providerRoot(fixture.workspace);
+      const logicalRoot = providerRoot(alias);
+      await mkdir(canonicalRoot, { recursive: true });
+      await mkdir(logicalRoot, { recursive: true });
+      const record = JSON.stringify({ type: 'user', sessionId: 'logical', cwd: alias });
+      await writeFile(join(logicalRoot, 'logical.jsonl'), record + '\n');
+      // Identical sources across the two keys still represent one source.
+      await writeFile(join(canonicalRoot, 'duplicate.jsonl'), record + '\n');
+      await writeFile(join(canonicalRoot, 'canonical.jsonl'), JSON.stringify({ type: 'user', sessionId: 'canonical', cwd: fixture.workspace }) + '\n');
+      if (provider === 'claude') {
+        await writeFile(join(logicalRoot, 'unrelated.jsonl'), JSON.stringify({ type: 'user', cwd: fixture.root }) + '\n');
+      }
+      const options = { providerHome: fixture.providerHome, expectedProviders: [provider] };
+      const direct = await discoverWorkspaceHistories({ ...options, workspace: alias });
+      const explicit = await discoverWorkspaceHistories({ ...options, workspace: fixture.workspace, workspaceAliases: [alias, alias] });
+      // Existing fixtures contribute one additional source except for Pi.
+      expect(direct.sources).toHaveLength(provider === 'pi' ? 2 : 3);
+      expect(direct.workspaceId).toBe(fixture.workspace);
+      expect(direct.workspacePath).toBe(fixture.workspace);
+      expect(explicit.manifestId).toBe(direct.manifestId);
+      expect(direct.authorizedRoots?.[provider]).toEqual(expect.arrayContaining([canonicalRoot, logicalRoot]));
+      const restricted = await discoverWorkspaceHistories({
+        ...options, workspace: alias, authorizedRoots: { [provider]: [canonicalRoot] },
+      });
+      expect(restricted.authorizedRoots?.[provider]).toEqual([canonicalRoot]);
+      expect(restricted.sources.every(source => source.authorizedRoot === canonicalRoot)).toBe(true);
+    },
+  );
+
+  it('rejects aliases that resolve to a different workspace', async () => {
+    const fixture = await providerFixture();
+    await expect(discoverWorkspaceHistories({
+      workspace: fixture.workspace, workspaceAliases: [fixture.root], expectedProviders: ['claude'],
+    })).rejects.toThrow('workspace alias resolves to a different workspace');
+  });
+
+  it('deduplicates canonical and logical project keys that share a provider directory', async () => {
+    const fixture = await providerFixture();
+    const alias = join(fixture.root, 'logical');
+    await symlink(fixture.workspace, alias);
+    const projects = join(fixture.providerHome, '.claude/projects');
+    const canonicalRoot = join(projects, claudeProjectKey(fixture.workspace));
+    await symlink(canonicalRoot, join(projects, claudeProjectKey(alias)));
+    const manifest = await discoverWorkspaceHistories({
+      workspace: alias, providerHome: fixture.providerHome, expectedProviders: ['claude'],
+    });
+    expect(manifest.sources).toHaveLength(1);
+    expect(manifest.authorizedRoots).toEqual({ claude: [canonicalRoot] });
+  });
+
   it.each(['codex', 'muse', 'omp'] as const)(
     'discovers %s exact, subfolder, symlink, and worktree sessions without sibling-prefix matches',
     async (provider) => {

@@ -370,7 +370,7 @@ export function printIndexUsage(): void {
   console.log('');
   console.log('Options:');
   console.log('  build [--force] [--verbose] [--all] [--scope <dir>] [--graph <name>]');
-  console.log('  refresh [--full] [--workspace <path>]... [--root <dir>]');
+  console.log('  refresh [--full] [--workspace <path>]... [--root <dir>]...');
   console.log('          [--only graphs|sessions|caches] [--dry-run] [--json] [--lock-wait-ms <n>]');
   console.log('  sync [--backend fortemi-core] [--graph <name> | --all] [--repo <name>]');
   console.log('       [--privacy private|sanitized|public] [--generated-at <iso>] [--json]');
