@@ -350,7 +350,7 @@ export function printIndexUsage(): void {
   console.log('');
   console.log('Available subcommands:');
   console.log('  build      Build/rebuild the artifact index');
-  console.log('  refresh    Safely refresh graphs, existing caches, and session catalogs');
+  console.log('  refresh    Safely refresh graphs, caches, sessions, runtime, models, and local issues');
   console.log('  query      Search artifacts by keyword, type, phase, tags');
   console.log('  discover   Capability search across operational asset types (#1214)');
   console.log('  show       Print the full text of a specific operational asset');
@@ -371,7 +371,7 @@ export function printIndexUsage(): void {
   console.log('Options:');
   console.log('  build [--force] [--verbose] [--all] [--scope <dir>] [--graph <name>]');
   console.log('  refresh [--full] [--workspace <path>]... [--root <dir>]');
-  console.log('          [--only graphs|sessions|caches] [--dry-run] [--json] [--lock-wait-ms <n>]');
+  console.log('          [--only graphs|sessions|caches|runtime|models|issues] [--dry-run] [--json] [--lock-wait-ms <n>]');
   console.log('  sync [--backend fortemi-core] [--graph <name> | --all] [--repo <name>]');
   console.log('       [--privacy private|sanitized|public] [--generated-at <iso>] [--json]');
   console.log('  --graph <name>  Target a specific graph (framework, project, codebase, source, user, or user-defined)');

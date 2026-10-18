@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findPackageRoot } from '../cli/find-package-root.js';
-import { projectControlPath } from '../config/project-artifacts.js';
+import { projectAiwgPath, projectControlPath } from '../config/project-artifacts.js';
 import { getUserStateDir } from '../config/user-state.js';
 import { collectGraphIndexFiles } from './index-files.js';
 import { collectIndexStatus } from './index-status.js';
@@ -20,14 +20,14 @@ export interface RefreshOptions {
   workspaces?: string[];
   root?: string;
   full?: boolean;
-  only?: 'graphs' | 'sessions' | 'caches';
+  only?: 'graphs' | 'sessions' | 'caches' | 'runtime' | 'models' | 'issues';
   dryRun?: boolean;
   lockWaitMs?: number;
   signal?: AbortSignal;
 }
 
 export interface RefreshJob {
-  kind: 'graph' | 'cache' | 'sessions';
+  kind: 'graph' | 'cache' | 'sessions' | 'runtime' | 'models' | 'issues';
   workspace: string;
   graph?: string;
   status: 'planned' | 'ok' | 'skipped' | 'deferred' | 'error';
@@ -144,6 +144,11 @@ export function planIndexRefresh(options: RefreshOptions): RefreshJob[] {
       if ((!options.only || options.only === 'sessions') && fs.existsSync(path.join(workspace, '.aiwg/sessions/catalog.sqlite'))) {
         jobs.push({ kind: 'sessions', workspace, status: 'planned', wallMs: 0 });
       }
+      for (const kind of ['runtime', 'models', 'issues'] as const) {
+        if (options.only && options.only !== kind) continue;
+        if (kind === 'issues' && !fs.existsSync(projectAiwgPath(workspace, 'issues'))) continue;
+        jobs.push({ kind, workspace, status: 'planned', wallMs: 0 });
+      }
     }
     return jobs;
   } finally {
@@ -224,6 +229,35 @@ async function executeJob(job: RefreshJob, options: RefreshOptions): Promise<voi
       return;
     }
     syncFortemiCoreIndex(workspace, { graph: job.graph });
+  } else if (job.kind === 'runtime' || job.kind === 'issues') {
+    const directory = job.kind === 'runtime'
+      ? projectAiwgPath(workspace, 'smiths', 'toolsmith') : projectAiwgPath(workspace, 'issues');
+    const output = path.join(directory, job.kind === 'runtime' ? 'runtime.json' : 'index/issues.index.json');
+    const before = outputStamp(output);
+    if (job.kind === 'runtime') {
+      const { RuntimeDiscovery } = await import('../smiths/toolsmith/runtime-discovery.mjs');
+      await new RuntimeDiscovery(directory, { cwd: workspace, quiet: true }).discover({ force: Boolean(options.full) });
+    } else {
+      const { LocalIssueProviderCore } = await import('../issues/local.js');
+      await new LocalIssueProviderCore(directory).rebuildIssueIndex({ force: Boolean(options.full) });
+    }
+    if (!options.full && before !== undefined && before === outputStamp(output)) {
+      job.status = 'skipped'; job.reason = 'unchanged';
+      return;
+    }
+  } else if (job.kind === 'models') {
+    const { getFrameworkRoot } = await import('../channel/manager.mjs');
+    const { collectProviderInventory } = await import('../providers/provider-inventory.js');
+    const { resolveDynamicModelCatalog } = await import('../models/model-discovery.js');
+    const catalog = await resolveDynamicModelCatalog({
+      aiwgRoot: await getFrameworkRoot(), inventory: await collectProviderInventory(workspace),
+      homeDir: process.env.HOME, allowNetwork: true, forceRefresh: Boolean(options.full),
+      omp: { cwd: workspace }, grokBuild: { cwd: workspace, env: process.env },
+    });
+    if (catalog.discovery?.source === 'cache') {
+      job.status = 'skipped'; job.reason = 'unchanged';
+      return;
+    }
   } else {
     const { refreshSessionCatalog } = await import('../sessions/refresh.js');
     const reason = await refreshSessionCatalog(workspace, Boolean(options.full), options.lockWaitMs ?? 0, options.signal);
@@ -234,6 +268,16 @@ async function executeJob(job: RefreshJob, options: RefreshOptions): Promise<voi
     }
   }
   job.status = 'ok';
+}
+
+function outputStamp(file: string): string | undefined {
+  try {
+    const stat = fs.statSync(file, { bigint: true });
+    return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
 }
 
 function jobKey(job: RefreshJob): string {
@@ -354,7 +398,10 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
         if (flag === '--workspace') options.workspaces!.push(value);
         else if (flag === '--root') options.root = value;
         else if (flag === '--only') {
-          if (value !== 'graphs' && value !== 'sessions' && value !== 'caches') throw new Error('--only must be graphs, sessions, or caches');
+          if (value !== 'graphs' && value !== 'sessions' && value !== 'caches'
+            && value !== 'runtime' && value !== 'models' && value !== 'issues') {
+            throw new Error('--only must be graphs, sessions, caches, runtime, models, or issues');
+          }
           options.only = value;
         } else {
           if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error('--lock-wait-ms must be a non-negative integer');

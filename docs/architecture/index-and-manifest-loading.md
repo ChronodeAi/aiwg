@@ -225,10 +225,16 @@ project; repeat `--workspace <path>` to select projects explicitly.
 
 Refresh builds configured, existing, and default graphs incrementally, syncs
 existing Fortemi Core caches, then discovers and imports existing session catalogs.
+It also refreshes the runtime tool catalog and models catalog for each workspace,
+and rebuilds the local issues index where issue storage exists. Runtime and issue
+jobs skip unchanged inputs; models reuse a fresh catalog cache. Models discovery
+may access the network, using the same discovery and offline fallback as
+`aiwg models refresh`.
 Session discovery uses only roots saved by an earlier authorized discovery;
 `--full` rebuilds graphs and reindexes every workspace in each selected session
 catalog, using the same unscoped rebuild as `aiwg sessions reindex --all-workspaces`.
-Use `--only graphs|sessions|caches`
+`--full` also forces runtime, models, and issues refreshes.
+Use `--only graphs|sessions|caches|runtime|models|issues`
 to narrow the work or `--dry-run` to inspect the plan without writes. Missing
 SQLite support skips sessions with `aiwg features install sqlite` as the remedy.
 

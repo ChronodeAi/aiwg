@@ -6,6 +6,12 @@ import { planIndexRefresh, refreshIndexes, refreshResourceGate, runIndexRefresh 
 import { acquireDirectoryLock } from '../../../src/artifacts/prebuilt-build-lock.js';
 import { getGraphIndexDir, loadUserGraphConfigs } from '../../../src/artifacts/types.js';
 import { syncFortemiCoreIndex } from '../../../src/artifacts/fortemi-core-sync.js';
+import * as resourcePreflight from '../../../tools/scripts/resource-preflight.mjs';
+import * as boundedProcess from '../../../src/process/bounded-child-process.mjs';
+import * as providerInventory from '../../../src/providers/provider-inventory.js';
+import * as modelDiscovery from '../../../src/models/model-discovery.js';
+import { LocalIssueProviderCore } from '../../../src/issues/local.js';
+import { RuntimeDiscovery } from '../../../src/smiths/toolsmith/runtime-discovery.mjs';
 import { discoverWorkspaceHistories, readDiscoveryManifest, writeDiscoveryManifest } from '../../../src/sessions/workspace-discovery.js';
 
 let root: string;
@@ -45,6 +51,11 @@ beforeEach(() => {
     XDG_DATA_HOME: path.join(root, 'data'), XDG_CONFIG_HOME: path.join(root, 'config'),
   })) vi.stubEnv(key, value);
   fs.mkdirSync(process.env.HOME!, { recursive: true });
+  vi.stubEnv('AIWG_MODEL_CATALOG_URL', '');
+  vi.spyOn(boundedProcess, 'boundedExecFileSync').mockImplementation(() => { throw new Error('not installed'); });
+  vi.spyOn(providerInventory, 'collectProviderInventory').mockImplementation(async projectDir => ({
+    generatedAt: new Date().toISOString(), projectDir, providers: [], activeProvider: null, activeSource: 'none',
+  }));
 });
 
 afterEach(() => {
@@ -66,7 +77,7 @@ describe('index refresh', () => {
     const report = await refreshIndexes({ cwd: workspace, dryRun: true });
     expect(report.jobs.map(job => [job.kind, job.graph])).toEqual([
       ['graph', 'refs'], ['graph', 'project'], ['graph', 'codebase'], ['graph', 'source'],
-      ['cache', 'project'], ['sessions', undefined],
+      ['cache', 'project'], ['sessions', undefined], ['runtime', undefined], ['models', undefined],
     ]);
     expect(report.jobs.every(job => job.status === 'planned')).toBe(true);
     expect(snapshot(root)).toEqual(before);
@@ -96,14 +107,15 @@ describe('index refresh', () => {
   });
 
   it('builds incrementally, then skips unchanged graphs and caches without rewriting outputs', async () => {
+    await refreshIndexes({ cwd: workspace, only: 'runtime' }, admitted);
     const first = await refreshIndexes({ cwd: workspace }, admitted);
-    expect(first.totals).toMatchObject({ ok: 2, errors: 0 });
+    expect(first.totals).toMatchObject({ ok: 3, skipped: 1, errors: 0 });
     loadUserGraphConfigs(workspace);
     syncFortemiCoreIndex(workspace, { graph: 'project' });
     const before = snapshot(path.join(workspace, '.aiwg/.index'));
     const second = await refreshIndexes({ cwd: workspace }, admitted);
     expect(second.status).toBe('ok');
-    expect(second.jobs).toHaveLength(3);
+    expect(second.jobs).toHaveLength(5);
     expect(second.jobs.every(job => job.status === 'skipped' && job.reason === 'unchanged')).toBe(true);
     expect(snapshot(path.join(workspace, '.aiwg/.index'))).toEqual(before);
     expect(fs.existsSync(path.join(state, 'index-refresh-checkpoint.json'))).toBe(false);
@@ -260,9 +272,9 @@ describe('index refresh', () => {
   it('keeps job failures resumable and emits the versioned JSON contract with a failing exit code', async () => {
     write(path.join(workspace, '.aiwg/.index/project'), 'blocks graph output');
     const report = await refreshIndexes({ cwd: workspace }, admitted);
-    expect(report).toMatchObject({ status: 'partial', totals: { errors: 1, ok: 1 } });
+    expect(report).toMatchObject({ status: 'partial', totals: { errors: 1, ok: 3 } });
     expect(report.jobs[0].error).toBeTypeOf('string');
-    expect(JSON.parse(fs.readFileSync(path.join(state, 'index-refresh-checkpoint.json'), 'utf8')).completed).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(path.join(state, 'index-refresh-checkpoint.json'), 'utf8')).completed).toHaveLength(3);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const cli = await runIndexRefresh(['--only', 'invalid', '--json'], workspace);
     expect(cli.status).toBe('error');
@@ -274,6 +286,109 @@ describe('index refresh', () => {
     expect(log).toHaveBeenCalledTimes(1);
     expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({ status: 'ok', mode: 'incremental' });
     expect(process.exitCode).toBe(0);
+  });
+
+  it('plans runtime, models, and existing local issues in dry runs without writes', async () => {
+    fs.mkdirSync(path.join(workspace, '.aiwg/issues/items'), { recursive: true });
+    const before = snapshot(root);
+    const jobs = planIndexRefresh({ cwd: workspace });
+    const report = await refreshIndexes({ cwd: workspace, dryRun: true });
+    expect(report.jobs).toEqual(jobs);
+    expect(jobs.slice(-3).map(job => job.kind)).toEqual(['runtime', 'models', 'issues']);
+    expect(jobs.slice(-3).every(job => job.status === 'planned')).toBe(true);
+    expect(snapshot(root)).toEqual(before);
+    expect(providerInventory.collectProviderInventory).not.toHaveBeenCalled();
+  });
+
+  it('leaves workspaces without local issue storage out of the issues plan', () => {
+    expect(planIndexRefresh({ cwd: workspace, only: 'issues' })).toEqual([]);
+  });
+
+  it.each(['runtime', 'models', 'issues'] as const)('accepts --only %s in the JSON CLI contract', async only => {
+    fs.mkdirSync(path.join(workspace, '.aiwg/issues/items'), { recursive: true });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const report = await runIndexRefresh(['--only', only, '--dry-run', '--json'], workspace);
+    expect(report.jobs).toEqual([{ kind: only, workspace, status: 'planned', wallMs: 0 }]);
+    expect(log).toHaveBeenCalledOnce();
+    expect(JSON.parse(log.mock.calls[0][0] as string)).toEqual(report);
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('executes --only runtime with one JSON report and no discovery chatter', async () => {
+    vi.spyOn(resourcePreflight, 'readLiveHostResources').mockReturnValue({
+      supported: true, availMemGb: 16, loadRatio: 0, memPsiAvg10: 0, memPsiAvg60: 0, freeDiskGb: 100,
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const report = await runIndexRefresh(['--only', 'runtime', '--json'], workspace);
+    expect(report).toMatchObject({ status: 'ok', totals: { jobs: 1, ok: 1, errors: 0 } });
+    expect(report.jobs[0]).toMatchObject({ kind: 'runtime', workspace, status: 'ok' });
+    expect(log).toHaveBeenCalledOnce();
+    expect(JSON.parse(log.mock.calls[0][0] as string)).toEqual(report);
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('runs only runtime for the selected workspace and keeps output quiet', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const report = await refreshIndexes({ cwd: workspace, only: 'runtime' }, admitted);
+    expect(report).toMatchObject({ status: 'ok', totals: { jobs: 1, ok: 1, errors: 0 } });
+    expect(report.jobs[0]).toMatchObject({ kind: 'runtime', workspace, status: 'ok' });
+    const catalog = JSON.parse(fs.readFileSync(path.join(workspace, '.aiwg/smiths/toolsmith/runtime.json'), 'utf8'));
+    expect(catalog.environment.workingDir).toBe(workspace);
+    expect(providerInventory.collectProviderInventory).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(workspace, '.aiwg/.index'))).toBe(false);
+    expect(log).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each(['runtime', 'models', 'issues'] as const)('uses the %s shortcut and forces a full refresh', async only => {
+    fs.mkdirSync(path.join(workspace, '.aiwg/issues/items'), { recursive: true });
+    const first = await refreshIndexes({ cwd: workspace, only }, admitted);
+    expect(first.jobs[0].status).toBe('ok');
+    const before = snapshot(root);
+    const second = await refreshIndexes({ cwd: workspace, only }, admitted);
+    expect(second.jobs[0]).toMatchObject({ kind: only, status: 'skipped', reason: 'unchanged' });
+    expect(snapshot(root)).toEqual(before);
+    const full = await refreshIndexes({ cwd: workspace, only, full: true }, admitted);
+    expect(full).toMatchObject({ mode: 'full', totals: { jobs: 1, ok: 1, errors: 0 } });
+    expect(full.jobs[0].status).toBe('ok');
+  });
+
+  it.each(['runtime', 'models', 'issues'] as const)('isolates a %s failure and resumes only the failed job', async kind => {
+    fs.mkdirSync(path.join(workspace, '.aiwg/issues/items'), { recursive: true });
+    const failed = kind === 'runtime'
+      ? vi.spyOn(RuntimeDiscovery.prototype, 'discover').mockRejectedValue(new Error('runtime failed'))
+      : kind === 'models'
+        ? vi.spyOn(modelDiscovery, 'resolveDynamicModelCatalog').mockRejectedValue(new Error('models failed'))
+        : vi.spyOn(LocalIssueProviderCore.prototype, 'rebuildIssueIndex').mockRejectedValue(new Error('issues failed'));
+    const report = await refreshIndexes({ cwd: workspace }, admitted);
+    expect(report).toMatchObject({ status: 'partial', totals: { jobs: 5, ok: 4, errors: 1 } });
+    expect(report.jobs.find(job => job.kind === kind)).toMatchObject({ status: 'error', error: `${kind} failed` });
+    expect(report.jobs.filter(job => job.kind !== kind).every(job => job.status === 'ok')).toBe(true);
+    failed.mockRestore();
+    const next = await refreshIndexes({ cwd: workspace }, admitted);
+    expect(next.status).toBe('ok');
+    expect(next.jobs.find(job => job.kind === kind)?.status).toBe('ok');
+    expect(next.jobs.filter(job => job.kind !== kind).every(job => job.reason === 'checkpoint')).toBe(true);
+    expect(fs.existsSync(path.join(state, 'index-refresh-checkpoint.json'))).toBe(false);
+  });
+
+  it.each(['runtime', 'models', 'issues'] as const)('applies the host lock and resource gate to %s jobs', async only => {
+    fs.mkdirSync(path.join(workspace, '.aiwg/issues/items'), { recursive: true });
+    const release = await acquireDirectoryLock(path.join(state, 'index-refresh.lock'));
+    const gate = vi.fn(async () => ({ ok: false, reason: 'memory pressure' }));
+    try {
+      const locked = await refreshIndexes({ cwd: workspace, only }, { gate });
+      expect(locked.jobs[0]).toMatchObject({ kind: only, status: 'skipped', reason: 'locked' });
+      expect(gate).not.toHaveBeenCalled();
+    } finally { await release(); }
+    const deferred = await refreshIndexes({ cwd: workspace, only }, { gate });
+    expect(deferred).toMatchObject({ status: 'deferred', totals: { jobs: 1, deferred: 1, errors: 0 } });
+    expect(deferred.jobs[0]).toMatchObject({ kind: only, reason: 'memory pressure' });
+    expect(gate).toHaveBeenCalledOnce();
+    const checkpoint = JSON.parse(fs.readFileSync(path.join(state, 'index-refresh-checkpoint.json'), 'utf8'));
+    expect(checkpoint.completed).toEqual([]);
+    expect((await refreshIndexes({ cwd: workspace, only }, admitted)).jobs[0].status).toBe('ok');
   });
 
   it('never discovers a provider root that was not already authorized', async () => {
