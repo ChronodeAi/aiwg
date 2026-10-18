@@ -7,6 +7,8 @@ import { constants, openSync, closeSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import Ajv2020 from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
 import {
   discoverMuseCatalogModels,
   discoverCodexDebugModels,
@@ -17,6 +19,7 @@ import {
   type NormalizeDiscoveryOptions,
   type ModelDiscoveryOptions,
   classifyDiscoveryError,
+  redactModelDiscoveryText,
   diffModelCatalog,
   discoverOpenClawModels,
   discoverOpenCodeModels,
@@ -211,6 +214,109 @@ describe('dynamic model catalog', () => {
       models: [],
       errorKind: 'rate-limit',
     });
+  });
+
+  it.each([
+    'EROFS: read-only file system, mkdir /home/synthetic/.pi/agent/settings.json.lock',
+    'EACCES: permission denied, FileSystem.open /home/synthetic/.local/share/opencode/log/401.log',
+    'EPERM: operation not permitted, mkdir /home/synthetic/.pi/agent/settings.json.lock',
+    'FileSystem.open: /home/synthetic/.local/share/opencode/log/synthetic.log',
+    'read-only file system, mkdir /home/synthetic/.pi/agent/settings.json.lock',
+    'permission denied, open /home/synthetic/.local/share/opencode/log/synthetic.log',
+    'operation not permitted, mkdir /home/synthetic/.pi/agent/settings.json.lock',
+  ])('classifies local filesystem failures as environment: %s', message => {
+    expect(classifyDiscoveryError(`\u001b[31m${message}\u001b[0m`)).toBe('environment');
+  });
+
+  it.each([
+    ['HTTP 403 forbidden', 'authentication'],
+    ['HTTP 403 permission denied', 'authentication'],
+    ['HTTP 429 rate limit exceeded', 'rate-limit'],
+    ['models timed out', 'timeout'],
+    ['spawn fake ENOENT', 'command'],
+    ['unknown option --pure', 'command'],
+    ['FileSystem.open: /tmp/unrelated-file', 'command'],
+  ])('preserves discovery classification for %s', (message, expected) => {
+    expect(classifyDiscoveryError(message)).toBe(expected);
+  });
+
+  it('strips terminal controls before redaction and diagnostic truncation', () => {
+    const diagnostic = '\u001b[31m'.repeat(900)
+      + '\u001b]8;;https://example.invalid\u0007failure\u001b]8;;\u001b\\ '
+      + 'to\u001b[1mken=synthetic-value\u001b[0m';
+    expect(redactModelDiscoveryText(diagnostic)).toBe('failure token=[REDACTED]');
+    expect(redactModelDiscoveryText('x'.repeat(5000))).toHaveLength(4096);
+  });
+
+  it('accepts environment discovery errors in the catalog schema', async () => {
+    const schema = JSON.parse(await readFile(new URL('../../../schemas/models/model-catalog.v1.schema.json', import.meta.url), 'utf8'));
+    const ajv = addFormats(new Ajv2020({ strict: true }));
+    ajv.addSchema(schema);
+    const validate = ajv.compile({ $ref: `${schema.$id}#/$defs/providerDiscovery` });
+    const result = await discoverPiModels('fake', async () => ({ stdout: '', exitCode: 1,
+      stderr: 'EROFS: read-only file system, mkdir /home/synthetic/.pi/agent/settings.json.lock' }));
+    expect(validate(result), JSON.stringify(validate.errors)).toBe(true);
+    expect(validate({ ...result, errorKind: 'unknown-kind' })).toBe(false);
+  });
+
+  it.each(['returned', 'thrown'])('sanitizes %s native errors before storing diagnostics', async mode => {
+    const { root, cacheFile, inventory } = await fixture();
+    const message = 'EROFS: read-only file system, mkdir /home/synthetic/.pi/agent/settings.json.lock';
+    const resolved = await resolveDynamicModelCatalog({ aiwgRoot: root, cacheFile, inventory, forceRefresh: true,
+      nativeDiscoverers: { codex: async () => {
+        const error = `\u001b[31m${message}\u001b[0m`;
+        if (mode === 'thrown') throw new Error(error);
+        return { provider: 'codex', source: 'native', observedAt: new Date(0).toISOString(),
+          accountScope: 'local-account', models: [], errorKind: 'environment', error };
+      } },
+    });
+    expect(resolved.discovery!.providers.codex).toMatchObject({ errorKind: 'environment', error: message, models: [] });
+    const cached = JSON.parse(await readFile(cacheFile, 'utf8'));
+    expect(cached.discovery.providers.codex.error).toBe(message);
+  });
+
+  it.each([
+    ['opencode', discoverOpenCodeModels, 'synthetic/code\n',
+      'EACCES: permission denied, FileSystem.open /home/synthetic/.local/share/opencode/log/synthetic.log'],
+    ['pi', discoverPiModels, 'provider  model\nsynthetic  code\n',
+      'EROFS: read-only file system, mkdir /home/synthetic/.pi/agent/settings.json.lock'],
+  ] as const)('preserves the last good %s catalog through environment failures and recovery', async (provider, discover, stdout, message) => {
+    const { root, cacheFile, inventory, catalog } = await fixture();
+    inventory.providers = [{ ...inventory.providers[0], id: provider }];
+    const staticFile = join(root, 'agentic/code/providers/model-catalog.v1.json');
+    await writeFile(staticFile, JSON.stringify({ ...catalog, providers: {
+      [provider]: { roles: { coding: { id: 'synthetic/static-code' } } },
+    } }));
+    let failed = false;
+    let now = new Date('2026-10-17T12:00:00.000Z');
+    const runner = async (_command: string, args: string[]) => args.includes('--version')
+      ? { stdout: 'fixture', stderr: '', exitCode: 0 }
+      : failed ? { stdout: '', stderr: `\u001b[31m${message}\u001b[0m`, exitCode: 1 }
+        : { stdout, stderr: '', exitCode: 0 };
+    const options = { aiwgRoot: root, cacheFile, inventory, forceRefresh: true, now: () => now,
+      nativeDiscoverers: { [provider]: async () => ({ ...await discover('fake', runner), observedAt: now.toISOString() }) } };
+    const first = await resolveDynamicModelCatalog(options);
+    expect(first.discovery!.providers[provider].errorKind).toBeUndefined();
+    failed = true;
+    now = new Date('2026-10-18T12:00:00.000Z');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const resolved = await resolveDynamicModelCatalog(options);
+      const entry = resolved.discovery!.providers[provider];
+      expect(entry).toMatchObject({ source: 'native', errorKind: 'environment', error: message,
+        models: first.discovery!.providers[provider].models,
+        observedAt: first.discovery!.providers[provider].observedAt });
+      expect(resolved.providers[provider]).toEqual(first.providers[provider]);
+      expect(resolved.discovery!.fetchedAt).toBe(now.toISOString());
+      const cached = JSON.parse(await readFile(cacheFile, 'utf8'));
+      expect(cached.discovery.providers[provider]).toEqual(entry);
+      expect(Object.values(cached.discovery.instances)).toContainEqual(entry);
+      expect(JSON.stringify(cached)).not.toContain('\\u001b');
+    }
+    failed = false;
+    const recovered = (await resolveDynamicModelCatalog(options)).discovery!.providers[provider];
+    expect(recovered.errorKind).toBeUndefined();
+    expect(recovered.error).toBeUndefined();
+    expect(recovered.observedAt).toBe(now.toISOString());
   });
 
   it.each([
