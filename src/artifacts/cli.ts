@@ -372,6 +372,10 @@ export function printIndexUsage(): void {
   console.log('  build [--force] [--verbose] [--all] [--scope <dir>] [--graph <name>]');
   console.log('  refresh [--full] [--workspace <path>]... [--root <dir>]...');
   console.log('          [--only graphs|sessions|caches|runtime|models|issues] [--dry-run] [--json] [--lock-wait-ms <n>]');
+  console.log('          [--max-record-bytes <n>] [--max-source-bytes <n>]');
+  console.log('  Session import defaults: 67108864 bytes per record, 1073741824 bytes (1 GiB) per source; source 0 is unlimited.');
+  console.log('  --exclude <id-or-glob> (repeatable): skip session IDs or absolute path globs; adds to sessions.import.exclude and AIWG_SESSIONS_IMPORT_EXCLUDE (comma-separated).');
+  console.log('  Import limits: CLI flag > AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES / AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES > workspace config > default.');
   console.log('  sync [--backend fortemi-core] [--graph <name> | --all] [--repo <name>]');
   console.log('       [--privacy private|sanitized|public] [--generated-at <iso>] [--json]');
   console.log('  --graph <name>  Target a specific graph (framework, project, codebase, source, user, or user-defined)');

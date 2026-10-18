@@ -52,11 +52,77 @@ Writes are atomic: the loader writes to a randomly-suffixed temp sibling, then
 | `remotes`       | `RemotesConfig`                  | optional | Repo origin topology. When absent, agents treat `origin` as primary. See [Remotes Block](#remotes-block).                                             |
 | `delivery`      | `DeliveryConfig`                 | optional | Repo control / delivery policy. When absent, runtime defaults apply. See [Delivery Block](#delivery-block).                                           |
 | `build`         | `BuildConfig`                    | optional | Project build policy, including large-build host resource preflight. See [Build Block](#build-block).                                                 |
+| `sessions`      | object                           | optional | Authorized discovery paths and import byte limits. See [Sessions](#sessions). |
 | `uhp`           | `UhpConfig`                      | optional | Explicit experimental UHP client profiles. See [UHP Client Profiles](#uhp-client-profiles).                                                           |
 
 Valid `providers` values: `antigravity` (alias `agy`), `claude`, `codex`,
 `copilot`, `cursor`, `deepseek-harness`, `factory`, `grokbot`, `hermes`, `muse`, `opencode`, `openclaw`, `openhuman`,
 `omp`, `pi`, `warp`, and `windsurf`.
+
+## Sessions
+
+```json
+{
+  "sessions": {
+    "codex_roots": ["/authorized/codex/sessions"],
+    "discovery_manifests": ["additional-discovery.json"],
+    "import": {
+      "max_record_bytes": 67108864,
+      "max_source_bytes": 1073741824,
+      "exclude": ["12345678-1234-1234-1234-123456789abc", "~/.codex/sessions/**/rollout-2026-10-18*.jsonl"]
+    }
+  }
+}
+```
+
+`codex_roots` authorizes additional Codex discovery roots. `discovery_manifests`
+adds manifests to session index refresh. Paths are relative to the selected
+workspace or absolute.
+
+| Setting | Default | Accepted values |
+| --- | --- | --- |
+| `sessions.import.max_record_bytes` | `67108864` (64 MiB) | Positive safe integer, in bytes |
+| `sessions.import.exclude` | `[]` | Array of non-empty native session IDs or absolute path globs (`~` expands to home); supports `*`, `**`, `?` |
+| `sessions.import.max_source_bytes` | `1073741824` (1 GiB) | Non-negative safe integer, in bytes; `0` means unlimited |
+
+`aiwg sessions import`, `aiwg sessions import-discovered`, and `aiwg index refresh`
+accept `--max-record-bytes <n>` and `--max-source-bytes <n>`. Precedence is CLI
+flag, then environment variable, then the selected workspace's config, then the
+defaults above. The environment variables are
+`AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES` and `AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES`.
+They accept decimal byte counts with the same integer ranges as the corresponding
+config values. Only an explicit source cap of `0` (in a flag, env var, or config)
+removes the source byte cap. Codex and Claude JSONL imports
+stream with bounded memory; the run resource gate still applies. Record-count
+and nesting limits remain unchanged. Muse workspace inspection uses its separate
+discovery limits.
+
+Exclusions match exact native session IDs or locator path globs before any source
+file is opened or read, during discovery/selection and again before batch import.
+Codex rollout IDs come from the filename or session metadata already recorded in
+the discovery manifest; exclusions never parse a source to find its ID. The
+example above excludes one Codex rollout by ID and a set of rollout paths.
+`aiwg sessions import-discovered` and `aiwg index refresh` accept repeatable
+`--exclude <id-or-glob>`. `AIWG_SESSIONS_IMPORT_EXCLUDE` accepts a comma-separated
+list. Config, env and flag entries add together. Relative path globs and empty
+entries are invalid.
+
+Discovery and batch receipts report `status: "excluded"`, an `exclusion` with the
+matching `entry` and `kind` (`session-id` or `path-glob`), and separate `excluded`
+totals. Session refresh and `index refresh` preserve these receipts; index refresh
+also prints exclusions in text output. Exclusions do not count as rejections or
+errors and do not cause partial-import warnings or resumable checkpoints. They
+also replace prior rejected dispositions. Rediscover after removing exclusions
+to select those sources again.
+
+Single-document JSON and Markdown exports retain a 64 MiB safety cap because
+those formats require buffering: Claude account exports, Copilot JSON, OpenCode
+JSON, Grokbot JSON, Muse package exports, and Cursor, Warp, and Grok Build
+Markdown. A smaller configured source cap also applies. Raising import limits
+does not raise this safety cap.
+
+Resource rejection diagnostics include the setting name, configured bytes,
+observed bytes, and origin (`flag`, `env`, `config`, or `default`).
 
 ## UHP Client Profiles
 

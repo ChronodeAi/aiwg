@@ -8,6 +8,7 @@ import {
   type SelectedSource, type Session, type SessionEvent, type SessionSource,
   type SessionSourceAdapter,
 } from './contracts.js';
+import { assertImportByteLimit, DEFAULT_IMPORT_BYTE_LIMITS, resolveImportLimits, type ImportByteLimits } from './import-limits.js';
 import { redactSessionValue, sanitizeSessionEvent, sanitizeNativeExtensions } from './policy.js';
 import type { ImportReceipt } from './repository.js';
 import type { SessionRepositoryPort } from './ports.js';
@@ -18,10 +19,8 @@ import {
   deriveSessionIntent,
 } from './origin.js';
 
-export interface ImportLimits {
+export interface ImportLimits extends ImportByteLimits {
   maxRecords: number;
-  maxRecordBytes: number;
-  maxTotalBytes: number;
   batchSize: number;
 }
 export interface ImportRequest {
@@ -37,10 +36,9 @@ export interface ImportRequest {
   inactivityThresholdMs?: number;
 }
 
-const DEFAULT_LIMITS: ImportLimits = {
+export const DEFAULT_IMPORT_LIMITS: ImportLimits = {
   maxRecords: 1_000_000,
-  maxRecordBytes: 8 * 1024 * 1024,
-  maxTotalBytes: 1024 * 1024 * 1024,
+  ...DEFAULT_IMPORT_BYTE_LIMITS,
   batchSize: 1_000,
 };
 
@@ -93,7 +91,9 @@ export class IncrementalSessionImporter {
         'session import workspace is outside the authorized source scope',
       );
     }
-    const limits = { ...DEFAULT_LIMITS, ...request.limits };
+    const limits = { ...DEFAULT_IMPORT_LIMITS, ...resolveImportLimits(undefined, {
+      maxRecordBytes: request.limits?.maxRecordBytes, maxSourceBytes: request.limits?.maxTotalBytes,
+    }), ...request.limits };
     const previous = request.batchRunId
       ? this.repository.getBatchCheckpoint(
           request.source.sourceId,
@@ -165,6 +165,7 @@ export class IncrementalSessionImporter {
     };
     const receipts: ImportReceipt[] = [];
     let batch: ProviderRecord[] = [];
+    let batchBytes = 0;
     let batchStart = checkpoint.recordsRead;
     let durableCheckpoint = { ...checkpoint };
     const importStarted = performance.now();
@@ -228,10 +229,12 @@ export class IncrementalSessionImporter {
       receipts.push(receipt);
       durableCheckpoint = { ...checkpoint };
       batch = [];
+      batchBytes = 0;
       batchStart = checkpoint.recordsRead;
     };
 
     try {
+      if (continuity) assertImportByteLimit('maxTotalBytes', limits, continuity.size);
       for await (const record of request.adapter.stream(
         request.selectedSource,
         previous ? { value: previous.cursor } : undefined,
@@ -243,10 +246,13 @@ export class IncrementalSessionImporter {
           );
         }
         const bytes = Buffer.byteLength(JSON.stringify(record));
-        assertSessionResourceLimit('maxRecordBytes', limits.maxRecordBytes, bytes);
-        assertSessionResourceLimit('maxTotalBytes', limits.maxTotalBytes, checkpoint.bytesRead + bytes);
+        assertImportByteLimit('maxRecordBytes', limits, bytes);
+        if (!continuity) assertImportByteLimit('maxTotalBytes', limits, checkpoint.bytesRead + bytes);
         assertSessionResourceLimit('maxRecords', limits.maxRecords, checkpoint.recordsRead + 1);
+        // Bound batches by bytes as well as record count for large records.
+        if (batchBytes + bytes > 4 * 1024 * 1024) flush();
         batch.push(record);
+        batchBytes += bytes;
         checkpoint.recordsRead += 1;
         if (record.sourceCursor?.startsWith('byte:')) {
           checkpoint.positionKind = 'byte-offset';

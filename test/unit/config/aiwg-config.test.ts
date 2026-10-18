@@ -147,6 +147,61 @@ describe('aiwg-config', () => {
   // ── readAiwgConfig / writeAiwgConfig ───────────────────────────────────────
 
   describe('readAiwgConfig', () => {
+    it('keeps session import editor defaults and env overrides aligned with the contract', () => {
+      const schema = JSON.parse(readFileSync(resolve('vscode-extension/schemas/aiwg.config.v1.json'), 'utf8'));
+      const limits = schema.properties.sessions.properties.import.properties;
+      expect(limits.max_record_bytes).toMatchObject({ default: 67108864, minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
+      expect(limits.max_source_bytes).toMatchObject({ default: 1073741824, minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+      expect(limits.max_record_bytes.description).toContain('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES');
+      expect(limits.max_source_bytes.description).toContain('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES');
+    });
+
+    it('reads session exclusions and exposes their editor schema', async () => {
+      mkdirSync(join(tmpDir, '.aiwg'));
+      const exclude = ['session-id', '/sessions/**/*.jsonl', '~/.codex/sessions/rollout-?.jsonl'];
+      writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { exclude } } }));
+      expect((await readAiwgConfig(tmpDir))?.sessions?.import?.exclude).toEqual(exclude);
+      const schema = JSON.parse(readFileSync(resolve('vscode-extension/schemas/aiwg.config.v1.json'), 'utf8'));
+      const rule = schema.properties.sessions.properties.import.properties.exclude;
+      expect(rule).toMatchObject({ type: 'array', default: [], items: { type: 'string', minLength: 1 } });
+      for (const entry of exclude) expect(new RegExp(rule.items.pattern).test(entry)).toBe(true);
+      for (const entry of ['', '  ', '*.jsonl', 'relative/*.jsonl', '~user/*']) expect(new RegExp(rule.items.pattern).test(entry)).toBe(false);
+    });
+
+    it.each([null, 'session-id', [null], [42], [''], ['  '], ['relative/*.jsonl'], ['*.jsonl'], ['~user/*']])(
+      'rejects invalid sessions.import.exclude=%j', async exclude => {
+        mkdirSync(join(tmpDir, '.aiwg'));
+        writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { exclude } } }));
+        await expect(readAiwgConfig(tmpDir)).rejects.toThrow('sessions.import.exclude');
+      },
+    );
+
+    it('reads session import byte limits including an unlimited source cap', async () => {
+      mkdirSync(join(tmpDir, '.aiwg'));
+      writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({
+        sessions: { import: { max_record_bytes: 67108864, max_source_bytes: 0 } },
+      }));
+      expect((await readAiwgConfig(tmpDir))?.sessions?.import)
+        .toEqual({ max_record_bytes: 67108864, max_source_bytes: 0 });
+    });
+
+    it.each([null, [], 'limits'])('rejects malformed session import config %j', async (limits) => {
+      mkdirSync(join(tmpDir, '.aiwg'));
+      writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: limits } }));
+      await expect(readAiwgConfig(tmpDir)).rejects.toThrow('sessions.import must be an object');
+    });
+
+    it.each([
+      ['max_record_bytes', 0], ['max_record_bytes', -1], ['max_record_bytes', 1.5],
+      ['max_record_bytes', '1024'], ['max_record_bytes', null],
+      ['max_source_bytes', -1], ['max_source_bytes', 1.5], ['max_source_bytes', '0'],
+      ['max_source_bytes', 9007199254740992],
+    ])('rejects invalid sessions.import.%s=%j', async (key, value) => {
+      mkdirSync(join(tmpDir, '.aiwg'));
+      writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { [key]: value } } }));
+      await expect(readAiwgConfig(tmpDir)).rejects.toThrow(`sessions.import.${key} must be`);
+    });
+
     it('reads an explicit discovery manifest list', async () => {
       mkdirSync(join(tmpDir, '.aiwg'));
       writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({

@@ -13,7 +13,7 @@ import {
   type SourceProbe,
 } from '../contracts.js';
 import {
-  readBoundedJsonLines, streamBoundedJsonLines,
+  streamBoundedJsonLines,
   type BoundedJsonRecord, type ReaderLimits,
 } from '../readers.js';
 
@@ -110,6 +110,12 @@ export class OpenClawSessionAdapter implements SessionSourceAdapter {
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
+    if (SOURCE_CLASSES.has(source.locatorClass)) {
+      const records = this.readLocalSource(source, true);
+      let result = await records.next();
+      while (!result.done) result = await records.next();
+      return result.value;
+    }
     const parsed = await this.readSource(source, true);
     return {
       sourceSchemaVersion: parsed.schemaVersion,
@@ -120,74 +126,101 @@ export class OpenClawSessionAdapter implements SessionSourceAdapter {
 
   async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
     if (SOURCE_CLASSES.has(source.locatorClass)) {
-      const input = await streamBoundedJsonLines({
-        selectedPath: source.locator,
-        allowedRoots: source.authorizedScope.allowedRoots,
-      }, {
-        consistency: source.locatorClass === 'openclaw-consistent-snapshot-jsonl'
-          ? 'complete' : 'provisional',
-        limits: this.limits,
-      });
-      const start = parseCursor(cursor?.value);
-      let outputIndex = 0;
-      let nativeSchema: string | null = null;
-      let eventSchema: string | null = null;
-      let sawRecord = false;
-      for await (const line of input) {
-        sawRecord = true;
-        const parsed = SnapshotSchema.safeParse(line.value);
-        if (!parsed.success) {
-          throw new SessionContractError('MALFORMED_SOURCE', 'OpenClaw snapshot is malformed', schemaRejectionDetail(parsed.error));
-        }
-        const snapshot = parsed.data;
-        const currentNative = nativeVersion(snapshot.schemaVersion);
-        const currentEvent = nativeVersion(snapshot.eventVersion);
-        if ((nativeSchema && nativeSchema !== currentNative)
-          || (eventSchema && eventSchema !== currentEvent)) {
-          throw new SessionContractError(
-            'SCHEMA_DRIFT',
-            'mixed OpenClaw snapshot schemas',
-            { issues: [{ path: nativeSchema && nativeSchema !== currentNative ? 'schemaVersion' : 'eventVersion', code: 'custom' }] },
-          );
-        }
-        nativeSchema = currentNative;
-        eventSchema = currentEvent;
-        assertSupportedSchemaMajor(nativeSchema, 16);
-        assertSupportedSchemaMajor(eventSchema, 3);
-        if (source.locatorClass === 'openclaw-consistent-snapshot-jsonl'
-          && snapshot.snapshotConsistency !== 'sqlite-backup') {
-          throw new SessionContractError(
-            'SCHEMA_DRIFT',
-            'OpenClaw snapshot lacks sqlite3.backup() consistency evidence',
-            schemaIssueDetail('snapshotConsistency'),
-          );
-        }
-        if (snapshot.incognito) {
-          throw new SessionContractError(
-            'OPERATION_NOT_AUTHORIZED',
-            'OpenClaw incognito session capture is unavailable by provider policy',
-          );
-        }
-        if (snapshot.gateway?.mode === 'remote'
-          && snapshot.gateway.hostId !== snapshot.gateway.expectedHostId) {
-          throw new SessionContractError(
-            'SOURCE_NOT_AUTHORIZED',
-            'OpenClaw remote Gateway identity does not match the authorized host',
-          );
-        }
-        for (const record of normalizeSnapshot(snapshot, line, source.locatorClass)) {
-          if (outputIndex++ >= start) yield record;
-        }
-      }
-      if (!sawRecord) throw new SessionContractError('MALFORMED_SOURCE', 'OpenClaw source is empty', schemaIssueDetail('<root>'));
-      if (input.incompleteTail && source.locatorClass === 'openclaw-consistent-snapshot-jsonl') {
-        throw new SessionContractError('TRUNCATED_SOURCE', 'OpenClaw consistent snapshot is truncated');
-      }
+      yield* this.readLocalSource(source, false, cursor);
       return;
     }
     const parsed = await this.readSource(source, false);
     const start = parseCursor(cursor?.value);
     for (const record of parsed.records.slice(start)) yield record;
+  }
+
+  private async *readLocalSource(
+    source: SelectedSource,
+    inspection: boolean,
+    cursor?: ImportCursor,
+  ): AsyncGenerator<ProviderRecord, SourceProbe> {
+    const input = await streamBoundedJsonLines({
+      selectedPath: source.locator,
+      allowedRoots: source.authorizedScope.allowedRoots,
+    }, {
+      consistency: source.locatorClass === 'openclaw-consistent-snapshot-jsonl'
+        ? 'complete' : 'provisional',
+      limits: this.limits,
+    });
+    const start = parseCursor(cursor?.value);
+    let outputIndex = 0;
+    let nativeSchema: string | null = null;
+    let eventSchema: string | null = null;
+    let sawRecord = false;
+    let complete = true;
+    let incognito = false;
+    let remoteMismatch = false;
+    let projectionIncomplete = false;
+    for await (const line of input) {
+      sawRecord = true;
+      const parsed = SnapshotSchema.safeParse(line.value);
+      if (!parsed.success) {
+        throw new SessionContractError('MALFORMED_SOURCE', 'OpenClaw snapshot is malformed', schemaRejectionDetail(parsed.error));
+      }
+      const snapshot = parsed.data;
+      const currentNative = nativeVersion(snapshot.schemaVersion);
+      const currentEvent = nativeVersion(snapshot.eventVersion);
+      if ((nativeSchema && nativeSchema !== currentNative)
+        || (eventSchema && eventSchema !== currentEvent)) {
+        throw new SessionContractError(
+          'SCHEMA_DRIFT',
+          'mixed OpenClaw snapshot schemas',
+          { issues: [{ path: nativeSchema && nativeSchema !== currentNative ? 'schemaVersion' : 'eventVersion', code: 'custom' }] },
+        );
+      }
+      nativeSchema = currentNative;
+      eventSchema = currentEvent;
+      assertSupportedSchemaMajor(nativeSchema, 16);
+      assertSupportedSchemaMajor(eventSchema, 3);
+      if (source.locatorClass === 'openclaw-consistent-snapshot-jsonl'
+        && snapshot.snapshotConsistency !== 'sqlite-backup') {
+        throw new SessionContractError(
+          'SCHEMA_DRIFT',
+          'OpenClaw snapshot lacks sqlite3.backup() consistency evidence',
+          schemaIssueDetail('snapshotConsistency'),
+        );
+      }
+      incognito ||= snapshot.incognito === true;
+      const mismatched = snapshot.gateway?.mode === 'remote'
+        && snapshot.gateway.hostId !== snapshot.gateway.expectedHostId;
+      remoteMismatch ||= mismatched;
+      projectionIncomplete ||= Boolean(snapshot.projection
+        && (snapshot.projection.kind !== 'canonical' || !snapshot.projection.complete));
+      complete &&= snapshot.sessions.every(sessionComplete);
+      if (!inspection && snapshot.incognito) {
+        throw new SessionContractError(
+          'OPERATION_NOT_AUTHORIZED',
+          'OpenClaw incognito session capture is unavailable by provider policy',
+        );
+      }
+      if (!inspection && mismatched) {
+        throw new SessionContractError(
+          'SOURCE_NOT_AUTHORIZED',
+          'OpenClaw remote Gateway identity does not match the authorized host',
+        );
+      }
+      if (snapshot.incognito || mismatched) continue;
+      for (const record of normalizeSnapshot(snapshot, line, source.locatorClass)) {
+        if (outputIndex++ >= start) yield record;
+      }
+    }
+    if (!sawRecord) throw new SessionContractError('MALFORMED_SOURCE', 'OpenClaw source is empty', schemaIssueDetail('<root>'));
+    if (input.incompleteTail && source.locatorClass === 'openclaw-consistent-snapshot-jsonl') {
+      throw new SessionContractError('TRUNCATED_SOURCE', 'OpenClaw consistent snapshot is truncated');
+    }
+    return {
+      sourceSchemaVersion: OPENCLAW_SOURCE_SCHEMA_VERSION,
+      consistency: source.locatorClass === 'openclaw-consistent-snapshot-jsonl'
+        ? 'consistent-snapshot'
+        : complete && !projectionIncomplete ? 'complete' : 'provisional',
+      operationalState: incognito ? 'inaccessible'
+        : remoteMismatch || projectionIncomplete ? 'degraded' : 'available',
+    };
   }
 
   private async readSource(source: SelectedSource, inspection: boolean): Promise<{
@@ -214,19 +247,6 @@ export class OpenClawSessionAdapter implements SessionSourceAdapter {
         throw new SessionContractError('UNSUPPORTED_OPERATION', 'OpenClaw Gateway capability was not negotiated');
       }
       input = (await this.gateway.snapshot(source)).map(toRecord);
-    } else if (SOURCE_CLASSES.has(source.locatorClass)) {
-      const result = await readBoundedJsonLines({
-        selectedPath: source.locator,
-        allowedRoots: source.authorizedScope.allowedRoots,
-      }, {
-        consistency: source.locatorClass === 'openclaw-consistent-snapshot-jsonl'
-          ? 'complete' : 'provisional',
-        limits: this.limits,
-      });
-      if (result.incompleteTail && source.locatorClass === 'openclaw-consistent-snapshot-jsonl') {
-        throw new SessionContractError('TRUNCATED_SOURCE', 'OpenClaw consistent snapshot is truncated');
-      }
-      input = result.records;
     } else {
       throw new SessionContractError('UNSUPPORTED_OPERATION', 'unsupported OpenClaw source class');
     }
@@ -251,14 +271,6 @@ export class OpenClawSessionAdapter implements SessionSourceAdapter {
     }
     assertSupportedSchemaMajor([...nativeSchemas][0], 16);
     assertSupportedSchemaMajor([...eventSchemas][0], 3);
-    if (source.locatorClass === 'openclaw-consistent-snapshot-jsonl'
-      && parsed.some(({ value }) => value.snapshotConsistency !== 'sqlite-backup')) {
-      throw new SessionContractError(
-        'SCHEMA_DRIFT',
-        'OpenClaw snapshot lacks sqlite3.backup() consistency evidence',
-        schemaIssueDetail('snapshotConsistency'),
-      );
-    }
     const incognito = parsed.some(({ value }) => value.incognito);
     const remoteMismatch = parsed.some(({ value }) => value.gateway?.mode === 'remote'
       && value.gateway.hostId !== value.gateway.expectedHostId);
@@ -278,10 +290,8 @@ export class OpenClawSessionAdapter implements SessionSourceAdapter {
       value.projection && (value.projection.kind !== 'canonical' || !value.projection.complete));
     return {
       schemaVersion: OPENCLAW_SOURCE_SCHEMA_VERSION,
-      consistency: source.locatorClass === 'openclaw-consistent-snapshot-jsonl'
-        ? 'consistent-snapshot'
-        : parsed.every(({ value }) => value.sessions.every(sessionComplete)) && !projectionIncomplete
-          ? 'complete' : 'provisional',
+      consistency: parsed.every(({ value }) => value.sessions.every(sessionComplete)) && !projectionIncomplete
+        ? 'complete' : 'provisional',
       operationalState: incognito ? 'inaccessible' : remoteMismatch || projectionIncomplete ? 'degraded' : 'available',
       records: incognito || remoteMismatch
         ? []

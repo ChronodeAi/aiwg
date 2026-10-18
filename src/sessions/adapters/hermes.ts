@@ -13,7 +13,7 @@ import {
   type SourceProbe,
 } from '../contracts.js';
 import {
-  readBoundedJsonLines, streamBoundedJsonLines,
+  streamBoundedJsonLines,
   type BoundedJsonRecord, type ReaderLimits,
 } from '../readers.js';
 
@@ -102,6 +102,13 @@ export class HermesSessionAdapter implements SessionSourceAdapter {
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
+    if (source.locatorClass === 'hermes-export-jsonl'
+      || source.locatorClass === 'hermes-consistent-snapshot-jsonl') {
+      const records = this.stream(source);
+      let result = await records.next();
+      while (!result.done) result = await records.next();
+      if (result.value) return result.value;
+    }
     const parsed = await this.readSource(source);
     return {
       sourceSchemaVersion: parsed.schemaVersion,
@@ -110,7 +117,7 @@ export class HermesSessionAdapter implements SessionSourceAdapter {
     };
   }
 
-  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
+  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncGenerator<ProviderRecord, SourceProbe | undefined> {
     if (source.locatorClass === 'hermes-export-jsonl'
       || source.locatorClass === 'hermes-consistent-snapshot-jsonl') {
       const input = await streamBoundedJsonLines({
@@ -124,12 +131,14 @@ export class HermesSessionAdapter implements SessionSourceAdapter {
       let outputIndex = 0;
       let schema: string | null = null;
       let sawRecord = false;
+      let complete = true;
       for await (const line of input) {
         sawRecord = true;
         const parsed = ExportSchema.safeParse(line.value);
         if (!parsed.success) {
           throw new SessionContractError('MALFORMED_SOURCE', 'Hermes export is malformed', schemaRejectionDetail(parsed.error));
         }
+        complete &&= ended(parsed.data);
         const currentSchema = declaredSchema(parsed.data);
         if (schema && schema !== currentSchema) {
           throw new SessionContractError('SCHEMA_DRIFT', 'mixed Hermes export schemas', schemaIssueDetail('schemaVersion'));
@@ -152,11 +161,16 @@ export class HermesSessionAdapter implements SessionSourceAdapter {
       if (input.incompleteTail && source.locatorClass !== 'hermes-export-jsonl') {
         throw new SessionContractError('TRUNCATED_SOURCE', 'Hermes consistent snapshot is truncated');
       }
-      return;
+      return {
+        sourceSchemaVersion: HERMES_EXPORT_SCHEMA_VERSION,
+        consistency: complete ? 'complete' : 'provisional',
+        operationalState: 'available',
+      };
     }
     const parsed = await this.readSource(source);
     const start = parseCursor(cursor?.value);
     for (const record of parsed.records.slice(start)) yield record;
+    return undefined;
   }
 
   private async readSource(source: SelectedSource): Promise<{
@@ -184,19 +198,6 @@ export class HermesSessionAdapter implements SessionSourceAdapter {
       input = (await this.localApi.snapshot(source)).map((value, sequence) => ({
         value, sequence, byteOffset: sequence, byteLength: Buffer.byteLength(JSON.stringify(value)),
       }));
-    } else if (source.locatorClass === 'hermes-export-jsonl'
-      || source.locatorClass === 'hermes-consistent-snapshot-jsonl') {
-      const result = await readBoundedJsonLines({
-        selectedPath: source.locator,
-        allowedRoots: source.authorizedScope.allowedRoots,
-      }, {
-        consistency: source.locatorClass === 'hermes-export-jsonl' ? 'provisional' : 'complete',
-        limits: this.limits,
-      });
-      input = result.records;
-      if (result.incompleteTail && source.locatorClass !== 'hermes-export-jsonl') {
-        throw new SessionContractError('TRUNCATED_SOURCE', 'Hermes consistent snapshot is truncated');
-      }
     } else {
       throw new SessionContractError('UNSUPPORTED_OPERATION', 'unsupported Hermes source class');
     }
@@ -212,14 +213,6 @@ export class HermesSessionAdapter implements SessionSourceAdapter {
     });
     const schemaVersion = declaredVersion(parsed.map(({ value }) => value));
     assertSupportedSchemaMajor(schemaVersion, 23);
-    if (source.locatorClass === 'hermes-consistent-snapshot-jsonl'
-      && parsed.some(({ value }) => value.snapshotConsistency !== 'sqlite-backup')) {
-      throw new SessionContractError(
-        'SCHEMA_DRIFT',
-        'Hermes snapshot lacks sqlite3.backup() consistency evidence',
-        schemaIssueDetail('snapshotConsistency'),
-      );
-    }
     return {
       schemaVersion: HERMES_EXPORT_SCHEMA_VERSION,
       consistency: parsed.every(({ value }) => ended(value)) ? 'complete' : 'provisional',

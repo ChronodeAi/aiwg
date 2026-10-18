@@ -1,7 +1,8 @@
+import * as sessionReaders from '../../../src/sessions/readers.js';
 import { appendFile, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   PiSessionAdapter, type SelectedSource,
   IncrementalSessionImporter, SessionRepository, SessionSourceSchema, stableSessionId,
@@ -30,6 +31,25 @@ async function resumeFixture() {
 afterEach(async () => Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))));
 
 describe('PiSessionAdapter', () => {
+
+  it('inspects and streams JSONL without collecting the source', async () => {
+    const buffered = vi.spyOn(sessionReaders, 'readBoundedJsonLines')
+      .mockRejectedValue(new Error('JSONL import must stream'));
+    try {
+      const adapter = new PiSessionAdapter();
+      const selection = selected('valid.jsonl');
+      await expect(adapter.inspect(selection)).resolves.toMatchObject({ operationalState: 'available' });
+      let records = 0;
+      for await (const record of adapter.stream(selection)) {
+        expect(record.nativeSessionId).toBeTruthy();
+        records += 1;
+      }
+      expect(records).toBeGreaterThan(0);
+      expect(buffered).not.toHaveBeenCalled();
+    } finally {
+      buffered.mockRestore();
+    }
+  });
   it('discovers v3 JSONL and preserves tree provenance while redacting tool output', async () => {
     const adapter = new PiSessionAdapter();
     const discovered = []; for await (const item of adapter.discover({ workspaceId: 'fixture', allowedRoots: [fixtures] })) discovered.push(item);

@@ -1,3 +1,4 @@
+import type { SourceExclusion } from './import-exclusions.js';
 import type { SessionCoveragePreflight, SessionRejectionDetail, SessionRuntimeIdentity } from './contracts.js';
 import { reconcileCoveragePreflight } from './coverage-preflight.js';
 import type { DiscoveryProviderReport } from './workspace-discovery.js';
@@ -11,6 +12,7 @@ export type BatchSourceStatus =
   | 'committed'
   | 'duplicate'
   | 'previously-committed'
+  | 'excluded'
   | 'rejected'
   | 'skipped';
 
@@ -24,6 +26,7 @@ export interface BatchSourceDisposition {
   errorCode: string | null;
   diagnostic: string | null;
   detail?: SessionRejectionDetail | null;
+  exclusion?: SourceExclusion;
   updatedAt: string;
 }
 
@@ -66,6 +69,7 @@ export interface SessionCoverageReport {
     discovered: number;
     accepted: number;
     rejected: number;
+    excluded: number;
     skipped: number;
     duplicated: number;
     previouslyCommitted: number;
@@ -91,6 +95,7 @@ export function coverageFromBatchRun(
   ]);
   const accepted = run.sources.filter((source) => source.status === 'committed').length;
   const rejected = run.sources.filter((source) => source.status === 'rejected').length;
+  const excluded = run.sources.filter(source => source.status === 'excluded').length;
   const skipped = run.sources.filter((source) => source.status === 'skipped').length;
   const duplicated = run.sources.filter(
     (source) => source.status === 'duplicate',
@@ -113,7 +118,7 @@ export function coverageFromBatchRun(
   const acquisitionIncomplete = rejected > 0 || pending > 0 || skipped > 0
     || (preflight?.expectedProviderBasis === 'explicit' && unresolvedProviders.length > 0);
   const incomplete = acquisitionIncomplete || !preflight || preflight.status !== 'complete'
-    || unavailable.length > 0 || accepted + duplicated + previouslyCommitted === 0
+    || unavailable.length > 0 || accepted + duplicated + previouslyCommitted + excluded === 0
     || exportRequired.length > 0 || notChecked.length > 0;
   const rejectionCounts: Record<string, number> = {};
   for (const source of run.sources) {
@@ -158,6 +163,7 @@ export function coverageFromBatchRun(
       discovered: run.sources.length,
       accepted,
       rejected,
+      excluded,
       skipped,
       duplicated,
       previouslyCommitted,
@@ -165,9 +171,9 @@ export function coverageFromBatchRun(
     },
     sessionsAccepted: run.sources.reduce((sum, source) => sum + source.sessionsAccepted, 0),
     eventsAccepted: run.sources.reduce((sum, source) => sum + source.eventsAccepted, 0),
-    coverageRatio: run.sources.length === 0
+    coverageRatio: run.sources.length === excluded
       ? null
-      : (accepted + duplicated + previouslyCommitted) / run.sources.length,
+      : (accepted + duplicated + previouslyCommitted) / (run.sources.length - excluded),
     rejectionCounts,
     sourceDateRange: {
       earliest: sourceTimestamps.at(0) ?? null,
@@ -213,6 +219,7 @@ function unknownCoverage(): SessionCoverageReport {
       discovered: 0,
       accepted: 0,
       rejected: 0,
+      excluded: 0,
       skipped: 0,
       duplicated: 0,
       previouslyCommitted: 0,

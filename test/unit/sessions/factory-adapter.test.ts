@@ -1,5 +1,6 @@
+import * as sessionReaders from '../../../src/sessions/readers.js';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   FACTORY_ADAPTER_VERSION,
   FACTORY_SOURCE_SCHEMA_VERSION,
@@ -27,6 +28,25 @@ function selected(name: string): SelectedSource {
 }
 
 describe('Factory session adapter', () => {
+
+  it('inspects and streams JSONL without collecting the source', async () => {
+    const buffered = vi.spyOn(sessionReaders, 'readBoundedJsonLines')
+      .mockRejectedValue(new Error('JSONL import must stream'));
+    try {
+      const adapter = new FactorySessionAdapter();
+      const selection = selected('complete.jsonl');
+      await expect(adapter.inspect(selection)).resolves.toMatchObject({ operationalState: 'available' });
+      let records = 0;
+      for await (const record of adapter.stream(selection)) {
+        expect(record.nativeSessionId).toBeTruthy();
+        records += 1;
+      }
+      expect(records).toBeGreaterThan(0);
+      expect(buffered).not.toHaveBeenCalled();
+    } finally {
+      buffered.mockRestore();
+    }
+  });
   const adapter = new FactorySessionAdapter();
 
   it('reports documented local JSONL and negotiated remote capability classes', () => {

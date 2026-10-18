@@ -2,15 +2,16 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { open, readFile } from 'node:fs/promises';
 import { assertSessionResourceLimit, schemaIssueDetail, SessionContractError, type ConsistencyStateSchema } from './contracts.js';
+import { assertImportByteLimit, DEFAULT_IMPORT_BYTE_LIMITS, type ImportByteLimits } from './import-limits.js';
 import { authorizeSourceFile, type SourceAuthorization } from './policy.js';
 import type { z } from 'zod';
 
-export interface ReaderLimits {
+export interface ReaderLimits extends ImportByteLimits {
   maxRecords: number;
-  maxRecordBytes: number;
-  maxTotalBytes: number;
   maxNestingDepth: number;
 }
+export type ReaderLimitName = Exclude<keyof ReaderLimits, 'limitOrigins'>;
+
 export interface BoundedJsonRecord {
   value: unknown;
   sequence: number;
@@ -35,8 +36,7 @@ export interface BoundedJsonLineStream extends AsyncIterable<BoundedJsonRecord> 
 
 export const DEFAULT_READER_LIMITS: ReaderLimits = Object.freeze({
   maxRecords: 1_000_000,
-  maxRecordBytes: 8 * 1024 * 1024,
-  maxTotalBytes: 1024 * 1024 * 1024,
+  ...DEFAULT_IMPORT_BYTE_LIMITS,
   maxNestingDepth: 64,
 });
 
@@ -45,7 +45,7 @@ export async function* streamJsonLines(
   options: {
     start?: number;
     end?: number;
-    limits?: Pick<ReaderLimits, 'maxRecordBytes' | 'maxTotalBytes'>;
+    limits?: ImportByteLimits;
   } = {},
 ): AsyncGenerator<{ line: string; byteLength: number }> {
   const input = createReadStream(path, { start: options.start, end: options.end });
@@ -61,8 +61,8 @@ export async function* streamJsonLines(
         const end = newline === -1 ? buffer.length : newline + 1;
         const segment = buffer.subarray(start, end);
         if (options.limits) {
-          assertSessionResourceLimit('maxRecordBytes', options.limits.maxRecordBytes, length + segment.length);
-          assertSessionResourceLimit('maxTotalBytes', options.limits.maxTotalBytes, total + segment.length);
+          assertImportByteLimit('maxRecordBytes', options.limits, length + segment.length);
+          assertImportByteLimit('maxTotalBytes', options.limits, (options.start ?? 0) + total + segment.length);
         }
         // Bound the raw bytes before copying or decoding a record. Only LF
         // separates records; CRLF and Unicode separators remain JSON input.
@@ -166,14 +166,18 @@ export async function streamBoundedJsonLines(
   };
 }
 
+// Single-document JSON and text exports cannot be incrementally normalized.
+export const MAX_BUFFERED_SOURCE_BYTES = 64 * 1024 * 1024;
+
 export async function readBoundedJson(
   authorization: SourceAuthorization,
   limitsInput?: Partial<ReaderLimits>,
 ): Promise<{ value: unknown; bytesRead: number }> {
   const allowed = await authorizeSourceFile(authorization);
   const limits = { ...DEFAULT_READER_LIMITS, ...limitsInput };
-  assertSessionResourceLimit('maxTotalBytes', limits.maxTotalBytes, allowed.size);
-  assertSessionResourceLimit('maxRecordBytes', limits.maxRecordBytes, allowed.size);
+  assertImportByteLimit('maxTotalBytes', limits, allowed.size);
+  assertImportByteLimit('maxRecordBytes', limits, allowed.size);
+  assertSessionResourceLimit('maxBufferedSourceBytes', MAX_BUFFERED_SOURCE_BYTES, allowed.size);
   let value: unknown;
   try {
     value = JSON.parse(await readFile(allowed.canonicalPath, 'utf8'));
@@ -190,8 +194,9 @@ export async function readBoundedText(
 ): Promise<{ value: string; bytesRead: number }> {
   const allowed = await authorizeSourceFile(authorization);
   const limits = { ...DEFAULT_READER_LIMITS, ...limitsInput };
-  assertSessionResourceLimit('maxTotalBytes', limits.maxTotalBytes, allowed.size);
-  assertSessionResourceLimit('maxRecordBytes', limits.maxRecordBytes, allowed.size);
+  assertImportByteLimit('maxTotalBytes', limits, allowed.size);
+  assertImportByteLimit('maxRecordBytes', limits, allowed.size);
+  assertSessionResourceLimit('maxBufferedSourceBytes', MAX_BUFFERED_SOURCE_BYTES, allowed.size);
   return {
     value: await readFile(allowed.canonicalPath, 'utf8'),
     bytesRead: allowed.size,

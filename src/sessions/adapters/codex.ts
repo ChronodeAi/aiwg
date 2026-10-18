@@ -15,7 +15,7 @@ import {
   type SourceProbe,
 } from '../contracts.js';
 import {
-  readBoundedJsonLines, streamBoundedJsonLines,
+  streamBoundedJsonLines,
   type BoundedJsonRecord, type ReaderLimits,
 } from '../readers.js';
 
@@ -100,15 +100,20 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
-    const parsed = await this.readSource(source);
-    return {
-      sourceSchemaVersion: parsed.schemaVersion,
-      consistency: parsed.consistency,
-      operationalState: 'available',
-    };
+    const records = this.readSource(source);
+    let result = await records.next();
+    while (!result.done) result = await records.next();
+    return result.value;
   }
 
   async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
+    yield* this.readSource(source, cursor);
+  }
+
+  private async *readSource(
+    source: SelectedSource,
+    cursor?: ImportCursor,
+  ): AsyncGenerator<ProviderRecord, SourceProbe> {
     const start = parseCursor(cursor?.value);
     const input = await streamBoundedJsonLines(
       { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots },
@@ -122,6 +127,8 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
     const identities = new Map<string, string>();
     let outputIndex = 0;
     let sawRecord = false;
+    let complete = false;
+    let sawActive = false;
     for await (const line of input) {
       sawRecord = true;
       mode ??= isAppServerRecord(line.value) ? 'app-server' : 'rollout';
@@ -139,8 +146,11 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
         }
         for (const thread of extractThreads(parsed.data)) {
           validateThreadIdentity(thread, identities);
+          sawActive ||= statusType(thread.status) === 'active';
         }
-        normalized = normalizeAppServer([line]).records;
+        const appServer = normalizeAppServer([line]);
+        complete ||= appServer.complete;
+        normalized = appServer.records;
       } else {
         const parsed = RolloutEnvelopeSchema.safeParse(line.value);
         if (!parsed.success) {
@@ -160,33 +170,13 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
     if (!sawRecord && !input.incompleteTail) {
       throw new SessionContractError('MALFORMED_SOURCE', 'Codex JSONL source is empty', schemaIssueDetail('<root>'));
     }
-  }
-
-  private async readSource(source: SelectedSource): Promise<{
-    records: ProviderRecord[];
-    schemaVersion: string;
-    consistency: 'provisional' | 'complete';
-  }> {
-    const input = await readBoundedJsonLines(
-      { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots },
-      { consistency: 'provisional', limits: this.limits },
-    );
-    if (input.records.length === 0 && !input.incompleteTail) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Codex JSONL source is empty', schemaIssueDetail('<root>'));
-    }
-    const appServer = isAppServerLocator(source.locator)
-      || input.records.some((record) => isAppServerRecord(record.value));
-    const schemaVersion = declaredSchemaVersion(input.records);
-    assertSupportedSchemaMajor(schemaVersion);
-    const normalized = appServer
-      ? normalizeAppServer(input.records)
-      : normalizeRollout(input.records, source.locator);
     return {
-      records: normalized.records,
-      schemaVersion,
-      consistency: normalized.complete ? 'complete' : 'provisional',
+      sourceSchemaVersion: schemaVersion ?? CODEX_SOURCE_SCHEMA_VERSION,
+      consistency: complete && !sawActive ? 'complete' : 'provisional',
+      operationalState: 'available',
     };
   }
+
 }
 
 function normalizeAppServer(
@@ -243,28 +233,6 @@ function normalizeAppServer(
     }
   }
   return { records, complete: complete && !sawActive };
-}
-
-function normalizeRollout(
-  input: BoundedJsonRecord[],
-  locator: string,
-): { records: ProviderRecord[]; complete: false } {
-  const sourceArtifactSessionId = rolloutIdFromFilename(locator);
-  const state: RolloutState = { nativeSessionId: sourceArtifactSessionId };
-  const records: ProviderRecord[] = [];
-  for (const line of input) {
-    const parsed = RolloutEnvelopeSchema.safeParse(line.value);
-    if (!parsed.success) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Codex rollout record is malformed', schemaRejectionDetail(parsed.error));
-    }
-    records.push(normalizeRolloutRecord(
-      state,
-      parsed.data,
-      line,
-      sourceArtifactSessionId,
-    ));
-  }
-  return { records, complete: false };
 }
 
 interface RolloutState {

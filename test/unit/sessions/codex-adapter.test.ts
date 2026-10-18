@@ -1,7 +1,8 @@
+import * as sessionReaders from '../../../src/sessions/readers.js';
 import { cp, mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CODEX_ADAPTER_VERSION,
   CodexSessionAdapter,
@@ -35,6 +36,25 @@ afterEach(async () => {
 });
 
 describe('Codex session adapter', () => {
+
+  it('inspects and streams JSONL without collecting the source', async () => {
+    const buffered = vi.spyOn(sessionReaders, 'readBoundedJsonLines')
+      .mockRejectedValue(new Error('JSONL import must stream'));
+    try {
+      const adapter = new CodexSessionAdapter();
+      const selection = selectedSource('threads.app-server.jsonl', 'codex-streaming');
+      await expect(adapter.inspect(selection)).resolves.toMatchObject({ operationalState: 'available' });
+      let records = 0;
+      for await (const record of adapter.stream(selection)) {
+        expect(record.nativeSessionId).toBeTruthy();
+        records += 1;
+      }
+      expect(records).toBeGreaterThan(0);
+      expect(buffered).not.toHaveBeenCalled();
+    } finally {
+      buffered.mockRestore();
+    }
+  });
   it('publishes implemented API-first and rollout fallback capabilities', () => {
     const adapter = new CodexSessionAdapter();
     expect(adapter).toMatchObject({
@@ -107,7 +127,6 @@ describe('Codex session adapter', () => {
     expect(records.every((record) => record.extensions?.lineage === undefined
       && record.extensions?.inheritedFromId === undefined
       && record.extensions?.replayed === undefined)).toBe(true);
-    expect((await adapter['readSource'](selected)).records).toEqual(records);
   });
 
   it('reads only complete rollout records and preserves durable replay provenance', async () => {
@@ -133,7 +152,6 @@ describe('Codex session adapter', () => {
     expect(records.every((record) => record.extensions?.lineage === undefined
       && record.extensions?.inheritedFromId === undefined
       && record.extensions?.replayed === undefined)).toBe(true);
-    expect((await adapter['readSource'](selected)).records).toEqual(records);
   });
 
   it.each([true, false])('pins child identity and uses the history boundary with explicit ordinals %s', async (explicitOrdinals) => {
@@ -157,7 +175,6 @@ describe('Codex session adapter', () => {
     expect(records.slice(1, 6).every((record) => record.extensions?.inheritedFromId === parentId)).toBe(true);
     expect(records[0].extensions?.replayed).toBeUndefined();
     expect(records[6].extensions?.replayed).toBeUndefined();
-    expect((await adapter['readSource'](selected)).records).toEqual(records);
     expect(await collect(adapter.stream(selected, { value: '4' }))).toEqual(records.slice(4));
   });
 
@@ -177,7 +194,6 @@ describe('Codex session adapter', () => {
     expect(records.filter((record) => record.extensions?.replayed).map((record) => record.sequence))
       .toEqual([1, 2]);
     expect(records[1].extensions?.inheritedFromId).toBe(parentId);
-    expect((await adapter['readSource'](selected)).records).toEqual(records);
     expect(await collect(adapter.stream(selected, { value: '2' }))).toEqual(records.slice(2));
   });
 

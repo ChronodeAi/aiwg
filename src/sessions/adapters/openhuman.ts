@@ -13,7 +13,7 @@ import {
   type SourceProbe,
 } from '../contracts.js';
 import {
-  readBoundedJsonLines, streamBoundedJsonLines,
+  streamBoundedJsonLines,
   type BoundedJsonRecord, type ReaderLimits,
 } from '../readers.js';
 
@@ -103,15 +103,13 @@ export class OpenHumanSessionAdapter implements SessionSourceAdapter {
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
-    const parsed = await this.readSource(source);
-    return {
-      sourceSchemaVersion: parsed.schemaVersion,
-      consistency: parsed.consistency,
-      operationalState: 'available',
-    };
+    const records = this.stream(source);
+    let result = await records.next();
+    while (!result.done) result = await records.next();
+    return result.value;
   }
 
-  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
+  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncGenerator<ProviderRecord, SourceProbe> {
     if (source.locatorClass !== 'openhuman-session-raw-jsonl'
       && source.locatorClass !== 'openhuman-enriched-jsonl') {
       throw new SessionContractError('UNSUPPORTED_OPERATION', 'unsupported OpenHuman source class');
@@ -123,6 +121,7 @@ export class OpenHumanSessionAdapter implements SessionSourceAdapter {
     }, { consistency: 'provisional', limits: this.limits });
     const threads = new Map<string, ThreadState>();
     const turns = new Map<string, TurnState>();
+    const sessions = new Map<string, boolean>();
     const maxJoinStates = Math.min(this.limits?.maxRecords ?? 1_000_000, 10_000);
     let schemaVersion: string | null = null;
     let outputIndex = 0;
@@ -145,6 +144,7 @@ export class OpenHumanSessionAdapter implements SessionSourceAdapter {
         turns.set(`${value.thread_id}\0${value.request_id}`, value);
       } else {
         sawRaw = true;
+        sessions.set(value.session_id, value.active === false || value.type === 'session_end');
         const record = normalize(
           value,
           line,
@@ -154,78 +154,21 @@ export class OpenHumanSessionAdapter implements SessionSourceAdapter {
         );
         if (outputIndex++ >= start) yield record;
       }
-      if (threads.size + turns.size > maxJoinStates) {
+      if (threads.size + turns.size + sessions.size > maxJoinStates) {
         throw new SessionContractError(
           'RESOURCE_LIMIT_EXCEEDED',
           'OpenHuman enrichment join state exceeds the bounded streaming limit',
-          { limit: 'maxJoinStates', configured: maxJoinStates, observed: threads.size + turns.size },
+          { limit: 'maxJoinStates', configured: maxJoinStates, observed: threads.size + turns.size + sessions.size },
         );
       }
     }
     if (!sawRaw) {
       throw new SessionContractError('MALFORMED_SOURCE', 'OpenHuman source contains no session_raw records', schemaIssueDetail('<root>'));
     }
-  }
-
-  private async readSource(source: SelectedSource): Promise<{
-    schemaVersion: string;
-    consistency: 'provisional' | 'complete';
-    records: ProviderRecord[];
-  }> {
-    if (source.locatorClass !== 'openhuman-session-raw-jsonl'
-      && source.locatorClass !== 'openhuman-enriched-jsonl') {
-      throw new SessionContractError('UNSUPPORTED_OPERATION', 'unsupported OpenHuman source class');
-    }
-    const result = await readBoundedJsonLines({
-      selectedPath: source.locator,
-      allowedRoots: source.authorizedScope.allowedRoots,
-    }, { consistency: 'provisional', limits: this.limits });
-    if (result.records.length === 0) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'OpenHuman transcript source is empty', schemaIssueDetail('<root>'));
-    }
-    const parsed = result.records.map(({ value, ...line }) => {
-      const record = RecordSchema.safeParse(value);
-      if (!record.success) throw new SessionContractError(
-        'MALFORMED_SOURCE',
-        'OpenHuman transcript record is malformed',
-        schemaRejectionDetail(record.error),
-      );
-      return { value: record.data, ...line };
-    });
-    const versions = new Set(parsed.map(({ value }) => version(value.schemaVersion)));
-    if (versions.size !== 1) throw new SessionContractError(
-      'SCHEMA_DRIFT',
-      'mixed OpenHuman schema versions',
-      schemaIssueDetail('schemaVersion'),
-    );
-    assertSupportedSchemaMajor([...versions][0]);
-    const raw = parsed.filter((item): item is typeof item & { value: RawRecord } =>
-      item.value.recordType === 'session_raw');
-    if (raw.length === 0) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'OpenHuman source contains no session_raw records', schemaIssueDetail('<root>'));
-    }
-    const threads = new Map<string, ThreadState>();
-    const turns = new Map<string, TurnState>();
-    for (const item of parsed) {
-      if (item.value.recordType === 'thread_state') threads.set(item.value.thread_id, item.value);
-      if (item.value.recordType === 'turn_state') {
-        turns.set(`${item.value.thread_id}\0${item.value.request_id}`, item.value);
-      }
-    }
-    const sessions = new Map<string, RawRecord[]>();
-    for (const item of raw) {
-      const values = sessions.get(item.value.session_id) ?? [];
-      values.push(item.value);
-      sessions.set(item.value.session_id, values);
-    }
     return {
-      schemaVersion: OPENHUMAN_SOURCE_SCHEMA_VERSION,
-      consistency: result.incompleteTail || [...sessions.values()].some((events) =>
-        events.at(-1)?.active !== false && events.at(-1)?.type !== 'session_end')
-        ? 'provisional' : 'complete',
-      records: raw.map(({ value, ...line }) =>
-        normalize(value, line, source.locatorClass, threads.get(value.thread_id),
-          value.request_id ? turns.get(`${value.thread_id}\0${value.request_id}`) : undefined)),
+      sourceSchemaVersion: OPENHUMAN_SOURCE_SCHEMA_VERSION,
+      consistency: !input.incompleteTail && [...sessions.values()].every(Boolean) ? 'complete' : 'provisional',
+      operationalState: 'available',
     };
   }
 }

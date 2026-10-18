@@ -1,7 +1,7 @@
 import { open } from 'node:fs/promises';
 import { schemaIssueDetail, SessionContractError } from '../contracts.js';
 import { authorizeSourceFile, type SourceAuthorization } from '../policy.js';
-import type { ReaderLimits } from '../readers.js';
+import type { ReaderLimits, ReaderLimitName } from '../readers.js';
 
 // Discovery inspects metadata, not an entire import. Bound allocation before
 // assembling a line (readline would buffer an arbitrarily large single line).
@@ -16,7 +16,7 @@ export const MUSE_WORKSPACE_TAIL_BYTES = 1024 * 1024;
 
 export class MuseWorkspaceLimitError extends SessionContractError {
   constructor(
-    public readonly limitName: keyof ReaderLimits,
+    public readonly limitName: ReaderLimitName,
     public readonly limitValue: number,
     observed: number,
   ) {
@@ -140,6 +140,6 @@ export function parseMuseScanJson(line: string, maxDepth: number): unknown {
   return value;
 }
 
-function scanLimit(limit: keyof ReaderLimits, configured: number, observed: number): MuseWorkspaceLimitError {
+function scanLimit(limit: ReaderLimitName, configured: number, observed: number): MuseWorkspaceLimitError {
   return new MuseWorkspaceLimitError(limit, configured, observed);
 }
