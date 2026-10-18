@@ -241,6 +241,9 @@ export interface ArtifactIndex {
   /** Metadata extractor revision used to build the entries. */
   extractorVersion?: string;
 
+  /** Fingerprint of graph configuration used by the incremental builder. */
+  buildConfigHash?: string;
+
   /** ISO timestamp of last build */
   builtAt: string;
 

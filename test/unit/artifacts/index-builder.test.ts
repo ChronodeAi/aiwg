@@ -754,7 +754,7 @@ state_transfer:
       expect(byPath['.aiwg/frameworks/local-delivery/flows/release.yaml']?.kind).toBe('FlowPlaybook');
     });
 
-    it('re-extracts unchanged files when the index format version changes', async () => {
+    it.each(['extractorVersion', 'buildConfigHash'])('re-extracts unchanged files when %s is stale', async field => {
       const templateDir = path.join(tmpDir, 'agentic', 'code', 'addons', 'ops', 'templates');
       fs.mkdirSync(templateDir, { recursive: true });
       const runbookPath = path.join(templateDir, 'rotation-runbook.md');
@@ -771,7 +771,8 @@ state_transfer:
       const metadataPath = path.join(tmpDir, INDEX_DIR, 'metadata.json');
       const stale = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
       const entryPath = Object.keys(stale.entries)[0];
-      stale.extractorVersion = '2026.07.17.1';
+      if (field === 'buildConfigHash') delete stale.buildConfigHash;
+      else stale.extractorVersion = '2026.07.17.1';
       stale.entries[entryPath].type = 'template';
       delete stale.entries[entryPath].kind;
       fs.writeFileSync(metadataPath, JSON.stringify(stale));
@@ -781,6 +782,7 @@ state_transfer:
       const rebuilt = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
       expect(rebuilt.version).toBe('1.0.0');
       expect(rebuilt.extractorVersion).toBe('2026.08.24.1');
+      expect(rebuilt.buildConfigHash).toMatch(/^[a-f0-9]{64}$/);
       expect(rebuilt.entries[entryPath].type).toBe('runbook');
       expect(rebuilt.entries[entryPath].kind).toBe('Runbook');
     });
@@ -865,6 +867,165 @@ type: use-case
       const indexDir = path.join(tmpDir, INDEX_DIR);
       const metadata = JSON.parse(fs.readFileSync(path.join(indexDir, 'metadata.json'), 'utf-8'));
       expect(Object.keys(metadata.entries)).toHaveLength(2);
+    });
+
+    it.each(['default', 'project', 'codebase', 'outputDir', 'sqlite'])(
+      'preserves index bytes and mtimes on repeated no-op builds (%s)', async variant => {
+        const sourceDir = path.join(tmpDir, variant === 'codebase' ? 'src' : '.aiwg/requirements');
+        fs.mkdirSync(sourceDir, { recursive: true });
+        const extension = variant === 'codebase' ? 'ts' : 'md';
+        fs.writeFileSync(path.join(sourceDir, `target.${extension}`), '# Target\n');
+        fs.writeFileSync(path.join(sourceDir, `source.${extension}`), `# Source\n\n[target](./target.${extension})\n`);
+        if (variant === 'sqlite') {
+          fs.writeFileSync(path.join(tmpDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+            index: { graphBackend: 'sqlite' },
+          }));
+        }
+        const options = {
+          quiet: true,
+          graph: variant === 'project' || variant === 'sqlite' ? 'project'
+            : variant === 'codebase' ? 'codebase' : undefined,
+          outputDir: variant === 'outputDir' ? path.join(tmpDir, 'output') : undefined,
+        };
+        await buildIndex(tmpDir, { ...options, force: true });
+        const indexDir = path.join(options.outputDir ?? tmpDir, INDEX_DIR, options.graph ?? '');
+        const filenames = ['metadata.json', 'tags.json', 'dependencies.json', 'checksum-manifest.json'];
+        if (variant === 'sqlite') filenames.push('graph.db');
+        const snapshots = filenames.map(filename => {
+          const file = path.join(indexDir, filename);
+          fs.utimesSync(file, new Date('2000-01-01'), new Date('2000-01-01'));
+          return { file, bytes: fs.readFileSync(file), mtime: fs.statSync(file, { bigint: true }).mtimeNs };
+        });
+        const statsFile = path.join(indexDir, 'stats.json');
+        const originalStats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+        fs.utimesSync(statsFile, new Date('2000-01-01'), new Date('2000-01-01'));
+        const statsMtime = fs.statSync(statsFile, { bigint: true }).mtimeNs;
+
+        await buildIndex(tmpDir, options);
+        await buildIndex(tmpDir, options);
+
+        for (const { file, bytes, mtime } of snapshots) {
+          expect(fs.readFileSync(file), file).toEqual(bytes);
+          expect(fs.statSync(file, { bigint: true }).mtimeNs, file).toBe(mtime);
+        }
+        expect(fs.statSync(statsFile, { bigint: true }).mtimeNs).not.toBe(statsMtime);
+        const stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+        expect(stats.graphMetrics).toEqual(originalStats.graphMetrics);
+        expect(stats.totalArtifacts).toBe(2);
+      },
+    );
+
+    it('refreshes only the manifest and stats when source timestamps drift', async () => {
+      const sourceDir = path.join(tmpDir, '.aiwg', 'requirements');
+      fs.mkdirSync(sourceDir, { recursive: true });
+      const source = path.join(sourceDir, 'a.md');
+      fs.writeFileSync(source, '# A\n');
+      await buildIndex(tmpDir, { force: true, quiet: true });
+      const indexDir = path.join(tmpDir, INDEX_DIR);
+      const files = ['metadata.json', 'tags.json', 'dependencies.json'].map(name => path.join(indexDir, name));
+      const before = files.map(file => fs.readFileSync(file, 'utf8'));
+      fs.utimesSync(source, new Date('2000-01-01'), new Date('2000-01-01'));
+
+      await buildIndex(tmpDir, { quiet: true });
+
+      expect(files.map(file => fs.readFileSync(file, 'utf8'))).toEqual(before);
+      const manifest = JSON.parse(fs.readFileSync(path.join(indexDir, 'checksum-manifest.json'), 'utf8'));
+      expect(manifest.entries['.aiwg/requirements/a.md'].mtime).toBe(fs.statSync(source).mtime.toISOString());
+    });
+
+    it.each(['tags.json', 'dependencies.json', 'stats.json', 'checksum-manifest.json', 'graph.db'])(
+      'rebuilds when a required index file is missing (%s)', async filename => {
+        const sourceDir = path.join(tmpDir, '.aiwg', 'requirements');
+        fs.mkdirSync(sourceDir, { recursive: true });
+        fs.writeFileSync(path.join(sourceDir, 'a.md'), '# A\n');
+        if (filename === 'graph.db') {
+          fs.writeFileSync(path.join(tmpDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+            index: { graphBackend: 'sqlite' },
+          }));
+        }
+        await buildIndex(tmpDir, { force: true, quiet: true });
+        const file = path.join(tmpDir, INDEX_DIR, filename);
+        fs.unlinkSync(file);
+
+        await buildIndex(tmpDir, { quiet: true });
+
+        expect(fs.existsSync(file)).toBe(true);
+        expect(fs.statSync(file).size).toBeGreaterThan(0);
+      },
+    );
+
+    it('rebuilds metadata and dependencies after a source is deleted', async () => {
+      const sourceDir = path.join(tmpDir, '.aiwg', 'requirements');
+      fs.mkdirSync(sourceDir, { recursive: true });
+      fs.writeFileSync(path.join(sourceDir, 'a.md'), '# A\n\n@.aiwg/requirements/b.md\n');
+      fs.writeFileSync(path.join(sourceDir, 'b.md'), '# B\n');
+      await buildIndex(tmpDir, { force: true, quiet: true });
+      fs.unlinkSync(path.join(sourceDir, 'b.md'));
+
+      await buildIndex(tmpDir, { quiet: true });
+
+      const indexDir = path.join(tmpDir, INDEX_DIR);
+      const metadata = JSON.parse(fs.readFileSync(path.join(indexDir, 'metadata.json'), 'utf8'));
+      const deps = JSON.parse(fs.readFileSync(path.join(indexDir, 'dependencies.json'), 'utf8'));
+      expect(Object.keys(metadata.entries)).toEqual(['.aiwg/requirements/a.md']);
+      expect(deps['.aiwg/requirements/a.md'].upstream).toEqual([]);
+      expect(deps['.aiwg/requirements/b.md']).toBeUndefined();
+    });
+
+    it('rebuilds metadata and tags after source content changes', async () => {
+      const sourceDir = path.join(tmpDir, '.aiwg', 'requirements');
+      fs.mkdirSync(sourceDir, { recursive: true });
+      const source = path.join(sourceDir, 'a.md');
+      fs.writeFileSync(source, '# A\n');
+      await buildIndex(tmpDir, { force: true, quiet: true });
+      fs.writeFileSync(source, '---\ntitle: Changed\ntags: [updated]\n---\n# A\n');
+
+      await buildIndex(tmpDir, { quiet: true });
+
+      const indexDir = path.join(tmpDir, INDEX_DIR);
+      const metadata = JSON.parse(fs.readFileSync(path.join(indexDir, 'metadata.json'), 'utf8'));
+      const tags = JSON.parse(fs.readFileSync(path.join(indexDir, 'tags.json'), 'utf8'));
+      expect(metadata.entries['.aiwg/requirements/a.md'].title).toBe('Changed');
+      expect(tags.updated).toEqual(['.aiwg/requirements/a.md']);
+    });
+
+    it('rebuilds the selected backend after configuration changes', async () => {
+      const sourceDir = path.join(tmpDir, '.aiwg', 'requirements');
+      fs.mkdirSync(sourceDir, { recursive: true });
+      fs.writeFileSync(path.join(sourceDir, 'a.md'), '# A\n');
+      await buildIndex(tmpDir, { force: true, quiet: true });
+      fs.writeFileSync(path.join(tmpDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+        index: { graphBackend: 'sqlite' },
+      }));
+
+      await buildIndex(tmpDir, { quiet: true });
+
+      const indexDir = path.join(tmpDir, INDEX_DIR);
+      const stats = JSON.parse(fs.readFileSync(path.join(indexDir, 'stats.json'), 'utf8'));
+      expect(stats.graphMetrics.backend).toBe('sqlite');
+      expect(fs.existsSync(path.join(indexDir, 'graph.db'))).toBe(true);
+    });
+
+    it('completes a no-op 3000-artifact build in under 25 percent of a forced build', async () => {
+      const sourceDir = path.join(tmpDir, 'src');
+      fs.mkdirSync(sourceDir, { recursive: true });
+      for (let i = 0; i < 3000; i++) {
+        const refs = [1, 2, 3].map(offset => `@src/artifact-${(i + offset) % 3000}.ts`).join('\n');
+        fs.writeFileSync(path.join(sourceDir, `artifact-${i}.ts`),
+          `---\ntitle: Artifact ${i}\ntags: [synthetic]\n---\n# Artifact ${i}\n\n${refs}\n`);
+      }
+      const start = performance.now();
+      await buildIndex(tmpDir, { graph: 'codebase', force: true, quiet: true });
+      const forcedMs = performance.now() - start;
+      const incrementalStart = performance.now();
+      await buildIndex(tmpDir, { graph: 'codebase', quiet: true });
+      const incrementalMs = performance.now() - incrementalStart;
+
+      const stats = JSON.parse(fs.readFileSync(path.join(tmpDir, INDEX_DIR, 'codebase', 'stats.json'), 'utf8'));
+      expect(stats.totalArtifacts).toBe(3000);
+      expect(stats.graphMetrics.totalEdges).toBe(9000);
+      console.info(`3000 artifacts: forced=${forcedMs.toFixed(1)}ms, no-op=${incrementalMs.toFixed(1)}ms (${(100 * incrementalMs / forcedMs).toFixed(1)}%)`);
+      expect(incrementalMs).toBeLessThan(forcedMs * 0.25);
     });
 
     it('should infer type from filename patterns', async () => {
@@ -1264,6 +1425,18 @@ type: citations
       expect(ref008.title).toBe('Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks');
       // Authors should be in summary
       expect(ref008.summary).toContain('Lewis');
+
+      // Supplements are outside the graph scan roots and can change independently.
+      fs.writeFileSync(path.join(citationDir, 'REF-008-citations.md'), `---
+ref: REF-008
+title: Updated title
+authors: Updated authors
+---
+`);
+      await buildIndex(tmpDir, { graph: 'papers', quiet: true });
+      const updated = JSON.parse(fs.readFileSync(path.join(indexDir, 'metadata.json'), 'utf-8'));
+      expect(updated.entries['pdfs/full/REF-008-lewis-2020-rag.pdf'].title).toBe('Updated title');
+      expect(updated.entries['pdfs/full/REF-008-lewis-2020-rag.pdf'].summary).toContain('Updated authors');
     });
 
     it('accepts match shorthand in metadataSupplements config (#738)', async () => {
