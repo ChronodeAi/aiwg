@@ -5362,6 +5362,65 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
     return { launcher, child, result, runDir: attempt.runDir };
   }
 
+  // The frozen reference retains the timeout-classification bug. Exercise
+  // the corrected contract separately, on both production capture paths.
+  describe.each([false, true])('deadline/cancellation race, recovery gated=%s', (gated) => {
+    it.each(['systemd-unit', 'degraded'].flatMap(mode =>
+      ['CANCELLED', 'HARD_DEADLINE', 'clean-close'].map(winner => ({ mode, winner }))))(
+      '$mode preserves $winner when finalization crosses the deadline', async ({ mode, winner }) => {
+        const fx = await equivFixtureRoot();
+        try {
+          const attempt = await fx.freshPlan();
+          vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+          const launcher = new SessionLauncher();
+          const child = makeFakeChild();
+          const stopUnit = vi.fn(() => ({ ok: true }));
+          const cleanupDelay = vi.fn(() => {
+            // finish() has committed and cleared its timers. Model slow
+            // stream/fs cleanup without sleeping or depending on host load.
+            expect(launcher.workerStop).toBeNull();
+            vi.advanceTimersByTime(10_000);
+          });
+          child.unref = cleanupDelay;
+          const launched = new Promise(resolve => launcher.once('launched', resolve));
+          const resultPromise = launcher.launchWorker({
+            invocationPath: attempt.invocationPath, runDir: attempt.runDir,
+            inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+            checkDispatch: () => ({ enabled: gated, ok: true, failures: [] }),
+            isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+            launchIsolated: () => ({ mode, child, ...(mode === 'systemd-unit' ? { unit: 'aiwg-worker-race' } : {}) }),
+            stopUnit, isolationStatus: () => ({ active: true }),
+          });
+          await launched;
+          // Cancellation wins 5 ms before the hard timer. Its grace is
+          // clipped to that deadline, so both timers become due together.
+          await vi.advanceTimersByTimeAsync(4995);
+          if (winner === 'clean-close') {
+            child.emit('exit', 0, null);
+            child.emit('close', 0, null);
+          } else {
+            if (winner === 'CANCELLED') launcher.workerStop();
+            await vi.advanceTimersByTimeAsync(5);
+            if (winner === 'HARD_DEADLINE' && launcher.workerStop) launcher.workerStop();
+          }
+          // Degraded mode has a 100 ms force-kill backstop after grace.
+          if (launcher.workerStop) await vi.advanceTimersByTimeAsync(100);
+          expect(launcher.workerStop).toBeNull();
+          const result = await resultPromise;
+          expect(cleanupDelay).toHaveBeenCalledOnce();
+          expect(Object.hasOwn(result, 'attemptOutcome')).toBe(gated);
+          const expected = { cancelled: winner === 'CANCELLED', timedOut: winner === 'HARD_DEADLINE',
+            stopReason: winner === 'clean-close' ? null : winner };
+          expect(result).toMatchObject(expected);
+          expect(JSON.parse(await readFile(path.join(attempt.runDir, 'exit.json'), 'utf8'))).toMatchObject(expected);
+          if (mode === 'systemd-unit') expect(stopUnit).toHaveBeenCalledTimes(winner === 'clean-close' ? 0 : 1);
+        } finally {
+          vi.useRealTimers();
+          await rm(fx.root, { recursive: true, force: true });
+        }
+      });
+  });
+
   for (const trigger of notGatedTriggers) {
     describe(`not-gated via: ${trigger.name}`, () => {
       async function build() {
@@ -5370,47 +5429,18 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         return fx;
       }
 
-      // Baseline and branch run SEQUENTIALLY, each under its OWN
-      // fake-timer session (matching the proven single-launch pattern
-      // already used elsewhere in this file, e.g. "captures a leader
-      // first visible after more than 250 ms of null launcher samples" in
-      // `worker-single-invocation.test.ts`). `vi.advanceTimersByTimeAsync`
-      // only advances timers that are ALREADY registered at the moment it
-      // is called; the real fs I/O this launcher does on its way to
-      // actually arming the hard-deadline timer needs real event-loop
-      // turns (not just microtasks) to land. Advancing in a bounded
-      // number of real-yielding steps gives that real I/O room to land
-      // between each step; the `beforeAll` warm-up launch above (run
-      // before fake timers are ever installed anywhere in this describe
-      // block) is what keeps the number of steps actually needed small
-      // and bounded in practice for the DEGRADED isolation path used
-      // below. No real waiting: every step is a fake-clock advance, never
-      // a wall-clock sleep — `setImmediate` only yields the current real
-      // macrotask, it does not sleep.
-      //
-      // NOT covered here, by construction and not by oversight: a
-      // systemd-unit timeout/cancellation through a fake child drives
-      // `captureOneWorker`/`captureOneWorkerBaseline`'s `observeIdentity`
-      // into its `hasTransport` branch, which repeatedly `await`s a real
-      // fs read (`transportRecord`) inside a `later()` callback it itself
-      // reschedules every 5ms until `identityCapture.expired()`. Under
-      // `vi.useFakeTimers()` (sync and async advance APIs, with and
-      // without the `beforeAll` module warm-up — all tried), that
-      // recursive async-callback-reschedules-itself pattern never
-      // reliably drains within any bounded number of manual advance+yield
-      // steps found in the time available: the newly-armed timer is
-      // registered only after its predecessor's `await` resolves, and a
-      // fake-clock advance does not reliably wait for that before moving
-      // on. This is a vitest fake-timer/real-async-I/O interaction
-      // specific to the TEST HARNESS's fake isolation layer, not a
-      // behavior difference between the frozen fixture and the branch —
-      // both run the IDENTICAL, unmodified `observeIdentity` for this
-      // not-gated path, so there is no asymmetry for this construction to
-      // hide, and the degraded-isolation timeout/cancellation tests below
-      // exercise the exact same hard-deadline/stop/finish machinery
-      // without that specific hazard (degraded's `observeIdentity` branch
-      // is synchronous, never `await`s). This is as far as the existing
-      // fake isolation layer allows, per the assignment's own wording.
+      // Advance only until finish() starts (it clears workerStop before its
+      // first await), then keep time fixed while real stream/fs cleanup drains.
+      // Advancing until resultPromise resolves made cleanup duration depend on
+      // disk/runner load and could push only one side past the hard deadline.
+      async function advanceUntilFinalizing(launcher, stepMs, maxSteps) {
+        for (let step = 0; step < maxSteps && launcher.workerStop; step += 1) {
+          await vi.advanceTimersByTimeAsync(stepMs);
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        expect(launcher.workerStop).toBeNull();
+      }
+
       async function runTimedFakeDegradedScenario(LauncherClass, fx, attempt, extraOptions) {
         vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
@@ -5423,27 +5453,15 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
             launchIsolated: () => ({ mode: 'degraded', child: makeFakeChild() }), ...extraOptions,
           });
           await launched;
-          let settled = false;
-          resultPromise.finally(() => { settled = true; });
-          for (let step = 0; step < 20 && !settled; step += 1) {
-            await vi.advanceTimersByTimeAsync(500);
-            await new Promise((resolve) => setImmediate(resolve));
-          }
+          await advanceUntilFinalizing(launcher, 500, 20);
           return { result: await resultPromise, runDir: attempt.runDir };
         } finally {
           vi.useRealTimers();
         }
       }
 
-      // #2915 round 8 review 8 (D3): the comment above documents WHY the
-      // degraded-isolation harness's single 500ms-advance/one-yield step
-      // cannot drain this scenario -- `observeIdentity`'s `hasTransport`
-      // branch `await`s a REAL `transportRecord()` disk read inside a
-      // recursive, self-rescheduling `later(observeIdentity, 5)` timer, so
-      // a new fake timer is registered only after a real microtask/macrotask
-      // turn the single coarse advance does not reliably provide. Finer
-      // granularity (matching the loop's own 5ms reschedule interval) with
-      // a real yield between EVERY advance drains it deterministically.
+      // Fine steps let real transport-record I/O complete between recursive
+      // identity samples; freeze the clock as soon as finalization starts.
       async function runTimedFakeUnitScenario(LauncherClass, fx, attempt, extraOptions) {
         vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
@@ -5459,16 +5477,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
             ...extraOptions,
           });
           await launched;
-          let settled = false;
-          resultPromise.finally(() => { settled = true; });
-          // 5ms virtual steps (matching `observeIdentity`'s own reschedule
-          // interval once started), each followed by a real event-loop
-          // turn -- bounded at 3000 steps (15s virtual, comfortably past
-          // the 1s hard-deadline + 1s grace this scenario arms).
-          for (let step = 0; step < 3000 && !settled; step += 1) {
-            await vi.advanceTimersByTimeAsync(5);
-            await new Promise((resolve) => setImmediate(resolve));
-          }
+          await advanceUntilFinalizing(launcher, 5, 3000);
           return { result: await resultPromise, runDir: attempt.runDir };
         } finally {
           vi.useRealTimers();
@@ -5536,12 +5545,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
               });
               await launched;
               launcher.workerStop();
-              let settled = false;
-              resultPromise.finally(() => { settled = true; });
-              for (let step = 0; step < 3000 && !settled; step += 1) {
-                await vi.advanceTimersByTimeAsync(5);
-                await new Promise((resolve) => setImmediate(resolve));
-              }
+              await advanceUntilFinalizing(launcher, 5, 3000);
               return { result: await resultPromise, runDir: attempt.runDir };
             } finally {
               vi.useRealTimers();
@@ -5575,12 +5579,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
               });
               await launched;
               launcher.workerStop();
-              let settled = false;
-              resultPromise.finally(() => { settled = true; });
-              for (let step = 0; step < 20 && !settled; step += 1) {
-                await vi.advanceTimersByTimeAsync(500);
-                await new Promise((resolve) => setImmediate(resolve));
-              }
+              await advanceUntilFinalizing(launcher, 500, 20);
               return { result: await resultPromise, runDir: attempt.runDir };
             } finally {
               vi.useRealTimers();
