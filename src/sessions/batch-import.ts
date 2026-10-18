@@ -44,6 +44,7 @@ export interface BatchImportReceipt {
   schemaVersion: typeof BATCH_IMPORT_VERSION;
   run: BatchImportRun;
   coverage: SessionCoverageReport;
+  interruptedRuns: Array<{ runId: string; interruptedAt: string }>;
   totals: {
     discovered: number;
     accepted: number;
@@ -270,6 +271,7 @@ function receiptFor(run: BatchImportRun, now: Date): BatchImportReceipt {
     schemaVersion: BATCH_IMPORT_VERSION,
     run,
     coverage,
+    interruptedRuns: [],
     totals: {
       discovered: coverage.sources.discovered,
       accepted: coverage.sources.accepted,

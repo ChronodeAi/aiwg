@@ -1,9 +1,12 @@
+import { fork } from 'node:child_process';
 import {
   copyFile, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { sessionsHandler } from '../../../src/cli/handlers/sessions.js';
 import {
   SessionRepository,
   CodexSessionAdapter,
@@ -11,6 +14,7 @@ import {
   importDiscoveryManifest,
   publicDiscoveryManifest,
   redactSourceLocator,
+  importLeasePath,
   readDiscoveryManifest,
   sha256,
   writeDiscoveryManifest,
@@ -511,6 +515,84 @@ describe('workspace session discovery and batch import', () => {
       });
     } finally {
       repository.close();
+    }
+  });
+
+  itWithSqlite('immediately resumes a SIGKILLed child import and reports the interrupted run', async () => {
+    const fixture = await providerFixture();
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, providerHome: fixture.providerHome,
+    });
+    const manifestPath = join(fixture.root, 'manifest.json');
+    const database = join(fixture.root, 'catalog.sqlite');
+    await writeDiscoveryManifest(manifestPath, manifest);
+    const child = fork(fileURLToPath(new URL('../../fixtures/sessions/import-kill-child.ts', import.meta.url)),
+      [database, manifestPath], {
+        execArgv: ['--import', 'tsx'],
+        stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+        timeout: 15_000,
+        killSignal: 'SIGKILL',
+      });
+    let stderr = '';
+    child.stderr!.on('data', (chunk) => { stderr += String(chunk); });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.once('exit', (code, signal) => resolve({ code, signal }));
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.once('message', (message) => {
+          if (message === 'source-staged') resolve();
+          else reject(new Error(`unexpected child message: ${String(message)}`));
+        });
+        child.once('error', reject);
+        child.once('exit', () => reject(new Error(`child exited before staging: ${stderr}`)));
+      });
+      const before = new SessionRepository(database);
+      const interrupted = before.getBatchImportRunForManifest(manifest.manifestId, manifest.workspaceId)!;
+      try {
+        expect(interrupted.status).toBe('running');
+        expect(interrupted.sources.filter((source) => source.status === 'committed')).toHaveLength(1);
+      } finally {
+        before.close();
+      }
+      expect(child.kill('SIGKILL')).toBe(true);
+      expect(await exited).toEqual({ code: null, signal: 'SIGKILL' });
+      const owner = JSON.parse(await readFile(join(importLeasePath(database), 'owner.json'), 'utf8'));
+      expect(Date.now() - Date.parse(owner.heartbeatAt)).toBeLessThan(30_000);
+      if (process.platform === 'linux') expect(owner.processStartId).toMatch(/^[\w-]+:\d+$/);
+
+      const args = ['import-discovered', '--workspace', fixture.workspace,
+        '--manifest', manifestPath, '--db', database, '--resume', '--confirm',
+        '--lock-wait-ms', '0', '--json'];
+      const context = { args, rawArgs: ['sessions', ...args], cwd: fixture.root, frameworkRoot: process.cwd() };
+      expect((await sessionsHandler.execute(context)).exitCode).toBe(0);
+      const receipt = JSON.parse(String(log.mock.calls.at(-1)?.[0])).data.receipt;
+      expect(receipt.interruptedRuns).toEqual([
+        { runId: interrupted.runId, interruptedAt: expect.any(String) },
+      ]);
+      expect(receipt.run.interruptedAt).toBe(receipt.interruptedRuns[0].interruptedAt);
+      expect(receipt.totals).toMatchObject({ accepted: 3, previouslyCommitted: 1, rejected: 0, pending: 0 });
+      expect(receipt.run.sources.every((source: { attempts: number }) => source.attempts === 1)).toBe(true);
+      const after = new SessionRepository(database);
+      try {
+        expect(after.getBatchImportRun(interrupted.runId)).toMatchObject({
+          status: 'partial', interruptedAt: receipt.run.interruptedAt,
+        });
+        expect(after.listSessions({ workspaceId: manifest.workspaceId, limit: 20 }).total).toBe(4);
+        expect(after.doctor()).toMatchObject({ integrity: 'ok', sessions: 4 });
+      } finally {
+        after.close();
+      }
+      expect((await sessionsHandler.execute(context)).exitCode).toBe(0);
+      const replay = JSON.parse(String(log.mock.calls.at(-1)?.[0])).data.receipt;
+      expect(replay.interruptedRuns).toEqual([]);
+      expect(replay.run.interruptedAt).toBe(receipt.run.interruptedAt);
+      expect(replay.totals).toMatchObject({ accepted: 0, previouslyCommitted: 4 });
+    } finally {
+      child.kill('SIGKILL');
+      await exited;
+      log.mockRestore();
     }
   });
 

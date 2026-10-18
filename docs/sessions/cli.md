@@ -229,11 +229,18 @@ failed process leaves a resumable run; repeat `import-discovered --resume
 idempotent.
 
 Single and batch imports acquire `<catalog>.import.lock`. The lease records run
-ID, PID, host, start time, and heartbeat. A second writer waits up to
+ID, PID, host, start time, heartbeat, and (on Linux) boot ID and process start
+ticks to distinguish a reused PID. A second writer waits up to
 `--lock-wait-ms` (default 5000) and then returns `IMPORT_LOCKED` with safe owner
-metadata and recovery guidance. AIWG auto-recovers only a stale same-host lease
-whose process is confirmed dead; foreign-host ownership is never broken
-automatically. WAL readers remain available while an importer owns the lease.
+metadata and recovery guidance. A same-host lease is reclaimed immediately when
+its process is confirmed dead or its recorded process identity no longer matches.
+Live or unverifiable owners and foreign-host leases are never broken automatically.
+After acquiring the lease, either import command marks orphaned `running` batch
+runs as `interrupted` and records `interruptedAt` (the recovery timestamp). The
+batch receipt's `interruptedRuns` lists their run IDs and timestamps; single-source
+imports report the same list beside `receipts`. A resumed batch retains
+`run.interruptedAt` after completion. WAL readers remain available while an
+importer owns the lease.
 
 ## Coverage and timeline
 

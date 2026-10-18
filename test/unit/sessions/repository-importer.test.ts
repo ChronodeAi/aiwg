@@ -19,6 +19,7 @@ import {
   sha256,
   stableEventId,
   stableSessionId,
+  type BatchImportRun,
   type ProviderRecord,
   type MemoryDestinationPlan,
   type SessionSource,
@@ -162,6 +163,46 @@ describeWithSqlite('transactional session repository and importer', () => {
         })]));
     } finally {
       raw.close();
+      repository.close();
+    }
+  });
+
+  it('marks only running batch imports interrupted across workspaces and preserves source progress', () => {
+    const repository = new SessionRepository(':memory:');
+    const timestamp = '2026-10-01T00:00:00.000Z';
+    const recoveryTime = new Date('2026-10-01T00:00:01.000Z');
+    const base: BatchImportRun = {
+      schemaVersion: '1.0.0', runId: 'orphan', manifestId: 'manifest',
+      manifestCreatedAt: timestamp, workspaceId: 'workspace', status: 'running',
+      startedAt: timestamp, updatedAt: timestamp, completedAt: null,
+      providers: [], sources: [{
+        sourceId: 'source', provider: 'generic', status: 'committed', attempts: 1,
+        sessionsAccepted: 1, eventsAccepted: 2, errorCode: null, diagnostic: null,
+        updatedAt: timestamp,
+      }],
+    };
+    try {
+      repository.saveBatchImportRun(base);
+      repository.saveBatchImportRun({ ...base, runId: 'other-orphan', workspaceId: 'other-workspace' });
+      for (const status of ['complete', 'partial', 'interrupted'] as const) {
+        repository.saveBatchImportRun({ ...base, runId: status, manifestId: status, status });
+      }
+      expect(repository.interruptRunningBatchImports(recoveryTime)).toEqual([
+        { runId: 'orphan', interruptedAt: recoveryTime.toISOString() },
+        { runId: 'other-orphan', interruptedAt: recoveryTime.toISOString() },
+      ]);
+      for (const runId of ['orphan', 'other-orphan']) {
+        expect(repository.getBatchImportRun(runId)).toMatchObject({
+          status: 'interrupted', interruptedAt: recoveryTime.toISOString(),
+          updatedAt: recoveryTime.toISOString(), completedAt: null, sources: base.sources,
+        });
+      }
+      for (const status of ['complete', 'partial', 'interrupted']) {
+        expect(repository.getBatchImportRun(status)).toMatchObject({ status, updatedAt: timestamp });
+        expect(repository.getBatchImportRun(status)?.interruptedAt).toBeUndefined();
+      }
+      expect(repository.interruptRunningBatchImports(new Date())).toEqual([]);
+    } finally {
       repository.close();
     }
   });
