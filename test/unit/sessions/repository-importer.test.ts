@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { requireFeaturePackage } from '../../../src/features/runtime.js';
 import {
-  appendFile, mkdtemp, readFile, rename, rm, stat, utimes, writeFile,
+  appendFile, readFile, rename, rm, stat, utimes, writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,6 +24,8 @@ import {
   type SessionSourceAdapter,
 } from '../../../src/sessions/index.js';
 import { describeWithSqlite } from '../../helpers/sqlite.js';
+// File-owned temp dirs are removed after the file, even when a test fails (#3018).
+import { mkdtemp } from '../../helpers/temp-dir.js';
 
 function adapter(records: ProviderRecord[]): SessionSourceAdapter {
   return {
