@@ -1,4 +1,4 @@
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 export const WORKSPACE_MATCH_KINDS = ['exact', 'subfolder', 'worktree'] as const;
@@ -10,9 +10,10 @@ export async function matchSessionWorkspace(
   workspace: string,
 ): Promise<WorkspaceMatchKind | null> {
   try {
-    const candidate = await realpath(resolve(cwd));
+    const { path: candidate, missing } = await resolveCandidate(resolve(cwd));
     const workspacePath = await realpath(resolve(workspace));
     const direct = encloses(workspacePath, candidate);
+    if (missing && !direct) return null;
     const physicalCatalog = await nearestCatalogBetween(candidate, direct ? workspacePath : undefined);
     if (physicalCatalog && !encloses(physicalCatalog, workspacePath)) return null;
     const mainRepository = await worktreeMainRepository(candidate).catch(() => null);
@@ -27,6 +28,25 @@ export async function matchSessionWorkspace(
     // Unresolved paths or Git metadata cannot establish workspace ownership.
     return null;
   }
+}
+
+async function resolveCandidate(path: string): Promise<{ path: string; missing: boolean }> {
+  let ancestor = path;
+  const suffix: string[] = [];
+  for (;;) {
+    try {
+      // Stop at symlinks too, so realpath rejects dangling links below.
+      await lstat(ancestor);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = dirname(ancestor);
+      if (parent === ancestor) throw error;
+      suffix.unshift(basename(ancestor));
+      ancestor = parent;
+    }
+  }
+  return { path: join(await realpath(ancestor), ...suffix), missing: suffix.length > 0 };
 }
 
 function encloses(parent: string, child: string): boolean {
