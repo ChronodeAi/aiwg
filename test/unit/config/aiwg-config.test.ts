@@ -147,6 +147,23 @@ describe('aiwg-config', () => {
   // ── readAiwgConfig / writeAiwgConfig ───────────────────────────────────────
 
   describe('readAiwgConfig', () => {
+    it('reads an explicit Codex discovery root list', async () => {
+      mkdirSync(join(tmpDir, '.aiwg'));
+      writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({
+        sessions: { codex_roots: ['relative/sessions', '/tmp/codex-sessions'] },
+      }));
+      expect((await readAiwgConfig(tmpDir))?.sessions?.codex_roots)
+        .toEqual(['relative/sessions', '/tmp/codex-sessions']);
+    });
+
+    it.each([null, [], 'sessions', { codex_roots: 'sessions' }, { codex_roots: [null] }, { codex_roots: [' '] }])(
+      'rejects malformed Codex discovery root configuration %j', async (sessions) => {
+        mkdirSync(join(tmpDir, '.aiwg'));
+        writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({ sessions }));
+        await expect(readAiwgConfig(tmpDir)).rejects.toThrow('sessions.codex_roots must be an array of non-empty paths');
+      },
+    );
+
     it('returns null when config does not exist', async () => {
       const result = await readAiwgConfig(tmpDir);
       expect(result).toBeNull();

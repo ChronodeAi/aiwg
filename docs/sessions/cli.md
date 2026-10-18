@@ -71,7 +71,7 @@ the adapter's stored boolean metadata, within the same provider and workspace.
 aiwg sessions sources [--expected-providers <comma-separated-ids>] [--json]
 aiwg sessions discover --workspace <path>
                        [--expected-providers <comma-separated-ids>]
-                       [--codex-root <authorized-path>] [--muse-root <authorized-path>]
+                       [--codex-root <authorized-path>]... [--muse-root <authorized-path>]
                        [--omp-root <authorized-path>] [--dsh-root <authorized-path>]
                        [--manifest <path>] [--dry-run] [--json]
 aiwg sessions import-discovered --workspace <path>
@@ -136,9 +136,34 @@ aiwg sessions doctor [--json]
 
 Discovery scans only provider roots associated with the explicitly authorized
 workspace. Claude, Cursor, and Factory have workspace-keyed local roots. Codex
-rollouts use a shared root, so AIWG does not inspect `CODEX_HOME` implicitly:
-pass `--codex-root` to authorize that root, or leave Codex reported as
-`SHARED_ROOT_AUTHORIZATION_REQUIRED`. OMP and DeepSeek Harness also require an
+rollouts use shared roots. Repeat `--codex-root` to authorize multiple roots,
+or configure `sessions.codex_roots` in the workspace's `.aiwg/aiwg.config`:
+
+```json
+{
+  "sessions": {
+    "codex_roots": ["/home/operator/.codex/sessions", "./exported-codex"]
+  }
+}
+```
+
+Configured paths resolve relative to the workspace; CLI paths resolve relative
+to the current directory. Both lists are combined. When neither list supplies
+roots, `--provider-home <home>` authorizes discovery of `<home>/.codex/sessions`,
+`<home>/.codex/roles-runtime/*/.codex/sessions`, and `$CODEX_HOME/sessions` when
+set. Without explicit roots or provider-home authorization, Codex remains
+`SHARED_ROOT_AUTHORIZATION_REQUIRED`. Explicit lists restrict scanning to those
+roots. Maintenance refreshes scan only the roots saved in the manifest.
+
+Canonical root aliases are scanned once. Matching Codex rollouts are deduplicated
+by their `session_meta` ID (falling back to the filename UUID, then content digest).
+The Codex provider's `rootCounts` reports each root's status, retained
+`sourceCount`, and skipped `duplicateCount`; counts apply after workspace matching.
+Unavailable roots have zero counts. Root reports redact paths and include
+a `rootId` hash to distinguish roots with the same leaf name; exact roots remain
+in the persisted manifest's `authorizedRoots`.
+
+OMP and DeepSeek Harness also require an
 explicit authorized root through `--omp-root` or `--dsh-root`. Harness imports
 raw v2 JSONL; compressed histories require a reviewed raw export. Providers that
 require an API or manual

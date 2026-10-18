@@ -1,25 +1,169 @@
 import {
-  mkdir, mkdtemp, readFile, rm, writeFile,
+  mkdir, mkdtemp, readFile, rm, symlink, writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   SessionRepository,
   discoverWorkspaceHistories,
   importDiscoveryManifest,
+  publicDiscoveryManifest,
+  redactSourceLocator,
   readDiscoveryManifest,
+  sha256,
   writeDiscoveryManifest,
 } from '../../../src/sessions/index.js';
 import { itWithSqlite } from '../../helpers/sqlite.js';
 
 const roots: string[] = [];
 
+beforeEach(() => vi.stubEnv('CODEX_HOME', ''));
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe('workspace session discovery and batch import', () => {
+  it('discovers default, role-profile and CODEX_HOME roots with per-root counts', async () => {
+    const fixture = await providerFixture();
+    const roleRoot = join(fixture.providerHome, '.codex/roles-runtime/full/.codex/sessions');
+    const emptyRoot = join(fixture.providerHome, '.codex/roles-runtime/empty/.codex/sessions');
+    const missingRoot = join(fixture.providerHome, '.codex/roles-runtime/missing/.codex/sessions');
+    const runtimeHome = join(fixture.root, 'runtime-codex');
+    await writeCodexRollout(roleRoot, fixture.workspace, 'role');
+    await writeCodexRollout(join(runtimeHome, 'sessions'), fixture.workspace, 'runtime');
+    await mkdir(emptyRoot, { recursive: true });
+    await mkdir(resolve(missingRoot, '..'), { recursive: true });
+    vi.stubEnv('CODEX_HOME', runtimeHome);
+
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders: ['codex'],
+    });
+    expect(manifest.sources).toHaveLength(3);
+    expect(manifest.authorizedRoots?.codex).toEqual(expect.arrayContaining([roleRoot, emptyRoot, join(runtimeHome, 'sessions')]));
+    expect(manifest.providers[0].rootCounts).toEqual(expect.arrayContaining([
+      { ...rootIdentity(roleRoot), status: 'checked', sourceCount: 1, duplicateCount: 0 },
+      { ...rootIdentity(join(runtimeHome, 'sessions')), status: 'checked', sourceCount: 1, duplicateCount: 0 },
+      { ...rootIdentity(emptyRoot), status: 'checked', sourceCount: 0, duplicateCount: 0 },
+      { ...rootIdentity(missingRoot), status: 'unavailable', sourceCount: 0, duplicateCount: 0 },
+    ]));
+    const output = publicDiscoveryManifest(manifest);
+    expect(JSON.stringify(output.providers)).not.toContain(fixture.providerHome);
+    expect(JSON.stringify(manifest.providers)).not.toContain(fixture.providerHome);
+    expect(new Set(manifest.providers[0].rootCounts?.map((root) => root.rootId)).size).toBe(5);
+    expect((output.providers as Array<{ rootCounts: unknown[] }>)[0].rootCounts).toHaveLength(5);
+    const path = join(fixture.workspace, 'manifest.json');
+    await writeDiscoveryManifest(path, manifest);
+    await expect(readDiscoveryManifest(path)).resolves.toEqual(manifest);
+    const altered = JSON.parse(await readFile(path, 'utf8'));
+    altered.providers[0].rootCounts[0].sourceCount += 1;
+    await writeFile(path, JSON.stringify(altered));
+    await expect(readDiscoveryManifest(path)).rejects.toThrow('identity does not match');
+  });
+
+  it('keeps automatic Codex roots behind provider-home authorization', async () => {
+    const fixture = await providerFixture();
+    vi.stubEnv('CODEX_HOME', join(fixture.providerHome, '.codex'));
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, operatorHome: fixture.providerHome, expectedProviders: ['codex'],
+    });
+    expect(manifest.sources).toEqual([]);
+    expect(manifest.providers[0]).toMatchObject({
+      reasonCode: 'SHARED_ROOT_AUTHORIZATION_REQUIRED', rootCounts: [],
+    });
+  });
+
+  it('finds a role-only store once when CODEX_HOME names the same home', async () => {
+    const fixture = await providerFixture();
+    await rm(join(fixture.providerHome, '.codex/sessions'), { recursive: true });
+    const roleHome = join(fixture.providerHome, '.codex/roles-runtime/full/.codex');
+    await writeCodexRollout(join(roleHome, 'sessions'), fixture.workspace, 'role-only');
+    vi.stubEnv('CODEX_HOME', roleHome);
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders: ['codex'],
+    });
+    expect(manifest.sources).toHaveLength(1);
+    expect(manifest.authorizedRoots?.codex).toEqual([join(roleHome, 'sessions')]);
+    expect(manifest.providers[0].rootCounts).toEqual([
+      { ...rootIdentity(join(fixture.providerHome, '.codex/sessions')), status: 'unavailable', sourceCount: 0, duplicateCount: 0 },
+      { ...rootIdentity(join(roleHome, 'sessions')), status: 'checked', sourceCount: 1, duplicateCount: 0 },
+    ]);
+  });
+
+  it('reports zero per-root counts when every explicit Codex root is missing', async () => {
+    const fixture = await providerFixture();
+    const missing = join(fixture.root, 'missing');
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, codexRoots: [missing], expectedProviders: ['codex'],
+    });
+    expect(manifest.providers[0]).toMatchObject({
+      status: 'unavailable', reasonCode: 'PROVIDER_ROOT_UNAVAILABLE',
+      rootCounts: [{ ...rootIdentity(missing), status: 'unavailable', sourceCount: 0, duplicateCount: 0 }],
+    });
+  });
+
+  it('deduplicates rollout IDs across explicit roots and canonical root aliases', async () => {
+    const fixture = await providerFixture();
+    const first = join(fixture.root, 'a');
+    const second = join(fixture.root, 'b');
+    const alias = join(fixture.root, 'alias');
+    await writeCodexRollout(first, fixture.workspace, 'shared');
+    await writeCodexRollout(second, fixture.workspace, 'shared', 'different-copy.jsonl');
+    await writeFile(join(second, 'different-copy.jsonl'), '\n', { flag: 'a' });
+    await writeCodexRollout(second, fixture.workspace, 'unique');
+    await writeCodexRollout(second, join(fixture.root, 'other'), 'unrelated');
+    await symlink(first, alias);
+    vi.stubEnv('CODEX_HOME', join(fixture.providerHome, '.codex'));
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders: ['codex'],
+      codexRoots: [first, second, alias, first],
+    });
+    expect(manifest.sources).toHaveLength(2);
+    expect(manifest.authorizedRoots?.codex).toEqual([first, second]);
+    expect(manifest.providers[0].rootCounts).toEqual([
+      { ...rootIdentity(first), status: 'checked', sourceCount: 1, duplicateCount: 0 },
+      { ...rootIdentity(second), status: 'checked', sourceCount: 1, duplicateCount: 1 },
+    ]);
+  });
+
+  it('deduplicates rollout filename IDs and retains digest fallback for unidentified exports', async () => {
+    const fixture = await providerFixture();
+    const first = join(fixture.root, 'a');
+    const second = join(fixture.root, 'b');
+    const id = '00000000-0000-4000-8000-000000000325';
+    const record = JSON.stringify({ type: 'turn_context', payload: { cwd: fixture.workspace } });
+    await Promise.all([first, second].map((root) => mkdir(root)));
+    await writeFile(join(first, `rollout-${id}.jsonl`), record + '\n');
+    await writeFile(join(second, `copy-${id}.jsonl`), record + '\n\n');
+    await writeFile(join(first, 'export.jsonl'), record + '\n\n\n');
+    await writeFile(join(second, 'export.jsonl'), record + '\n\n\n');
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, codexRoots: [first, second], expectedProviders: ['codex'],
+    });
+    expect(manifest.sources).toHaveLength(2);
+    expect(manifest.providers[0].rootCounts?.reduce((sum, root) => sum + root.duplicateCount, 0)).toBe(2);
+  });
+
+  it('restricts maintenance discovery to saved roots despite new role homes and CODEX_HOME', async () => {
+    const fixture = await providerFixture();
+    const initial = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders: ['codex'],
+    });
+    const roleHome = join(fixture.providerHome, '.codex/roles-runtime/new/.codex');
+    await writeCodexRollout(join(roleHome, 'sessions'), fixture.workspace, 'new');
+    vi.stubEnv('CODEX_HOME', roleHome);
+    const refreshed = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders: ['codex'],
+      authorizedRoots: initial.authorizedRoots,
+    });
+    expect(refreshed.authorizedRoots).toEqual(initial.authorizedRoots);
+    expect(refreshed.sources).toEqual(initial.sources);
+    expect((await discoverWorkspaceHistories({
+      workspace: fixture.workspace, expectedProviders: ['codex'], authorizedRoots: {},
+    })).sources).toEqual([]);
+  });
+
   it('inventories only matching known roots, persists the exact manifest, and exposes export gaps', async () => {
     const fixture = await providerFixture();
     const manifest = await discoverWorkspaceHistories({
@@ -250,6 +394,15 @@ describe('workspace session discovery and batch import', () => {
     }
   });
 });
+
+function rootIdentity(root: string): { root: string; rootId: string } {
+  return { root: redactSourceLocator(root), rootId: sha256(root) };
+}
+
+async function writeCodexRollout(root: string, workspace: string, id: string, filename = `${id}.jsonl`): Promise<void> {
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, filename), JSON.stringify({ type: 'session_meta', payload: { id, cwd: workspace } }) + '\n');
+}
 
 async function providerFixture(): Promise<{ root: string; workspace: string; providerHome: string }> {
   const root = await mkdtemp(join(tmpdir(), 'aiwg-session-discovery-'));

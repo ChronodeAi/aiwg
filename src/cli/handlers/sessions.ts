@@ -97,6 +97,7 @@ import {
   type SourceProbe,
 } from '../../sessions/index.js';
 import { classifyGrokbotBlobName } from '../../sessions/adapters/grokbot-locator.js';
+import { readAiwgConfig } from '../../config/aiwg-config.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 
 const JSON_CONTRACT_VERSION = '1.0.0';
@@ -189,7 +190,7 @@ Options:
   --expected-providers <ids>  Comma-separated authorized scope, independent of runtime inventory
   --manifest <path>  Override the discovery manifest path
   --provider-home <path>  Override the provider home root (testing/portable homes)
-  --codex-root <path>  Explicitly authorize a shared Codex sessions/export root
+  --codex-root <path>  Authorize a shared Codex sessions/export root (repeatable)
   --omp-root <path>  Explicitly authorize an OMP profile sessions root
   --muse-root <path>  Explicitly authorize a Muse Code sessions root
   --dsh-root <path>  Explicitly authorize a DeepSeek Harness sessions root
@@ -284,6 +285,7 @@ interface ParsedArgs {
   positionals: string[];
   flags: Set<string>;
   values: Map<string, string>;
+  codexRoots: string[];
 }
 
 async function executeCommand(
@@ -1471,6 +1473,7 @@ async function discoverWorkspace(
   args: ParsedArgs,
 ): Promise<{ envelope: Envelope; exitCode: number }> {
   const workspace = resolve(ctx.cwd, requiredValue(args, '--workspace'));
+  const config = await readAiwgConfig(workspace);
   const manifest = await discoverWorkspaceHistories({
     workspace,
     expectedProviders: requestedProviders(args),
@@ -1485,9 +1488,10 @@ async function discoverWorkspace(
       ? resolve(ctx.cwd, args.values.get('--dsh-root')!) : undefined,
     grokbotRoot: args.values.has('--grokbot-root')
       ? resolve(ctx.cwd, args.values.get('--grokbot-root')!) : undefined,
-    codexRoot: args.values.has('--codex-root')
-      ? resolve(ctx.cwd, args.values.get('--codex-root')!)
-      : undefined,
+    codexRoots: [
+      ...(config?.sessions?.codex_roots ?? []).map((root) => resolve(workspace, root)),
+      ...args.codexRoots.map((root) => resolve(ctx.cwd, root)),
+    ],
   });
   const manifestPath = resolve(
     ctx.cwd,
@@ -1923,6 +1927,7 @@ function catalogScope(
 function parseArgs(argv: string[]): ParsedArgs {
   const flags = new Set<string>();
   const values = new Map<string, string>();
+  const codexRoots: string[] = [];
   const positionals: string[] = [];
   const valueFlags = new Set([
     '--db', '--provider', '--workspace', '--tag', '--limit', '--cursor', '--source-id',
@@ -1945,6 +1950,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         throw new CliError('MISSING_OPTION_VALUE', `missing value for ${arg}`, EXIT.usage);
       }
       values.set(arg, value);
+      if (arg === '--codex-root') codexRoots.push(value);
       index += 1;
     } else if (arg.startsWith('-')) {
       flags.add(arg);
@@ -1954,7 +1960,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       positionals.push(arg);
     }
   }
-  return { command, positionals, flags, values };
+  return { command, positionals, flags, values, codexRoots };
 }
 
 function requestedProviders(args: ParsedArgs): string[] | undefined {
