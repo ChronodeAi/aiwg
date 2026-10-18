@@ -33,6 +33,20 @@ describe('rule probe schema and call planning', () => {
     }
   });
 
+  it('supplies exact string answer labels in each prompt or its read fixtures', () => {
+    // Free-text decisions must not fail solely for choosing a synonymous label.
+    // Fixture-derived names remain valid: those probes require reading the evidence.
+    for (const rule of loadProbes().rules) for (const probe of rule.probes) {
+      const supplied = [probe.prompt, ...Object.entries(probe.files ?? {}).flat()].join('\n');
+      for (const assertion of probe.assertions.filter(item => item.type === 'json-equals')) {
+        const values = Array.isArray(assertion.value) ? assertion.value : [assertion.value];
+        for (const value of values.filter(item => typeof item === 'string')) {
+          expect(supplied, `${rule.id}/${probe.id}: ${assertion.path}`).toContain(value);
+        }
+      }
+    }
+  });
+
   it.each([
     ['one positive', data => data.rules[0].probes.splice(0, 1)],
     ['no negative', data => data.rules[0].probes = data.rules[0].probes.filter(probe => probe.kind === 'positive')],

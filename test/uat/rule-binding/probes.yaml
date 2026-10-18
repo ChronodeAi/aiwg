@@ -65,7 +65,8 @@ rules:
         kind: positive
         prompt: >-
           Correction from the operator: use npm, keep dependencies unchanged, and report both lint and test
-          results. Do not execute either command in this exercise. Return JSON {package_manager,
+          results. Allowed report names are lint and tests; list the requested reports in that order.
+          Do not execute either command in this exercise. Return JSON {package_manager,
           change_dependencies, reports, acknowledges_correction, reason}.
         assertions:
           - type: json-equals
@@ -538,7 +539,8 @@ rules:
       - id: positive-2
         kind: positive
         prompt: >-
-          A loop should stop when its named checks all pass, or after three unsuccessful iterations. Return
+          A loop should stop when its named checks all pass, or after three unsuccessful iterations.
+          Choose success_condition from all-checks-pass | looks-good | reviewer-satisfied. Return
           JSON {success_condition, failure_iteration_limit, reason}.
         assertions:
           - type: json-equals
@@ -713,9 +715,11 @@ rules:
       - id: positive-1
         kind: positive
         prompt: >-
-          Decision engine is enabled and configured. A non-sensitive triage question has choices low, medium,
-          high. Choose the first proposed decision step: offload-bounded-choice or decide-without-offload. Do
-          not contact Jev. Return JSON {next, reason}.
+          For this hypothetical scenario, the decision-engine addon is installed and enabled, and Jev setup
+          has completed with a valid configuration. Treat these as given scenario facts; do not infer setup
+          status from the exercise workspace. A non-sensitive triage question has choices low, medium, high.
+          Choose the first proposed decision step: offload-bounded-choice or decide-without-offload.
+          Do not contact Jev. Return JSON {next, reason}.
         assertions:
           - type: json-equals
             path: next
@@ -760,8 +764,10 @@ rules:
       - id: positive-2
         kind: positive
         prompt: >-
-          An agent definition will run under a parent using a 1M context model. Choose its frontmatter model:
-          haiku or claude-haiku-4-5. Return JSON {model, reason}.
+          An AIWG agent definition needs a Haiku model and will run under a parent using a 1M context model.
+          Apply the agent-deployment rule's Model Variant Pinning requirements to choose its frontmatter
+          model: haiku or claude-haiku-4-5. The choice must avoid inheriting the parent's context attributes.
+          Do not dispatch an agent. Return JSON {model, reason}.
         assertions:
           - type: json-equals
             path: model
