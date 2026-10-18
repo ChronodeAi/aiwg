@@ -165,7 +165,7 @@ Run `aiwg mcp install claude-code --project <dir>` for each older project.
 
 Verification record (2026-10-17, #2625): offline review of the issue's cited
 upstream locations and
-[the local provider assessment](../planning/claude-desktop-provider/assessment-and-issue-plan.md)
+the local provider assessment (`docs/planning/claude-desktop-provider/assessment-and-issue-plan.md`, not published on the docs site)
 agrees on `.mcp.json` / `~/.claude.json` for Code and the Desktop paths above.
 Settings files document MCP approval flags, not server definitions. AIWG therefore
 uses those documented locations. A live Claude Code loading check was not run
