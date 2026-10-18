@@ -86,6 +86,8 @@ const SECRET_PATTERNS: Array<[string, RegExp]> = [
   ['environment-assignment', /\b(?:AWS_SECRET_ACCESS_KEY|[A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY))[ \t]*=[ \t]*(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s]+)/gi],
   ['credential', /\b(?:api[_-]?key|token|password|secret)[ \t]*[:=][ \t]*["']?[^\s"',;]{6,}/gi],
   ['credential', /^[ \t]*password[ \t]+[^\s]+[ \t]*$/gim],
+  // Space-separated values only when they look generated (20+ chars, letters and digits), so prose stays.
+  ['credential', /\b(?:api[_-]?key|token|secret)[ \t]+(?=[A-Za-z0-9._~+/=-]*[0-9])(?=[A-Za-z0-9._~+/=-]*[A-Za-z])[A-Za-z0-9._~+/=-]{20,}/gi],
   ['provider-token', /\b(?:sk-(?:ant-|proj-)?|[sr]k_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|xai-|npm_|hf_|xox[baprs]-|AKIA|AIza)[A-Za-z0-9._~+/=-]{8,}/g],
   ['provider-token', /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+/g],
   ['connection-string', /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s]+/gi],

@@ -200,6 +200,15 @@ session_0123456789abcdef`;
     expect(redactSessionText(text)).toMatchObject({ text, classes: [], decisions: {} });
   });
 
+  it('redacts space-separated generated credentials but keeps keyword prose', () => {
+    const value = 'FAKE' + '0a1b2c3d4e'.repeat(3);
+    for (const keyword of ['token', 'api_key', 'API-KEY', 'secret']) {
+      expect(redactSessionText(`${keyword} ${value}`).text).toBe('[REDACTED:credential]');
+    }
+    const prose = 'token count 123456, a secret ingredient, token budget exceeded, api key rotation';
+    expect(redactSessionText(prose)).toMatchObject({ text: prose, classes: [] });
+  });
+
   it('redacts nested keys and arrays without prototype mutation or input mutation', () => {
     const input = { nested: [{ ['redaction-canary-key']: 'redaction-canary-value' }], id: 'session-1' };
     const result = redactSessionValue(input);
