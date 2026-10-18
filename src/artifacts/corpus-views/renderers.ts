@@ -250,9 +250,9 @@ function renderPipeline(ctx: RenderContext): string {
 /** GRADE display order; unknown grades fall after, 'Ungraded' last. */
 const GRADE_ORDER = ['A', 'A-', 'B', 'B-', 'C', 'C-', 'D'];
 
-/** Papers grouped by current GRADE (radar `grade-current`); no-radar → Ungraded. (#1492) */
+/** Papers grouped by current GRADE, falling back to reference frontmatter. */
 function renderByGrade(ctx: RenderContext): string {
-  const groups = groupBy(ctx.records, (r) => [r.radar?.gradeCurrent || 'Ungraded']);
+  const groups = groupBy(ctx.records, (r) => [r.grade || 'Ungraded']);
   const lines = header('Index: Papers by GRADE', ctx, ctx.records.length);
   const names = [...groups.keys()].sort((a, b) => {
     if (a === 'Ungraded') return 1;
@@ -294,7 +294,7 @@ function renderStaleQueue(ctx: RenderContext): string {
     '|---|---|---|---|---|---:|---|',
   );
   for (const { r, cadence, last, overdue } of sorted) {
-    lines.push(`| ${r.refId} | ${r.title.slice(0, 70)} | ${r.radar!.gradeCurrent ?? '—'} | ${cadence} | ${last} | ${overdue} | ${overdue > 0 ? 'yes' : 'no'} |`);
+    lines.push(`| ${r.refId} | ${r.title.slice(0, 70)} | ${r.grade ?? '—'} | ${cadence} | ${last} | ${overdue} | ${overdue > 0 ? 'yes' : 'no'} |`);
   }
   return lines.join('\n') + '\n';
 }

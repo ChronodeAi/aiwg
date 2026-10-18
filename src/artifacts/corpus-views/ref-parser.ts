@@ -31,6 +31,8 @@ export interface RefRecord {
   /** Downstream consuming projects from the "## Referenced By" table (#1495). */
   referencedByProjects: string[];
   title: string;
+  /** Current radar grade, falling back to the reference document's frontmatter grade. */
+  grade: string | null;
   path: string;
   year: number | null;
   authors: string[];
@@ -376,6 +378,7 @@ export function loadCorpus(root: string): CorpusParse {
       classifyFirst(`${venueRaw ?? ''} ${text.slice(0, 3500)}`.toLowerCase(), VENUE_PATTERNS) ||
       (venueRaw ? String(venueRaw).trim() : null);
     const { tier, paramsM } = extractParams(text);
+    const radar = extractRadar(root, refId);
 
     records.push({
       refId,
@@ -385,6 +388,7 @@ export function loadCorpus(root: string): CorpusParse {
       ),
       referencedByProjects: extractReferencedByProjects(text),
       title: extractTitle(text, fm),
+      grade: radar?.gradeCurrent ?? asStr(fm.grade),
       path: filePath,
       year: extractYear(text, fm, citation),
       authors,
@@ -397,7 +401,7 @@ export function loadCorpus(root: string): CorpusParse {
       paramsM,
       incoming,
       outgoing,
-      radar: extractRadar(root, refId),
+      radar,
       discovery: extractDiscovery(citation),
       funders: extractFunders(citation),
     });
