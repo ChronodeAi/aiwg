@@ -73,6 +73,17 @@ describe('startup context measurement', () => {
     expect(measureDeployed(project, home, 'codex').mirrors.bytes).toBe(6);
   });
 
+  it('counts Claude paths rules as conditional, not startup', () => {
+    const project = tempDir(), home = tempDir();
+    write(project, '.claude/rules/kernel.md', '---\nenforcement: high\n---\nKERNEL\n');
+    write(project, '.claude/rules/scoped.md', '---\n# aiwg:managed vunknown bundled\nenforcement: medium\npaths:\n  - src/**\n---\nSCOPED\n');
+    write(project, '.claude/rules/mentions-paths.md', 'Body text naming\npaths: in prose only\n');
+    const claude = measureDeployed(project, home, 'claude');
+    const kernelBytes = Buffer.byteLength('---\nenforcement: high\n---\nKERNEL\n') + Buffer.byteLength('Body text naming\npaths: in prose only\n');
+    expect(claude.startup.bytes).toBe(kernelBytes);
+    expect(claude.conditional.files.map(file => file.path)).toEqual(['.claude/rules/scoped.md']);
+  });
+
   it('measures aggregated Warp/Hermes rule sections and global OpenClaw rule files', () => {
     const project = tempDir(), home = tempDir();
     write(project, 'WARP.md', '# Context\n## AIWG Rules\n\n### Tiny\nRule body.\n---\n### Second\nAnother rule.\n---\n\n## Other\nUnrelated.\n');

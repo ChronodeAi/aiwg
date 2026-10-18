@@ -45,7 +45,12 @@ export function measureDeployed(project, home, provider) {
   for (const file of ruleFiles) {
     const content = fs.readFileSync(file, 'utf8');
     const item = record(file, base, content);
-    if (provider === 'claude' || provider === 'openclaw') rules.push(item);
+    // Claude loads a rule with `paths:` frontmatter only when a matching file is
+    // read or written, so it is conditional, not startup context.
+    if (provider === 'claude') {
+      const frontmatter = content.match(/^(?:<!--[^\n]*-->\n)?---\r?\n([\s\S]*?)\r?\n---/);
+      (frontmatter && /^paths:/m.test(frontmatter[1]) ? conditional : rules).push(item);
+    } else if (provider === 'openclaw') rules.push(item);
     else if (provider === 'cursor' && file.endsWith('.mdc')) {
       (/^alwaysApply:\s*true\s*$/m.test(content) ? rules : conditional).push(item);
     } else mirrors.push(item);
