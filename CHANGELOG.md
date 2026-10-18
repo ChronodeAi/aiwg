@@ -9,6 +9,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Rebuild session analytics only for sessions affected by committed incremental
+  imports, index source/batch totals and aggregate them in one query, and skip
+  verified analytics scans and use covering indexes for FTS checks on open,
+  while repairing desynchronized analytics and FTS tables (#306).
 - Accept null Grok Bot replica hints and skip unknown send-message types while
   retaining validation for known types; include field paths and codes in malformed
   source diagnostics without exposing transcript values (#307, Gitea #3224).
