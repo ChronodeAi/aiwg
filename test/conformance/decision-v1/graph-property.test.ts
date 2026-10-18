@@ -113,7 +113,8 @@ describe('seeded properties of plans and receipts', () => {
       const digests = new Set<string>();
       for (let order = 0; order < 3; order++) {
         const records: any[] = [];
-        const ledger = new GraphBudgetLedger(graph, plan);
+        // A fixed budget clock keeps admission and settlement independent of CI load.
+        const ledger = new GraphBudgetLedger(graph, plan, [], () => 0);
         const invokeNode = admittedDecisionFlowAdapter(ledger, () => ({ attempts: 1, tokens: 2, costMicros: 2 }),
           async (request: GraphFlowRequest): Promise<GraphFlowResponse> => ({ outputs: { out: `${request.node.id}-value` }, attempts: 1,
             usage: { tokens: 1, costUsd: 0.000001, timeMs: 1 } }), undefined, record => records.push(structuredClone(record)));

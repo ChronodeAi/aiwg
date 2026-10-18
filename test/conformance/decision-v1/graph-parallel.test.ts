@@ -26,7 +26,8 @@ async function run(graph: DecisionGraph, badIds = false) {
   const plan = planDecisionGraph(graph, new Set([pin.digest]));
   const manifest = decisionGraphToFlow(graph, { resolvedPins: new Set([pin.digest]),
     decisionSkillId: skill, terminal: 'left' });
-  const ledger = new GraphBudgetLedger(graph, plan);
+  // A fixed budget clock keeps admission and settlement independent of CI load.
+  const ledger = new GraphBudgetLedger(graph, plan, [], () => 0);
   const ordinary: string[] = [], native: string[][] = [], observations: string[] = [], records: any[] = []; 
   const invokeNode = admittedDecisionFlowAdapter(ledger, () => ({ attempts: 1, tokens: 2, costMicros: 2 }),
     async req => { ordinary.push(req.node.id); return { outputs: { result: req.node.id }, attempts: 1, usage }; },
@@ -67,7 +68,8 @@ describe('DAG native batch and independent fan-out through Flow', () => {
   });
   it('DAG-038 prevents native batching when runtime projected inputs differ despite matching plan', async () => {
     const graph = fixture(); const plan = planDecisionGraph(graph, new Set([pin.digest]));
-    const ledger = new GraphBudgetLedger(graph, plan);
+    // A fixed budget clock keeps admission and settlement independent of CI load.
+    const ledger = new GraphBudgetLedger(graph, plan, [], () => 0);
     let batched = 0, individual = 0;
     const parallel = decisionGraphParallelDispatch(graph, plan, { ledger,
       estimate: () => ({ attempts: 1, tokens: 1, costMicros: 1 }), canBatch: () => true,
