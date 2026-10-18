@@ -125,7 +125,7 @@ export function reconcileCoveragePreflight(
     if (!['pending-import', 'import-incomplete', 'scope-incomplete', 'acquired'].includes(entry.disposition)) return entry;
     const selected = sources.filter((source) => source.provider === entry.provider);
     const imported = selected.length === entry.sourceCount && selected.length > 0
-      && selected.every((source) => accepted.has(source.status) && source.eventsAccepted > 0);
+      && selected.every((source) => source.status === 'excluded' || (accepted.has(source.status) && source.eventsAccepted > 0));
     return {
       ...entry,
       disposition: !imported ? 'import-incomplete' as const

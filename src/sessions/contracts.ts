@@ -399,7 +399,7 @@ export interface AuthorizedScope {
   authorizedAccounts?: string[];
   networkOperation?: string;
 }
-export interface SourceDescriptor { provider: SessionProviderId; locator: string; locatorClass: string }
+export interface SourceDescriptor { provider: SessionProviderId; locator: string; locatorClass: string; nativeSessionId?: string }
 export interface SelectedSource extends SourceDescriptor { sourceId: string; authorizedScope: AuthorizedScope }
 export interface SourceProbe {
   sourceSchemaVersion: string;

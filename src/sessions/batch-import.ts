@@ -20,6 +20,7 @@ import {
   type SessionCoverageReport,
 } from './batch-contracts.js';
 import { IncrementalSessionImporter, SessionImportFailure, type ImportLimits } from './importer.js';
+import { matchImportExclusion, resolveImportExclusions, type SourceExclusion } from './import-exclusions.js';
 import { resolveImportLimits } from './import-limits.js';
 import { fingerprintSourceFile } from './readers.js';
 import type { SessionRepository } from './repository.js';
@@ -30,6 +31,7 @@ import type {
 
 export interface BatchImportOptions {
   manifest: SessionDiscoveryManifest;
+  exclude?: string[];
   limits?: Partial<ImportLimits>;
   runtime?: SessionRuntimeIdentity;
   repository: SessionRepository;
@@ -51,6 +53,7 @@ export interface BatchImportReceipt {
     discovered: number;
     accepted: number;
     rejected: number;
+    excluded: number;
     skipped: number;
     duplicated: number;
     previouslyCommitted: number;
@@ -63,6 +66,7 @@ export interface BatchImportReceipt {
 export async function importDiscoveryManifest(
   options: BatchImportOptions,
 ): Promise<BatchImportReceipt> {
+  const exclusions = resolveImportExclusions(undefined, options.exclude);
   const limits = { ...resolveImportLimits(undefined, {
     maxRecordBytes: options.limits?.maxRecordBytes, maxSourceBytes: options.limits?.maxTotalBytes,
   }), ...options.limits };
@@ -106,6 +110,12 @@ export async function importDiscoveryManifest(
         `batch run is missing discovered source ${manifestSource.sourceId}`,
       );
     }
+    const exclusion = matchImportExclusion(manifestSource, exclusions) ?? manifestSource.exclusion;
+    if (exclusion) {
+      excludeSource(disposition, exclusion, now());
+      continue;
+    }
+    delete disposition.exclusion;
     if (isAccepted(disposition.status)) {
       disposition.status = 'previously-committed';
       disposition.updatedAt = now().toISOString();
@@ -223,14 +233,24 @@ export function previewDiscoveryImport(
   manifest: SessionDiscoveryManifest,
   existing: BatchImportRun | null,
   now = new Date(),
+  exclude: string[] = [],
 ): BatchImportReceipt {
   const run = existing ?? newBatchRun(
     manifest,
     sha256(['workspace-import-v1', manifest.manifestId, manifest.workspaceId].join('\0')),
     now,
   );
+  const exclusions = resolveImportExclusions(undefined, exclude);
   return receiptFor({
     ...run,
+    sources: run.sources.map(source => {
+      const manifestSource = manifest.sources.find(candidate => candidate.sourceId === source.sourceId)!;
+      const exclusion = matchImportExclusion(manifestSource, exclusions) ?? manifestSource.exclusion;
+      if (!exclusion) return source;
+      const disposition = { ...source };
+      excludeSource(disposition, exclusion, now);
+      return disposition;
+    }),
     preflight: coveragePreflight({
       expectedProviders: manifest.preflight?.expectedProviders,
       expectedProviderBasis: manifest.preflight?.expectedProviderBasis ?? 'legacy',
@@ -261,7 +281,8 @@ function newBatchRun(
     sources: manifest.sources.map((source): BatchSourceDisposition => ({
       sourceId: source.sourceId,
       provider: source.provider,
-      status: 'pending',
+      status: source.status ?? 'pending',
+      ...(source.exclusion ? { exclusion: source.exclusion } : {}),
       attempts: 0,
       sessionsAccepted: 0,
       eventsAccepted: 0,
@@ -283,6 +304,7 @@ function receiptFor(run: BatchImportRun, now: Date): BatchImportReceipt {
       discovered: coverage.sources.discovered,
       accepted: coverage.sources.accepted,
       rejected: coverage.sources.rejected,
+      excluded: coverage.sources.excluded,
       skipped: coverage.sources.skipped,
       duplicated: coverage.sources.duplicated,
       previouslyCommitted: coverage.sources.previouslyCommitted,
@@ -291,6 +313,17 @@ function receiptFor(run: BatchImportRun, now: Date): BatchImportReceipt {
       eventsAccepted: coverage.eventsAccepted,
     },
   };
+}
+
+function excludeSource(source: BatchSourceDisposition, exclusion: SourceExclusion, now: Date): void {
+  source.status = 'excluded';
+  source.exclusion = exclusion;
+  source.errorCode = null;
+  source.diagnostic = null;
+  source.detail = null;
+  source.sessionsAccepted = 0;
+  source.eventsAccepted = 0;
+  source.updatedAt = now.toISOString();
 }
 
 function persistProgress(

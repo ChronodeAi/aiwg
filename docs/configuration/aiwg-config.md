@@ -68,7 +68,8 @@ Valid `providers` values: `antigravity` (alias `agy`), `claude`, `codex`,
     "discovery_manifests": ["additional-discovery.json"],
     "import": {
       "max_record_bytes": 67108864,
-      "max_source_bytes": 2147483648
+      "max_source_bytes": 1073741824,
+      "exclude": ["12345678-1234-1234-1234-123456789abc", "~/.codex/sessions/**/rollout-2026-10-18*.jsonl"]
     }
   }
 }
@@ -81,7 +82,8 @@ workspace or absolute.
 | Setting | Default | Accepted values |
 | --- | --- | --- |
 | `sessions.import.max_record_bytes` | `67108864` (64 MiB) | Positive safe integer, in bytes |
-| `sessions.import.max_source_bytes` | `2147483648` (2 GiB) | Non-negative safe integer, in bytes; `0` means unlimited |
+| `sessions.import.exclude` | `[]` | Array of non-empty native session IDs or absolute path globs (`~` expands to home); supports `*`, `**`, `?` |
+| `sessions.import.max_source_bytes` | `1073741824` (1 GiB) | Non-negative safe integer, in bytes; `0` means unlimited |
 
 `aiwg sessions import`, `aiwg sessions import-discovered`, and `aiwg index refresh`
 accept `--max-record-bytes <n>` and `--max-source-bytes <n>`. Precedence is CLI
@@ -94,6 +96,24 @@ removes the source byte cap. Codex and Claude JSONL imports
 stream with bounded memory; the run resource gate still applies. Record-count
 and nesting limits remain unchanged. Muse workspace inspection uses its separate
 discovery limits.
+
+Exclusions match exact native session IDs or locator path globs before any source
+file is opened or read, during discovery/selection and again before batch import.
+Codex rollout IDs come from the filename or session metadata already recorded in
+the discovery manifest; exclusions never parse a source to find its ID. The
+example above excludes one Codex rollout by ID and a set of rollout paths.
+`aiwg sessions import-discovered` and `aiwg index refresh` accept repeatable
+`--exclude <id-or-glob>`. `AIWG_SESSIONS_IMPORT_EXCLUDE` accepts a comma-separated
+list. Config, env and flag entries add together. Relative path globs and empty
+entries are invalid.
+
+Discovery and batch receipts report `status: "excluded"`, an `exclusion` with the
+matching `entry` and `kind` (`session-id` or `path-glob`), and separate `excluded`
+totals. Session refresh and `index refresh` preserve these receipts; index refresh
+also prints exclusions in text output. Exclusions do not count as rejections or
+errors and do not cause partial-import warnings or resumable checkpoints. They
+also replace prior rejected dispositions. Rediscover after removing exclusions
+to select those sources again.
 
 Single-document JSON and Markdown exports retain a 64 MiB safety cap because
 those formats require buffering: Claude account exports, Copilot JSON, OpenCode

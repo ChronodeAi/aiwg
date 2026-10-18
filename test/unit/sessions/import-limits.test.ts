@@ -10,8 +10,8 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('session import byte limits', () => {
-  it('defaults to 64 MiB records and 2 GiB sources in importer and readers', () => {
-    const defaults = { maxRecordBytes: 64 * 1024 * 1024, maxTotalBytes: 2147483648 };
+  it('defaults to 64 MiB records and 1 GiB sources in importer and readers', () => {
+    const defaults = { maxRecordBytes: 64 * 1024 * 1024, maxTotalBytes: 1073741824 };
     expect(resolveImportLimits()).toMatchObject({ ...defaults,
       limitOrigins: { maxRecordBytes: 'default', maxTotalBytes: 'default' } });
     expect(DEFAULT_IMPORT_LIMITS).toMatchObject(defaults);
@@ -34,7 +34,7 @@ describe('session import byte limits', () => {
     vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES', undefined);
     expect(resolveImportLimits(config)).toMatchObject({ maxTotalBytes: 200,
       limitOrigins: { maxTotalBytes: 'config' } });
-    expect(resolveImportLimits()).toMatchObject({ maxTotalBytes: 2147483648,
+    expect(resolveImportLimits()).toMatchObject({ maxTotalBytes: 1073741824,
       limitOrigins: { maxTotalBytes: 'default' } });
   });
 
@@ -57,13 +57,13 @@ describe('session import byte limits', () => {
     expect(() => assertImportByteLimit('maxTotalBytes', limits, 2 ** 40)).not.toThrow();
   });
 
-  it('enforces the 2 GiB default source cap at its byte boundary', () => {
+  it('enforces the 1 GiB default source cap at its byte boundary', () => {
     const limits = resolveImportLimits();
-    expect(() => assertImportByteLimit('maxTotalBytes', limits, 2147483648)).not.toThrow();
-    expect(() => assertImportByteLimit('maxTotalBytes', limits, 2147483649))
+    expect(() => assertImportByteLimit('maxTotalBytes', limits, 1073741824)).not.toThrow();
+    expect(() => assertImportByteLimit('maxTotalBytes', limits, 1073741825))
       .toThrow(expect.objectContaining({ detail: { limit: 'maxTotalBytes',
-        setting: 'sessions.import.max_source_bytes', configured: 2147483648,
-        observed: 2147483649, origin: 'default' } }));
+        setting: 'sessions.import.max_source_bytes', configured: 1073741824,
+        observed: 1073741825, origin: 'default' } }));
   });
 
   it('resolves each flag independently ahead of config and default', () => {

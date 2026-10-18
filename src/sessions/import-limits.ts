@@ -10,7 +10,7 @@ export interface ImportByteLimits {
 
 export const DEFAULT_IMPORT_BYTE_LIMITS = Object.freeze({
   maxRecordBytes: 64 * 1024 * 1024,
-  maxTotalBytes: 2 * 1024 * 1024 * 1024,
+  maxTotalBytes: 1024 * 1024 * 1024,
 });
 
 export function resolveImportLimits(

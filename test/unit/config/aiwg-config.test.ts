@@ -151,10 +151,30 @@ describe('aiwg-config', () => {
       const schema = JSON.parse(readFileSync(resolve('vscode-extension/schemas/aiwg.config.v1.json'), 'utf8'));
       const limits = schema.properties.sessions.properties.import.properties;
       expect(limits.max_record_bytes).toMatchObject({ default: 67108864, minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
-      expect(limits.max_source_bytes).toMatchObject({ default: 2147483648, minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+      expect(limits.max_source_bytes).toMatchObject({ default: 1073741824, minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
       expect(limits.max_record_bytes.description).toContain('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES');
       expect(limits.max_source_bytes.description).toContain('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES');
     });
+
+    it('reads session exclusions and exposes their editor schema', async () => {
+      mkdirSync(join(tmpDir, '.aiwg'));
+      const exclude = ['session-id', '/sessions/**/*.jsonl', '~/.codex/sessions/rollout-?.jsonl'];
+      writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { exclude } } }));
+      expect((await readAiwgConfig(tmpDir))?.sessions?.import?.exclude).toEqual(exclude);
+      const schema = JSON.parse(readFileSync(resolve('vscode-extension/schemas/aiwg.config.v1.json'), 'utf8'));
+      const rule = schema.properties.sessions.properties.import.properties.exclude;
+      expect(rule).toMatchObject({ type: 'array', default: [], items: { type: 'string', minLength: 1 } });
+      for (const entry of exclude) expect(new RegExp(rule.items.pattern).test(entry)).toBe(true);
+      for (const entry of ['', '  ', '*.jsonl', 'relative/*.jsonl', '~user/*']) expect(new RegExp(rule.items.pattern).test(entry)).toBe(false);
+    });
+
+    it.each([null, 'session-id', [null], [42], [''], ['  '], ['relative/*.jsonl'], ['*.jsonl'], ['~user/*']])(
+      'rejects invalid sessions.import.exclude=%j', async exclude => {
+        mkdirSync(join(tmpDir, '.aiwg'));
+        writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { exclude } } }));
+        await expect(readAiwgConfig(tmpDir)).rejects.toThrow('sessions.import.exclude');
+      },
+    );
 
     it('reads session import byte limits including an unlimited source cap', async () => {
       mkdirSync(join(tmpDir, '.aiwg'));

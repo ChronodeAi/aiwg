@@ -132,6 +132,24 @@ describe('provider/runtime coverage preflight', () => {
     }
   });
 
+  it.each([true, false])('keeps explicitly excluded sources out of acquisition gaps and rejection totals (all excluded: %s)', allExcluded => {
+    const sources: BatchSourceDisposition[] = [{ ...accepted('claude'), status: 'excluded',
+      sessionsAccepted: 0, eventsAccepted: 0, exclusion: { entry: 'session-id', kind: 'session-id' } }];
+    if (!allExcluded) sources.push({ ...accepted('claude'), sourceId: 'second' });
+    const provider = { ...checked('claude'), sourceCount: sources.length };
+    const preflight = coveragePreflight({ expectedProviders: ['claude'], reports: [provider], runtime });
+    expect(reconcileCoveragePreflight(preflight, sources)).toMatchObject({ status: 'complete', unresolvedProviders: [] });
+    const coverage = coverageFromBatchRun({
+      schemaVersion: '2.0.0', runId: 'test', manifestId: 'test', workspaceId: 'test',
+      manifestCreatedAt: new Date().toISOString(), startedAt: '', updatedAt: '', completedAt: '',
+      status: 'complete', preflight, providers: [provider], sources,
+    });
+    expect(coverage).toMatchObject({ status: 'complete', acquisitionStatus: 'complete',
+      rejectionCounts: {}, sources: { excluded: 1, rejected: 0, pending: 0 },
+      coverageRatio: allExcluded ? null : 1 });
+    expect(coverage.remediation.join(' ')).not.toContain('rejected');
+  });
+
   it('keeps imported Muse sources scope-incomplete when some sources were not fully inspected (#2865)', () => {
     const report = {
       ...checked('muse'), status: 'not-checked' as const, sourceCount: 1,

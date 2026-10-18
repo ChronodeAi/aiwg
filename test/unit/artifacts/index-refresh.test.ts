@@ -100,6 +100,34 @@ describe('index refresh', () => {
     } }));
   });
 
+  itWithSqlite('excludes previously rejected sources from refresh rejection totals and clears the checkpoint', async () => {
+    const database = path.join(workspace, '.aiwg/sessions/catalog.sqlite');
+    fs.mkdirSync(path.dirname(database), { recursive: true });
+    new SessionRepository(database).close();
+    const authorized = path.join(root, 'authorized');
+    const ids = ['config-id', 'env-id', 'flag-one', 'flag-two'];
+    for (const id of ids) write(path.join(authorized, `${id}.jsonl`), JSON.stringify({ type: 42, cwd: workspace, id }) + '\n');
+    const manifest = await discoverWorkspaceHistories({
+      workspace, expectedProviders: ['claude'], authorizedRoots: { claude: [authorized] },
+    });
+    await writeDiscoveryManifest(path.join(workspace, '.aiwg/sessions/discovery-manifest.json'), manifest);
+    const rejected = await refreshIndexes({ cwd: workspace, only: 'sessions' }, admitted);
+    expect(rejected.jobs[0].sessionImport?.totals).toMatchObject({ rejected: 4, excluded: 0 });
+    write(path.join(workspace, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { exclude: ['config-id'] } } }));
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_EXCLUDE', 'env-id');
+    for (const id of ids) write(path.join(authorized, `${id}.jsonl`), 'invalid synthetic data');
+    const report = await refreshIndexes({ cwd: workspace, only: 'sessions',
+      exclude: ['flag-one', path.join(authorized, 'flag-tw?.jsonl')],
+    }, admitted);
+    expect(report).toMatchObject({ status: 'ok', totals: { excluded: 4, errors: 0 } });
+    expect(report.jobs[0].reason).toBeUndefined();
+    expect(report.jobs[0].sessionImport).toMatchObject({ run: { status: 'complete' },
+      totals: { excluded: 4, rejected: 0, pending: 0 } });
+    expect(JSON.parse(JSON.stringify(report)).jobs[0].sessionImport.run.sources.every((source: any) => source.status === 'excluded')).toBe(true);
+    expect(report.messages).toEqual([]);
+    expect(fs.existsSync(path.join(state, 'index-refresh-checkpoint.json'))).toBe(false);
+  });
+
   itWithSqlite('imports multiple configured manifests into the catalog and skips completed batches on the next refresh', async () => {
     const database = path.join(workspace, '.aiwg/sessions/catalog.sqlite');
     fs.mkdirSync(path.dirname(database), { recursive: true });

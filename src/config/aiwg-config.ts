@@ -9,6 +9,8 @@
  * @implements #621
  */
 
+import { validateImportExclusions } from '../sessions/import-exclusions.js';
+
 import { resolveDispatchHostThresholds } from './dispatch-thresholds-runtime.mjs';
 export { DEFAULT_DISPATCH_HOST_THRESHOLDS, resolveDispatchHostThresholds } from './dispatch-thresholds-runtime.mjs';
 
@@ -469,10 +471,11 @@ export interface AiwgConfig {
     codex_roots?: string[];
     /** Additional authorized discovery manifests for refresh, relative to the workspace or absolute. */
     discovery_manifests?: string[];
-    /** Import byte limits; source cap 0 means unlimited. */
+    /** Import limits and exclusions; source cap 0 means unlimited. */
     import?: {
       max_record_bytes?: number;
       max_source_bytes?: number;
+      exclude?: string[];
     };
   };
   $schema?: string;
@@ -1988,6 +1991,7 @@ export async function readAiwgConfigCandidate(projectDir: string): Promise<AiwgC
     if (limits === null || typeof limits !== 'object' || Array.isArray(limits)) {
       throw new Error('sessions.import must be an object');
     }
+    if (limits.exclude !== undefined) validateImportExclusions(limits.exclude);
     for (const key of ['max_record_bytes', 'max_source_bytes'] as const) {
       const value = limits[key];
       const minimum = key === 'max_source_bytes' ? 0 : 1;

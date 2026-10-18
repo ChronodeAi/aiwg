@@ -108,7 +108,7 @@ describe('sessions CLI contracts', () => {
     expect(usage).toContain('--max-record-bytes <n>');
     expect(usage).toContain('--max-source-bytes <n>');
     expect(usage).toContain('default 67108864');
-    expect(usage).toContain('default 2147483648, 2 GiB; 0 unlimited');
+    expect(usage).toContain('default 1073741824, 1 GiB; 0 unlimited');
     expect(usage).toContain('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES');
     expect(usage).toContain('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES');
     expect(usage).toContain('CLI flag > env var > workspace config > default');
@@ -761,6 +761,65 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
       maxRecordBytes: 4096, maxTotalBytes: 8192,
       limitOrigins: { maxRecordBytes: 'config', maxTotalBytes: 'config' },
     } }));
+  });
+
+  it('adds config, env and repeated exclusion flags to discovered import and preview', async () => {
+    const providerRoot = resolve(root, 'authorized');
+    mkdirSync(providerRoot);
+    const ids = ['config-id', 'env-id', 'flag-one', 'flag-two'];
+    for (const id of ids) writeFileSync(resolve(providerRoot, `${id}.jsonl`), JSON.stringify({
+      type: 'session_meta', payload: { id, cwd: root },
+    }) + '\n');
+    const { discoverWorkspaceHistories, writeDiscoveryManifest } = await import('../../../../src/sessions/workspace-discovery.js');
+    const manifest = await discoverWorkspaceHistories({
+      workspace: root, expectedProviders: ['codex'], codexRoot: providerRoot,
+    });
+    const manifestPath = resolve(root, 'manifest.json');
+    await writeDiscoveryManifest(manifestPath, manifest);
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { exclude: ['config-id'] } } }));
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_EXCLUDE', 'env-id');
+    for (const id of ids) rmSync(resolve(providerRoot, `${id}.jsonl`));
+    const args = ['import-discovered', '--workspace', root, '--manifest', manifestPath,
+      '--db', resolve(root, 'catalog.sqlite'), '--json', '--exclude', 'flag-one', '--exclude', 'flag-two'];
+    expect((await sessionsHandler.execute(context([...args, '--dry-run'], root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.receipt.totals).toMatchObject({ excluded: 4, rejected: 0, pending: 0 });
+    expect((await sessionsHandler.execute(context([...args, '--confirm'], root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data).toMatchObject({ resumable: false,
+      receipt: { run: { status: 'complete' }, totals: { excluded: 4, rejected: 0, pending: 0 } } });
+    expect(jsonOutput(log).data.receipt.run.sources.map((source: any) => source.exclusion.entry).sort()).toEqual(ids.sort());
+  });
+
+  it('applies config and env exclusions to CLI discovery before reading sources', async () => {
+    const providerRoot = resolve(root, 'authorized');
+    mkdirSync(providerRoot);
+    writeFileSync(resolve(providerRoot, 'config-id.jsonl'), 'invalid synthetic data');
+    writeFileSync(resolve(providerRoot, 'env-id.jsonl'), 'invalid synthetic data');
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { exclude: ['config-id'] } } }));
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_EXCLUDE', 'env-id');
+    const args = ['discover', '--workspace', root, '--expected-providers', 'codex',
+      '--codex-root', providerRoot, '--manifest', resolve(root, 'manifest.json'), '--json'];
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.manifest.totals).toMatchObject({ sources: 2, excluded: 2 });
+    expect(jsonOutput(log).data.manifest.sources.every((source: any) => source.status === 'excluded')).toBe(true);
+  });
+
+  it('uses a saved session_meta ID to exclude a renamed rollout before rediscovery reads', async () => {
+    const providerRoot = resolve(root, 'authorized');
+    mkdirSync(providerRoot);
+    const locator = resolve(providerRoot, 'renamed.jsonl');
+    writeFileSync(locator, JSON.stringify({ type: 'session_meta', payload: { id: 'metadata-id', cwd: root } }) + '\n');
+    const args = ['discover', '--workspace', root, '--expected-providers', 'codex',
+      '--codex-root', providerRoot, '--manifest', resolve(root, 'manifest.json'), '--json'];
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).toBe(0);
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { exclude: ['metadata-id'] } } }));
+    writeFileSync(locator, 'invalid synthetic data');
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.manifest).toMatchObject({ totals: { excluded: 1 }, sources: [{
+      status: 'excluded', nativeSessionId: 'metadata-id', exclusion: { entry: 'metadata-id', kind: 'session-id' },
+    }] });
   });
 
   it('threads config and flag source limits through discovered batch import', async () => {

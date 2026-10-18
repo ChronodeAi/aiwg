@@ -79,7 +79,7 @@ string and is preserved in stored batch runs and import failure receipts.
 For example, `{"limit":"maxBytes","configured":1024,"observed":2048}`
 identifies an authorized byte-limit rejection without exposing source content.
 Muse workspace inspection failures also retain this detail when available.
-Imports default to 64 MiB per record and 2 GiB (2,147,483,648 bytes) per source. Configure
+Imports default to 64 MiB per record and 1 GiB (1,073,741,824 bytes) per source. Configure
 `sessions.import.max_record_bytes` and `sessions.import.max_source_bytes`, or
 pass `--max-record-bytes` and `--max-source-bytes` to `sessions import`,
 `sessions import-discovered`, or `index refresh`. You can also set
@@ -87,6 +87,43 @@ pass `--max-record-bytes` and `--max-source-bytes` to `sessions import`,
 to decimal byte counts, using the same integer ranges as config. Precedence is
 CLI flag > env var > workspace config > default. A source cap of `0` from any
 origin means unlimited and still streams JSONL imports. See the [config reference](../configuration/aiwg-config.md#sessions).
+To skip a Codex rollout before reading it, add its native session ID or an
+absolute path glob to `sessions.import.exclude`. For example, either entry skips
+the same rollout:
+
+```json
+{
+  "sessions": {
+    "import": {
+      "exclude": [
+        "12345678-1234-1234-1234-123456789abc",
+        "~/.codex/sessions/**/rollout-*-12345678-1234-1234-1234-123456789abc.jsonl"
+      ]
+    }
+  }
+}
+```
+
+IDs match exactly using discovery metadata or the filename; sources are never
+parsed to decide exclusions. Path globs support `*`, `**` and `?`, and `~`
+expands to home. `AIWG_SESSIONS_IMPORT_EXCLUDE` adds comma-separated entries.
+Repeatable `--exclude <id-or-glob>` adds entries for `sessions import-discovered`
+and `index refresh`:
+
+```bash
+aiwg sessions import-discovered --workspace "$PWD" --confirm \
+  --exclude 12345678-1234-1234-1234-123456789abc \
+  --exclude '~/.codex/sessions/**/rollout-2026-10-18*.jsonl'
+aiwg index refresh --only sessions --exclude '~/.codex/sessions/**/rollout-2026-10-18*.jsonl'
+```
+
+Discovery, import and refresh report these sources as `excluded`, with the
+matching entry and kind (`session-id` or `path-glob`). They have their own
+`excluded` count and do not count as rejected or errors, cause partial-import
+warnings, or leave a sticky checkpoint. A previously rejected source now
+matching the list becomes excluded. Rediscover after removing a discovery
+exclusion to include that source again.
+
 Use `aiwg sessions --help` for the complete command and JSON contracts.
 
 ## Ask questions about collected history
