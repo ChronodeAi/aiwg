@@ -1,12 +1,63 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   getVersionInfo,
+  getPackageRoot,
   resolveEffectiveInstallationRoot,
   resolveMcpServerEntrypointPath,
 } from '../../../src/channel/manager.mjs';
+
+describe('getVersionInfo launcher/runtime identity', () => {
+  let root: string;
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    if (root) rmSync(root, { recursive: true, force: true });
+  });
+
+  function setup(devMode: boolean, runtimeVersion: string | null = '2026.10.3') {
+    root = mkdtempSync(join(tmpdir(), 'aiwg-version-'));
+    const launcher = join(root, 'launcher');
+    const runtime = join(root, 'runtime');
+    mkdirSync(launcher);
+    mkdirSync(runtime);
+    writeFileSync(join(launcher, 'package.json'), JSON.stringify({ version: '2026.9.20' }));
+    if (runtimeVersion) writeFileSync(join(runtime, 'package.json'), JSON.stringify({ version: runtimeVersion }));
+    writeFileSync(join(root, 'channel.json'), JSON.stringify({ channel: devMode ? 'edge' : 'stable', devMode, edgePath: runtime }));
+    vi.stubEnv('AIWG_CONFIG', root);
+    vi.stubEnv('AIWG_LAUNCHER_ROOT', launcher);
+    vi.stubEnv('AIWG_CLI_DRY_RUN', '1');
+    return { launcher, runtime };
+  }
+
+  it('reports the launcher and effective edge runtime while preserving the executing version', async () => {
+    const { runtime } = setup(true);
+    expect(await getVersionInfo()).toMatchObject({
+      version: JSON.parse(readFileSync(join(getPackageRoot(), 'package.json'), 'utf8')).version,
+      launcherVersion: '2026.9.20', runtimeVersion: '2026.10.3', runtimePath: runtime,
+    });
+  });
+
+  it('ignores the edge path outside dev mode', async () => {
+    const { launcher } = setup(false);
+    expect(await getVersionInfo()).toMatchObject({
+      launcherVersion: '2026.9.20', runtimeVersion: '2026.9.20', runtimePath: launcher,
+    });
+  });
+
+  it('reports matching versions without hiding the runtime path', async () => {
+    const { runtime } = setup(true, '2026.9.20');
+    expect(await getVersionInfo()).toMatchObject({
+      launcherVersion: '2026.9.20', runtimeVersion: '2026.9.20', runtimePath: runtime,
+    });
+  });
+
+  it('reports an unreadable runtime version as unknown', async () => {
+    const { runtime } = setup(true, null);
+    expect(await getVersionInfo()).toMatchObject({ runtimeVersion: '(unknown)', runtimePath: runtime });
+  });
+});
 
 // Config-driven version stamps: user-facing CLI output (the `aiwg use` version
 // stamp, `aiwg diagnose` bug-report link, the entrypoint packaging-bug message)

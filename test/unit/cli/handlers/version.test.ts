@@ -72,6 +72,36 @@ describe('versionHandler metadata', () => {
   });
 });
 
+describe('versionHandler launcher/runtime identity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetVersionInfo.mockResolvedValue(versionInfo({
+      devMode: true, launcherVersion: '2026.9.20', runtimeVersion: '2026.10.3', runtimePath: '/synthetic/runtime',
+    }));
+  });
+
+  it.each([{ args: [] }, { args: ['--verbose'] }])('labels both versions in text output with args $args', async ({ args }) => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await versionHandler.execute(makeCtx(args));
+      const { dim } = await import('../../../../src/cli/ui.js');
+      expect(dim).toHaveBeenCalledWith('    launcher: 2026.9.20');
+      expect(dim).toHaveBeenCalledWith('    runtime: 2026.10.3');
+      expect(dim).toHaveBeenCalledWith('    runtime path: /synthetic/runtime');
+    } finally { spy.mockRestore(); }
+  });
+
+  it('includes both versions and the runtime path in JSON', async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await versionHandler.execute(makeCtx(['--json']));
+      expect(JSON.parse(spy.mock.calls[0][0])).toMatchObject({
+        version: '2026.4.0', launcherVersion: '2026.9.20', runtimeVersion: '2026.10.3', runtimePath: '/synthetic/runtime',
+      });
+    } finally { spy.mockRestore(); }
+  });
+});
+
 describe('versionHandler.execute — stable channel', () => {
   beforeEach(() => {
     vi.clearAllMocks();

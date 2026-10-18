@@ -278,6 +278,7 @@ Show version and channel information.
 aiwg version
 aiwg -version
 aiwg --version
+aiwg --version --json
 ```
 
 **Capabilities:** cli, version, info
@@ -290,6 +291,14 @@ Shows:
 - Active channel (stable/main)
 - Installation path
 - Node.js version
+
+In dev mode, text output labels both the global launcher version and the effective
+runtime version. JSON output adds `launcherVersion`, `runtimeVersion`, and
+`runtimePath`; the existing `version` and `packageRoot` fields still describe the
+package executing the report. Plain `--version` runs in the launcher, while
+`version` and `--version --json` run through the selected runtime. An unreadable
+package version is reported as `(unknown)`. `aiwg doctor` warns when the launcher
+and runtime versions differ or either version cannot be determined.
 
 **Example output:**
 
