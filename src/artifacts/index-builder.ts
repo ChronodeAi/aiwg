@@ -41,10 +41,13 @@ import {
   resolveProjectAiwgDir,
 } from '../config/project-artifacts.js';
 import { normalizeStateTransferProjection } from './state-transfer.js';
+import { runIndexPreparation, type IndexPreparationJob, type IndexPreparationResult } from './index-preparation.js';
 import { collectGraphIndexFiles, findArtifactFiles, indexPathFor } from './index-files.js';
 
 export interface BuildOptions {
   force?: boolean;
+  /** Bound independent preparation threads; 0/1 keeps serial extraction. */
+  workers?: number;
   quiet?: boolean;
   verbose?: boolean;
   scope?: string;
@@ -929,6 +932,84 @@ function resolveInstallRootHint(): string {
   return '<aiwg install root>';
 }
 
+/** Shared serial/worker read, checksum and extraction. No index output or global reduction. */
+export function prepareIndexArtifact(job: IndexPreparationJob): IndexPreparationResult {
+  const { fullPath, relativePath } = job;
+  const content = fs.readFileSync(fullPath, 'utf8');
+  const checksum = computeChecksum(content);
+  if (job.existingChecksum === checksum) return { checksum };
+  const { data, body } = parseFrontmatter(content);
+  // YAML Flow documents (workflow.aiwg.io/v1) are pure YAML, not
+  // markdown+frontmatter — detect them up front so they classify and
+  // become discoverable (#1540).
+  const flow = parseFlowDoc(content, relativePath);
+  const decision = flow ? null : parseDecisionDoc(content, relativePath);
+  const gatePack = flow || decision ? null : parseGatePackDoc(content, relativePath);
+  const inferredType = inferType(data, relativePath);
+  const physicalType = inferType({ ...data, type: undefined }, relativePath);
+  const runbook = flow || decision || gatePack ? null : parseRunbookDoc(data, body, relativePath);
+  const schemaDoc = inferredType === 'schema' ? parseSchemaDoc(content, relativePath) : null;
+  const title = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.title ?? extractTitle(data, body);
+  const phase = typeof data.phase === 'string' ? data.phase : inferPhase(relativePath);
+  const type = flow?.type ?? decision?.type ?? gatePack?.type ?? (runbook ? 'runbook' : inferredType);
+  const tags = flow?.tags ?? decision?.tags ?? gatePack?.tags ?? (Array.isArray(data.tags) ? data.tags.map(String) : []);
+  const summary = flow?.description ?? decision?.description ?? gatePack?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
+  const dependencies = extractMentions(content);
+  const markdownLinks = extractMarkdownLinks(content);
+
+  // Discovery metadata (#1214, #1540, #1792) — meaningful for operational
+  // AIWG artifact kinds. Kept undefined on document types so the index file
+  // stays small for the common case.
+  const isDiscoverable = OPERATIONAL_DISCOVERY_TYPES.includes(
+    type as typeof OPERATIONAL_DISCOVERY_TYPES[number],
+  );
+  // Declarative processes have no trigger phrases — they rely on their
+  // capability and structure-aware search terms.
+  const triggers = isDiscoverable && !flow ? extractTriggers(body, data) : undefined;
+  const capability = flow?.capability ?? decision?.capability ?? gatePack?.capability ?? schemaDoc?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
+  const kind = flow?.kind ?? decision?.kind ?? gatePack?.kind ?? runbook?.kind;
+  const sourceType = runbook && physicalType !== 'runbook' ? physicalType : undefined;
+  const searchTerms = flow?.searchTerms ?? decision?.searchTerms ?? gatePack?.searchTerms ?? schemaDoc?.searchTerms ?? runbook?.searchTerms;
+  const kernel =
+    data.kernel === true || data.kernel === 'true' ? true : undefined;
+  // Script entrypoint metadata is meaningful for skills only (#1227).
+  const script = type === 'skill' ? extractSkillScript(data) : undefined;
+  const operationalState = normalizeOperationalState(data.operational_state);
+  const stateTransfer = normalizeStateTransferProjection(data.state_transfer);
+  // Canonical short name (#1233) — used by the scorer to floor exact-name
+  // queries to 1.0 so hyphenated kernel-skill names like `aiwg-doctor`
+  // remain searchable even when the rendered title strips the hyphen.
+  const name = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
+
+  const entry: MetadataEntry = {
+    path: relativePath,
+    type,
+    ...(kind ? { kind } : {}),
+    ...(sourceType ? { sourceType } : {}),
+    phase,
+    title,
+    tags,
+    created: typeof data.created === 'string' ? data.created : new Date(job.birthtimeMs).toISOString(),
+    updated: new Date(job.mtimeMs).toISOString(),
+    checksum,
+    summary,
+    dependencies,
+    ...(markdownLinks.length > 0 ? { markdownLinks } : {}),
+    dependents: [], // Computed after all entries are processed
+    ...(name ? { name } : {}),
+    ...(triggers && triggers.length > 0 ? { triggers } : {}),
+    ...(capability ? { capability } : {}),
+    ...(searchTerms && searchTerms.length > 0 ? { searchTerms } : {}),
+    ...(kernel ? { kernel } : {}),
+    ...(script ? { script } : {}),
+    ...(type === 'rule' || type === 'behavior' ? extractRuleBindings(data, body) :
+      Array.isArray(data.paths) ? { governedPaths: data.paths.filter((value): value is string => typeof value === 'string') } : {}),
+    ...(operationalState ? { operationalState } : {}),
+    ...(stateTransfer ? { stateTransfer } : {}),
+  };
+  return { checksum, entry };
+}
+
 export async function buildIndex(
   cwd: string,
   options: BuildOptions = {}
@@ -1122,6 +1203,23 @@ export async function buildIndex(
   const existingEntries = canReuseExisting ? existingIndex.entries : {};
   const manifest: ChecksumManifest = canReuseExisting ? storedManifest : { version: 1, generated: '', entries: {} };
 
+  // Establish the complete changed-file batch before any extraction/reduction.
+  // Warm stat hits never create threads or read source contents.
+  const preparationStats = new Map<string, fs.Stats>();
+  const jobs: IndexPreparationJob[] = [];
+  if (!useFilenameMetadata) for (const fullPath of files) {
+    let stat: fs.Stats;
+    try { stat = fileStats?.get(fullPath) ?? fs.statSync(fullPath); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+    preparationStats.set(fullPath, stat);
+    const relativePath = indexPathFor(cwd, fullPath, graph), previous = manifest.entries[relativePath];
+    if (!force && statMatches(stat, previous) && existingEntries[relativePath]?.checksum === previous?.checksum) continue;
+    jobs.push({ fullPath, relativePath, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs, sizeBytes: stat.size,
+      ...(!force && existingEntries[relativePath] ? { existingChecksum: existingEntries[relativePath].checksum } : {}) });
+  }
+  const preparation = await runIndexPreparation(jobs, prepareIndexArtifact, import.meta.url, options.workers);
+  const preparedArtifacts = new Map(jobs.map((job, index) => [job.fullPath, preparation.results[index]]));
+
   for (const fullPath of files) {
     const relativePath = indexPathFor(cwd, fullPath, graph);
 
@@ -1154,7 +1252,7 @@ export async function buildIndex(
       // This is the fast path: unchanged files don't touch the filesystem beyond fs.statSync.
       let stat: fs.Stats;
       try {
-        stat = fileStats?.get(fullPath) ?? fs.statSync(fullPath);
+        stat = preparationStats.get(fullPath) ?? fs.statSync(fullPath);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           manifestStats.pruned++;
@@ -1176,92 +1274,19 @@ export async function buildIndex(
         continue;
       }
 
-      // Phase 2: content read + checksum verification for files that looked changed.
-      const content = fs.readFileSync(fullPath, 'utf-8');
-      const checksum = computeChecksum(content);
-
-      // Skip unchanged files in incremental mode (checksum matched despite stat drift)
+      const prepared = preparedArtifacts.get(fullPath)!;
+      const { checksum } = prepared;
       if (!force && existingEntries[relativePath]?.checksum === checksum) {
         entries[relativePath] = existingEntries[relativePath];
-        // Update manifest with current stat so Phase 1 succeeds next time.
         nextManifestEntries[relativePath] = makeEntry(checksum, stat);
         unchangedCount++;
         manifestStats.checksumSkipped++;
         if (verbose) log(`  unchanged (checksum): ${relativePath}`);
         continue;
       }
-
       manifestStats.reindexed++;
       nextManifestEntries[relativePath] = makeEntry(checksum, stat);
-      const { data, body } = parseFrontmatter(content);
-      // YAML Flow documents (workflow.aiwg.io/v1) are pure YAML, not
-      // markdown+frontmatter — detect them up front so they classify and
-      // become discoverable (#1540).
-      const flow = parseFlowDoc(content, relativePath);
-      const decision = flow ? null : parseDecisionDoc(content, relativePath);
-      const gatePack = flow || decision ? null : parseGatePackDoc(content, relativePath);
-      const inferredType = inferType(data, relativePath);
-      const physicalType = inferType({ ...data, type: undefined }, relativePath);
-      const runbook = flow || decision || gatePack ? null : parseRunbookDoc(data, body, relativePath);
-      const schemaDoc = inferredType === 'schema' ? parseSchemaDoc(content, relativePath) : null;
-      const title = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.title ?? extractTitle(data, body);
-      const phase = typeof data.phase === 'string' ? data.phase : inferPhase(relativePath);
-      const type = flow?.type ?? decision?.type ?? gatePack?.type ?? (runbook ? 'runbook' : inferredType);
-      const tags = flow?.tags ?? decision?.tags ?? gatePack?.tags ?? (Array.isArray(data.tags) ? data.tags.map(String) : []);
-      const summary = flow?.description ?? decision?.description ?? gatePack?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
-      const dependencies = extractMentions(content);
-      const markdownLinks = extractMarkdownLinks(content);
-
-      // Discovery metadata (#1214, #1540, #1792) — meaningful for operational
-      // AIWG artifact kinds. Kept undefined on document types so the index file
-      // stays small for the common case.
-      const isDiscoverable = OPERATIONAL_DISCOVERY_TYPES.includes(
-        type as typeof OPERATIONAL_DISCOVERY_TYPES[number],
-      );
-      // Declarative processes have no trigger phrases — they rely on their
-      // capability and structure-aware search terms.
-      const triggers = isDiscoverable && !flow ? extractTriggers(body, data) : undefined;
-      const capability = flow?.capability ?? decision?.capability ?? gatePack?.capability ?? schemaDoc?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
-      const kind = flow?.kind ?? decision?.kind ?? gatePack?.kind ?? runbook?.kind;
-      const sourceType = runbook && physicalType !== 'runbook' ? physicalType : undefined;
-      const searchTerms = flow?.searchTerms ?? decision?.searchTerms ?? gatePack?.searchTerms ?? schemaDoc?.searchTerms ?? runbook?.searchTerms;
-      const kernel =
-        data.kernel === true || data.kernel === 'true' ? true : undefined;
-      // Script entrypoint metadata is meaningful for skills only (#1227).
-      const script = type === 'skill' ? extractSkillScript(data) : undefined;
-      const operationalState = normalizeOperationalState(data.operational_state);
-      const stateTransfer = normalizeStateTransferProjection(data.state_transfer);
-      // Canonical short name (#1233) — used by the scorer to floor exact-name
-      // queries to 1.0 so hyphenated kernel-skill names like `aiwg-doctor`
-      // remain searchable even when the rendered title strips the hyphen.
-      const name = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
-
-      entry = {
-        path: relativePath,
-        type,
-        ...(kind ? { kind } : {}),
-        ...(sourceType ? { sourceType } : {}),
-        phase,
-        title,
-        tags,
-        created: typeof data.created === 'string' ? data.created : stat.birthtime.toISOString(),
-        updated: stat.mtime.toISOString(),
-        checksum,
-        summary,
-        dependencies,
-        ...(markdownLinks.length > 0 ? { markdownLinks } : {}),
-        dependents: [], // Computed after all entries are processed
-        ...(name ? { name } : {}),
-        ...(triggers && triggers.length > 0 ? { triggers } : {}),
-        ...(capability ? { capability } : {}),
-        ...(searchTerms && searchTerms.length > 0 ? { searchTerms } : {}),
-        ...(kernel ? { kernel } : {}),
-        ...(script ? { script } : {}),
-        ...(type === 'rule' || type === 'behavior' ? extractRuleBindings(data, body) :
-          Array.isArray(data.paths) ? { governedPaths: data.paths.filter((value): value is string => typeof value === 'string') } : {}),
-        ...(operationalState ? { operationalState } : {}),
-        ...(stateTransfer ? { stateTransfer } : {}),
-      };
+      entry = prepared.entry!;
     }
 
     entries[relativePath] = entry;
