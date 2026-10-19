@@ -205,7 +205,8 @@ export class BehaviorRegistry {
 
   /**
    * Merge multiple behaviors. Returns combined directives and toolset.
-   * Directive collisions: last wins (with warning).
+   * Directive collisions: highest priority wins (default 0), then later attachment.
+   * Every collision warns with the winning and losing behaviors.
    * Toolset collisions: error.
    */
   merge(behaviors) {
@@ -215,12 +216,24 @@ export class BehaviorRegistry {
 
     for (const behavior of behaviors) {
       for (const directive of behavior.directives || []) {
-        if (directiveMap.has(directive.id)) {
+        const incoming = { ...directive, _behaviorName: behavior.name };
+        const previous = directiveMap.get(directive.id);
+        if (previous) {
+          const incomingPriority = directive.priority ?? 0;
+          const previousPriority = previous.priority ?? 0;
+          const incomingWins = incomingPriority >= previousPriority;
+          const winner = incomingWins ? incoming : previous;
+          const loser = incomingWins ? previous : incoming;
+          const reason = incomingPriority === previousPriority
+            ? 'equal priority; later in attachment order'
+            : 'higher priority';
           warnings.push(
-            `Directive '${directive.id}' from '${behavior.name}' overrides previous definition`
+            `Directive '${directive.id}': '${winner._behaviorName}' (priority ${winner.priority ?? 0}) ` +
+            `wins over '${loser._behaviorName}' (priority ${loser.priority ?? 0}); ${reason}`
           );
+          if (!incomingWins) continue;
         }
-        directiveMap.set(directive.id, { ...directive, _behaviorName: behavior.name });
+        directiveMap.set(directive.id, incoming);
       }
 
       for (const tool of behavior.tools || []) {
