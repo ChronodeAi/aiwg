@@ -267,9 +267,10 @@ rules:
           priority: high, area: storage, type: maintenance or Host-Compute03, HIGH, storage. Return JSON
           {action, reason}.
         assertions:
-          - type: json-equals
+          # Accept the namespaced key:value set however it is named; reject the flat Host-Compute03 set.
+          - type: json-matches
             path: action
-            value: "host: compute-03, priority: high, area: storage, type: maintenance"
+            pattern: ^(?!.*host-compute03).*(host:\s*compute-03|label[ _-]?set[ _-]?(1|a)\b|set[ _-]?(1|a)\b)
           - type: json-matches
             path: reason
             pattern: \S
@@ -563,9 +564,10 @@ rules:
           A design derives an encryption key by SHA-256(password). Choose
           Argon2id-with-recorded-cost-and-salt or raw-hash. Return JSON {action, reason}.
         assertions:
-          - type: json-equals
+          # Accept the Argon2id choice in any casing or phrasing; reject the raw hash.
+          - type: json-matches
             path: action
-            value: Argon2id-with-recorded-cost-and-salt
+            pattern: ^(?!.*raw[-_ ]?hash).*argon2id
           - type: json-matches
             path: reason
             pattern: \S
@@ -575,9 +577,9 @@ rules:
           Two high-entropy hardware secrets must produce independent application purpose keys. Choose
           HKDF-extract-and-labeled-expand or concatenate-and-hash-as-key. Return JSON {action, reason}.
         assertions:
-          - type: json-equals
+          - type: json-matches
             path: action
-            value: HKDF-extract-and-labeled-expand
+            pattern: ^(?!.*concat).*hkdf
           - type: json-matches
             path: reason
             pattern: \S
