@@ -1306,7 +1306,12 @@
                 "if": {
                   "required": [
                     "all"
-                  ]
+                  ],
+                  "properties": {
+                    "all": {
+                      "const": true
+                    }
+                  }
                 },
                 "then": {
                   "maxProperties": 1
@@ -1317,7 +1322,11 @@
                   "required": [
                     "group",
                     "capabilities"
-                  ]
+                  ],
+                  "properties": {
+                    "group": {},
+                    "capabilities": {}
+                  }
                 }
               }
             ]

@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, cpSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { rulesHandler } from '../../../src/cli/handlers/rules.js';
 import { buildHandlerMap } from '../../../src/cli/handlers/index.js';
 import { rulePinState } from '../../../src/rules/pin-state.js';
@@ -12,7 +13,7 @@ import { doctorHandler } from '../../../src/cli/handlers/utilities.js';
 import { main as configMain } from '../../../src/config/cli.js';
 let root: string;
 const repo = resolve(__dirname, '../../..');
-const run = (args: string[]) => rulesHandler.execute({ args, rawArgs: ['rules', ...args], cwd: root, frameworkRoot: repo });
+const run = (args: string[], frameworkRoot = repo) => rulesHandler.execute({ args, rawArgs: ['rules', ...args], cwd: root, frameworkRoot });
 const configFile = () => join(root, '.aiwg/aiwg.config');
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'aiwg-rules-cli-'));
@@ -96,18 +97,28 @@ describe('rules command', () => {
     await expect(writeAiwgConfig(root, config)).rejects.toThrow('enforcement');
   });
   it('preview reports every provider budget failure before persisting config', async () => {
+    const frameworkRoot = join(root, 'provider-fixture');
+    mkdirSync(join(frameworkRoot, 'agentic/code/frameworks'), { recursive: true });
+    mkdirSync(join(frameworkRoot, 'agentic/code/addons'), { recursive: true });
+    mkdirSync(join(frameworkRoot, 'tools/agents/providers'), { recursive: true });
+    for (const provider of ['claude', 'cursor']) {
+      const implementation = pathToFileURL(join(repo, 'tools/agents/providers', `${provider}.mjs`)).href;
+      writeFileSync(join(frameworkRoot, 'tools/agents/providers', `${provider}.mjs`), `export { deploy } from ${JSON.stringify(implementation)};\n`);
+    }
+    vi.stubEnv('AIWG_ROOT', frameworkRoot);
+    vi.stubEnv('AIWG_RULE_BINDING_INDEX_CACHE', join(root, 'binding-index-cache'));
     const config = JSON.parse(readFileSync(configFile(), 'utf8'));
     config.providers = ['claude', 'cursor'];
     writeFileSync(configFile(), JSON.stringify(config));
     vi.stubEnv('AIWG_RULES_INLINE_BUDGET_TOKENS', '1');
     const before = readFileSync(configFile(), 'utf8');
-    const failed = await run(['pin', 'fixture-on-demand', '--no-deploy', '--json']);
+    const failed = await run(['pin', 'fixture-on-demand', '--no-deploy', '--json'], frameworkRoot);
     expect(failed.exitCode).toBe(1);
     expect(failed.message).toContain('claude');
     expect(failed.message).toContain('cursor');
     expect(failed.message).toContain('fixture-on-demand');
     expect(readFileSync(configFile(), 'utf8')).toBe(before);
-    const allowed = await run(['pin', 'fixture-on-demand', '--dry-run', '--allow-over-budget', '--json']);
+    const allowed = await run(['pin', 'fixture-on-demand', '--dry-run', '--allow-over-budget', '--json'], frameworkRoot);
     expect(allowed.exitCode, allowed.message).toBe(0);
     expect(JSON.parse(allowed.message!).providers).toHaveLength(2);
     expect(existsSync(join(root, '.claude/rules/fixture-on-demand.md'))).toBe(false);
