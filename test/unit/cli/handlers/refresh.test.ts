@@ -17,7 +17,7 @@ import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 
 const {
   mockRun, mockUseExecute, mockRefreshAllPackages, mockReadAiwgConfig, mockHashManifest,
-  mockWriteAiwgConfig,
+  mockWriteAiwgConfig, mockRefreshCapabilities,
 } = vi.hoisted(() => ({
   mockRun: vi.fn().mockResolvedValue({ exitCode: 0 }),
   mockUseExecute: vi.fn().mockResolvedValue({ exitCode: 0 }),
@@ -25,6 +25,7 @@ const {
   mockReadAiwgConfig: vi.fn().mockResolvedValue(null),
   mockHashManifest: vi.fn().mockResolvedValue(null),
   mockWriteAiwgConfig: vi.fn().mockResolvedValue(undefined),
+  mockRefreshCapabilities: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../../../src/cli/handlers/script-runner.js', () => ({
@@ -33,6 +34,10 @@ vi.mock('../../../../src/cli/handlers/script-runner.js', () => ({
 
 vi.mock('../../../../src/cli/handlers/use.js', () => ({
   createUseHandler: vi.fn(() => ({ execute: mockUseExecute })),
+}));
+
+vi.mock('../../../../src/artifacts/framework-capabilities.js', () => ({
+  refreshFrameworkCapabilities: mockRefreshCapabilities,
 }));
 
 vi.mock('../../../../src/channel/manager.mjs', () => ({
@@ -75,6 +80,7 @@ import {
   BUNDLED_RULE_SOURCE_GROUPS,
   allowsTrackedDeletes,
 } from '../../../../src/cli/handlers/refresh.js';
+import { getFrameworkRoot } from '../../../../src/channel/manager.mjs';
 import * as ui from '../../../../src/cli/ui.js';
 // Backward-compat alias for existing test references
 const syncHandler = refreshHandler;
@@ -179,6 +185,27 @@ describe('syncHandler.execute — default run (no flags)', () => {
   it('calls refreshAllPackages', async () => {
     await syncHandler.execute(makeCtx());
     expect(mockRefreshAllPackages).toHaveBeenCalled();
+  });
+});
+
+describe('refresh capability cache lifecycle (#3304)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRun.mockResolvedValue({ exitCode: 0 });
+    vi.mocked(getFrameworkRoot).mockResolvedValue('/mock/framework/root');
+  });
+
+  it('refreshes runtime capabilities even with no installed project bundles', async () => {
+    mockReadAiwgConfig.mockResolvedValue({ providers: ['codex'], installed: {}, parallelism: {} });
+    const result = await syncHandler.execute(makeCtx(['--skip-update']));
+    expect(result.exitCode).toBe(0);
+    expect(mockUseExecute).not.toHaveBeenCalled();
+    expect(mockRefreshCapabilities).toHaveBeenCalledWith('/mock/framework/root', true, { force: true });
+  });
+
+  it('does not refresh capability data during a dry run', async () => {
+    await syncHandler.execute(makeCtx(['--dry-run']));
+    expect(mockRefreshCapabilities).not.toHaveBeenCalled();
   });
 });
 

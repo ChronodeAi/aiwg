@@ -687,6 +687,17 @@ export const refreshHandler: CommandHandler = {
       }
     }
 
+    // Runtime updates can change the corpus even when there are no recorded
+    // deployments. Refresh both discovery representations, independently of use.
+    if (!dryRun) {
+      try {
+        const { refreshFrameworkCapabilities } = await import('../../artifacts/framework-capabilities.js');
+        await refreshFrameworkCapabilities(frameworkRoot, true, { force: true });
+      } catch (error) {
+        ui.warn(`Capability index refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
     // Step 4.25: Report planned project-local deploys (#1035).
     // The active use handler performs the actual project-local deploy during
     // framework refresh; this block surfaces dry-run and completion details.
