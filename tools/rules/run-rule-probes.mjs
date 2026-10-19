@@ -68,6 +68,15 @@ export function loadProbes(file = DEFAULT_PROBES) {
   return data;
 }
 
+/** Shared qualified read-only invocation for probe and release-comparison adapters. */
+export function probeInvocation(provider, model, prompt) {
+  if (!['claude', 'codex'].includes(provider)) throw new Error('Provider must be claude or codex');
+  return { command: provider, args: provider === 'claude'
+    ? ['-p', prompt, '--model', model, '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
+      '--tools', 'Read,Glob,Grep,Bash', '--allowedTools', 'Read', 'Glob', 'Grep', 'Bash(aiwg discover:*)', 'Bash(aiwg show:*)']
+    : ['exec', '--json', '--model', model, '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', prompt] };
+}
+
 export function buildPlan(data, { provider = 'claude', model, n = 5, rules = [], project = '<deployed-project>' } = {}) {
   if (!['claude', 'codex'].includes(provider)) throw new Error('Provider must be claude or codex');
   if (!Number.isSafeInteger(n) || n < 1) throw new Error('n must be a positive integer');
@@ -83,12 +92,9 @@ export function buildPlan(data, { provider = 'claude', model, n = 5, rules = [],
       const prompt = 'This is a read-only behavioral decision exercise in a deployed AIWG project. '
         + 'Use local context and read-only discovery as needed. Do not edit files, contact services, spawn agents, or perform the proposed actions. '
         + 'Return only the requested JSON decision; explain your decision in its reason field.\n\n' + probe.prompt;
-      const args = provider === 'claude'
-        ? ['-p', prompt, '--model', model, '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
-          '--tools', 'Read,Glob,Grep,Bash', '--allowedTools', 'Read', 'Glob', 'Grep', 'Bash(aiwg discover:*)', 'Bash(aiwg show:*)']
-        : ['exec', '--json', '--model', model, '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', prompt];
+      const { command, args } = probeInvocation(provider, model, prompt);
       calls.push({ rule: rule.id, probe: probe.id, kind: probe.kind, repetition,
-        command: provider, args, cwd: '<fresh-temp-copy-of-project>', prompt, assertions: probe.assertions,
+        command, args, cwd: '<fresh-temp-copy-of-project>', prompt, assertions: probe.assertions,
         body_fingerprint: bodyFingerprint, files: probe.files ?? {} });
     }
   }

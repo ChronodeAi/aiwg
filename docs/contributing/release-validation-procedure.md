@@ -10,6 +10,12 @@
 
 ---
 
+## RC response regression gate
+
+After the RC build and full validation, run [release comparison](release-comparison.md) against the last published package on Claude, Codex, and Hermes: the complete base/Wave 5 probe corpus plus the workflow scenarios, n=5 per side, identical subject model/settings, and a distinct blind judge model. Resolve or explicitly accept each regression with a recorded reason linked to its evidence before shipping. Invalid or incomplete runs hold the gate. Higher-consequence model spot checks supplement the complete corpus. Do not count offline stub tests or a selected smoke set as the release comparison.
+
+RC build → full tests → release comparison → fix or record acceptance for each regression → ship.
+
 ## 0. Pre-flight (Do once, on the host machine)
 
 Run these checks **before** opening any provider session. They verify your local install is healthy and the version under test is what you expect.
