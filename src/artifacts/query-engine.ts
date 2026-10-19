@@ -9,7 +9,7 @@
  * @tests @test/unit/artifacts/query-engine.test.ts
  */
 
-import { refreshFrameworkCapabilities, isCorpusBundleInstalled } from './framework-capabilities.js';
+import { refreshFrameworkCapabilities, resolveFrameworkCorpusRoot, isCorpusBundleInstalled } from './framework-capabilities.js';
 import { minimatch } from 'minimatch';
 import type { DiscoveryShadowRoute } from './discovery-shadow.js';
 import * as fs from 'node:fs';
@@ -1046,7 +1046,7 @@ export async function discoverCapability(
     | undefined;
 
   if (resourceSource !== 'web' && (!params.graph || params.graph === 'framework')) {
-    const root = fs.existsSync(path.join(cwd, 'agentic/code')) ? cwd : aiwgRoot;
+    const root = resolveFrameworkCorpusRoot(cwd) ?? aiwgRoot;
     if (root) {
       try {
         await refreshFrameworkCapabilities(root, backend === 'fortemi-core');
@@ -1562,7 +1562,7 @@ async function loadShowEntries(
   let entries: MetadataEntry[] = [];
 
   if (resourceSource !== 'web' && (!params.graph || params.graph === 'framework')) {
-    const root = fs.existsSync(path.join(cwd, 'agentic/code')) ? cwd : aiwgRoot;
+    const root = resolveFrameworkCorpusRoot(cwd) ?? aiwgRoot;
     if (root) {
       try {
         await refreshFrameworkCapabilities(root, backend === 'fortemi-core' && params.backend !== undefined);

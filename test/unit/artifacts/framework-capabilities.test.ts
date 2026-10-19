@@ -56,6 +56,10 @@ beforeEach(() => {
     XDG_CONFIG_HOME: path.join(tmp, 'config'), XDG_CACHE_HOME: path.join(tmp, 'cache'),
     AIWG_ROOT: root, AIWG_ARTIFACTS_PATH: '', AIWG_PROJECT_ARTIFACTS_PATH: '', AIWG_PROJECT_AIWG_DIR: '',
   })) vi.stubEnv(key, value);
+  write('package.json', JSON.stringify({ name: 'aiwg', version: '1.0.0' }));
+  for (const kind of ['frameworks', 'addons', 'extensions', 'agents', 'behaviors']) {
+    fs.mkdirSync(path.join(root, 'agentic/code', kind), { recursive: true });
+  }
   write(`${research}/manifest.json`, JSON.stringify({ id: 'research-complete', modeAliases: ['research'] }));
   write(`${research}/skills/corpus-health-audit/SKILL.md`, '---\nname: corpus-health-audit\ndescription: Audit paper corpus health.\n---\n# Corpus Health Audit\n');
   log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -69,6 +73,49 @@ afterEach(() => {
 });
 
 describe('framework capabilities outside provider directories (#3304)', () => {
+  it.each(['show', 'discover'] as const)('does not replace the shared runtime graph from a partial project corpus (%s)', async query => {
+    copySkill('induct-research');
+    await refreshFrameworkCapabilities(root);
+    const metadata = path.join(getGraphIndexDir(root, 'framework'), 'metadata.json');
+    const before = fs.readFileSync(metadata, 'utf8');
+    const partial = path.join(project, 'agentic/code/addons/local/skills/local-only/SKILL.md');
+    fs.mkdirSync(path.dirname(partial), { recursive: true });
+    fs.writeFileSync(partial, '---\nname: local-only\n---\n# Local only\n');
+    const builder = vi.spyOn(indexBuilder, 'buildIndex');
+    if (query === 'show') {
+      await showArtifact(project, { name: 'induct-research', typeFilter: ['skill'], backend: 'local', json: true });
+    } else {
+      await discoverCapability(project, { phrase: 'induct this paper', backend: 'local', json: true });
+    }
+    expect(builder).not.toHaveBeenCalled();
+    expect(fs.readFileSync(metadata, 'utf8')).toBe(before);
+  });
+
+  it.each([false, true])('ignores partial roots without publishing a receipt (package marker: %s)', async packageMarker => {
+    const partial = path.join(project, 'agentic/code/frameworks/local/skills/probe/SKILL.md');
+    fs.mkdirSync(path.dirname(partial), { recursive: true });
+    fs.writeFileSync(partial, '# Probe\n');
+    if (packageMarker) {
+      // Even an aiwg package with frameworks/addons can be a partial checkout.
+      fs.writeFileSync(path.join(project, 'package.json'), '{"name":"aiwg"}');
+      fs.mkdirSync(path.join(project, 'agentic/code/addons'), { recursive: true });
+    }
+    const builder = vi.spyOn(indexBuilder, 'buildIndex');
+    await refreshFrameworkCapabilities(project, true, { force: true });
+    expect(builder).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(getGraphIndexDir(project, 'framework'), 'capability-sources.json'))).toBe(false);
+  });
+
+  it('resolves a bundled addon directory to the owning runtime before rebuilding', async () => {
+    copySkill('induct-research');
+    const addon = path.join(root, 'agentic/code/addons/probe');
+    fs.mkdirSync(addon, { recursive: true });
+    const builder = vi.spyOn(indexBuilder, 'buildIndex');
+    await refreshFrameworkCapabilities(addon);
+    expect(builder).toHaveBeenCalledWith(root, expect.objectContaining({ graph: 'framework' }));
+    expect(index().entries[induction]?.type).toBe('skill');
+  });
+
   it('indexes all canonical research skills, including induction and quality audit', async () => {
     for (const name of fs.readdirSync(path.join(repo, research, 'skills'))) {
       if (fs.existsSync(path.join(repo, research, 'skills', name, 'SKILL.md'))) copySkill(name);
@@ -223,14 +270,14 @@ describe('framework capabilities outside provider directories (#3304)', () => {
   });
 
   it('invalidates receipts for runtime version, worktree HEAD, and manual index changes', async () => {
-    write('package.json', '{"version":"1.0.0"}');
+    write('package.json', '{"name":"aiwg","version":"1.0.0"}');
     write('.git', 'gitdir: git-worktree');
     write('git-worktree/HEAD', 'ref: refs/heads/main');
     write('git-worktree/commondir', '../git-common');
     write('git-common/packed-refs', 'aaaa refs/heads/main\n');
     await refreshFrameworkCapabilities(root, false);
     const builder = vi.spyOn(indexBuilder, 'buildIndex');
-    write('package.json', '{"version":"1.0.1"}');
+    write('package.json', '{"name":"aiwg","version":"1.0.1"}');
     await refreshFrameworkCapabilities(root, false);
     write('git-common/refs/heads/main', 'bbbb');
     await refreshFrameworkCapabilities(root, false);

@@ -5,8 +5,25 @@ import { createHash } from 'node:crypto';
 import { getGraphIndexDir } from './types.js';
 import { acquireDirectoryLock, DirectoryLockContentionError } from './prebuilt-build-lock.js';
 
+const CORPUS_KINDS = ['frameworks', 'addons', 'extensions', 'agents', 'behaviors'] as const;
+
 function readText(file: string): string {
   try { return fs.readFileSync(file, 'utf8'); } catch { return ''; }
+}
+
+/** Only an AIWG package/repository owns the shared corpus, never a project or bundle. */
+export function resolveFrameworkCorpusRoot(candidate: string): string | null {
+  let root = path.resolve(candidate);
+  while (true) {
+    try {
+      const pkg = JSON.parse(readText(path.join(root, 'package.json')));
+      if (pkg.name === 'aiwg' && CORPUS_KINDS.every(kind =>
+        fs.statSync(path.join(root, 'agentic/code', kind)).isDirectory())) return root;
+    } catch { /* keep looking for the owning package */ }
+    const parent = path.dirname(root);
+    if (parent === root) return null;
+    root = parent;
+  }
 }
 
 /** Resolve HEAD without spawning git, including worktrees and packed refs. */
@@ -31,11 +48,11 @@ function gitHead(root: string): string {
  * require `aiwg refresh` (which forces reconciliation) or an explicit index build.
  */
 function sourceFingerprint(root: string): string {
-  const hash = createHash('sha256').update('framework-capabilities-v1');
+  const hash = createHash('sha256').update('framework-capabilities-v2');
   hash.update(path.resolve(root));
   try { hash.update(JSON.parse(readText(path.join(root, 'package.json'))).version ?? ''); } catch { /* fixture root */ }
   hash.update(gitHead(root));
-  for (const kind of ['frameworks', 'addons', 'extensions', 'agents', 'behaviors']) {
+  for (const kind of CORPUS_KINDS) {
     const dir = path.join(root, 'agentic/code', kind);
     let entries: fs.Dirent[];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
@@ -76,8 +93,9 @@ export async function refreshFrameworkCapabilities(
   syncFortemi = true,
   options: { force?: boolean } = {},
 ): Promise<void> {
-  if (!['frameworks', 'addons', 'extensions', 'agents', 'behaviors']
-    .some(dir => fs.existsSync(path.join(root, 'agentic/code', dir)))) return;
+  const corpusRoot = resolveFrameworkCorpusRoot(root);
+  if (!corpusRoot) return;
+  root = corpusRoot;
   const dir = getGraphIndexDir(root, 'framework');
   const receiptPath = path.join(dir, 'capability-sources.json');
   const metadataPath = path.join(dir, 'metadata.json');
