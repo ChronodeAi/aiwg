@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { resolve } from 'path';
 import { readFileSync, existsSync } from 'fs';
+import { sourceRules } from './rule-source-expectations.js';
 import { execFileSync } from 'child_process';
 
 // @ts-expect-error — .mjs provider module without type declarations
@@ -32,6 +33,10 @@ import { createAgentsMd as openhumanAgentsMd } from '../../../tools/agents/provi
 
 const REPO_ROOT = resolve(__dirname, '../../..');
 const levelOf = (f: string): string | null => ruleEnforcementLevel(readFileSync(f, 'utf8'));
+const corpusRules = ['addons', 'frameworks', 'extensions'].flatMap(kind =>
+  sourceRules(REPO_ROOT, kind as 'addons' | 'frameworks' | 'extensions'));
+const legacyOnDemandNames = [...new Set(corpusRules.filter(rule => rule.legacyOnDemand).map(rule => rule.name))].sort();
+const migratedTierNames = corpusRules.filter(rule => !rule.structural && rule.data.activation !== undefined).map(rule => rule.name);
 
 // `tmpFile()`'s directories were never removed (#3018), leaking one per call; module-level so
 // it covers every describe block in this file, not just the ones that already track their own.
@@ -107,29 +112,28 @@ describe('rule tier deployment (#1673)', () => {
     });
   });
 
-  // Contract guard against the real repo source: the deploy enumerators must
-  // never feed MEDIUM/LOW rules into the always-on set, and the on-demand
-  // enumerator must surface them. Locks the tiering behavior in CI.
+  // ADR 50–61, 265–272: preserve the exact file-delivery set, including
+  // native paths at any severity; summaries/bindings never become full bodies.
   describe('deploy enumerators on real source', () => {
-    it('getAddonRuleFiles yields only always-on (no medium/low) rules', () => {
-      const files: string[] = getAddonRuleFiles(REPO_ROOT);
-      const leaked = files.filter((f) => ['medium', 'low'].includes(levelOf(f) as string));
-      expect(leaked).toEqual([]);
+    it('getAddonRuleFiles yields activation-selected bodies and structural indexes', () => {
+      const expected = sourceRules(REPO_ROOT, 'addons')
+        .filter(rule => (!rule.consolidated || !rule.structural && rule.data.activation !== undefined) && rule.fileDelivered)
+        .map(rule => rule.file).sort();
+      expect(getAddonRuleFiles(REPO_ROOT).sort()).toEqual(expected);
     });
 
-    it('collectFrameworkArtifacts rules yield only always-on rules', () => {
+    it('collectFrameworkArtifacts rules yield activation-selected bodies and structural indexes', () => {
+      const expected = sourceRules(REPO_ROOT, 'frameworks').filter(rule => rule.fileDelivered).map(rule => rule.file).sort();
       const arts = collectFrameworkArtifacts(REPO_ROOT, 'all', { includeRules: true });
-      const leaked = (arts.rules as string[]).filter((f) => ['medium', 'low'].includes(levelOf(f) as string));
-      expect(leaked).toEqual([]);
+      expect(arts.rules.sort()).toEqual(expected);
     });
 
-    it('listOnDemandRuleFiles surfaces the medium/low tier and nothing always-on', () => {
+    it('listOnDemandRuleFiles surfaces exactly the untagged medium/low fallback', () => {
       const od: string[] = listOnDemandRuleFiles(REPO_ROOT);
-      expect(od.length).toBeGreaterThan(0);
       // every entry is genuinely medium/low
       expect(od.every((f) => ['medium', 'low'].includes(levelOf(f) as string))).toBe(true);
-      // a known MEDIUM rule is present
-      expect(od.some((f) => f.endsWith('diagram-generation.md'))).toBe(true);
+      expect(onDemandRuleNames(od)).toEqual(legacyOnDemandNames);
+      for (const name of migratedTierNames) expect(onDemandRuleNames(od)).not.toContain(name);
     });
 
     it('listOnDemandRuleFiles stays complete when called from bundled addon or extension sources (#1784)', () => {
@@ -143,14 +147,9 @@ describe('rule tier deployment (#1673)', () => {
 
       expect(addonNames).toEqual(rootNames);
       expect(extensionNames).toEqual(rootNames);
-      expect(addonNames).toEqual(expect.arrayContaining([
-        'activity-log',
-        'context-budget',
-        'diagram-generation',
-        'voice-framework',
-        'prose-bridge',
-        'scoped-reasoning',
-      ]));
+
+      expect(rootNames).toEqual(legacyOnDemandNames);
+      for (const name of migratedTierNames) expect(addonNames).not.toContain(name);
     });
   });
 });
@@ -236,6 +235,7 @@ describe('on-demand index propagation (#1675)', () => {
     for (const [provider, ruleDir] of CASES) {
       it(`${provider} writes RULES-ONDEMAND.md with ${expectedCount} entries`, async () => {
         const target = await mkdtemp(join(tmpdir(), `aiwg-od-${provider}-`));
+        fileRoots.push(target);
         execFileSync(
           'node',
           [
@@ -248,6 +248,10 @@ describe('on-demand index propagation (#1675)', () => {
           { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
         );
         const indexPath = join(target, ruleDir, 'RULES-ONDEMAND.md');
+        if (expectedCount === 0) {
+          expect(existsSync(indexPath)).toBe(false);
+          return;
+        }
         expect(existsSync(indexPath)).toBe(true);
         const body = await readFile(indexPath, 'utf8');
         expect((body.match(/^- /gm) || []).length).toBe(expectedCount);
@@ -258,6 +262,7 @@ describe('on-demand index propagation (#1675)', () => {
 
     it('keeps the complete index after an aiwg-use-all-style addon pass (#1784)', async () => {
       const target = await mkdtemp(join(tmpdir(), 'aiwg-od-multipass-'));
+      fileRoots.push(target);
       const expected = onDemandRuleNames(listOnDemandRuleFiles(REPO_ROOT));
 
       execFileSync(
@@ -283,17 +288,19 @@ describe('on-demand index propagation (#1675)', () => {
         { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
       );
 
-      const body = await readFile(join(target, '.codex/rules/RULES-ONDEMAND.md'), 'utf8');
+      // ADR 61, 265–272: once no legacy tier remains, remove its startup
+      // listing rather than retaining stale entries from earlier passes.
+      const indexPath = join(target, '.codex/rules/RULES-ONDEMAND.md');
+      if (legacyOnDemandNames.length === 0) {
+        expect(existsSync(indexPath)).toBe(false);
+        return;
+      }
+      const body = await readFile(indexPath, 'utf8');
       const actual = [...body.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]).sort();
       expect(actual).toEqual(expected);
-      expect(actual).toEqual(expect.arrayContaining([
-        'activity-log',
-        'context-budget',
-        'diagram-generation',
-        'voice-framework',
-        'prose-bridge',
-        'scoped-reasoning',
-      ]));
+
+      expect(actual).toEqual(legacyOnDemandNames);
+      for (const name of migratedTierNames) expect(actual).not.toContain(name);
 
       await rm(target, { recursive: true, force: true });
     }, 60_000);
@@ -317,13 +324,15 @@ describe('on-demand index propagation (#1675)', () => {
       const body = await readFile(join(target, 'AGENTS.md'), 'utf8');
       expect(body).toContain('On-Demand Rules');
       expect(body).toContain('aiwg show rule ');
-      expect(body).toContain('- `activity-log` — `aiwg show rule activity-log`');
+      expect([...body.matchAll(/^- `([^`]+)` — `aiwg show rule /gm)].map(match => match[1])).toEqual(legacyOnDemandNames);
+      for (const name of migratedTierNames) expect(body).not.toContain(`- \`${name}\` — \`aiwg show rule `);
       expect(body).not.toContain('{{ON_DEMAND_RULES}}');
 
       openhumanAgentsMd(target, join(REPO_ROOT, 'agentic/code/addons/aiwg-utils'), false);
       const addonPassBody = await readFile(join(target, 'AGENTS.md'), 'utf8');
       expect(addonPassBody).toContain('On-Demand Rules');
-      expect(addonPassBody).toContain('- `activity-log` — `aiwg show rule activity-log`');
+      expect([...addonPassBody.matchAll(/^- `([^`]+)` — `aiwg show rule /gm)].map(match => match[1])).toEqual(legacyOnDemandNames);
+      for (const name of migratedTierNames) expect(addonPassBody).not.toContain(`- \`${name}\` — \`aiwg show rule `);
       expect(addonPassBody).not.toContain('{{ON_DEMAND_RULES}}');
 
       await rm(target, { recursive: true, force: true });
@@ -389,7 +398,7 @@ describe('inline rule budget (#2562)', () => {
     expect(resolveRulesInlineBudgetTokens({})).toBe(DEFAULT_RULES_INLINE_BUDGET_TOKENS);
     expect(resolveRulesInlineBudgetTokens({ AIWG_RULES_INLINE_BUDGET_TOKENS: '10000' })).toBe(10_000);
     expect(resolveRulesInlineBudgetTokens({ AIWG_RULES_INLINE_BUDGET_TOKENS: '0' })).toBe(0);
-    expect(resolveRulesInlineBudgetTokens({ AIWG_RULES_INLINE_BUDGET_TOKENS: 'nope' })).toBe(DEFAULT_RULES_INLINE_BUDGET_TOKENS);
+    expect(() => resolveRulesInlineBudgetTokens({ AIWG_RULES_INLINE_BUDGET_TOKENS: 'nope' })).toThrow('non-negative safe integer');
   });
 
   it('keeps every rule inline when the set fits the budget', async () => {
@@ -401,7 +410,7 @@ describe('inline rule budget (#2562)', () => {
     expect(result.demoted).toEqual([]);
   });
 
-  it('demotes HIGH rules largest-first and never demotes CRITICAL rules or indexes', async () => {
+  it('keeps all activation-selected rules even when the budget is exceeded', async () => {
     const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
     roots.push(root);
     const critical = await ruleFile(root, 'critical-big', 'critical', 4_000, true);
@@ -412,19 +421,19 @@ describe('inline rule budget (#2562)', () => {
     await writeFile(index, '# index\n' + 'y'.repeat(4_000));
     // 5 files ≈ 3.2K tokens; a 2.3K budget forces exactly one demotion — the largest HIGH.
     const result = applyInlineRuleBudget([critical, highBig, highSmall, unlabelled, index], 2_300);
-    expect(result.demoted).toEqual([highBig]);
-    expect(result.inline).toEqual([critical, highSmall, unlabelled, index]);
+    expect(result.demoted).toEqual([]);
+    expect(result.inline).toEqual([critical, highBig, highSmall, unlabelled, index]);
   });
 
-  it('demotes unlabelled rules only after every HIGH rule, and leaves CRITICAL over-budget sets intact', async () => {
+  it('preserves HIGH, unlabelled and CRITICAL rules when over budget', async () => {
     const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
     roots.push(root);
     const critical = await ruleFile(root, 'critical', 'critical', 8_000);
     const high = await ruleFile(root, 'high', 'high', 400);
     const unlabelled = await ruleFile(root, 'unlabelled', null, 4_000);
     const result = applyInlineRuleBudget([critical, high, unlabelled], 1_000);
-    expect(result.demoted).toEqual([high, unlabelled]);
-    expect(result.inline).toEqual([critical]);
+    expect(result.demoted).toEqual([]);
+    expect(result.inline).toEqual([critical, high, unlabelled]);
   });
 
   it('is disabled when the budget is zero', async () => {
@@ -452,42 +461,17 @@ describe('inline rule budget (#2562)', () => {
     expect(content.split('ops-safety').length).toBe(3);
   });
 
-  it('reconciles a deployed rule directory against the budget across passes and records the sidecar', async () => {
+  it('retires stale demotion state without deleting activation-selected or operator rules', async () => {
     const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
     roots.push(root);
     const dest = join(root, '.claude', 'rules');
     await mkdir(dest, { recursive: true });
-    const managed = async (name: string, level: string, bytes: number) => {
-      await writeFile(join(dest, `${name}.md`), `---\n# aiwg:managed v1.0.0 bundled\nenforcement: ${level}\n---\n${'x'.repeat(bytes)}`);
-    };
-    await managed('critical', 'critical', 4_000);
-    await managed('high-big', 'high', 4_000);
-    await managed('high-small', 'high', 400);
-    await writeFile(join(dest, 'operator.md'), `---\nenforcement: high\n---\n${'o'.repeat(8_000)}`); // unmanaged: never touched
-    await writeFile(join(dest, 'RULES-INDEX.md'), '# index');
-
-    // Pass 1: ~2.1K managed tokens over a 1.5K budget → the largest HIGH leaves.
-    const first = reconcileInlineRuleBudget(dest, 1_500);
-    expect(first.removed).toEqual(['high-big']);
-    expect(first.demoted).toEqual(['high-big']);
-    expect(existsSync(join(dest, 'high-big.md'))).toBe(false);
-    expect(existsSync(join(dest, 'critical.md'))).toBe(true);
+    await writeFile(join(dest, 'large.md'), `<!-- aiwg:managed -->\n${'x'.repeat(8000)}`);
+    await writeFile(join(dest, 'operator.md'), '# Operator');
+    await writeFile(join(dest, RULE_BUDGET_SIDECAR), JSON.stringify({ budgetTokens: 1, demoted: ['large'] }));
+    expect(reconcileInlineRuleBudget(dest, 1)).toEqual({ demoted: [], removed: [] });
+    expect(existsSync(join(dest, 'large.md'))).toBe(true);
     expect(existsSync(join(dest, 'operator.md'))).toBe(true);
-    expect(readRuleBudgetSidecar(dest)).toEqual({ budgetTokens: 1_500, demoted: ['high-big'] });
-
-    // Pass 2 adds another HIGH rule that fits: nothing else is removed, the sidecar carries.
-    await managed('high-late', 'high', 400);
-    const second = reconcileInlineRuleBudget(dest, 1_500);
-    expect(second.removed).toEqual([]);
-    expect(second.demoted).toEqual(['high-big']);
-
-    // A different budget recomputes from what is on disk (~1.23K managed tokens).
-    const third = reconcileInlineRuleBudget(dest, 1_150);
-    expect(third.removed).toEqual(['high-late']);
-    expect(third.demoted).toEqual(['high-late']);
-
-    // Disabling the budget clears the sidecar.
-    reconcileInlineRuleBudget(dest, 0);
     expect(existsSync(join(dest, RULE_BUDGET_SIDECAR))).toBe(false);
   });
 

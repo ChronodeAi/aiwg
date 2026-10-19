@@ -1,0 +1,334 @@
+{
+  "issue": 2941,
+  "scope": "Wave 1 canonical rule activation and bindings; no behavioral model probes",
+  "prerequisites": {
+    "repair": "Accept exact indexed artifact slugs when canonical agent frontmatter names are display names; preserve type checks, ambiguity/source precedence and rejection of titles/paths.",
+    "source": "src/artifacts/query-engine.ts",
+    "literal_base_deployment": "blocked: Missing agent binding target: build-engineer",
+    "repaired_base_default_guard": {
+      "passed": false,
+      "selected_context_bytes": 300762,
+      "estimated_tokens": 75190.5,
+      "limit_tokens": 64000
+    },
+    "measurement_fixture": {
+      "base": "test/fixtures/rule-binding/project",
+      "extra_files": {
+        ".aiwg/aiwg.config": {
+          "version": "1",
+          "rules": {
+            "inline_budget_tokens": 0
+          }
+        }
+      },
+      "note": "Guard disabled only in a temporary measurement fixture. The same resolver repair and fixture are used before and after. This is not a claim that the unchanged default-budget deployment passes."
+    }
+  },
+  "rules": [
+    {
+      "name": "quiet-mode",
+      "source": "agentic/code/addons/aiwg-utils/rules/quiet-mode.md",
+      "activation": "bound",
+      "bound_to": {
+        "agents": [
+          "fleet-quiet-bot",
+          "fleet-business-bot"
+        ]
+      },
+      "before_native_bytes": 4029,
+      "after_native_bytes": 0
+    },
+    {
+      "name": "escalation-discipline",
+      "source": "agentic/code/addons/aiwg-utils/rules/escalation-discipline.md",
+      "activation": "bound",
+      "bound_to": {
+        "agents": [
+          "fleet-quiet-bot",
+          "fleet-business-bot",
+          "concierge",
+          "aiwg-model-efficiency-worker",
+          "aiwg-model-coding-worker",
+          "aiwg-model-reasoning-worker",
+          "aiwg-steward"
+        ],
+        "skills": [
+          "steward"
+        ]
+      },
+      "before_native_bytes": 8156,
+      "after_native_bytes": 0
+    },
+    {
+      "name": "tool-quota",
+      "source": "agentic/code/addons/aiwg-utils/rules/tool-quota.md",
+      "activation": "bound",
+      "bound_to": {
+        "agents": [
+          "fleet-quiet-bot",
+          "fleet-business-bot",
+          "concierge",
+          "ralph-loop",
+          "ralph-verifier"
+        ],
+        "skills": [
+          "ralph",
+          "ralph-external",
+          "ralph-resume",
+          "aiwg-mission",
+          "mission-control"
+        ]
+      },
+      "before_native_bytes": 7539,
+      "after_native_bytes": 0
+    },
+    {
+      "name": "decision-offload",
+      "source": "agentic/code/addons/decision-engine/rules/decision-offload.md",
+      "activation": "bound",
+      "bound_to": {
+        "skills": [
+          "decision-offload",
+          "decision-evaluate",
+          "decision-playground"
+        ]
+      },
+      "before_native_bytes": 0,
+      "after_native_bytes": 0
+    },
+    {
+      "name": "debug-source-not-output",
+      "source": "agentic/code/addons/aiwg-utils/rules/debug-source-not-output.md",
+      "activation": "paths",
+      "bound_to": {
+        "agents": [
+          "debugger",
+          "self-debug"
+        ],
+        "skills": [
+          "debug-memory"
+        ]
+      },
+      "paths": [
+        "tools/**",
+        "src/**",
+        "agentic/**",
+        "dist/**",
+        "build/**",
+        "node_modules/**"
+      ],
+      "before_native_bytes": 9602,
+      "after_native_bytes": 9885
+    }
+  ],
+  "gates": {
+    "U1": {
+      "passed": false,
+      "provider": "claude",
+      "before_rule_bytes": 284748,
+      "after_rule_bytes": 265307,
+      "saved_bytes": 19441,
+      "limit_bytes": 110000,
+      "gap_bytes": 155307,
+      "before_behavior_bytes": 0,
+      "after_behavior_bytes": 0,
+      "claude_provider_regression": false,
+      "other_provider_regression": "not measured against a comparable full base; six provider delivery fixtures pass"
+    },
+    "U2": {
+      "activation_lint": "pass",
+      "explicit_wave1_rules": 5,
+      "existing_bound_behaviors": 8,
+      "remaining_migration_warnings": 154,
+      "complete_corpus_coverage": false
+    },
+    "U3": {
+      "passed": true,
+      "declared_rule_artifact_pairs": 26,
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "hermes",
+        "warp",
+        "openclaw"
+      ],
+      "delivered_pair_checks": 156
+    },
+    "U4": {
+      "passed": true,
+      "default_cli_bound_rule_pair_checks": 26,
+      "mcp_parity_cases": 3,
+      "note": "Real CLI uses a freshly rebuilt framework index; shared MCP CLI-envelope parity and Fortemi round-trip tests also pass."
+    },
+    "U5": {
+      "status": "not run; conductor on titan",
+      "rollback": "For a failing rule, set activation: kernel and remove bound_to/paths; revert each rule independently."
+    },
+    "U6": {
+      "passed": true,
+      "results": [
+        {
+          "name": "quiet-mode",
+          "phrase": "when should a chat bot stay silent",
+          "rank": 1,
+          "top3": [
+            "quiet-mode",
+            "agent-friendly-code",
+            "component-completeness"
+          ]
+        },
+        {
+          "name": "escalation-discipline",
+          "phrase": "should I use a stronger model",
+          "rank": 1,
+          "top3": [
+            "escalation-discipline",
+            "research-before-decision",
+            "cli-secondary"
+          ]
+        },
+        {
+          "name": "tool-quota",
+          "phrase": "stop retrying failing tool calls in an unattended loop",
+          "rank": 2,
+          "top3": [
+            "auto-compact-continue",
+            "tool-quota",
+            "research-before-decision"
+          ]
+        },
+        {
+          "name": "decision-offload",
+          "phrase": "offload bounded decisions to Jev",
+          "rank": 1,
+          "top3": [
+            "decision-offload",
+            "research-before-decision",
+            "agent-fallback"
+          ]
+        },
+        {
+          "name": "debug-source-not-output",
+          "phrase": "debug generated output or canonical source",
+          "rank": 1,
+          "top3": [
+            "debug-source-not-output",
+            "artifact-output-policy",
+            "dependency-source-policy"
+          ]
+        }
+      ]
+    },
+    "U7": {
+      "status": "not run; conductor on titan"
+    },
+    "U8": {
+      "status": "not run; full-deploy model dispatch/headroom requires conductor validation"
+    },
+    "U9": {
+      "passed": true,
+      "provider_fixture_count": 6,
+      "codex_full_sdlc_deployment_exit_code": 0,
+      "codex_agents_md_bytes": 1196,
+      "codex_agents_md_limit_bytes": 32768
+    }
+  },
+  "remaining_waves": {
+    "wave2_full_files_bytes": 38575,
+    "wave3_full_files_bytes": 50225,
+    "wave4_five_kernel_full_files_bytes": 35081,
+    "additional_anti_laziness_full_file_bytes": 10352,
+    "optimistic_remaining_bytes_even_if_all_those_files_vanished": 131074,
+    "conclusion": "Wave 5 is necessary to reach 110000 B. Waves 2–4 cannot close the gap even under the optimistic complete-removal calculation, including anti-laziness; summaries and kernel cores must actually remain. The agreed full migration projects 40000–55000 B and still requires measurement/probes."
+  },
+  "validation": {
+    "typecheck": "pass",
+    "build_cli": "pass",
+    "package_plugins": "pass; regeneration produced no byte changes because none of the five rules is copied by current plugin mappings",
+    "plugin_copies": "pass",
+    "rule_triggers": "pass",
+    "unit_tests": {
+      "passed": 315,
+      "files": 15,
+      "note": "265 rule/lint/show/neighbor cases; 41 existing provider/behavior cases; 9 Wave 1 canonical delivery cases. Failed fixture iterations were corrected and their failed file rerun green."
+    },
+    "orchestration_conformance": {
+      "passed": 932,
+      "files": 36,
+      "config": "config/vitest.config.js",
+      "maxWorkers": 4,
+      "note": "Vitest API loads the required base config and overrides only lane include/exclude ownership to admit orchestrationConformanceFiles, which the default config excludes. No repository config changed."
+    },
+    "ci_lints": [
+      {
+        "script": "lint:dep-sources",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:eval-imports",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:package-license-boundary",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:agent-sizes",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:test-registration",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:test-process-timeouts",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:orchestration-packs",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:schemas",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:ops-templates",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:mission-inventory",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:mission-contract",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:vault-migration",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:session-fixtures",
+        "exit_code": 0
+      }
+    ],
+    "omitted_ci_lints": [
+      {
+        "script": "lint:audit-signatures",
+        "reason": "Requires npm registry network access, prohibited by task."
+      },
+      {
+        "script": "lint:generated-artifacts",
+        "reason": "Invokes git ls-files, prohibited by task."
+      }
+    ],
+    "constraints": "Local worktree/system temp only; no explicit git commands, installs, tracker writes, network requests or model calls; one Vitest process at a time, nice -n 19, maxWorkers=4"
+  },
+  "evidence": {
+    "before": "wave1-measurement-before.json",
+    "after": "wave1-measurement-after.json",
+    "temporary_logs": "/tmp/aiwg-2941-evidence"
+  }
+}

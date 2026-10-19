@@ -1410,6 +1410,19 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
       capability: "Run the Acme review workflow.",
     });
     writeProjectGraph(tmp, [rule, skill]);
+    // Keep the mixed-graph parity fixture independent of the installed corpus.
+    // An absent framework cache legitimately falls back to packaged rules.
+    writeProjectGraph(tmp, [entry({
+      path: "agentic/code/addons/framework/rules/framework-only.md",
+      type: "rule",
+      name: "framework-only",
+      title: "Framework-only Rule",
+      summary: "Packaged task scheduling guidance.",
+      capability: "Schedule background maintenance.",
+      triggers: undefined,
+      tags: ["scheduling"],
+    })], undefined, "framework");
+    syncFortemiCoreIndex(tmp, { graph: "framework" });
     syncFortemiCoreIndex(tmp, {
       graph: "project",
       generatedAt: "2026-01-05T00:00:00.000Z",

@@ -35,10 +35,11 @@ function runInstalledCli(args: string[]): Promise<CliResult> {
   return runInstalledCliIn(project, args);
 }
 
+// Registry isolation must retain an explicit offline policy from the caller.
 function installedEnv(): NodeJS.ProcessEnv {
   const cleanEnv = Object.fromEntries(
     Object.entries(process.env).filter(([key]) =>
-      !key.toLowerCase().startsWith('npm_config_') && key !== 'AIWG_ROOT'),
+      (!key.toLowerCase().startsWith('npm_config_') || key.toLowerCase() === 'npm_config_offline') && key !== 'AIWG_ROOT'),
   );
   return {
     ...cleanEnv,
@@ -141,7 +142,7 @@ describe('global install native lifecycle-script policy', () => {
     const npmrc = path.join(tempRoot, 'npmrc');
     await writeFile(npmrc, 'ignore-scripts=false\n');
     const cleanEnv = Object.fromEntries(
-      Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith('npm_config_')),
+      Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith('npm_config_') || key.toLowerCase() === 'npm_config_offline'),
     );
     const installArgs = [
         'install', '--global', '--prefix', prefix,

@@ -37,7 +37,7 @@ let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
 import os from 'os';
-import { getFrameworksForMode, normalizeDeploymentMode, skillMatchesProvider, isKernelSkill } from '../agents/providers/base.mjs';
+import { contentHash, writeSidecarManifest, getFrameworksForMode, normalizeDeploymentMode, skillMatchesProvider, isKernelSkill } from '../agents/providers/base.mjs';
 
 const CODEX_SKILLS_DIR = path.join(os.homedir(), '.codex', 'skills');
 const MAX_NAME_LENGTH = 100;
@@ -433,6 +433,7 @@ function deploySkill(skill, targetDir, opts) {
   // during transform, so the SKILL.md alone isn't a reliable signal).
   // Cleanup keys off this presence.
   fs.writeFileSync(path.join(skillDir, '.aiwg-managed'), 'aiwg\n', 'utf8');
+  writeSidecarManifest(skillDir, { skillSource: path.dirname(skill.sourcePath), managed: { 'SKILL.md': { sourcePath: skill.sourcePath, hash: `sha256:${contentHash(skill.content)}` } } }, false);
   console.log(`  deployed: ${skill.name}`);
 
   return { action: 'deploy', reason: 'success' };

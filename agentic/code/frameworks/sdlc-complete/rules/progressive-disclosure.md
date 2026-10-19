@@ -1,5 +1,22 @@
 ---
 enforcement: medium
+activation: paths
+summary: Label SDLC template sections by phase, reveal details progressively, and provide realistic worked examples suited to the project phase.
+bound_to:
+  skills:
+    - artifact-orchestration
+  agents:
+    - requirements-analyst
+    - technical-writer
+  flows: []
+paths:
+  - agentic/code/frameworks/sdlc-complete/templates/**
+  - .aiwg/requirements/**
+  - .aiwg/architecture/**
+  - .aiwg/risks/**
+  - .aiwg/testing/**
+triggers:
+  - how to progressively disclose SDLC templates
 ---
 
 # Progressive Disclosure Rules

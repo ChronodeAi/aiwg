@@ -24,6 +24,7 @@ import path from 'path';
 import os from 'os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import {
+  withRuleDeployment,
   ensureDir,
   listMdFiles,
   deploySkillDir,
@@ -192,14 +193,31 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
 /**
  * Generate a lean AGENTS.md for Hermes
  *
- * Hermes loads AGENTS.md on every turn — keep it under 1,000 characters
- * to preserve context budget on 12GB VRAM setups.
+ * Hermes reaches AGENTS.md through its startup pointer on every task. Reserve
+ * the 19,000-character budget for CRITICAL kernel bodies and the kernel index.
  * See: docs/integrations/hermes-quickstart.md (Part 3)
  */
 // Hermes context cap is 20K chars (head-tail truncated above). Hard limit
 // to leave headroom for project-specific additions and skill-discovery.
 const HERMES_AGENTS_MD_HARD_CAP = 19_000;
 const HERMES_AGENTS_MD_SOFT_WARN = 15_000;
+
+/** Never truncate CRITICAL bodies. Report each contribution before promotion. */
+export function assertContextBudget(content, name = 'AGENTS.md', rules = []) {
+  if (content.length <= HERMES_AGENTS_MD_HARD_CAP) return;
+  const critical = rules.filter(rule => rule.tagged && rule.activation === 'kernel'
+    && String(rule.enforcement || '').trim().toLowerCase() === 'critical');
+  const sizes = critical.map(rule => ({ name: rule.name,
+    chars: `## Rule: ${rule.name}\n\n${rule.body.trim()}`.length }));
+  const total = sizes.reduce((sum, rule) => sum + rule.chars, 0) + Math.max(0, sizes.length - 1) * 2;
+  throw new Error(
+    `Hermes ${name} (${content.length} chars) exceeds hard cap of ${HERMES_AGENTS_MD_HARD_CAP}. ` +
+    `Hermes truncates above 20K. ` +
+    (total > HERMES_AGENTS_MD_HARD_CAP ? 'CRITICAL kernel set alone exceeds the cap. ' : 'Assembled context exceeds the cap; review wrappers and operator additions. ') +
+    `CRITICAL kernel total: ${total} chars (bodies and rule headings).\n` +
+    sizes.map(rule => `  ${rule.name}: ${rule.chars} chars`).join('\n')
+  );
+}
 
 /**
  * Top-7 CRITICAL rule directives, inlined into AGENTS.md for guaranteed
@@ -297,41 +315,32 @@ surface as provider-agnostic tools when configured.
 **Artifacts** (project-required, .aiwg/ directory):
 - \`mcp_aiwg_artifact_read\` / \`mcp_aiwg_artifact_write\``;
 
+function mergeHermesContext(file, generated, kind) {
+  let existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  existing = existing.replace(/\n?<!-- AIWG:rule-startup:start -->[\s\S]*?<!-- AIWG:rule-startup:end -->\n?/g, '');
+  const start = `<!-- AIWG:hermes-${kind}:start -->`;
+  const end = `<!-- AIWG:hermes-${kind}:end -->`;
+  const managed = `${start}\n${generated}\n${end}`;
+  if (existing.includes(start)) return existing.slice(0, existing.indexOf(start)) + managed + existing.slice(existing.indexOf(end) + end.length);
+  if (kind === 'context' && existing.startsWith('# AIWG Integration') && existing.includes(HERMES_AGENTS_MD_FOOTER)) {
+    existing = existing.slice(existing.indexOf(HERMES_AGENTS_MD_FOOTER) + HERMES_AGENTS_MD_FOOTER.length);
+  } else if (kind === 'routing' && existing.includes(generated)) {
+    existing = existing.replace(generated, '');
+  }
+  return existing ? `${existing.trimEnd()}\n\n${managed}\n` : `<!-- aiwg-managed -->\n${managed}\n`;
+}
+
 export function generateAgentsMd(agentCount, skillCount, targetDir, opts) {
   const { dryRun } = opts;
 
+  // Startup is reserved for rule contracts. Workflow routing, artifact catalogs,
+  // and the optional MCP tool inventory duplicate discover/show and consume
+  // Hermes's finite per-turn context before the kernel is appended.
   const header = `# AIWG Integration
 
-AIWG connected through file-based deployment. Native Hermes skills are available
-at \`$HERMES_HOME/skills/\` (kernel) and \`$HERMES_HOME/skills/.aiwg/\` (standard).
-When unset, \`HERMES_HOME\` defaults to the platform-native Hermes home.
-Use \`aiwg discover\` and \`aiwg show <type> <name>\` for the on-demand catalog.
-The MCP sidecar (\`aiwg mcp serve\`) is optional.
-
-## Route to AIWG When
-
-- Structured artifacts needed (requirements, architecture, test plans, risk registers)
-- Multi-step workflows with phase gates or checkpoints
-- Template-driven output that persists across sessions
-
-Handle in Hermes directly: one-off questions, short tasks, conversation.
-
-## Memory Boundary
-
-When AIWG returns an artifact: store path + one-sentence summary in MEMORY.md.
-Do NOT copy artifact body text into memory. Reference, don't replicate.
-
-Use \`delegate_task(goal="...", context="...")\` for AIWG workflows.
-Child agents automatically exclude context files and memory.
-
-## Artifact Store (.aiwg/)
-
-Fetch on demand via \`mcp_aiwg_artifact_read\`:
-- \`requirements/\` — use cases, user stories
-- \`architecture/\` — SAD, ADRs
-- \`planning/\` — phase plans
-- \`testing/\` — test strategy
-- \`security/\` — threat models
+Skills: \`$HERMES_HOME/skills/\` (kernel), \`$HERMES_HOME/skills/.aiwg/\` (standard).
+Find: \`aiwg discover "rule <topic>" --type rule\`. Fetch: \`aiwg show rule <name>\`.
+MCP is optional; \`mcp_aiwg_rule_show\` exposes the same rule catalog.
 `;
 
   // On-demand tier (#1675): the MEDIUM/LOW rules not inlined above. Hermes has
@@ -339,18 +348,15 @@ Fetch on demand via \`mcp_aiwg_artifact_read\`:
   const onDemandSection = opts.srcRoot
     ? renderOnDemandRuleSection(listOnDemandRuleFiles(opts.srcRoot))
     : '';
-  const sections = [header, CRITICAL_RULE_DIRECTIVES];
+  const migrated = new Set((opts.ruleDelivery?.rules || []).filter(rule => rule.tagged).map(rule => rule.name));
+  const directives = CRITICAL_RULE_DIRECTIVES.split(/(?=^### Rule: )/m).filter(section => section.startsWith('### Rule: ') && !migrated.has(section.match(/^### Rule: ([^ \n]+)/)?.[1])).join('');
+  const sections = [header, directives];
   if (onDemandSection) sections.push(onDemandSection);
-  sections.push(HERMES_AGENTS_MD_FOOTER);
-  const output = sections.join('\n\n');
+  // The optional tool inventory is available on demand through the CLI.
   const destPath = path.join(targetDir, 'AGENTS.md');
+  const output = mergeHermesContext(destPath, sections.join('\n\n'), 'context');
 
-  if (output.length > HERMES_AGENTS_MD_HARD_CAP) {
-    throw new Error(
-      `Hermes AGENTS.md (${output.length} chars) exceeds hard cap of ${HERMES_AGENTS_MD_HARD_CAP}. ` +
-      `Hermes truncates above 20K. Trim the priming block or split rule bodies further.`
-    );
-  }
+  assertContextBudget(output, 'AGENTS.md', opts.ruleDelivery?.rules);
 
   if (dryRun) {
     console.log(`[dry-run] Would write AGENTS.md (${output.length} chars, ${Math.round(output.length / 4)} tokens estimated)`);
@@ -397,7 +403,7 @@ when the full AIWG project context is needed.
   if (dryRun) {
     console.log(`[dry-run] Would write .hermes.md (${body.length} chars)`);
   } else {
-    fs.writeFileSync(destPath, body, 'utf8');
+    fs.writeFileSync(destPath, mergeHermesContext(destPath, body, 'routing'), 'utf8');
     console.log(`  Created .hermes.md (${body.length} chars)`);
   }
   return 1;
@@ -417,7 +423,7 @@ when the full AIWG project context is needed.
  */
 export function deploySkills(skillDirs, opts) {
   const standardDestDir = paths.skills;
-  const kernelDestDir = kernelSkillsPath;
+  const kernelDestDir = opts.kernelSkillsPath || kernelSkillsPath;
 
   if (!opts.dryRun) {
     console.log(`  Deploying ${skillDirs.length} skills (kernel + standard split)...`);
@@ -431,6 +437,10 @@ export function deploySkills(skillDirs, opts) {
 // ============================================================================
 
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath, assertContextBudget }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,
@@ -509,7 +519,7 @@ export async function deploy(opts) {
     const kernelNames = computeAllKernelNames(srcRoot);
     if (kernelNames != null) {
       const desiredKernel = [...kernelNames, 'aiwg-orchestrate'];
-      pruneStaleAiwgSkills(kernelSkillsPath, desiredKernel, opts);
+      pruneStaleAiwgSkills(opts.kernelSkillsPath || kernelSkillsPath, desiredKernel, opts);
 
       // Register kernel skills in Hermes's bundled manifest so the Curator
       // (v0.12.0+, 7-day archival cycle) does not archive them. Standard
@@ -603,7 +613,7 @@ export async function deploy(opts) {
  */
 export function updateBundledManifest(kernelSkillNames, opts) {
   const { dryRun, quiet } = opts;
-  const manifestPath = path.join(kernelSkillsPath, '.bundled_manifest');
+  const manifestPath = path.join(opts.kernelSkillsPath || kernelSkillsPath, '.bundled_manifest');
   const aiwgTag = 'aiwg-managed';
 
   // Read existing manifest (if any) and split into "ours" vs "theirs"
@@ -668,7 +678,7 @@ export function migrateLegacySkillPath(opts) {
   // this provider (env var first, platform default otherwise): with
   // HERMES_HOME set, the legacy tree lives under that root — never under
   // the process home directory.
-  const legacyPath = path.join(getHermesHome(), '.aiwg', 'skills');
+  const legacyPath = opts.hermesLegacySkills || path.join(getHermesHome(), '.aiwg', 'skills');
   const newPath = paths.skills;
 
   let legacyExists = false;
@@ -754,7 +764,7 @@ function deployAiwgOrchestrateSkill(srcRoot, opts) {
     return;
   }
 
-  const destDir = path.join(kernelSkillsPath, 'aiwg-orchestrate');
+  const destDir = path.join(opts.kernelSkillsPath || kernelSkillsPath, 'aiwg-orchestrate');
   const destPath = path.join(destDir, 'SKILL.md');
 
   if (fs.existsSync(destPath)) {

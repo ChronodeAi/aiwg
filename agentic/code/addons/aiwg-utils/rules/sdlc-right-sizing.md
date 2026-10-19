@@ -1,4 +1,72 @@
 ---
+activation: summary
+summary: Choose the smallest SDLC workflow and artifact set justified by the change; reserve intake and phase ceremony for work whose scope warrants them.
+bound_to:
+  skills:
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
+    - intake-from-campaign
+    - intake-from-codebase
+    - intake-start
+    - intake-start-campaign
+    - intake-wizard
+    - sdlc-accelerate
+  flows:
+    - flow-agentloop-lfd-controls
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
+triggers:
+  - how much SDLC process does this change need
+  - should a small bug fix need intake
+  - choose a lightweight workflow
 enforcement: high
 ---
 

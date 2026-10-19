@@ -1,5 +1,21 @@
 ---
 enforcement: high
+activation: paths
+summary: Obtain explicit human authorization before changing AIWG CI; keep deployable CI templates in framework source and verify changes locally.
+bound_to:
+  skills:
+    - devkit-create-framework
+    - devkit-create-addon
+    - validate-component
+    - dev-doctor
+  agents:
+    - aiwg-developer
+    - devops-engineer
+    - build-engineer
+paths:
+  - .gitea/workflows/**
+  - .github/workflows/**
+  - agentic/code/frameworks/*/ci/**
 ---
 
 # AIWG CI Safety

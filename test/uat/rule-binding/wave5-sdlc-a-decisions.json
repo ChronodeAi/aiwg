@@ -1,0 +1,116 @@
+[
+  {
+    "rule": "actionable-feedback",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Structured feedback is required during reviews and refinement loops, not every conversation."
+  },
+  {
+    "rule": "agent-fallback",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Fallback routing belongs to agent dispatch and orchestration; concrete orchestration entry points carry it."
+  },
+  {
+    "rule": "agent-friendly-code",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "Code structure is scoped to source reads/writes and code-producing or reviewing artifacts."
+  },
+  {
+    "rule": "agent-generation-guardrails",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "Generation thresholds activate on source files or code-producing agent/workflow invocation."
+  },
+  {
+    "rule": "artifact-discovery",
+    "enforcement": "high",
+    "activation": "summary",
+    "reason": "A startup reminder prevents blind artifact searches before phase selection; phase and librarian bindings carry the details."
+  },
+  {
+    "rule": "auto-reply-chains",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Auto-reply safety applies to autonomous conversation orchestration."
+  },
+  {
+    "rule": "best-output-selection",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Iteration retention and selection apply to refinement loops and missions."
+  },
+  {
+    "rule": "citation-policy",
+    "enforcement": "critical",
+    "activation": "kernel",
+    "reason": "CRITICAL universal prohibition on fabricated citations and unsupported claims applies across all roles; retain the ADR kernel default."
+  },
+  {
+    "rule": "config-in-environment",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Environment configuration is scoped to implementation and deployment design."
+  },
+  {
+    "rule": "conversable-agent-interface",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Agent interface contracts belong to agent authoring and conversation orchestration."
+  },
+  {
+    "rule": "criticality-panel-sizing",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Panel sizing is an ensemble-review decision, not a universal startup obligation."
+  },
+  {
+    "rule": "disposable-processes",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Process lifecycle requirements belong to runtime implementation and deployment; enforcement is MEDIUM despite legacy severity HIGH metadata."
+  },
+  {
+    "rule": "executable-feedback",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Test execution and debug memory apply to code generation, implementation loops and test agents."
+  },
+  {
+    "rule": "failure-mitigation",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "The ADR binds the detailed failure taxonomy to generation, recovery and validation artifacts; universal integrity guards remain kernel."
+  },
+  {
+    "rule": "few-shot-examples",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Few-shot coverage and definition size are agent-authoring responsibilities."
+  },
+  {
+    "rule": "hitl-gates",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "SDLC phase transitions and critical checkpoints have explicit scoped gate entry points; routine tasks do not require gates."
+  },
+  {
+    "rule": "hitl-patterns",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Human collaboration patterns belong to artifact review, draft generation and gated loops."
+  },
+  {
+    "rule": "human-gate-display",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Gate presentation is activated by workflows and agents that present human checkpoints."
+  },
+  {
+    "rule": "index-generation",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Directory index generation belongs to indexing skills and the context librarian."
+  }
+]

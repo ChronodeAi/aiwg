@@ -1,5 +1,11 @@
 ---
 enforcement: critical
+activation: "kernel"
+summary: "Retrieve and verify corpus sources before citing; never invent references, quotes or locations, and match claim strength to evidence quality."
+triggers:
+  - "verify citations before making claims"
+  - "never invent citations or source locations"
+  - "match claim language to evidence quality"
 ---
 
 # Citation Policy Rules

@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/testing/rule-binding-probes.schema.json",
+  "title": "Rule binding behavioral probes",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "rules"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "extends": {
+      "const": "probes.yaml",
+      "description": "Overlay the repository's canonical probes.yaml by rule ID."
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/rule"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "extends": {} }, "required": ["extends"] },
+      "then": {},
+      "else": { "properties": { "rules": { "type": "array", "minItems": 21 } } }
+    }
+  ],
+  "definitions": {
+    "assertion": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "path",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "json-equals"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "value": {}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "path",
+            "pattern"
+          ],
+          "properties": {
+            "type": {
+              "const": "json-matches"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pattern": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "pattern"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "tool-matches",
+                "tool-not-matches"
+              ]
+            },
+            "pattern": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "prompt",
+        "assertions"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "kind": {
+          "enum": [
+            "positive",
+            "negative"
+          ]
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 30
+        },
+        "files": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "assertions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/assertion"
+          }
+        }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source",
+        "probes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "source": {
+          "type": "string",
+          "pattern": "^agentic/code/.+\\.md$"
+        },
+        "probes": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "$ref": "#/definitions/probe"
+          },
+          "allOf": [
+            {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "positive"
+                  }
+                }
+              },
+              "minContains": 2
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "negative"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

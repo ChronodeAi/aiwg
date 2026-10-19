@@ -1,4 +1,18 @@
 ---
+activation: bound
+summary: "Filter and read large context selectively; bound recursive calls by budget and concurrency caps, reconcile findings, and checkpoint long-running RLM work."
+bound_to:
+  skills:
+    - chunk
+    - fanout
+    - rlm-batch
+    - rlm-mode
+    - rlm-prep
+    - rlm-query
+    - rlm-search
+    - rlm-status
+  agents:
+    - rlm-agent
 enforcement: high
 ---
 

@@ -1,5 +1,15 @@
 ---
 enforcement: high
+activation: "bound"
+summary: "Execute tests before returning generated code; record results and root causes, apply targeted fixes, retry at most three times, and escalate with execution history."
+bound_to:
+  agents: ["ai-ml-engineer", "blockchain-developer", "build-engineer", "code-reviewer", "component-owner", "data-engineer", "database-optimizer", "debugger", "devops-engineer", "django-expert", "frontend-specialist", "integration-engineer", "kubernetes-expert", "legacy-modernizer", "mobile-developer", "performance-engineer", "react-expert", "reliability-engineer", "self-debug", "software-implementer", "spring-boot-expert", "test-architect", "test-engineer", "toolsmith", "toolsmith-dynamic", "toolsmith-provider"]
+  skills: ["address-issues", "agent-loop", "agent-loop-ext", "aiwg-mission", "auto-test-execution", "build-poc", "code-chunker", "decompose-file", "execute-feedback", "flow-delivery-track", "flow-guided-implementation", "flow-iteration-dual-track", "flow-test-strategy-execution", "generate-tests", "mission-control", "ralph", "ralph-external"]
+  flows: ["flow-delivery-track", "flow-guided-implementation", "flow-iteration-dual-track", "flow-test-strategy-execution"]
+triggers:
+  - "run tests before returning generated code"
+  - "retry failing tests with root cause analysis"
+  - "persist executable feedback debug memory"
 ---
 
 # Executable Feedback Loop Rules

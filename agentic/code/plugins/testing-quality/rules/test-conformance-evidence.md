@@ -1,4 +1,15 @@
 ---
+activation: bound
+summary: "Separate test evidence units, require current source and runner evidence, preserve unknown and failing states, and verify negative controls without weakening tests."
+bound_to:
+  skills:
+    - test-conformance
+    - test-normalize
+    - test-platform-research
+  agents:
+    - conformance-steward
+    - test-normalization-engineer
+    - test-oracle-reviewer
 name: test-conformance-evidence
 description: Evidence boundaries and fail-closed gates for test conformance audits and normalization
 ---

@@ -2,7 +2,7 @@
  * Context-finalization pass for generated provider context files.
  *
  * Templates provide the stable structure; this pass stitches in current
- * workspace facts from `.aiwg/aiwg.config` and the discover-first protocol so
+ * workspace facts from `.aiwg/aiwg.config` and rule authority pointers so
  * provider context files do not remain template-only (#1365).
  */
 
@@ -81,11 +81,9 @@ export async function buildContextFinalizationBlock(
     `- Recorded deployments: ${formatList([...providerDeployments].sort())}`,
     `- Normalized project context: \`${normalizedAiwgMdPath}\``,
     '',
-    '### Discover-First Protocol',
+    '### Capability Routing',
     '',
-    'Classify every user turn FIRST: is it a **new directive** or a continuation? When a message names or references an AIWG command/capability — even as pasted content like an `address-issues` tracker table, an issue list, or a `flow-*` name — treat it as a new directive and ACT: run `aiwg discover "<the need>"`, fetch with `aiwg show <type> <name>`, and invoke it. Do NOT ask "what would you like me to do with these?" when the action is implied — a pasted `address-issues #1234` table means run the address-issues workflow on those issues.',
-    '',
-    'Also run `aiwg discover` before declining an AIWG request as out of scope or inventing a workflow from memory. The CLI ranks AIWG capabilities across the installed corpus and rebuilds the index from `$AIWG_ROOT` automatically, so a "no matches" for a command you know is deployed is a bug — not a signal it is absent. Commands AIWG deploys to your provider command directory (`.opencode/command/`, `.claude/commands/`, `~/.codex/prompts/`, …) ARE discoverable this way; fetch them with `aiwg show command <name>`. This prevents decline-without-search failures, ask-instead-of-act on new directives, and hallucinated skill or agent names. Full rule: `agentic/code/addons/aiwg-utils/rules/skill-discovery.md`.',
+    'Routing authority: `aiwg show rule skill-discovery` (kernel); capability phrases: `aiwg show skill aiwg-utils-quickref`.',
     '',
     '### Engagement Verification',
     '',

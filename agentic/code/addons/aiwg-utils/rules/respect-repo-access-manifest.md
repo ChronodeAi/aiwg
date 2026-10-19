@@ -1,4 +1,56 @@
 ---
+activation: summary
+summary: Check the workspace repository access manifest and the target member configuration before repo or service actions; deny unlisted writes and obtain operator authorization for registration.
+bound_to:
+  skills:
+    - address-issues
+    - aiwg-delivery-pr
+    - aiwg-issue
+    - aiwg-pr
+    - aiwg-setup-project
+    - commit-and-push
+    - dev-builder-audit
+    - dev-ci-builder
+    - dev-pipeline-audit
+    - dev-release-coordinate
+    - git-mirror-audit
+    - issue-audit
+    - issue-auto-sync
+    - issue-close
+    - issue-comment
+    - issue-create
+    - issue-driven-al
+    - issue-list
+    - issue-planner
+    - issue-sync
+    - issue-update
+    - it-asset-sync
+    - it-deployment-lifecycle
+    - it-dr-test
+    - it-identity-audit
+    - it-network-state
+    - it-provision
+    - net-connectivity-test
+    - net-dns-check
+    - net-vlan-audit
+    - ops
+    - ops-audit-trail
+    - ops-quickref
+    - ops-verify
+    - pr-review
+    - pr-reviewer
+    - repo-analyzer
+    - repo-maintainer
+    - sec-access-snapshot
+    - sec-cert-scan
+    - sec-luks-verify
+    - steward
+    - steward-prep-delivery
+    - stream-deploy
+    - stream-health
+    - sys-cert-check
+    - sys-fleet-inventory
+    - sys-host-audit
 enforcement: high
 triggers:
   - "register a repo in the workspace manifest"

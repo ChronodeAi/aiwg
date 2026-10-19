@@ -1,5 +1,16 @@
 ---
 enforcement: high
+activation: "paths"
+summary: "Check existing and proposed line counts before writing code; warn at 300 lines, split before 500, and extract large additions with descriptive names and purpose comments."
+bound_to:
+  agents: ["ai-ml-engineer", "blockchain-developer", "build-engineer", "code-reviewer", "component-owner", "data-engineer", "database-optimizer", "debugger", "devops-engineer", "django-expert", "frontend-specialist", "integration-engineer", "kubernetes-expert", "legacy-modernizer", "mobile-developer", "performance-engineer", "react-expert", "reliability-engineer", "self-debug", "software-implementer", "spring-boot-expert", "test-architect", "test-engineer", "toolsmith", "toolsmith-dynamic", "toolsmith-provider"]
+  skills: ["address-issues", "agent-loop", "auto-test-execution", "build-poc", "code-chunker", "decompose-file", "flow-delivery-track", "flow-guided-implementation", "flow-iteration-dual-track", "flow-test-strategy-execution", "generate-tests", "ralph", "ralph-external"]
+  flows: ["flow-delivery-track", "flow-guided-implementation", "flow-iteration-dual-track", "flow-test-strategy-execution"]
+paths: ["**/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,c,cc,cpp,h,hpp,cs,rb,php,swift,scala,sh,bash,ps1,sql,tf,yaml,yml}"]
+triggers:
+  - "check file size before generating code"
+  - "generated file would exceed 500 lines"
+  - "extract additions from oversized code"
 ---
 
 # Agent Code Generation Guardrails

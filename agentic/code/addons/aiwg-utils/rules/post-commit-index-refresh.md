@@ -1,5 +1,15 @@
 ---
 enforcement: medium
+activation: summary
+summary: After a successful commit, detect configured indexes and refresh only affected graphs incrementally; honor skip conditions and report failures without blocking.
+bound_to:
+  skills:
+    - commit-and-push
+    - aiwg-pr
+    - aiwg-delivery-pr
+    - steward-prep-delivery
+  agents:
+    - aiwg-developer
 ---
 
 # Post-Commit Index Refresh Rule

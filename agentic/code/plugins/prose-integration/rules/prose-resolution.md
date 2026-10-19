@@ -1,4 +1,15 @@
 ---
+activation: bound
+summary: "Resolve PROSE_ROOT through prose-detect before Prose work, validate both specification files, revalidate cached paths, and obtain approval before installation."
+bound_to:
+  skills:
+    - forme-manifest
+    - prose-detect
+    - prose-install
+    - prose-reader
+    - prose-run
+    - prose-setup
+    - prose-validate
 enforcement: high
 name: prose-resolution
 level: HIGH

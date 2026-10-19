@@ -1,0 +1,874 @@
+{
+  "issue": 2945,
+  "lane": "sdlc-b",
+  "scope": "Only the 18 assigned rules, lane-specific new test/UAT files, and generated copies; no git commands, external network, installs, tracker writes, or model calls.",
+  "activation_counts": {
+    "kernel": 2,
+    "summary": 3,
+    "bound": 8,
+    "paths": 5,
+    "on-demand": 0
+  },
+  "rules": [
+    {
+      "name": "lfd-control-tiers",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/lfd-control-tiers.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "reason": "LFD controls govern budgeted agent-loop execution; loop and mission entry points can deliver the policy before execution.",
+      "summary": "Distinguish harness-enforced, hybrid, and cooperative LFD controls; use mechanical budget stops as the adversarial backstop.",
+      "bound_to": {
+        "skills": [
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "mission-control",
+          "ralph",
+          "ralph-external",
+          "ralph-resume"
+        ],
+        "agents": [
+          "ralph-loop",
+          "ralph-verifier"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls"
+        ]
+      },
+      "sha256": "314b53acd0523814ebc0ae3c25479aea5e11545225245fb76298ff51b17f74da"
+    },
+    {
+      "name": "logs-as-event-streams",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/logs-as-event-streams.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "reason": "Application logging policy belongs to implementation and observability review roles.",
+      "summary": "Write application logs as unbuffered stdout/stderr event streams with correlation IDs; delegate routing and rotation to the environment.",
+      "bound_to": {
+        "skills": [],
+        "agents": [
+          "software-implementer",
+          "reliability-engineer",
+          "devops-engineer",
+          "architecture-designer"
+        ],
+        "flows": []
+      },
+      "sha256": "650bc0bc9c47074f1090ef4d945a6bf148f55fecc31fdee379a5982a10b3ba71"
+    },
+    {
+      "name": "mention-wiring",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/mention-wiring.md",
+      "enforcement": "medium",
+      "activation": "summary",
+      "reason": "A startup reminder covers direct artifact creation; generator and mention-maintenance bindings supply the detailed wiring policy.",
+      "summary": "Wire valid project-relative @-mentions while creating artifacts; connect requirements, implementation, tests, and sources as you go.",
+      "bound_to": {
+        "skills": [
+          "artifact-orchestration",
+          "mention-wire",
+          "mention-validate",
+          "mention-lint"
+        ],
+        "agents": [
+          "requirements-analyst",
+          "requirements-documenter",
+          "architecture-designer",
+          "architecture-documenter",
+          "software-implementer",
+          "test-engineer",
+          "test-documenter",
+          "technical-writer",
+          "agentsmith",
+          "commandsmith",
+          "skillsmith"
+        ],
+        "flows": []
+      },
+      "sha256": "943d2dcee1be0127272bfcb02765f527aa6a8aa515a7ee040dad85c92edf793a"
+    },
+    {
+      "name": "no-attribution",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/no-attribution.md",
+      "enforcement": "critical",
+      "activation": "kernel",
+      "reason": "Universal output-authorship guard: any role can emit branded content before selecting an artifact or path. Compact the mandatory core to preserve full-body delivery within the Hermes hard cap.",
+      "summary": "Omit AI tool attribution, signatures, and branding from commits, pull requests, code, documentation, and generated content.",
+      "sha256": "8c507ea8250494e4ff8cd6ddddc35ecebb5fa244564422b488afeee9560c0350"
+    },
+    {
+      "name": "progressive-disclosure",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/progressive-disclosure.md",
+      "enforcement": "medium",
+      "activation": "paths",
+      "reason": "Template and SDLC artifact paths identify the policy before template generation; generator bindings cover tasks without known paths.",
+      "summary": "Label SDLC template sections by phase, reveal details progressively, and provide realistic worked examples suited to the project phase.",
+      "bound_to": {
+        "skills": [
+          "artifact-orchestration"
+        ],
+        "agents": [
+          "requirements-analyst",
+          "technical-writer"
+        ],
+        "flows": []
+      },
+      "paths": [
+        "agentic/code/frameworks/sdlc-complete/templates/**",
+        ".aiwg/requirements/**",
+        ".aiwg/architecture/**",
+        ".aiwg/risks/**",
+        ".aiwg/testing/**"
+      ],
+      "sha256": "e324f1e3f03cb1a232d97bdde401b95d9b9d16198ba34453508bf82e404d9b5c"
+    },
+    {
+      "name": "provenance-tracking",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/provenance-tracking.md",
+      "enforcement": "high",
+      "activation": "summary",
+      "reason": "Direct artifact creation needs a startup reminder; generation and provenance roles retrieve the detailed PROV contract before writing.",
+      "summary": "Record PROV entity, activity, agent, timestamps, and all derivations for generated artifacts; keep source mentions and bidirectional links consistent.",
+      "bound_to": {
+        "skills": [
+          "artifact-orchestration",
+          "auto-provenance",
+          "provenance-create",
+          "provenance-validate",
+          "provenance-report"
+        ],
+        "agents": [
+          "requirements-analyst",
+          "requirements-documenter",
+          "architecture-designer",
+          "architecture-documenter",
+          "software-implementer",
+          "test-engineer",
+          "test-documenter",
+          "technical-writer",
+          "agentsmith",
+          "commandsmith",
+          "skillsmith",
+          "provenance-manager",
+          "traceability-manager"
+        ],
+        "flows": []
+      },
+      "sha256": "8fd7e1361e2e463250182f2ca3cfa779f71ca35e445b5f543c6517b7af06cf1a"
+    },
+    {
+      "name": "qualified-references",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/qualified-references.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "reason": "Qualified linking is scoped to artifact generation and mention maintenance.",
+      "summary": "Use semantic @-mention qualifiers and maintain inverse links so implementation, tests, dependencies, and derivations remain traceable.",
+      "bound_to": {
+        "skills": [
+          "mention-wire",
+          "mention-validate",
+          "mention-lint",
+          "artifact-orchestration"
+        ],
+        "agents": [
+          "requirements-analyst",
+          "requirements-documenter",
+          "architecture-designer",
+          "architecture-documenter",
+          "software-implementer",
+          "test-engineer",
+          "test-documenter",
+          "technical-writer",
+          "agentsmith",
+          "commandsmith",
+          "skillsmith",
+          "traceability-manager"
+        ],
+        "flows": []
+      },
+      "sha256": "9156e55f99d9d1f322ee8fe7e9d88164ab143b349d4b02dcb16b348e85562f8d"
+    },
+    {
+      "name": "reasoning-sections",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/reasoning-sections.md",
+      "enforcement": "medium",
+      "activation": "paths",
+      "reason": "Template paths and artifact-authoring roles can load the rationale requirements before generating an SDLC artifact.",
+      "summary": "Include a numbered Reasoning section in artifact templates, documenting constraints, alternatives, decision rationale, and risks before finalizing content.",
+      "bound_to": {
+        "skills": [
+          "artifact-orchestration"
+        ],
+        "agents": [
+          "requirements-analyst",
+          "architecture-designer",
+          "test-documenter",
+          "technical-writer"
+        ],
+        "flows": []
+      },
+      "paths": [
+        "agentic/code/frameworks/sdlc-complete/templates/**",
+        ".aiwg/requirements/**",
+        ".aiwg/architecture/**",
+        ".aiwg/testing/**"
+      ],
+      "sha256": "642b29fe2d91a1a3e4d88356e92de4807791c02b986d62cc822f49d82872e696"
+    },
+    {
+      "name": "reproducibility",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/reproducibility.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "reason": "Workflow and loop entry points identify execution before checkpoints, snapshots, or holdout isolation are needed.",
+      "summary": "Use strict mode for critical workflows, checkpoint boundaries, capture execution snapshots, and isolate private holdout feedback from optimizers.",
+      "bound_to": {
+        "skills": [
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution",
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "mission-control",
+          "ralph",
+          "ralph-external",
+          "ralph-resume",
+          "execution-mode"
+        ],
+        "agents": [
+          "recovery-orchestrator"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      },
+      "sha256": "75bae0457416b92823d62d79c5dad2df3d1b9778aaa3c911e8b60c72c4440123"
+    },
+    {
+      "name": "reproducibility-validation",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/reproducibility-validation.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "reason": "Replay validation is scoped to critical testing, security, compliance, and release workflows whose artifacts can deliver it first.",
+      "summary": "Validate critical workflow replay with five runs and documented match thresholds; record nondeterminism and produce compliance reproducibility reports.",
+      "bound_to": {
+        "skills": [
+          "reproducibility-validate",
+          "generate-tests",
+          "auto-test-execution",
+          "flow-test-strategy-execution",
+          "flow-security-review-cycle",
+          "flow-compliance-validation",
+          "flow-release"
+        ],
+        "agents": [
+          "test-engineer",
+          "security-auditor",
+          "compliance-checker",
+          "build-engineer"
+        ],
+        "flows": [
+          "flow-test-strategy-execution",
+          "flow-security-review-cycle",
+          "flow-compliance-validation",
+          "flow-release"
+        ]
+      },
+      "sha256": "c54aeceaf4dca6be69e23a033a7494af2509342e8c4dc6c0cf682c7c9428a73c"
+    },
+    {
+      "name": "research-metadata",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/research-metadata.md",
+      "enforcement": "high",
+      "activation": "paths",
+      "reason": "Research paths and acquisition, citation, and quality artifacts identify the metadata requirement before research documents are written.",
+      "summary": "Give research documents FAIR frontmatter, verified identifiers, metric-bearing findings, GRADE quality, relevance fields, and PDF SHA-256 fixity records.",
+      "bound_to": {
+        "skills": [
+          "research-document",
+          "research-acquire",
+          "research-lint",
+          "grade-on-ingest"
+        ],
+        "agents": [
+          "technical-researcher",
+          "citation-verifier"
+        ],
+        "flows": []
+      },
+      "paths": [
+        ".aiwg/research/**",
+        "agentic/code/frameworks/sdlc-complete/templates/research/**"
+      ],
+      "sha256": "623f2361952e96b32fa218a273411dfaae56d28bad821d9fc333ee59c84b17a8"
+    },
+    {
+      "name": "sdlc-orchestration",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/sdlc-orchestration.md",
+      "enforcement": "medium",
+      "activation": "paths",
+      "reason": "Preserve existing SDLC globs and bind canonical orchestration entry points so MEDIUM severity no longer drops path-scoped delivery.",
+      "summary": "Discover and fetch canonical SDLC skills, right-size workflows, follow their gates, and coordinate independent work through provider-native mechanics.",
+      "bound_to": {
+        "skills": [
+          "sdlc-quickref",
+          "orchestrate-project",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ],
+        "agents": [
+          "executive-orchestrator",
+          "project-manager"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      },
+      "paths": [
+        ".aiwg/**",
+        "AIWG.md",
+        "**/skills/sdlc-quickref/SKILL.md",
+        "**/skills/orchestrate-project/SKILL.md",
+        "**/commands/flow-*.md",
+        "**/commands/intake-*.md",
+        "**/commands/project-*.md"
+      ],
+      "sha256": "07b65df1e690336c7a4bacb58b7200e31091e7f049250769eb501027230f91c7"
+    },
+    {
+      "name": "self-maintenance",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/self-maintenance.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "reason": "Installation, repair, refresh, and long-session maintenance are identified by their paired skills and steward role.",
+      "summary": "Use paired AIWG maintenance skills before raw action commands; preserve registry state and perform health checks before long orchestration sessions.",
+      "bound_to": {
+        "skills": [
+          "use",
+          "aiwg-doctor",
+          "aiwg-refresh",
+          "aiwg-regenerate",
+          "mission-control",
+          "aiwg-mission"
+        ],
+        "agents": [
+          "aiwg-steward"
+        ],
+        "flows": []
+      },
+      "sha256": "cc6b76747e465ab4376e09837a28cb721ecc313979d0461b2d513845aac320f7"
+    },
+    {
+      "name": "stateless-processes",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/stateless-processes.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "reason": "Process-state architecture is scoped to design, implementation, and reliability reviews.",
+      "summary": "Externalize durable process state to backing services; document the process state model and justify local storage or sticky-session deviations in an ADR.",
+      "bound_to": {
+        "skills": [],
+        "agents": [
+          "architecture-designer",
+          "software-implementer",
+          "cloud-architect",
+          "reliability-engineer",
+          "devops-engineer"
+        ],
+        "flows": []
+      },
+      "sha256": "57d795689228ce6389af961cbc246b78ab9314d5abdc4debfc788a3a1a2c8b89"
+    },
+    {
+      "name": "tao-loop",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/tao-loop.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "reason": "Iteration protocol and exploration quotas apply during tool-using agent tasks and loops, reached through explicit execution roles.",
+      "summary": "Record complete intent/action/observation iterations, ground actions in observed results, vary strategy after flat cycles, and declare exploration quotas for long loops.",
+      "bound_to": {
+        "skills": [
+          "flow-guided-implementation",
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "mission-control",
+          "ralph",
+          "ralph-external",
+          "ralph-resume"
+        ],
+        "agents": [
+          "ralph-loop",
+          "ralph-verifier",
+          "software-implementer",
+          "debugger",
+          "self-debug",
+          "test-engineer",
+          "code-reviewer",
+          "architecture-designer",
+          "requirements-analyst",
+          "security-auditor",
+          "technical-researcher"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-guided-implementation"
+        ]
+      },
+      "sha256": "443558bcbfcce6c51976c63dc0c18df0088c3b1749f0c5aa3143cff842edd0a4"
+    },
+    {
+      "name": "thought-protocol",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/thought-protocol.md",
+      "enforcement": "medium",
+      "activation": "summary",
+      "reason": "A concise startup reminder covers direct tool work; tool-using roles and loop entry points retrieve the detailed communication protocol.",
+      "summary": "Use goal, research, progress, extraction, reasoning, exception, and synthesis classifications to summarize intent, evidence, decisions, and outcomes during tool work.",
+      "bound_to": {
+        "skills": [
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "mission-control",
+          "ralph",
+          "ralph-external",
+          "ralph-resume"
+        ],
+        "agents": [
+          "requirements-analyst",
+          "requirements-documenter",
+          "architecture-designer",
+          "architecture-documenter",
+          "software-implementer",
+          "test-engineer",
+          "test-documenter",
+          "technical-writer",
+          "agentsmith",
+          "commandsmith",
+          "skillsmith",
+          "technical-researcher",
+          "security-auditor",
+          "debugger",
+          "code-reviewer"
+        ],
+        "flows": []
+      },
+      "sha256": "4e33f9a210abeb0cfb3fb212e200eada50a91892312f1aee1addaffce8ffe0dc"
+    },
+    {
+      "name": "token-security",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/token-security.md",
+      "enforcement": "critical",
+      "activation": "kernel",
+      "reason": "Universal secret-disclosure guard: any role can expose credentials in output or a tool call before a scoped binding can load. Compact the mandatory core to preserve full-body delivery within the Hermes hard cap.",
+      "summary": "Protect credentials in every role: never hard-code, print, commit, or pass secrets as arguments; load them at point of use with restricted permissions.",
+      "sha256": "61e9b224bd12fc11a9e77c163490fac7e7317652c67bc16f4fa838706ef722f8"
+    },
+    {
+      "name": "versioning",
+      "file": "agentic/code/frameworks/sdlc-complete/rules/versioning.md",
+      "enforcement": "critical",
+      "activation": "paths",
+      "reason": "Release-scoped CalVer policy can load through version/changelog paths or release entry points before versioning actions; it is not a universal turn invariant.",
+      "summary": "Use YYYY.M.PATCH without leading zeros; keep package versions, v-prefixed release tags, and changelog entries consistent before release.",
+      "bound_to": {
+        "skills": [
+          "flow-release",
+          "release-publication-verify",
+          "dev-release-coordinate"
+        ],
+        "agents": [
+          "deployment-manager",
+          "configuration-manager",
+          "build-engineer"
+        ],
+        "flows": [
+          "flow-release"
+        ]
+      },
+      "paths": [
+        "package.json",
+        "**/package.json",
+        "package-lock.json",
+        "**/package-lock.json",
+        "CHANGELOG.md",
+        "**/CHANGELOG.md",
+        ".aiwg/deployment/**",
+        ".github/workflows/*release*",
+        ".gitea/workflows/*release*"
+      ],
+      "sha256": "d74fb395837af95f1f3ca0a6261661614d281c3c5b6751ea2c99362efe256519"
+    }
+  ],
+  "artifact_gaps": [],
+  "gates": {
+    "U2": {
+      "explicit_lane_rules": 18,
+      "lint": "pass",
+      "remaining_corpus_warnings": 125,
+      "complete_corpus_coverage": false
+    },
+    "U3": {
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "hermes",
+        "warp",
+        "openclaw"
+      ],
+      "binding_pairs": 273,
+      "distinct_targets": 116,
+      "provider_pair_assertions": 1638
+    },
+    "U4": {
+      "distinct_cli_json_envelopes": 116,
+      "rule_artifact_assertions": 273
+    },
+    "U5": {
+      "status": "Not run; conductor runs on titan",
+      "new_lane_rules": 11,
+      "new_lane_probes": 33,
+      "n5_calls": 165,
+      "kernel_compaction_probes": [
+        "no-attribution",
+        "token-security"
+      ],
+      "primary_high_critical_moves": 6,
+      "additional_legacy_high_labels": [
+        "logs-as-event-streams",
+        "self-maintenance",
+        "stateless-processes"
+      ],
+      "schema": "Standalone file passes unmodified probes.schema.json and loadProbes; baseline 21 entries retained verbatim for minItems and REQUIRED_RULES.",
+      "rollback": "Set a failing rule to kernel and remove bound_to/paths independently."
+    },
+    "U6": {
+      "scope": "16 non-kernel lane rules; isolated HOME framework index built before discovery",
+      "tested_by": "wave5-sdlc-b-rule-bindings.test.ts"
+    },
+    "U7": {
+      "status": "Not run; eleven negative probes supplied for conductor"
+    },
+    "U8": {
+      "status": "Model dispatch/headroom remains conductor validation"
+    },
+    "U9": {
+      "scope": "Six provider fixtures cover full kernel bodies, summary indexes, native/emulated paths, all bound blocks, and Codex AGENTS.md < 32768 bytes"
+    }
+  },
+  "real_deploy": {
+    "framework": "sdlc",
+    "provider": "claude",
+    "exit_code": 0,
+    "root": "/tmp/aiwg-wave5-sdlc-b-deploy-wHxHQm",
+    "project": "/tmp/aiwg-wave5-sdlc-b-deploy-wHxHQm/project",
+    "home": "/tmp/aiwg-wave5-sdlc-b-deploy-wHxHQm/home",
+    "config": "/tmp/aiwg-wave5-sdlc-b-deploy-wHxHQm/config",
+    "channel": {
+      "channel": "edge",
+      "edgePath": "/srv/jmagly/aiwg-wt/w5-sdlc-b",
+      "devMode": true,
+      "checkOnStartup": false
+    },
+    "aiwg_home_unset": true,
+    "git_initialization": "Empty repository metadata written directly; no git command",
+    "log": "/tmp/aiwg-wave5-sdlc-b-evidence/deploy-sdlc-claude.log",
+    "command": [
+      "env",
+      "-u",
+      "AIWG_HOME",
+      "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+      "/srv/jmagly/aiwg-wt/w5-sdlc-b/bin/aiwg.mjs",
+      "use",
+      "sdlc",
+      "--provider",
+      "claude"
+    ],
+    "inline_budget": "Default 64000 tokens, no override; normal local report-only guard."
+  },
+  "validation": {
+    "lane_rule_bindings": {
+      "file": "test/unit/providers/wave5-sdlc-b-rule-bindings.test.ts",
+      "passed": 10,
+      "total": 10,
+      "passed_full_run": true
+    },
+    "typecheck": "pass",
+    "build_cli": "pass",
+    "package_plugins": "pass; no copied rule bodies exist for these rules in current plugin layouts, so generation made no tracked changes",
+    "lane_tests": {
+      "passed": 349,
+      "failed": 6,
+      "files_passed": 14,
+      "files_failed": 3,
+      "log": "/tmp/aiwg-wave5-sdlc-b-evidence/lane-tests.log"
+    },
+    "provider_retest": {
+      "passed": 8,
+      "failed": 0,
+      "files_passed": 1,
+      "files_failed": 0,
+      "log": "/tmp/aiwg-wave5-sdlc-b-evidence/lane-provider-retest.log"
+    },
+    "isolated_tier_tests": {
+      "passed": 42,
+      "failed": 1,
+      "files_passed": 0,
+      "files_failed": 1,
+      "log": "/tmp/aiwg-wave5-sdlc-b-evidence/isolated-tier-tests.log"
+    },
+    "unit_result_after_environment_correction": {
+      "passed": 352,
+      "failed": 3,
+      "total": 355,
+      "note": "Combined run initially had six failures; clean-HOME rerun fixes three deployment-command failures, leaving the three stale assertions listed under integration_followups."
+    },
+    "orchestration_conformance": {
+      "passed": 932,
+      "failed": 0,
+      "files_passed": 36,
+      "files_failed": 0,
+      "log": "/tmp/aiwg-wave5-sdlc-b-evidence/orchestration.log"
+    },
+    "ci_lints": [
+      {
+        "script": "lint:dep-sources",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:eval-imports",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:package-license-boundary",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:agent-sizes",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:test-registration",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:test-process-timeouts",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:orchestration-packs",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:rule-activation",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:schemas",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:ops-templates",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:mission-inventory",
+        "exit_code": 1
+      },
+      {
+        "script": "lint:mission-contract",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:plugin-copies",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:rule-triggers",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:vault-migration",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:session-fixtures",
+        "exit_code": 0
+      }
+    ],
+    "omitted_ci_lints": [
+      {
+        "script": "lint:audit-signatures",
+        "reason": "Registry network access is prohibited."
+      },
+      {
+        "script": "lint:generated-artifacts",
+        "reason": "Runs git ls-files; git commands are prohibited."
+      },
+      {
+        "script": "lint:affected-packages",
+        "reason": "Conditional external affected-package feed is not supplied; fetching it is prohibited."
+      }
+    ],
+    "deploy_first_attempt": {
+      "framework": "sdlc",
+      "provider": "claude",
+      "exit_code": 143,
+      "error": "spawnSync env ETIMEDOUT",
+      "root": "/tmp/aiwg-wave5-sdlc-b-deploy-sLHJdo",
+      "project": "/tmp/aiwg-wave5-sdlc-b-deploy-sLHJdo/project",
+      "home": "/tmp/aiwg-wave5-sdlc-b-deploy-sLHJdo/home",
+      "config": "/tmp/aiwg-wave5-sdlc-b-deploy-sLHJdo/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/srv/jmagly/aiwg-wt/w5-sdlc-b",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "git_initialization": "Empty repository metadata written directly; no git command",
+      "log": "/tmp/aiwg-wave5-sdlc-b-evidence/deploy-sdlc-claude.log"
+    },
+    "kernel_compaction": "Reduced two universal CRITICAL bodies from 15651 to 5388 UTF-8 bytes by removing repeated examples and rationale; retained mandatory constraints, integration requirements, conflicts, remediation, and references. The original bodies exceeded the Hermes fixture hard cap at 27423 characters.",
+    "test_fixture_correction": "Include flat skill markdown in the isolated corpus, and project it to SKILL.md, so dev-release-coordinate is tested as a real indexed artifact."
+  },
+  "integration_followups": [
+    {
+      "check": "test/unit/providers/rule-tier-deployment.test.ts:123",
+      "reason": "Tier-only enumerator assertion rejects MEDIUM paths rules (progressive-disclosure, reasoning-sections, sdlc-orchestration); ADR explicitly requires tagged paths to bypass the severity filter. Clean-HOME rerun: 42 pass, only this assertion fails."
+    },
+    {
+      "check": "test/unit/providers/rule-activation-deployment.test.ts: legacy tier-fallback byte snapshot",
+      "reason": "Legacy snapshot strips only selected activation fields from the live corpus and pins original body hashes; assigned kernel compaction and newly tagged list metadata require an integration-owned frozen-input fixture or reviewed snapshot update."
+    },
+    {
+      "check": "test/unit/lint/orchestration-guidance.test.ts",
+      "reason": "Pre-existing assertion rejects activation: summary in subagent-scoping, already migrated by Wave 3; both files are outside this lane scope and unchanged."
+    },
+    {
+      "check": "lint:mission-inventory",
+      "reason": "New lane probe file requires classification in the central inventory, which is outside this lane file scope.",
+      "inventory_entry": {
+        "path": "test/uat/rule-binding/wave5-sdlc-b-probes.yaml",
+        "owner": "test/uat",
+        "role": "fixture-or-test",
+        "currentVersion": "unversioned",
+        "statusVocabulary": [],
+        "serialization": "typescript/javascript",
+        "migrationAction": "retain",
+        "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+      }
+    }
+  ],
+  "kernel_fallbacks": [],
+  "kernel_retained": [
+    "no-attribution: universal output-authorship guard",
+    "token-security: universal credential-disclosure guard"
+  ],
+  "scope_verification": {
+    "existing_files_changed": 18,
+    "outside_assigned_existing_files": [],
+    "shared_probes_unchanged": true
+  },
+  "evidence": "/tmp/aiwg-wave5-sdlc-b-evidence"
+}

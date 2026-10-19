@@ -1,0 +1,110 @@
+[
+  {
+    "rule": "lfd-control-tiers",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "LFD controls govern budgeted agent-loop execution; loop and mission entry points can deliver the policy before execution."
+  },
+  {
+    "rule": "logs-as-event-streams",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Application logging policy belongs to implementation and observability review roles."
+  },
+  {
+    "rule": "mention-wiring",
+    "enforcement": "medium",
+    "activation": "summary",
+    "reason": "A startup reminder covers direct artifact creation; generator and mention-maintenance bindings supply the detailed wiring policy."
+  },
+  {
+    "rule": "no-attribution",
+    "enforcement": "critical",
+    "activation": "kernel",
+    "reason": "Universal output-authorship guard: any role can emit branded content before selecting an artifact or path. Compact the mandatory core to preserve full-body delivery within the Hermes hard cap."
+  },
+  {
+    "rule": "progressive-disclosure",
+    "enforcement": "medium",
+    "activation": "paths",
+    "reason": "Template and SDLC artifact paths identify the policy before template generation; generator bindings cover tasks without known paths."
+  },
+  {
+    "rule": "provenance-tracking",
+    "enforcement": "high",
+    "activation": "summary",
+    "reason": "Direct artifact creation needs a startup reminder; generation and provenance roles retrieve the detailed PROV contract before writing."
+  },
+  {
+    "rule": "qualified-references",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Qualified linking is scoped to artifact generation and mention maintenance."
+  },
+  {
+    "rule": "reasoning-sections",
+    "enforcement": "medium",
+    "activation": "paths",
+    "reason": "Template paths and artifact-authoring roles can load the rationale requirements before generating an SDLC artifact."
+  },
+  {
+    "rule": "reproducibility",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Workflow and loop entry points identify execution before checkpoints, snapshots, or holdout isolation are needed."
+  },
+  {
+    "rule": "reproducibility-validation",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Replay validation is scoped to critical testing, security, compliance, and release workflows whose artifacts can deliver it first."
+  },
+  {
+    "rule": "research-metadata",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "Research paths and acquisition, citation, and quality artifacts identify the metadata requirement before research documents are written."
+  },
+  {
+    "rule": "sdlc-orchestration",
+    "enforcement": "medium",
+    "activation": "paths",
+    "reason": "Preserve existing SDLC globs and bind canonical orchestration entry points so MEDIUM severity no longer drops path-scoped delivery."
+  },
+  {
+    "rule": "self-maintenance",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Installation, repair, refresh, and long-session maintenance are identified by their paired skills and steward role."
+  },
+  {
+    "rule": "stateless-processes",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Process-state architecture is scoped to design, implementation, and reliability reviews."
+  },
+  {
+    "rule": "tao-loop",
+    "enforcement": "high",
+    "activation": "summary",
+    "reason": "Operator decision 2026-10-19 after U5 review: bound delivery missed the exploration-quota obligation when agents used Ralph; summary activation keeps the bindings and puts the quota requirement in every startup index."
+  },
+  {
+    "rule": "thought-protocol",
+    "enforcement": "medium",
+    "activation": "summary",
+    "reason": "A concise startup reminder covers direct tool work; tool-using roles and loop entry points retrieve the detailed communication protocol."
+  },
+  {
+    "rule": "token-security",
+    "enforcement": "critical",
+    "activation": "kernel",
+    "reason": "Universal secret-disclosure guard: any role can expose credentials in output or a tool call before a scoped binding can load. Compact the mandatory core to preserve full-body delivery within the Hermes hard cap."
+  },
+  {
+    "rule": "versioning",
+    "enforcement": "critical",
+    "activation": "paths",
+    "reason": "Release-scoped CalVer policy can load through version/changelog paths or release entry points before versioning actions; it is not a universal turn invariant."
+  }
+]

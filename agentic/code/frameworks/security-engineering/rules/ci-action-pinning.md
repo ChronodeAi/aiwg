@@ -1,9 +1,24 @@
 ---
 enforcement: high
 triggers:
-  - "how do I pin a github action"
-  - "container image pinning"
-  - "is this workflow safe"
+  - how do I pin a github action
+  - container image pinning
+  - is this workflow safe
+activation: paths
+summary: Pin CI actions to full commit SHAs and images to versioned SHA-256 digests; retain version comments and update the reviewed pin manifest together.
+bound_to:
+  agents:
+    - build-engineer
+    - devops-engineer
+    - security-auditor
+    - secure-bootstrap-reviewer
+  skills:
+    - ci-workflow-audit
+    - supply-chain-trust
+    - supply-chain-hardening-quickstart
+    - dev-ci-builder
+    - dev-pipeline-audit
+paths: [ .github/workflows/**, .gitea/workflows/**, .gitlab-ci.yml, .gitlab/ci/**, .circleci/**, .buildkite/**, azure-pipelines*.yml, Jenkinsfile, ci/digests.txt ]
 ---
 
 # CI Action and Container Pinning

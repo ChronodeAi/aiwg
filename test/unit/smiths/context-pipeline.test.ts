@@ -438,7 +438,7 @@ describe('context finalization emission', () => {
     expect(second.match(/## Context Finalization/g)).toHaveLength(1);
   });
 
-  it('emits root, normalized, and provider twin context files with discover-first guidance', async () => {
+  it('emits root, normalized, and provider twin context files with discovery authority pointers', async () => {
     const dir = makeTmpDir();
     try {
       mkdirSync(join(dir, '.aiwg'), { recursive: true });
@@ -482,13 +482,10 @@ describe('context finalization emission', () => {
 
       for (const file of [result.aiwgMdPath, result.normalizedAiwgMdPath]) {
         const content = readFileSync(file, 'utf8');
-        expect(content).toContain('aiwg discover');
+        expect(content).toContain('aiwg show rule skill-discovery');
         expect(content).toContain('aiwg show');
-        expect(content).toContain('decline-without-search');
-        // #1542: directive classification + act-don't-ask + command discovery hint
-        expect(content).toContain('new directive');
-        expect(content).toContain('address-issues');
-        expect(content).toContain('show command');
+        expect(content).not.toContain('Classify every user turn FIRST');
+        expect(content).toContain('aiwg show skill aiwg-utils-quickref');
         expect(content).toContain('.aiwg/aiwg.config');
         expect(content).toContain('Tracker Authority Protocol');
         expect(content).toContain('Internal/canonical tracker: `origin` (gitea;');

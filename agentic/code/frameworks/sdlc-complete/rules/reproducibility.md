@@ -1,5 +1,75 @@
 ---
 enforcement: medium
+activation: bound
+summary: Use strict mode for critical workflows, checkpoint boundaries, capture execution snapshots, and isolate private holdout feedback from optimizers.
+bound_to:
+  skills:
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
+    - agent-loop
+    - agent-loop-ext
+    - aiwg-mission
+    - mission-control
+    - ralph
+    - ralph-external
+    - ralph-resume
+    - execution-mode
+  agents:
+    - recovery-orchestrator
+  flows:
+    - flow-agentloop-lfd-controls
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
+triggers:
+  - how to make workflow execution reproducible
 ---
 
 # Reproducibility Rules

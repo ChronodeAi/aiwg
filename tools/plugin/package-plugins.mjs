@@ -239,6 +239,7 @@ Writing quality validation and AI pattern detection.
     },
     extraCopy: [
       { from: 'agentic/code/addons/aiwg-utils/rules/skill-discovery.md', to: 'rules/skill-discovery.md' },
+      { from: 'agentic/code/addons/aiwg-utils/rules/skill-discovery-guidance.md', to: 'rules/skill-discovery-guidance.md' },
       { from: 'agentic/code/addons/aiwg-utils/rules/cli-secondary.md', to: 'rules/cli-secondary.md' }
     ],
     readme: `# AIWG Utilities

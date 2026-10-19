@@ -1,3 +1,4 @@
+import { sdlcDeploymentRules } from '../unit/providers/rule-source-expectations.js';
 import { mkdtempSync } from '../helpers/temp-dir.js';
 /**
  * Deployment Completeness & Content Validation Tests
@@ -24,6 +25,7 @@ import os from 'os';
 import { execFileSync } from 'child_process';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
+const activationRules = sdlcDeploymentRules(REPO_ROOT);
 const AGENTIC_ROOT = path.join(REPO_ROOT, 'agentic/code');
 let TEST_BASE: string;
 beforeAll(() => { TEST_BASE = mkdtempSync(path.join(os.tmpdir(), 'aiwg-deploy-completeness-')); });
@@ -635,26 +637,32 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
       const indexPath = path.join(projectDir, prov.ruleDir, 'RULES-INDEX.md');
       const content = await fs.readFile(indexPath, 'utf-8');
 
-      expect(content).toContain('# AIWG');
-      // Should reference rules by name
-      expect(content.length).toBeGreaterThan(500);
+      if (providerName === 'claude') {
+        expect(content).toContain('# Rule kernel index');
+        const summaries = activationRules.filter(rule => rule.activation === 'summary');
+        for (const rule of summaries) {
+          expect(content).toContain(rule.data.summary);
+          expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
+          expect(content).not.toContain(rule.body);
+        }
+        expect([...content.matchAll(/^- (.*?) —/gm)].map(match => match[1]).sort())
+          .toEqual(summaries.map(rule => rule.data.name || rule.name).sort());
+      } else {
+        expect(content).toContain('# AIWG');
+        expect(content.length).toBeGreaterThan(500);
+      }
     });
 
     it('deploys individual rule files alongside RULES-INDEX.md (PUW-016 #1117)', async () => {
-      // Per PUW-016: individual rule files now ship alongside the
-      // consolidated RULES-INDEX.md so the index's @-references resolve.
-      // The original test expected only RULES-INDEX.md; the assertion is
-      // flipped to require both surfaces.
+      // ADR: the index accompanies only activation-selected startup bodies.
       runDeploy(prov.name, projectDir, homeDir);
       const rulesDir = path.join(projectDir, prov.ruleDir);
-      const files = await fs.readdir(rulesDir).catch(() => []);
+      const files = await fs.readdir(rulesDir);
       const mdFiles = files.filter(f => f.endsWith('.md'));
-
-      const expectedRules = ['no-attribution.md', 'anti-laziness.md', 'token-security.md',
-        'executable-feedback.md', 'versioning.md', 'failure-mitigation.md'];
-
-      for (const rule of expectedRules) {
-        expect(mdFiles, `${providerName}: ${rule} should be deployed alongside RULES-INDEX.md`).toContain(rule);
+      for (const rule of activationRules) {
+        const assertion = expect(mdFiles, `${providerName}: ${rule.name} (${rule.activation})`);
+        if (rule.fileDelivered) assertion.toContain(`${rule.name}.md`);
+        else assertion.not.toContain(`${rule.name}.md`);
       }
       expect(mdFiles, `${providerName}: RULES-INDEX.md still ships`).toContain('RULES-INDEX.md');
     });

@@ -1,5 +1,30 @@
 ---
 enforcement: high
+activation: bound
+summary: Capture volatile evidence before disk scans or imaging; follow the collection levels, document skipped levels, and timestamp every collection step.
+bound_to:
+  agents:
+    - triage-agent
+    - memory-analyst
+    - network-analyst
+    - forensic-acquisition-agent
+    - forensics-orchestrator
+    - recon-agent
+    - cloud-analyst
+    - container-analyst
+  skills:
+    - forensics-triage
+    - forensics-acquire
+    - forensics-investigate
+    - forensics-profile
+    - target-profiling
+    - memory-forensics
+    - linux-forensics
+    - cloud-forensics
+    - container-forensics
+    - evidence-preservation
+triggers:
+  - collect volatile evidence before disk imaging
 ---
 
 # Volatility Order

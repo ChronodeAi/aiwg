@@ -1,4 +1,9 @@
 ---
+activation: summary
+summary: "Keep reasoning and output within the stated task boundaries; remove off-scope material and obtain scope clarification before expanding work."
+bound_to:
+  agents:
+    - context-curator
 enforcement: medium
 ---
 

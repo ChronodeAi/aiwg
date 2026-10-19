@@ -2,8 +2,28 @@
 enforcement: high
 id: no-adhoc-kdf
 severity: HIGH
-applies_to: [all-agents, applied-cryptographer]
-tags: [cryptography, kdf, key-derivation]
+applies_to:
+  - all-agents
+  - applied-cryptographer
+tags:
+  - cryptography
+  - kdf
+  - key-derivation
+activation: summary
+summary: "Use established KDFs matched to input entropy: HKDF for high-entropy secrets and Argon2id or appropriately costed PBKDF2 for passwords; never invent derivation."
+bound_to:
+  agents:
+    - applied-cryptographer
+    - code-reviewer
+    - security-auditor
+    - software-implementer
+  skills:
+    - crypto-primitive-selection
+    - auth-factor-design
+    - chain-of-trust-design
+    - secret-handling-runtime
+triggers:
+  - reject ad hoc key derivation
 ---
 
 # No Ad-Hoc Key Derivation

@@ -18,6 +18,11 @@ export { DEFAULT_DISPATCH_HOST_THRESHOLDS, resolveDispatchHostThresholds } from 
 import { validateIndexGraphOverrides, type IndexBuiltinGraphOverride } from './index-graph-overrides.js';
 export type { IndexBuiltinGraphOverride } from './index-graph-overrides.js';
 
+import { DEFAULT_RULES_INLINE_BUDGET_TOKENS, validateRulesConfig } from '../rules/inline-budget.mjs';
+import type { RulesConfig } from '../rules/inline-budget.mjs';
+export { validateRulesConfig, resolveRulesInlineBudget } from '../rules/inline-budget.mjs';
+export type { RulesConfig } from '../rules/inline-budget.mjs';
+
 import Ajv, { type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import { readFileSync, existsSync } from 'node:fs';
@@ -467,6 +472,8 @@ export interface ProjectLocalConfig {
  * Top-level shape of .aiwg/aiwg.config
  */
 export interface AiwgConfig {
+  /** Configurable startup lint guard; never selects or demotes rules. */
+  rules?: RulesConfig;
   decision?: DecisionConfig;
   sessions?: {
     /** Explicitly authorized Codex discovery roots, relative to the workspace or absolute. */
@@ -1886,6 +1893,7 @@ export function emptyConfig(providers: string[] = ['claude']): AiwgConfig {
       threatAssessment: defaultThreatAssessmentConfig(),
     },
     artifact_outputs: defaultArtifactOutputs(),
+    rules: { inline_budget_tokens: DEFAULT_RULES_INLINE_BUDGET_TOKENS },
     delivery: {
       mode: 'pr-required',
       default_branch: 'main',
@@ -2024,6 +2032,7 @@ export async function readAiwgConfigCandidate(projectDir: string): Promise<AiwgC
     ...validateThreatAssessmentConfig(parsed.security?.threatAssessment),
     ...validateProjectConfig(parsed.project),
     ...validateParallelismConfig(parsed.parallelism),
+    ...validateRulesConfig(parsed.rules),
     ...validateDecisionConfig(parsed.decision),
   ];
   if (threatAssessmentErrors.length > 0) {
@@ -2075,6 +2084,7 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
     ...validateThreatAssessmentConfig(config.security?.threatAssessment),
     ...validateProjectConfig(config.project),
     ...validateParallelismConfig(config.parallelism),
+    ...validateRulesConfig(config.rules),
     ...validateDecisionConfig(config.decision),
   ];
   if (threatAssessmentErrors.length > 0) {

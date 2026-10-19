@@ -86,7 +86,7 @@ describe('regenerateHandler', () => {
     for (const rel of ['AIWG.md', '.aiwg/AIWG.md']) {
       const content = readFileSync(join(tmpDir, rel), 'utf8');
       expect(content).toContain('## Context Finalization');
-      expect(content).toContain('aiwg discover');
+      expect(content).toContain('aiwg show rule skill-discovery');
       expect(content).toContain('aiwg show');
       expect(content).toContain('sdlc');
     }

@@ -1,5 +1,14 @@
 ---
 enforcement: medium
+activation: "bound"
+summary: "Define send, receive and generateReply interfaces for SDLC agents; preserve history, honor requestReply, include artifact metadata, and return null when no reply is needed."
+bound_to:
+  agents: ["agentsmith", "executive-orchestrator"]
+  skills: ["add-agent", "agent-loop", "artifact-orchestration", "devkit-create-agent", "smith-agenticdef"]
+triggers:
+  - "define conversable agent interface"
+  - "agent send receive generateReply protocol"
+  - "preserve agent conversation history"
 ---
 
 # Conversable Agent Interface Rules

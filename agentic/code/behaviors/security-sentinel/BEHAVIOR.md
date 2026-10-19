@@ -1,4 +1,8 @@
 ---
+activation: bound
+summary: "Scan matching file changes and deployment events for security issues; report findings without exposing secrets."
+bound_to:
+  agents: [security-auditor]
 name: security-sentinel
 version: 1.0.0
 description: Continuous security monitoring with reactive scanning on file changes,

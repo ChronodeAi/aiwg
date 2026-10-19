@@ -1,0 +1,1105 @@
+{
+  "issue": 2944,
+  "scope": "Five kernel cores, linked on-demand guidance, generated startup deduplication; no model probes",
+  "disposition_authority": "docs/architecture/adr-rule-activation-and-bound-delivery.md: Testable kernel admission and starting disposition",
+  "measurement_fixture": {
+    "base": "test/fixtures/rule-binding/project",
+    "framework": "sdlc",
+    "provider": "claude",
+    "inline_budget": "default; no override",
+    "measurement_owner": "tools/rules/measure-startup-context.mjs",
+    "note": "Same isolated fixture and environment before/after. Before holds the five saved original bodies unchanged throughout the complete deployment; after uses final compact bodies. Directory bytes include native path-conditioned files, not observed model tokens. Context adapters are reported separately. Source rule bodies are frozen during each entire run, including final reconciliation."
+  },
+  "rules": [
+    {
+      "name": "human-authorization",
+      "source": "agentic/code/addons/aiwg-utils/rules/human-authorization.md",
+      "activation": "kernel",
+      "companion": "agentic/code/addons/aiwg-utils/rules/human-authorization-guidance.md",
+      "companion_activation": "on-demand",
+      "before_source_bytes": 8783,
+      "after_source_bytes": 2062,
+      "before_sha256": "327c4f620f3b4393931a0097c716cb08339694bceaf1b8943978ab3c1059b970",
+      "after_sha256": "87ba37ee58d15677d31778db3434d9c9d94c8df78f33729032110cba74a43260",
+      "before_native_bytes": 8634,
+      "after_native_bytes": 1913
+    },
+    {
+      "name": "instruction-comprehension",
+      "source": "agentic/code/addons/aiwg-utils/rules/instruction-comprehension.md",
+      "activation": "kernel",
+      "companion": "agentic/code/addons/aiwg-utils/rules/instruction-comprehension-guidance.md",
+      "companion_activation": "on-demand",
+      "before_source_bytes": 8269,
+      "after_source_bytes": 2040,
+      "before_sha256": "819c0cfae3d8b9c61ff2eee4019a9277632a325796f5f83c89c17d54f5d58400",
+      "after_sha256": "38be5cf94977fca8cd59a5bf17d971ebcdf4e148a8cf4d96a8a2b791602b804e",
+      "before_native_bytes": 8138,
+      "after_native_bytes": 1909
+    },
+    {
+      "name": "research-before-decision",
+      "source": "agentic/code/addons/aiwg-utils/rules/research-before-decision.md",
+      "activation": "kernel",
+      "companion": "agentic/code/addons/aiwg-utils/rules/research-before-decision-guidance.md",
+      "companion_activation": "on-demand",
+      "before_source_bytes": 8378,
+      "after_source_bytes": 1785,
+      "before_sha256": "f3b20f417eb96095e2029e1851d7565922c97a55df970f39840aaf4852970cf9",
+      "after_sha256": "b4914ce096184c05e3d5c3abcd61ca2facf4dd9069eb3b31dd69fadbc0c55132",
+      "before_native_bytes": 8280,
+      "after_native_bytes": 1687
+    },
+    {
+      "name": "skill-discovery",
+      "source": "agentic/code/addons/aiwg-utils/rules/skill-discovery.md",
+      "activation": "kernel",
+      "companion": "agentic/code/addons/aiwg-utils/rules/skill-discovery-guidance.md",
+      "companion_activation": "on-demand",
+      "before_source_bytes": 8703,
+      "after_source_bytes": 2814,
+      "before_sha256": "3e6ce64e7bb3b630fc0c84f5ee9858cb89d8eaba49f065ecff222c8221dc7880",
+      "after_sha256": "4c4eb8b25a23b54a8c7ff4f969c8d35043a5c452485192252efd49d02843ee36",
+      "before_native_bytes": 8587,
+      "after_native_bytes": 2698
+    },
+    {
+      "name": "artifact-output-policy",
+      "source": "agentic/code/addons/aiwg-utils/rules/artifact-output-policy.md",
+      "activation": "kernel",
+      "companion": "agentic/code/addons/aiwg-utils/rules/artifact-output-policy-guidance.md",
+      "companion_activation": "on-demand",
+      "before_source_bytes": 1410,
+      "after_source_bytes": 1467,
+      "before_sha256": "b831dd7c431d9a342fabe7de1ed4559d50c342cc12eab37b1ddebb9a2496a699",
+      "after_sha256": "efb220f3db31e8a1f5ef43e82a9a631cd6c3564c852e67f1f48ece3a68fb90b9",
+      "before_native_bytes": 1442,
+      "after_native_bytes": 1499
+    }
+  ],
+  "gates": {
+    "U1": {
+      "passed": false,
+      "target_bytes": 45000,
+      "before_rule_bytes": 168337,
+      "after_rule_bytes": 142962,
+      "saved_bytes": 25375,
+      "gap_bytes": 97962,
+      "before_behavior_bytes": 0,
+      "after_behavior_bytes": 0,
+      "explanation": "Wave 4 alone cannot reach 45,000 B. Remaining untagged kernel-by-fallback bodies require Wave 5 disposition; native path-conditioned bodies and indexes also count in the Phase 0 directory metric.",
+      "contributors": {
+        "wave4_kernel": {
+          "bytes": 9706,
+          "count": 5,
+          "files": [
+            {
+              "path": ".claude/rules/skill-discovery.md",
+              "bytes": 2698,
+              "estimated_tokens": 675,
+              "activation": "kernel"
+            },
+            {
+              "path": ".claude/rules/human-authorization.md",
+              "bytes": 1913,
+              "estimated_tokens": 479,
+              "activation": "kernel"
+            },
+            {
+              "path": ".claude/rules/instruction-comprehension.md",
+              "bytes": 1909,
+              "estimated_tokens": 478,
+              "activation": "kernel"
+            },
+            {
+              "path": ".claude/rules/research-before-decision.md",
+              "bytes": 1687,
+              "estimated_tokens": 422,
+              "activation": "kernel"
+            },
+            {
+              "path": ".claude/rules/artifact-output-policy.md",
+              "bytes": 1499,
+              "estimated_tokens": 375,
+              "activation": "kernel"
+            }
+          ]
+        },
+        "untagged_kernel_by_fallback": {
+          "bytes": 112533,
+          "count": 24,
+          "files": [
+            {
+              "path": ".claude/rules/token-security.md",
+              "bytes": 8138,
+              "estimated_tokens": 2035,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/rlm-context-management.md",
+              "bytes": 7950,
+              "estimated_tokens": 1988,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/citation-policy.md",
+              "bytes": 7602,
+              "estimated_tokens": 1901,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/browser-control-safety.md",
+              "bytes": 7084,
+              "estimated_tokens": 1771,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/no-attribution.md",
+              "bytes": 6982,
+              "estimated_tokens": 1746,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/reproducibility-validation.md",
+              "bytes": 5902,
+              "estimated_tokens": 1476,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/provenance-tracking.md",
+              "bytes": 5787,
+              "estimated_tokens": 1447,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/actionable-feedback.md",
+              "bytes": 5719,
+              "estimated_tokens": 1430,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/lfd-control-tiers.md",
+              "bytes": 5451,
+              "estimated_tokens": 1363,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/tao-loop.md",
+              "bytes": 4957,
+              "estimated_tokens": 1240,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/daemon-interaction.md",
+              "bytes": 4704,
+              "estimated_tokens": 1176,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/artifact-discovery.md",
+              "bytes": 4668,
+              "estimated_tokens": 1167,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/failure-mitigation.md",
+              "bytes": 4632,
+              "estimated_tokens": 1158,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/research-metadata.md",
+              "bytes": 4221,
+              "estimated_tokens": 1056,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/agent-fallback.md",
+              "bytes": 4016,
+              "estimated_tokens": 1004,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/agent-friendly-code.md",
+              "bytes": 3765,
+              "estimated_tokens": 942,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/hitl-gates.md",
+              "bytes": 3762,
+              "estimated_tokens": 941,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/agent-generation-guardrails.md",
+              "bytes": 3097,
+              "estimated_tokens": 775,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/prose-resolution.md",
+              "bytes": 3063,
+              "estimated_tokens": 766,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/executable-feedback.md",
+              "bytes": 3041,
+              "estimated_tokens": 761,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/versioning.md",
+              "bytes": 2919,
+              "estimated_tokens": 730,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/test-conformance-evidence.md",
+              "bytes": 2249,
+              "estimated_tokens": 563,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/network-analysis-safety.md",
+              "bytes": 1656,
+              "estimated_tokens": 414,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/twelve-factor-evidence.md",
+              "bytes": 1168,
+              "estimated_tokens": 292,
+              "activation": "legacy fallback"
+            }
+          ]
+        },
+        "native_path_rules": {
+          "bytes": 15573,
+          "count": 3,
+          "files": [
+            {
+              "path": ".claude/rules/debug-source-not-output.md",
+              "bytes": 9885,
+              "estimated_tokens": 2472,
+              "activation": "paths",
+              "paths": [
+                "tools/**",
+                "src/**",
+                "agentic/**",
+                "dist/**",
+                "build/**",
+                "node_modules/**"
+              ]
+            },
+            {
+              "path": ".claude/rules/agent-deployment.md",
+              "bytes": 4881,
+              "estimated_tokens": 1221,
+              "activation": "legacy fallback",
+              "paths": [
+                ".claude/agents/**",
+                ".factory/droids/**",
+                ".codex/agents/**",
+                ".opencode/agent/**",
+                "agentic/**",
+                "AGENTS.md"
+              ]
+            },
+            {
+              "path": ".claude/rules/schema-first.md",
+              "bytes": 807,
+              "estimated_tokens": 202,
+              "activation": "legacy fallback",
+              "paths": [
+                "src/**",
+                "schemas/**",
+                "agentic/code/**",
+                ".aiwg/requirements/**",
+                ".aiwg/architecture/**"
+              ]
+            }
+          ]
+        },
+        "indexes": {
+          "bytes": 5150,
+          "count": 2,
+          "files": [
+            {
+              "path": ".claude/rules/RULES-ONDEMAND.md",
+              "bytes": 2968,
+              "estimated_tokens": 742,
+              "activation": "legacy fallback"
+            },
+            {
+              "path": ".claude/rules/RULES-INDEX.md",
+              "bytes": 2182,
+              "estimated_tokens": 546,
+              "activation": "legacy fallback"
+            }
+          ]
+        },
+        "other_explicit": {
+          "bytes": 0,
+          "count": 0,
+          "files": []
+        }
+      }
+    },
+    "U2": {
+      "activation_lint": "pass",
+      "remaining_migration_warnings": 137,
+      "complete_corpus_coverage": false,
+      "note": "Five cores explicitly kernel, five companions explicitly on-demand. Remaining corpus coverage belongs to Wave 5."
+    },
+    "U3": {
+      "status": "existing binding semantics unchanged; provider fixture passed"
+    },
+    "U4": {
+      "status": "existing CLI/MCP binding tests passed"
+    },
+    "U5": {
+      "status": "not run; conductor on titan"
+    },
+    "U6": {
+      "status": "existing kernel identities/triggers retained; no rule moved out of kernel"
+    },
+    "U7": {
+      "status": "not run; conductor on titan"
+    },
+    "U8": {
+      "status": "model dispatch/headroom requires conductor validation"
+    },
+    "U9": {
+      "passed": true,
+      "provider_fixture_count": 6,
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "hermes",
+        "warp",
+        "openclaw"
+      ],
+      "codex_fixture": {
+        "exit_code": 0,
+        "agents_md_bytes": 233,
+        "limit_bytes": 32768
+      },
+      "note": "Compare complete imperative paragraphs exactly once through each loaded kernel owner. OpenClaw reports conventional disk mirrors too; its bridge loads AIWG.md as the kernel owner."
+    }
+  },
+  "duplicates_removed": [
+    {
+      "file": "src/smiths/context-pipeline/finalization.ts",
+      "section": "Discover-First Protocol",
+      "replacement": "Capability Routing authority pointer"
+    },
+    {
+      "file": "src/smiths/context-pipeline/parallelism-section.ts",
+      "section": "Parallelism Cap / Model-selected delegation rubric",
+      "replacement": "subagent-scoping pointer; configured caps, provider facts, dispatch state retained"
+    },
+    {
+      "file": "src/smiths/context-pipeline/claude-hook.ts",
+      "section": "AIWG artifact output policy",
+      "replacement": "artifact-output-policy pointer plus @.aiwg/aiwg.config; shared hook removes duplicate policy in CLAUDE.md and AIWG.md"
+    },
+    {
+      "file": "src/smiths/context-pipeline/aiwg-md.ts",
+      "section": "CLAUDE.md mirror",
+      "replacement": "Normalize stale managed hook before mirroring, including first regenerate"
+    },
+    {
+      "file": "agentic/code/frameworks/sdlc-complete/templates/aiwg-sections/{01-sdlc-framework,02b-discover-first}.md",
+      "section": "Discover-First / artifact output destinations",
+      "replacement": "Kernel authority pointers, with assembled project AIWG.md and fragment regenerated; OpenClaw/OpenHuman/Copilot bridges updated"
+    },
+    {
+      "file": "agentic/code/addons/aiwg-utils/skills/aiwg-utils-quickref/SKILL.md",
+      "section": "How to use / canonical pipeline / Skill tool errors (former lines 23–52)",
+      "replacement": "skill-discovery and cli-secondary authority pointers"
+    }
+  ],
+  "dedup_test": {
+    "file": "test/unit/providers/wave4-kernel-dedup.test.ts",
+    "name": "regenerated CLAUDE.md, AIWG.md and quickref contain no duplicated rule text",
+    "coverage": "Two regenerations, stale managed text, no copied imperative sentences/sections, operator content retained, configured cap and config reference retained; actual deployed quickrefs checked on all six providers"
+  },
+  "validation": {
+    "evidence_dir": "/tmp/aiwg-2944-evidence",
+    "typecheck": {
+      "command": "nice -n 19 npm run typecheck",
+      "exit_code": 0,
+      "log": "/tmp/aiwg-2944-evidence/typecheck.log"
+    },
+    "build_cli": {
+      "command": "nice -n 19 npm run build:cli",
+      "exit_code": 0,
+      "log": "/tmp/aiwg-2944-evidence/build-after.log"
+    },
+    "tests": [
+      {
+        "report": "/tmp/aiwg-2944-evidence/final-tests.json",
+        "command": [
+          "nice",
+          "-n",
+          "19",
+          "./node_modules/.bin/vitest",
+          "run",
+          "--config",
+          "config/vitest.config.js",
+          "--maxWorkers=4",
+          "test/unit/sdlc-orchestration-assets.test.ts",
+          "test/unit/artifacts/rule-bindings.test.ts",
+          "test/unit/cli/deploy.test.ts",
+          "test/unit/cli/deployment-verification.test.ts",
+          "test/unit/cli/provider-deployment-plan.test.ts",
+          "test/unit/cli/skill-deployer.test.ts",
+          "test/unit/lint/rule-activation.test.ts",
+          "test/unit/lint/rule-triggers.test.mjs",
+          "test/unit/providers/rule-activation-deployment.test.ts",
+          "test/unit/providers/rule-tier-deployment.test.ts",
+          "test/unit/providers/rule-trigger-stripping.test.mjs",
+          "test/unit/providers/wave4-kernel-dedup.test.ts",
+          "test/unit/rules/activation.test.ts",
+          "test/unit/rules/delivery-policy-preflight.test.ts",
+          "test/unit/rules/inline-budget.test.ts",
+          "test/unit/rules/rule-probes.test.mjs",
+          "test/unit/rules/startup-context.test.mjs",
+          "test/unit/smiths/context-pipeline-discovery.test.ts",
+          "test/unit/smiths/context-pipeline.test.ts",
+          "test/unit/smiths/parallelism-section.test.ts",
+          "test/unit/cli/handlers/regenerate.test.ts"
+        ],
+        "suites": 21,
+        "passed": 444,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "report": "/tmp/aiwg-2944-evidence/wave4-tests.json",
+        "command": [
+          "nice",
+          "-n",
+          "19",
+          "./node_modules/.bin/vitest",
+          "run",
+          "--config",
+          "config/vitest.config.js",
+          "--maxWorkers=4",
+          "test/unit/providers/wave4-kernel-dedup.test.ts"
+        ],
+        "suites": 1,
+        "passed": 8,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "report": "/tmp/aiwg-2944-evidence/orchestration.json",
+        "command": [
+          "nice",
+          "-n",
+          "19",
+          "node",
+          "/tmp/aiwg-2944-orchestration.mjs"
+        ],
+        "suites": 36,
+        "passed": 932,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "report": "/tmp/aiwg-2944-evidence/isolated-cli-tests.json",
+        "command": [
+          "nice",
+          "-n",
+          "19",
+          "./node_modules/.bin/vitest",
+          "run",
+          "--config",
+          "config/vitest.config.js",
+          "--maxWorkers=4",
+          "test/unit/cli/skill-deployer.test.ts",
+          "test/unit/providers/rule-tier-deployment.test.ts"
+        ],
+        "suites": 2,
+        "passed": 69,
+        "failed": 0,
+        "skipped": 0
+      }
+    ],
+    "ci_lints": [
+      {
+        "script": "lint:dep-sources",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:eval-imports",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:package-license-boundary",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:agent-sizes",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:test-registration",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:test-process-timeouts",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:orchestration-packs",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:schemas",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:ops-templates",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:mission-inventory",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:mission-contract",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:vault-migration",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:session-fixtures",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:rule-activation",
+        "exit_code": 0,
+        "environment": "isolated HOME/config with freshly built canonical framework index"
+      },
+      {
+        "script": "lint:rule-triggers",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:plugin-copies",
+        "exit_code": 0
+      }
+    ],
+    "limits": {
+      "skipped": [
+        {
+          "script": "lint:audit-signatures",
+          "reason": "Calls npm audit signatures against the network; user forbids network."
+        },
+        {
+          "script": "lint:generated-artifacts",
+          "reason": "Runs git ls-files; user forbids git operations."
+        },
+        {
+          "script": "lint:affected-packages",
+          "reason": "Conditional CI feed not configured; no network or external local paths allowed."
+        }
+      ],
+      "model_probes": "Not run; U5/U7 are conductor-owned on titan.",
+      "orchestration": "Used config/vitest.config.js with maxWorkers=4, overriding only exclude globs to admit the registered orchestration lane. Offline fixtures and fake worker CLIs only."
+    }
+  },
+  "real_deploy": {
+    "root": "/tmp/aiwg-2944-real-A44zcN",
+    "project": "/tmp/aiwg-2944-real-A44zcN/project",
+    "home": "/tmp/aiwg-2944-real-A44zcN/home",
+    "aiwg_config": "/tmp/aiwg-2944-real-A44zcN/config",
+    "channel": {
+      "channel": "edge",
+      "edgePath": "/srv/jmagly/aiwg-wt/2944",
+      "devMode": true,
+      "checkOnStartup": false
+    },
+    "aiwg_home_unset": true,
+    "git_initialization": "Empty standard metadata written directly; no git command",
+    "commands": [
+      {
+        "command": [
+          "env",
+          "-u",
+          "AIWG_HOME",
+          "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+          "/srv/jmagly/aiwg-wt/2944/bin/aiwg.mjs",
+          "use",
+          "sdlc",
+          "--provider",
+          "claude"
+        ],
+        "exit_code": 0,
+        "log": "/tmp/aiwg-2944-evidence/real-deploy-claude.log"
+      },
+      {
+        "command": [
+          "env",
+          "-u",
+          "AIWG_HOME",
+          "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+          "/srv/jmagly/aiwg-wt/2944/bin/aiwg.mjs",
+          "regenerate"
+        ],
+        "exit_code": 0,
+        "log": "/tmp/aiwg-2944-evidence/real-regenerate.log"
+      }
+    ]
+  },
+  "restorations": {
+    "review": "crit4/review.md",
+    "obligations": [
+      {
+        "rule": "human-authorization",
+        "review_row": "H03",
+        "new_line": "- Before any listed high-stakes action, the agent MUST confirm with the user, even when the action seems obviously correct.",
+        "line_number": 25
+      },
+      {
+        "rule": "human-authorization",
+        "review_row": "H06",
+        "new_line": "- Removal includes unregistering components even when their files remain.",
+        "line_number": 26
+      },
+      {
+        "rule": "human-authorization",
+        "review_row": "H25",
+        "new_line": "- Apply these authorization checks whenever considering an operation that cannot be trivially undone, including an operation recoverable only with effort.",
+        "line_number": 27
+      },
+      {
+        "rule": "human-authorization",
+        "review_row": "H32",
+        "new_line": "- Before acting, agents MUST both understand what they are doing through research and have authorization to do it; neither requirement substitutes for the other.",
+        "line_number": 28
+      },
+      {
+        "rule": "human-authorization",
+        "review_row": "H35",
+        "new_line": "- Before any unrequested action, verify whether it is reversible without side effects.",
+        "line_number": 29
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I19",
+        "new_line": "- Before starting a multi-part request, create a tracking list recording each requested part and its completion state.",
+        "line_number": 21
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I27",
+        "new_line": "- Treat unrequested improvements, changes of approach without user prompting, requested-format mismatches, solving a similar-but-different problem, and the user pasting instructions again as instruction-drift or comprehension-failure signals, and immediately apply the recovery protocol.",
+        "line_number": 22
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I28",
+        "new_line": "- Treat unrequested improvements, changes of approach without user prompting, requested-format mismatches, solving a similar-but-different problem, and the user pasting instructions again as instruction-drift or comprehension-failure signals, and immediately apply the recovery protocol.",
+        "line_number": 22
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I29",
+        "new_line": "- Treat unrequested improvements, changes of approach without user prompting, requested-format mismatches, solving a similar-but-different problem, and the user pasting instructions again as instruction-drift or comprehension-failure signals, and immediately apply the recovery protocol.",
+        "line_number": 22
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I30",
+        "new_line": "- Treat unrequested improvements, changes of approach without user prompting, requested-format mismatches, solving a similar-but-different problem, and the user pasting instructions again as instruction-drift or comprehension-failure signals, and immediately apply the recovery protocol.",
+        "line_number": 22
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I31",
+        "new_line": "- Treat unrequested improvements, changes of approach without user prompting, requested-format mismatches, solving a similar-but-different problem, and the user pasting instructions again as instruction-drift or comprehension-failure signals, and immediately apply the recovery protocol.",
+        "line_number": 22
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I37",
+        "new_line": "- Before writing code, agents MUST both understand WHAT the user wants and research HOW to accomplish it.",
+        "line_number": 23
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R04",
+        "new_line": "- For configuration decisions and configuration-related failures, read the actual configuration file and use its actual values rather than guessed defaults.",
+        "line_number": 19
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R06",
+        "new_line": "- When selecting a library, check the project's dependency manifest and use what already exists in the project.",
+        "line_number": 20
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R38",
+        "new_line": "- Before making a technical decision, verify that you have read the relevant source code, checked existing project patterns, read error messages completely, searched actual file and function locations, verified types and signatures from source rather than memory, and confirmed that dependencies exist in the project.",
+        "line_number": 21
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R39",
+        "new_line": "- Before making a technical decision, verify that you have read the relevant source code, checked existing project patterns, read error messages completely, searched actual file and function locations, verified types and signatures from source rather than memory, and confirmed that dependencies exist in the project.",
+        "line_number": 21
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R40",
+        "new_line": "- Before making a technical decision, verify that you have read the relevant source code, checked existing project patterns, read error messages completely, searched actual file and function locations, verified types and signatures from source rather than memory, and confirmed that dependencies exist in the project.",
+        "line_number": 21
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R41",
+        "new_line": "- Before making a technical decision, verify that you have read the relevant source code, checked existing project patterns, read error messages completely, searched actual file and function locations, verified types and signatures from source rather than memory, and confirmed that dependencies exist in the project.",
+        "line_number": 21
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R42",
+        "new_line": "- Before making a technical decision, verify that you have read the relevant source code, checked existing project patterns, read error messages completely, searched actual file and function locations, verified types and signatures from source rather than memory, and confirmed that dependencies exist in the project.",
+        "line_number": 21
+      },
+      {
+        "rule": "skill-discovery",
+        "review_row": "S18",
+        "new_line": "- Subject to the listed query exemptions, for any request mentioning AIWG, a framework name (sdlc, research, forensics, ops, security-engineering, knowledge-base, marketing, media-curator), or a capability keyword (skill, agent, rule, command, addon, workflow, flow, template), aiwg discover MUST be the first information-gathering call.",
+        "line_number": 20
+      },
+      {
+        "rule": "skill-discovery",
+        "review_row": "S45",
+        "new_line": "- Before declining an AIWG capability, run aiwg discover with the appropriate --type and read the top result's capability rather than only its name.",
+        "line_number": 21
+      }
+    ],
+    "measurement_fixture": {
+      "claude": "tools/rules/measure-startup-context.mjs; sdlc; test/fixtures/rule-binding/project",
+      "codex_hermes": "wave4-kernel-dedup.test.ts six-provider fixture: five kernels and companions plus aiwg-utils-quickref; isolated project/home",
+      "note": "Before is the compact Wave 4 state immediately before restoration; after includes the 21 restored review rows. Existing Wave 4 measurements above are preserved."
+    },
+    "claude_rule_bytes": [
+      {
+        "rule": "human-authorization",
+        "before": 1913,
+        "after": 2516
+      },
+      {
+        "rule": "instruction-comprehension",
+        "before": 1909,
+        "after": 2423
+      },
+      {
+        "rule": "research-before-decision",
+        "before": 1687,
+        "after": 2275
+      },
+      {
+        "rule": "skill-discovery",
+        "before": 2698,
+        "after": 3186
+      },
+      {
+        "rule": "artifact-output-policy",
+        "before": 1499,
+        "after": 1499
+      }
+    ],
+    "claude_startup_bytes": {
+      "before": 93863,
+      "after": 96056,
+      "before_deployment_exit_code": 0,
+      "after_deployment_exit_code": 0
+    },
+    "provider_characters": {
+      "codex": {
+        "agents_md": {
+          "before": 269,
+          "after": 269
+        },
+        "startup_contributors": {
+          "before": [
+            {
+              "path": "AIWG.md",
+              "characters": 9228
+            },
+            {
+              "path": "AGENTS.md",
+              "characters": 269
+            }
+          ],
+          "after": [
+            {
+              "path": "AIWG.md",
+              "characters": 11421
+            },
+            {
+              "path": "AGENTS.md",
+              "characters": 269
+            }
+          ]
+        },
+        "reported_startup_characters": {
+          "before": 9497,
+          "after": 11690
+        }
+      },
+      "hermes": {
+        "agents_md": {
+          "before": 13913,
+          "after": 16106
+        },
+        "startup_contributors": {
+          "before": [
+            {
+              "path": "AGENTS.md",
+              "characters": 13913
+            },
+            {
+              "path": ".hermes.md",
+              "characters": 811
+            }
+          ],
+          "after": [
+            {
+              "path": "AGENTS.md",
+              "characters": 16106
+            },
+            {
+              "path": ".hermes.md",
+              "characters": 811
+            }
+          ]
+        },
+        "reported_startup_characters": {
+          "before": 14724,
+          "after": 16917
+        },
+        "agents_md_cap": 19000
+      }
+    },
+    "validation": {
+      "typecheck": "passed",
+      "package_plugins": "passed",
+      "lint_plugin_copies": "passed",
+      "vitest": {
+        "commands": [
+          "nice -n 19 node_modules/.bin/vitest run --config config/vitest.config.js --maxWorkers=3 test/unit/providers/wave4-kernel-dedup.test.ts test/unit/providers/rule-activation-deployment.test.ts",
+          "nice -n 19 node_modules/.bin/vitest run --config config/vitest.config.js --maxWorkers=3 test/unit/lint test/unit/rules test/unit/smiths"
+        ],
+        "passed": 697,
+        "skipped": 1,
+        "files_passed": 38,
+        "results": [
+          {
+            "file": "test/unit/providers/wave4-kernel-dedup.test.ts",
+            "passed": 8,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/providers/rule-activation-deployment.test.ts",
+            "passed": 24,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/runner.test.ts",
+            "passed": 34,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/mcpsmith/cli-analyzer.test.ts",
+            "passed": 12,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/research-regressions.test.ts",
+            "passed": 33,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/context-pipeline-muse-bridge.test.ts",
+            "passed": 14,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/rules/rule-probes.test.mjs",
+            "passed": 26,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/context-pipeline-overflow.test.ts",
+            "passed": 18,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/context-pipeline.test.ts",
+            "passed": 48,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/workspace-context.test.ts",
+            "passed": 41,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/workspace-context-home-walk.test.ts",
+            "passed": 6,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/agentsmith/generator.test.ts",
+            "passed": 26,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/fortemi-npm-pack.test.ts",
+            "passed": 12,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/rule-triggers.test.mjs",
+            "passed": 4,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/context-pipeline-discovery.test.ts",
+            "passed": 29,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/agent-def-sizes.test.ts",
+            "passed": 6,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/rule-activation.test.ts",
+            "passed": 12,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/toolsmith/runtime-discovery.test.ts",
+            "passed": 39,
+            "skipped": 1
+          },
+          {
+            "file": "test/unit/rules/inline-budget.test.ts",
+            "passed": 26,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/parallelism-section.test.ts",
+            "passed": 38,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/hook-bridge.test.ts",
+            "passed": 26,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/claude-context-inventory.test.ts",
+            "passed": 5,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/rules/startup-context.test.mjs",
+            "passed": 6,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/legacy-inject.test.ts",
+            "passed": 3,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/rules/activation.test.ts",
+            "passed": 64,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/commandsmith.test.ts",
+            "passed": 1,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/platform-paths-openhuman.test.ts",
+            "passed": 6,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/skillsmith.test.ts",
+            "passed": 13,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/orchestration-guidance.test.ts",
+            "passed": 14,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/codex-sidecar.test.ts",
+            "passed": 10,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/skillsmith-namespace.test.ts",
+            "passed": 10,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/loader.test.ts",
+            "passed": 8,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/reporters.test.ts",
+            "passed": 14,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/collision-detector.test.ts",
+            "passed": 11,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/namespace-adapter.test.ts",
+            "passed": 43,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/context-size-guard.test.ts",
+            "passed": 2,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/rules/delivery-policy-preflight.test.ts",
+            "passed": 1,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/context-hook-symlink.test.ts",
+            "passed": 4,
+            "skipped": 0
+          }
+        ]
+      },
+      "kernel_size_ceiling_change": "skill-discovery only: 3300 to 3400 bytes, accommodating the exact restoration sentences at 3302 bytes; other rule ceilings remain 3300."
+    }
+  }
+}

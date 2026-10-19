@@ -1,5 +1,15 @@
 ---
 enforcement: medium
+activation: "bound"
+summary: "Preserve iterations and select the best validated output; record hypotheses before changes, exclude VOID results, and stop at budget exhaustion with a best-output report."
+bound_to:
+  agents: ["ralph-loop", "ralph-verifier"]
+  skills: ["agent-loop", "agent-loop-ext", "aiwg-mission", "execute-feedback", "flow-guided-implementation", "mission-control", "ralph", "ralph-external", "ralph-resume"]
+  flows: ["flow-agentloop-lfd-controls", "flow-guided-implementation"]
+triggers:
+  - "select best iteration rather than final output"
+  - "loop budget exhausted best output report"
+  - "preserve iteration hypotheses and results"
 ---
 
 # Best Output Selection Rules

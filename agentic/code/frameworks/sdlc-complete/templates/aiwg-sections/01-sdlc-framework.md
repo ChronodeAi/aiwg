@@ -53,9 +53,5 @@ All SDLC artifacts (requirements, architecture, testing, etc.) are stored in **`
 
 ### Artifact output destinations
 
-Resolve `.aiwg/aiwg.config` `artifact_outputs` before creating a durable plan,
-review, or report. The canonical AIWG artifact store remains the source of
-truth. Provider-native presentation surfaces are derived exports and are
-explicit-only by default; they never replace canonical persistence. Write the
-canonical artifact first, record provenance for dual output, and fail safe for
-unknown destinations.
+Configuration: `.aiwg/aiwg.config` `artifact_outputs`. Destination authority:
+`aiwg show rule artifact-output-policy` (kernel).

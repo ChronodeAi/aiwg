@@ -5,15 +5,14 @@
  * These pin the guidance contracts that generated-context and skill tests
  * do not cover: concrete check-in numbers in the Tier 0 procedure,
  * Jev-first checkpoints with LLM fallback and no hard dependency, the
- * per-checkpoint `--caller` tags now that #2946 landed, and the absence of
- * unimplemented flags/tags the lane verified as missing in code (rule
- * summary/bound activation from #2942/#2645/#2646; doctor --groups /
- * steward --group).
+ * per-checkpoint `--caller` tags now that #2946 landed, and the supported
+ * summary/bound_to activation contract after the #2945 migration.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { validateDecisionAskInput, DecisionAskUsageError } from '../../../src/decision/ask.js';
+import { parseRuleFrontmatter } from '../../../src/rules/activation.mjs';
 
 const ROOT = process.cwd();
 const read = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
@@ -168,12 +167,16 @@ describe('worker boundary wrappers (#2893)', () => {
   }
 });
 
-describe('unsupported surfaces stay unadvertised (#2943 / #2946 prerequisites)', () => {
-  it('no orchestration rule claims summary/bound activation', () => {
-    for (const file of [SCOPING]) {
-      const text = read(file);
-      expect(text).not.toMatch(/activation:\s*summary/);
-      expect(text).not.toMatch(/bound:/);
-    }
+describe('supported orchestration activation (#2945)', () => {
+  it('uses summary delivery with validated bindings and no obsolete bound field', () => {
+    // ADR 98–100, 256: subagent-scoping is summary with orchestration bindings;
+    // validate the declared contract instead of forbidding the migrated mode.
+    const result = parseRuleFrontmatter(read(SCOPING));
+    expect(result.diagnostics).toEqual([]);
+    expect(result.valid).toBe(true);
+    if (!result.valid) return;
+    expect(result.rule.activation).toBe('summary');
+    expect(Object.values(result.rule.bound_to).flat().length).toBeGreaterThan(0);
+    expect(result.data).not.toHaveProperty('bound');
   });
 });

@@ -1,5 +1,15 @@
 ---
 enforcement: high
+activation: "bound"
+summary: "Require blocking human approval at SDLC phase transitions and artifact omissions; declare gate modes and conditions, track cost and rationale, and present decision context."
+bound_to:
+  agents: ["deployment-manager", "executive-orchestrator", "quality-assessor", "security-gatekeeper"]
+  skills: ["artifact-orchestration", "flow-change-control", "flow-compliance-validation", "flow-concept-to-inception", "flow-construction-to-transition", "flow-deploy-to-production", "flow-elaboration-to-construction", "flow-gate-check", "flow-inception-to-elaboration", "gate-evaluation", "orchestrate-project", "ralph", "ralph-external", "security-gate"]
+  flows: ["flow-agentloop-lfd-controls", "flow-change-control", "flow-compliance-validation", "flow-concept-to-inception", "flow-construction-to-transition", "flow-deploy-to-production", "flow-elaboration-to-construction", "flow-gate-check", "flow-inception-to-elaboration"]
+triggers:
+  - "human approval gate at phase transition"
+  - "artifact omission requires explicit approval"
+  - "configure blocking gate timeout"
 ---
 
 # Human-in-the-Loop Gate Rules

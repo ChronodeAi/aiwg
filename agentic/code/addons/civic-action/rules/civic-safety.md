@@ -1,3 +1,24 @@
+---
+enforcement: block
+activation: bound
+summary: "Fail closed on unresolved civic access or consent; prohibit covert recording, bypass, targeting, threats, and impersonation; minimize personal data."
+bound_to:
+  skills:
+    - civic-newsroom-plan
+    - civic-publish-gate
+    - editorial-correction-review
+    - local-resource-index
+    - public-meeting-reconcile
+    - public-records-plan
+    - public-technology-review
+    - source-compliance-gate
+  agents:
+    - citation-editor
+    - civic-newsroom-operator
+    - correction-editor
+    - news-caster
+---
+
 # Civic safety
 
 **Enforcement: BLOCK**

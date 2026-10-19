@@ -1,0 +1,548 @@
+#!/usr/bin/env node
+/**
+ * Setup Warp - Intelligent WARP.md Merge Tool
+ *
+ * Mirrors the proven pattern from aiwg-setup-project and aiwg-update-claude.
+ * Aggregates all AIWG agents and commands into a single WARP.md file for Warp Terminal.
+ *
+ * Usage:
+ *   node tools/warp/setup-warp.mjs [options]
+ *
+ * Options:
+ *   --target <path>    Target directory (default: cwd)
+ *   --mode <type>      Mode: general, sdlc, or both (default: both)
+ *   --update           Update mode (fail if no WARP.md exists)
+ *   --dry-run          Preview changes without writing
+ *   --force            Overwrite WARP.md (discard user content)
+ *
+ * Modes:
+ *   general  - Deploy only general-purpose agents and commands
+ *   sdlc     - Deploy only SDLC Complete framework agents and commands
+ *   both     - Deploy everything (default)
+ */
+
+import { fileURLToPath } from 'node:url';
+import fs from 'fs';
+import path from 'path';
+import { listOnDemandRuleFiles, renderOnDemandRuleSection } from '../agents/providers/base.mjs';
+
+// AIWG-managed section headings (will be replaced on update)
+const AIWG_MANAGED_SECTIONS = [
+  'AIWG SDLC Framework',
+  'AIWG SDLC Framework',
+  'SDLC Agents',
+  'SDLC Commands',
+  'Platform Compatibility',
+  'Core Orchestrator',
+  'Core Platform Orchestrator',
+  'Natural Language',
+  'Natural Language Command Translation',
+  'Phase Overview',
+  'Quick Start',
+  'Common Patterns',
+  'Troubleshooting',
+  'Resources'
+];
+
+export function parseArgs() {
+  const args = process.argv.slice(2);
+  const cfg = {
+    target: process.cwd(),
+    mode: 'both',
+    update: false,
+    dryRun: false,
+    force: false,
+    strict: false,
+    reportOnly: true
+  };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--target' && args[i + 1]) cfg.target = path.resolve(args[++i]);
+    else if (a === '--mode' && args[i + 1]) cfg.mode = String(args[++i]).toLowerCase();
+    else if (a === '--update') cfg.update = true;
+    else if (a === '--dry-run') cfg.dryRun = true;
+    else if (a === '--force') cfg.force = true;
+    else if (a === '--strict') cfg.strict = true;
+    else if (a === '--report-only') cfg.reportOnly = true;
+  }
+  return cfg;
+}
+
+/**
+ * Resolve AIWG installation path
+ * Priority: $AIWG_ROOT -> ~/.local/share/ai-writing-guide -> /usr/local/share/ai-writing-guide
+ */
+export function resolveAIWGRoot() {
+  const candidates = [
+    process.env.AIWG_ROOT,
+    path.join(process.env.HOME || '', '.local', 'share', 'ai-writing-guide'),
+    '/usr/local/share/ai-writing-guide',
+    // Development fallback (repo root)
+    path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..')
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const testPath = path.join(candidate, 'agentic', 'code', 'frameworks', 'sdlc-complete');
+    if (fs.existsSync(testPath)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    'AIWG installation not found. Please install AIWG first:\n' +
+    '  curl -fsSL https://raw.githubusercontent.com/jmagly/ai-writing-guide/refs/heads/main/tools/install/install.sh | bash\n\n' +
+    'Or set AIWG_ROOT environment variable if installed elsewhere.'
+  );
+}
+
+/**
+ * Parse markdown into sections based on ## headings
+ */
+function parseMarkdownSections(content) {
+  const lines = content.split('\n');
+  const sections = [];
+  let currentSection = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const match = line.match(/^##\s+(.+)$/);
+
+    if (match) {
+      // New section found
+      if (currentSection) {
+        sections.push(currentSection);
+      }
+      currentSection = {
+        heading: match[1].trim(),
+        startLine: i,
+        lines: [line]
+      };
+    } else if (currentSection) {
+      currentSection.lines.push(line);
+    } else {
+      // Before first ## heading (document header)
+      if (sections.length === 0) {
+        sections.push({
+          heading: '__HEADER__',
+          startLine: 0,
+          lines: [line]
+        });
+      } else {
+        sections[sections.length - 1].lines.push(line);
+      }
+    }
+  }
+
+  if (currentSection) {
+    sections.push(currentSection);
+  }
+
+  return sections;
+}
+
+/**
+ * Check if a section heading is AIWG-managed (will be replaced)
+ */
+function isAIWGManagedSection(heading) {
+  if (heading === '__HEADER__') return false;
+  return AIWG_MANAGED_SECTIONS.some(managed =>
+    heading.toLowerCase().includes(managed.toLowerCase())
+  );
+}
+
+/**
+ * List markdown files in a directory (non-recursive)
+ */
+function listMdFiles(dir) {
+  if (!fs.existsSync(dir)) return [];
+  const defaultExcluded = ['README.md', 'manifest.md', 'agent-template.md', 'openai-compat.md', 'DEVELOPMENT_GUIDE.md'];
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md') && !defaultExcluded.includes(e.name))
+    .map((e) => path.join(dir, e.name));
+}
+
+/**
+ * Transform agent markdown file to WARP.md section format
+ */
+function transformAgentToSection(agentPath, opts = {}) {
+  const content = fs.readFileSync(agentPath, 'utf8');
+  if (opts.ruleDelivery?.bindings.has(path.resolve(agentPath))) return `### ${path.basename(agentPath, '.md')}\n\nRead and follow .warp/agents/${path.basename(agentPath)} before invocation.\n`;
+  const name = path.basename(agentPath, '.md');
+
+  // Extract frontmatter and body
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!fmMatch) return null;
+
+  const [, frontmatter, body] = fmMatch;
+
+  // Parse frontmatter
+  const fm = {};
+  frontmatter.split('\n').forEach(line => {
+    const match = line.match(/^(\w[\w-]*)\s*:\s*(.+)$/);
+    if (match) {
+      fm[match[1]] = match[2].trim();
+    }
+  });
+
+  // Extract description and tools
+  const description = fm.description || '';
+  const tools = fm['allowed-tools'] || '';
+
+  // Format as WARP.md section
+  let section = `### ${name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}\n\n`;
+  if (tools) {
+    section += `**Tools**: ${tools}\n\n`;
+  }
+  if (description) {
+    section += `**Purpose**: ${description}\n\n`;
+  }
+
+  // Add body content (strip excessive blank lines)
+  const cleanBody = body.trim().replace(/\n{3,}/g, '\n\n');
+  if (cleanBody) {
+    section += cleanBody + '\n';
+  }
+
+  return section;
+}
+
+/**
+ * Transform command markdown file to WARP.md section format
+ */
+function transformCommandToSection(commandPath, opts = {}) {
+  const content = fs.readFileSync(commandPath, 'utf8');
+  if (opts.ruleDelivery?.bindings.has(path.resolve(commandPath))) return `### ${path.basename(commandPath, '.md')}\n\nRead and follow .warp/commands/${path.basename(commandPath)} before invocation.\n`;
+  const name = path.basename(commandPath, '.md');
+
+  // Extract frontmatter and body
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!fmMatch) return null;
+
+  const [, frontmatter, body] = fmMatch;
+
+  // Parse frontmatter
+  const fm = {};
+  frontmatter.split('\n').forEach(line => {
+    const match = line.match(/^(\w[\w-]*)\s*:\s*(.+)$/);
+    if (match) {
+      fm[match[1]] = match[2].trim();
+    }
+  });
+
+  // Extract description
+  const description = fm.description || '';
+
+  // Format as WARP.md section
+  let section = `### /${name}\n\n`;
+  if (description) {
+    section += `**Purpose**: ${description}\n\n`;
+  }
+
+  // Add usage/parameters section if present in body
+  const cleanBody = body.trim().replace(/\n{3,}/g, '\n\n');
+  if (cleanBody) {
+    // Extract first paragraph or two for context
+    const paragraphs = cleanBody.split('\n\n');
+    const preview = paragraphs.slice(0, 2).join('\n\n');
+    section += preview + '\n';
+  }
+
+  return section;
+}
+
+/**
+ * Transform rule markdown file to WARP.md section format.
+ * Rule content is inlined verbatim under an H3 heading (the rule name in
+ * Title Case), so Warp agents see the full rule body in their context.
+ * Per #1346 — closes cross-provider parity gap on the skill-discovery
+ * rule and other aiwg-utils rules that Warp's "rules via WARP.md only"
+ * convention previously left unwired.
+ */
+function transformRuleToSection(rulePath) {
+  const content = fs.readFileSync(rulePath, 'utf8');
+  const name = path.basename(rulePath, '.md');
+
+  // Strip frontmatter if present; the agent doesn't need the YAML.
+  const fmMatch = content.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
+  const body = (fmMatch ? fmMatch[1] : content).trim();
+
+  // Rules typically start with their own H1 (# Rule Name) — we want H3 in
+  // WARP.md so the rule slots under "## AIWG Rules". Strip a leading H1
+  // and rely on the section heading below; downshift surviving H2/H3.
+  const downshifted = body
+    .replace(/^# .+\n+/, '') // drop leading H1
+    .replace(/^## /gm, '#### ')
+    .replace(/^### /gm, '##### ');
+
+  const title = name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  return `### ${title}\n\n${downshifted}\n`;
+}
+
+/**
+ * Collect aiwg-utils rule file paths for inlining into WARP.md.
+ * Focused on cross-provider parity rules: discover-first is the linchpin
+ * (#1343, #1346); other aiwg-utils rules are included to match the
+ * intent of "rules via WARP.md" stated in tools/agents/providers/warp.mjs.
+ * Per the activity-log rule and feedback_parity_no_removal: always-deploy.
+ */
+function collectAiwgRulePaths(aiwgRoot) {
+  const utilsRules = path.join(aiwgRoot, 'agentic', 'code', 'addons', 'aiwg-utils', 'rules');
+  if (!fs.existsSync(utilsRules)) return [];
+  return listMdFiles(utilsRules)
+    // RULES-INDEX.md is a navigation aid for filesystem deployments; for
+    // Warp's inlined aggregation the full rule bodies are inlined directly,
+    // so the index would be duplicate content. Skip it.
+    .filter(p => !path.basename(p).startsWith('RULES-INDEX'));
+}
+
+/**
+ * Generate AIWG content section (aggregate agents, commands, and rules)
+ */
+export function generateAIWGContent(aiwgRoot, mode, opts = {}) {
+  let content = '';
+
+  // Add marker comments
+  content += '<!-- AIWG SDLC Framework (auto-updated) -->\n';
+  content += '<!-- Managed by aiwg use -->\n\n';
+  content += '---\n\n';
+
+  // Add framework overview
+  content += '## AIWG SDLC Framework\n\n';
+  content += `**AIWG Installation**: ${aiwgRoot}\n\n`;
+  content += 'This project uses the **AIWG SDLC framework** for software development lifecycle management.\n\n';
+  content += '### What is AIWG?\n\n';
+  content += 'AIWG provides:\n\n';
+  content += '- **58+ specialized agents** covering all lifecycle phases (Inception → Elaboration → Construction → Transition → Production)\n';
+  content += '- **42+ commands** for project management, security, testing, deployment, and traceability\n';
+  content += '- **100+ templates** for requirements, architecture, testing, security, deployment artifacts\n';
+  content += '- **Phase-based workflows** with gate criteria and milestone tracking\n';
+  content += '- **Multi-agent orchestration** patterns for collaborative artifact generation\n\n';
+
+  // Aggregate agents
+  content += '---\n\n';
+  content += '## SDLC Agents (Specialized Roles)\n\n';
+
+  const agentPaths = [];
+  if (mode === 'general' || mode === 'both') {
+    const generalAgents = path.join(aiwgRoot, 'agents');
+    if (fs.existsSync(generalAgents)) {
+      agentPaths.push(...listMdFiles(generalAgents));
+    }
+  }
+
+  // Addon agents (dynamically discovered)
+  const addonsRoot = path.join(aiwgRoot, 'agentic', 'code', 'addons');
+  if (fs.existsSync(addonsRoot)) {
+    const addonDirs = fs.readdirSync(addonsRoot, { withFileTypes: true })
+      .filter(e => e.isDirectory())
+      .map(e => path.join(addonsRoot, e.name, 'agents'));
+
+    for (const addonAgentsDir of addonDirs) {
+      if (fs.existsSync(addonAgentsDir)) {
+        agentPaths.push(...listMdFiles(addonAgentsDir));
+      }
+    }
+  }
+
+  if (mode === 'sdlc' || mode === 'both') {
+    const sdlcAgents = path.join(aiwgRoot, 'agentic', 'code', 'frameworks', 'sdlc-complete', 'agents');
+    if (fs.existsSync(sdlcAgents)) {
+      agentPaths.push(...listMdFiles(sdlcAgents));
+    }
+  }
+
+  for (const agentPath of agentPaths) {
+    const section = transformAgentToSection(agentPath, opts);
+    if (section) {
+      content += section + '\n';
+    }
+  }
+
+  // Aggregate commands
+  content += '---\n\n';
+  content += '## SDLC Commands (Workflows)\n\n';
+
+  const commandPaths = [];
+  if (mode === 'general' || mode === 'both') {
+    const generalCommands = path.join(aiwgRoot, 'commands');
+    if (fs.existsSync(generalCommands)) {
+      commandPaths.push(...listMdFiles(generalCommands));
+    }
+  }
+
+  // Addon commands (dynamically discovered)
+  if (fs.existsSync(addonsRoot)) {
+    const addonCommandDirs = fs.readdirSync(addonsRoot, { withFileTypes: true })
+      .filter(e => e.isDirectory())
+      .map(e => path.join(addonsRoot, e.name, 'commands'));
+
+    for (const addonCommandsDir of addonCommandDirs) {
+      if (fs.existsSync(addonCommandsDir)) {
+        commandPaths.push(...listMdFiles(addonCommandsDir));
+      }
+    }
+  }
+
+  if (mode === 'sdlc' || mode === 'both') {
+    const sdlcCommands = path.join(aiwgRoot, 'agentic', 'code', 'frameworks', 'sdlc-complete', 'commands');
+    if (fs.existsSync(sdlcCommands)) {
+      commandPaths.push(...listMdFiles(sdlcCommands));
+    }
+  }
+
+  for (const commandPath of commandPaths) {
+    const section = transformCommandToSection(commandPath, opts);
+    if (section) {
+      content += section + '\n';
+    }
+  }
+
+  // Aggregate cross-provider rules into WARP.md (#1346 — Warp parity fix).
+  // Warp's only rule-delivery channel is WARP.md (no .warp/rules/ scan),
+  // so the aiwg-utils rules — including the load-bearing skill-discovery
+  // protocol — must be inlined here to reach Warp agents.
+  const rulePaths = collectAiwgRulePaths(aiwgRoot).filter(file => {
+    const rule = opts.ruleDelivery?.rules.find(rule => rule.file === file);
+    return rule ? !rule.tagged : true;
+  });
+  if (rulePaths.length > 0) {
+    content += '---\n\n';
+    content += '## AIWG Rules\n\n';
+    content += 'These rules govern agent behavior across all AIWG-supported providers. Warp delivers them via this aggregated section because Warp does not natively scan `.warp/rules/`. The full source for each rule lives at `$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/<rule-name>.md`.\n\n';
+    // Place skill-discovery first — it is the load-bearing rule the parity
+    // fix exists to surface (per #1343/#1346). Agents that read top-down
+    // hit the discover-first protocol immediately.
+    const sorted = [...rulePaths].sort((a, b) => {
+      const ax = path.basename(a, '.md');
+      const bx = path.basename(b, '.md');
+      if (ax === 'skill-discovery') return -1;
+      if (bx === 'skill-discovery') return 1;
+      return ax.localeCompare(bx);
+    });
+    for (const rulePath of sorted) {
+      const section = transformRuleToSection(rulePath);
+      if (section) {
+        content += section + '\n';
+      }
+    }
+  }
+
+  // On-demand tier (#1675): the MEDIUM/LOW rules NOT inlined above. Warp has no
+  // scanned `.warp/rules/` dir, so the bridge notes the tier with fetch hints.
+  // Exclude anything already inlined verbatim in the AIWG Rules section.
+  const inlinedRuleNames = rulePaths.map((p) => path.basename(p, '.md'));
+  const onDemandSection = renderOnDemandRuleSection(
+    listOnDemandRuleFiles(aiwgRoot),
+    { exclude: inlinedRuleNames },
+  );
+  if (onDemandSection) {
+    content += '---\n\n';
+    content += onDemandSection + '\n\n';
+  }
+
+  // Add natural language section
+  content += '---\n\n';
+  content += '## Natural Language Command Translation\n\n';
+  content += 'You can use natural language to trigger SDLC workflows. Examples:\n\n';
+  content += '**Phase Transitions**:\n';
+  content += '- "Let\'s transition to Elaboration"\n';
+  content += '- "Move to Construction"\n';
+  content += '- "Ready to deploy"\n\n';
+  content += '**Review Cycles**:\n';
+  content += '- "Run security review"\n';
+  content += '- "Execute test suite"\n';
+  content += '- "Check compliance"\n\n';
+  content += '**Artifact Generation**:\n';
+  content += '- "Create architecture baseline"\n';
+  content += '- "Generate SAD"\n';
+  content += '- "Build test plan"\n\n';
+  content += '**Status Checks**:\n';
+  content += '- "Where are we?"\n';
+  content += '- "Can we transition?"\n';
+  content += '- "Check project health"\n\n';
+
+  // Add resources
+  content += '---\n\n';
+  content += '## Resources\n\n';
+  content += `- **AIWG Framework**: ${aiwgRoot}/agentic/code/frameworks/sdlc-complete/README.md\n`;
+  content += `- **Template Library**: ${aiwgRoot}/agentic/code/frameworks/sdlc-complete/templates/\n`;
+  content += `- **Agent Catalog**: ${aiwgRoot}/agentic/code/frameworks/sdlc-complete/agents/\n`;
+  content += `- **Natural Language Guide**: ${aiwgRoot}/agentic/code/frameworks/sdlc-complete/docs/simple-language-translations.md\n`;
+  content += '- **Warp Documentation**: https://docs.warp.dev/knowledge-and-collaboration/rules\n\n';
+
+  return content;
+}
+
+/**
+ * Merge WARP.md intelligently (preserve user content, replace AIWG sections)
+ */
+export function mergeWarpMd(existingContent, aiwgContent, force) {
+  const start = '<!-- AIWG:warp-context:start -->';
+  const end = '<!-- AIWG:warp-context:end -->';
+  const managed = `${start}\n${aiwgContent}\n${end}`;
+  const clean = (existingContent || '').replace(/\n?<!-- AIWG:rule-startup:start -->[\s\S]*?<!-- AIWG:rule-startup:end -->\n?/g, '');
+  if (clean.includes(start)) return clean.replace(/<!-- AIWG:warp-context:start -->[\s\S]*?<!-- AIWG:warp-context:end -->/, managed);
+  if (!clean || force) return `# Project Context\n\n${managed}\n`;
+  const sections = parseMarkdownSections(clean);
+  const user = sections.filter(section => !isAIWGManagedSection(section.heading)).map(section => section.lines.join('\n')).join('\n');
+  return `${user.trim()}\n\n${managed}\n`;
+}
+
+/**
+ * Create backup of existing WARP.md
+ */
+function createBackup(warpMdPath) {
+  if (!fs.existsSync(warpMdPath)) return null;
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = `${warpMdPath}.backup-${timestamp}`;
+  fs.copyFileSync(warpMdPath, backupPath);
+  return backupPath;
+}
+
+/**
+ * Validate WARP.md structure
+ */
+function validateWarpMd(warpMdPath) {
+  if (!fs.existsSync(warpMdPath)) {
+    return {
+      valid: false,
+      errors: ['WARP.md not found']
+    };
+  }
+
+  const content = fs.readFileSync(warpMdPath, 'utf8');
+  const errors = [];
+  const warnings = [];
+
+  // Check for AIWG section
+  if (!content.includes('## AIWG')) {
+    errors.push('Missing AIWG section');
+  }
+
+  // Check for agents
+  const agentCount = (content.match(/^### /gm) || []).length;
+  if (agentCount < 10) {
+    warnings.push(`Only ${agentCount} agents found (expected 58+)`);
+  }
+
+  // Check for commands
+  const commandCount = (content.match(/^### \//gm) || []).length;
+  if (commandCount < 10) {
+    warnings.push(`Only ${commandCount} commands found (expected 42+)`);
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    agentCount,
+    commandCount
+  };
+}
+
+/**
+ * Main execution
+ */

@@ -34,7 +34,8 @@ describe.skipIf(missingBuiltCli())('UAT: WD-002 — worker_dispatch: false block
   beforeEach(() => {
     projectDir = makeTmpDir('aiwg-uat-wd002-proj-');
     configDir = makeTmpDir('aiwg-uat-wd002-config-');
-    const binDir = makeTmpDir('aiwg-uat-wd002-bin-');
+    const binDir = join(projectDir, 'bin');
+    mkdirSync(binDir);
     sentinelFile = join(binDir, 'sentinel-worker-ran.txt');
     fakeClaudePath = join(binDir, 'fake-claude');
     // If this were ever invoked, it would prove dispatch happened — it must

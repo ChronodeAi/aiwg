@@ -1,5 +1,46 @@
 ---
 enforcement: medium
+activation: paths
+summary: Keep distributable AIWG artifacts in agentic/code, project output in the artifact store, and CI hook templates outside repository workflow directories.
+bound_to:
+  skills:
+    - devkit-create-addon
+    - devkit-create-extension
+    - devkit-create-framework
+    - devkit-create-agent
+    - devkit-create-command
+    - devkit-create-skill
+    - scaffold-addon
+    - scaffold-extension
+    - scaffold-framework
+    - new-bundle
+    - add-agent
+    - add-skill
+    - add-command
+    - add-behavior
+    - add-template
+    - validate-addon
+    - validate-component
+    - devkit-validate
+    - dev-doctor
+  agents:
+    - aiwg-developer
+paths:
+  - agentic/code/**
+  - .aiwg/**
+  - .claude/**
+  - .github/agents/**
+  - .github/prompts/**
+  - .github/instructions/**
+  - .cursor/**
+  - .warp/**
+  - .codex/**
+  - .factory/**
+  - .opencode/**
+  - .windsurf/**
+  - .openclaw/**
+  - .gitea/workflows/**
+  - .github/workflows/**
 ---
 
 # Addon Boundaries

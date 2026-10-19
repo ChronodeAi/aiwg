@@ -1,5 +1,15 @@
 ---
 enforcement: high
+activation: "summary"
+summary: "Query the artifact index as JSON before phase work, check dependencies before edits, rebuild after artifact changes, and use index statistics for project health."
+bound_to:
+  agents: ["architecture-designer", "context-librarian", "executive-orchestrator", "requirements-analyst", "technical-writer", "test-architect"]
+  skills: ["artifact-lookup", "artifact-orchestration", "build-artifact-index", "check-traceability", "flow-architecture-evolution", "flow-change-control", "flow-compliance-validation", "flow-concept-to-inception", "flow-construction-to-transition", "flow-cross-team-sync", "flow-delivery-track", "flow-deploy-to-production", "flow-discovery-track", "flow-elaboration-to-construction", "flow-gate-check", "flow-guided-implementation", "flow-handoff-checklist", "flow-hypercare-monitoring", "flow-inception-to-elaboration", "flow-incident-response", "flow-iteration-dual-track", "flow-knowledge-transfer", "flow-performance-optimization", "flow-release", "flow-requirements-evolution", "flow-retrospective-cycle", "flow-risk-management-cycle", "flow-security-review-cycle", "flow-team-onboarding", "flow-test-strategy-execution", "orchestrate-project", "project-health-check"]
+  flows: ["flow-agentloop-lfd-controls", "flow-architecture-evolution", "flow-change-control", "flow-compliance-validation", "flow-concept-to-inception", "flow-construction-to-transition", "flow-cross-team-sync", "flow-delivery-track", "flow-deploy-to-production", "flow-discovery-track", "flow-elaboration-to-construction", "flow-gate-check", "flow-guided-implementation", "flow-handoff-checklist", "flow-hypercare-monitoring", "flow-inception-to-elaboration", "flow-incident-response", "flow-iteration-dual-track", "flow-knowledge-transfer", "flow-performance-optimization", "flow-release", "flow-requirements-evolution", "flow-retrospective-cycle", "flow-risk-management-cycle", "flow-security-review-cycle", "flow-team-onboarding", "flow-test-strategy-execution"]
+triggers:
+  - "discover existing SDLC artifacts before phase work"
+  - "check artifact dependencies before editing"
+  - "query artifact index as JSON"
 ---
 
 # Artifact Discovery Rules

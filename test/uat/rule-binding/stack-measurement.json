@@ -1,0 +1,231 @@
+{
+  "version": 1,
+  "framework": "sdlc",
+  "token_estimate": "sum(ceil(UTF-8 bytes per file / 4)); not a tokenizer",
+  "metric": "Emitted native rule surfaces, including indexes and Claude behavior rules. Context adapters are separate; do not add context_files to startup (may overlap).",
+  "providers": {
+    "claude": {
+      "rules": {
+        "bytes": 30731,
+        "estimated_tokens": 7686,
+        "files": [
+          {
+            "path": ".claude/rules/artifact-output-policy.md",
+            "bytes": 1499,
+            "estimated_tokens": 375
+          },
+          {
+            "path": ".claude/rules/citation-policy.md",
+            "bytes": 7774,
+            "estimated_tokens": 1944
+          },
+          {
+            "path": ".claude/rules/human-authorization.md",
+            "bytes": 2516,
+            "estimated_tokens": 629
+          },
+          {
+            "path": ".claude/rules/instruction-comprehension.md",
+            "bytes": 2423,
+            "estimated_tokens": 606
+          },
+          {
+            "path": ".claude/rules/no-attribution.md",
+            "bytes": 2356,
+            "estimated_tokens": 589
+          },
+          {
+            "path": ".claude/rules/research-before-decision.md",
+            "bytes": 2275,
+            "estimated_tokens": 569
+          },
+          {
+            "path": ".claude/rules/RULES-INDEX.md",
+            "bytes": 4702,
+            "estimated_tokens": 1176
+          },
+          {
+            "path": ".claude/rules/RULES-ONDEMAND.md",
+            "bytes": 641,
+            "estimated_tokens": 161
+          },
+          {
+            "path": ".claude/rules/skill-discovery.md",
+            "bytes": 3186,
+            "estimated_tokens": 797
+          },
+          {
+            "path": ".claude/rules/token-security.md",
+            "bytes": 3359,
+            "estimated_tokens": 840
+          }
+        ]
+      },
+      "behaviors": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "startup": {
+        "bytes": 30731,
+        "estimated_tokens": 7686,
+        "files": [
+          {
+            "path": ".claude/rules/artifact-output-policy.md",
+            "bytes": 1499,
+            "estimated_tokens": 375
+          },
+          {
+            "path": ".claude/rules/citation-policy.md",
+            "bytes": 7774,
+            "estimated_tokens": 1944
+          },
+          {
+            "path": ".claude/rules/human-authorization.md",
+            "bytes": 2516,
+            "estimated_tokens": 629
+          },
+          {
+            "path": ".claude/rules/instruction-comprehension.md",
+            "bytes": 2423,
+            "estimated_tokens": 606
+          },
+          {
+            "path": ".claude/rules/no-attribution.md",
+            "bytes": 2356,
+            "estimated_tokens": 589
+          },
+          {
+            "path": ".claude/rules/research-before-decision.md",
+            "bytes": 2275,
+            "estimated_tokens": 569
+          },
+          {
+            "path": ".claude/rules/RULES-INDEX.md",
+            "bytes": 4702,
+            "estimated_tokens": 1176
+          },
+          {
+            "path": ".claude/rules/RULES-ONDEMAND.md",
+            "bytes": 641,
+            "estimated_tokens": 161
+          },
+          {
+            "path": ".claude/rules/skill-discovery.md",
+            "bytes": 3186,
+            "estimated_tokens": 797
+          },
+          {
+            "path": ".claude/rules/token-security.md",
+            "bytes": 3359,
+            "estimated_tokens": 840
+          }
+        ]
+      },
+      "conditional": {
+        "bytes": 65325,
+        "estimated_tokens": 16335,
+        "files": [
+          {
+            "path": ".claude/rules/agent-deployment.md",
+            "bytes": 5238,
+            "estimated_tokens": 1310
+          },
+          {
+            "path": ".claude/rules/agent-friendly-code.md",
+            "bytes": 5020,
+            "estimated_tokens": 1255
+          },
+          {
+            "path": ".claude/rules/agent-generation-guardrails.md",
+            "bytes": 4347,
+            "estimated_tokens": 1087
+          },
+          {
+            "path": ".claude/rules/dataset-safety.md",
+            "bytes": 2262,
+            "estimated_tokens": 566
+          },
+          {
+            "path": ".claude/rules/debug-source-not-output.md",
+            "bytes": 9885,
+            "estimated_tokens": 2472
+          },
+          {
+            "path": ".claude/rules/progressive-disclosure.md",
+            "bytes": 8494,
+            "estimated_tokens": 2124
+          },
+          {
+            "path": ".claude/rules/reasoning-sections.md",
+            "bytes": 8083,
+            "estimated_tokens": 2021
+          },
+          {
+            "path": ".claude/rules/research-metadata.md",
+            "bytes": 4675,
+            "estimated_tokens": 1169
+          },
+          {
+            "path": ".claude/rules/schema-first.md",
+            "bytes": 1203,
+            "estimated_tokens": 301
+          },
+          {
+            "path": ".claude/rules/sdlc-orchestration.md",
+            "bytes": 9407,
+            "estimated_tokens": 2352
+          },
+          {
+            "path": ".claude/rules/versioning.md",
+            "bytes": 3515,
+            "estimated_tokens": 879
+          },
+          {
+            "path": ".claude/rules/voice-framework.md",
+            "bytes": 3196,
+            "estimated_tokens": 799
+          }
+        ]
+      },
+      "mirrors": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "context_files": {
+        "bytes": 7524,
+        "estimated_tokens": 1882,
+        "files": [
+          {
+            "path": "CLAUDE.md",
+            "bytes": 972,
+            "estimated_tokens": 243
+          },
+          {
+            "path": "WORKSPACE.md",
+            "bytes": 2742,
+            "estimated_tokens": 686
+          },
+          {
+            "path": "AIWG.md",
+            "bytes": 3810,
+            "estimated_tokens": 953
+          }
+        ]
+      },
+      "budget": null,
+      "deployment": {
+        "command": "aiwg use sdlc --provider claude",
+        "exit_code": 0
+      }
+    }
+  },
+  "gates": [
+    {
+      "gate": "deployment",
+      "provider": "claude",
+      "pass": true
+    }
+  ]
+}

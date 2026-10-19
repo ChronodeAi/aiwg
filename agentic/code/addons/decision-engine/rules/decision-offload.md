@@ -1,5 +1,9 @@
 ---
 enforcement: high
+activation: bound
+summary: "When decision.enabled is true, offload bounded decisions to Jev; treat answers as advisory and decide normally on fallback."
+bound_to:
+  skills: [decision-offload, decision-evaluate, decision-playground]
 triggers:
   - "jev"
   - "jev token"

@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { sourceRules } from './rule-source-expectations.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 
@@ -82,8 +83,14 @@ describe('#1627 computeAllArtifactBasenames', () => {
     expect(agents).toBeInstanceOf(Set);
     expect(agents.has('software-implementer')).toBe(true);
     expect(agents.has('code-reviewer')).toBe(true);
-    expect(rules.has('anti-laziness')).toBe(true);
-    expect(rules.has('tao-loop')).toBe(true);
+    // ADR 57–61, 265–272: prune retains body-delivered rules, while migrated
+    // summary/bound/on-demand rules leave the recursively loaded rules tree.
+    const expected = ['frameworks', 'addons'].flatMap(kind =>
+      sourceRules(REPO_ROOT, kind as 'frameworks' | 'addons', true))
+      .filter(rule => rule.fileDelivered && !rule.consolidated).map(rule => rule.name);
+    expect(rules).toEqual(new Set(expected));
+    const nested = path.join(REPO_ROOT, 'agentic/code/addons/aiwg-utils');
+    expect(base.computeAllArtifactBasenames(nested, 'rules')).toEqual(rules);
   });
 
   it('returns null when there is no AIWG framework/addon tree', async () => {

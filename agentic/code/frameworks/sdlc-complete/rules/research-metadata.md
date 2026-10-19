@@ -1,5 +1,22 @@
 ---
 enforcement: high
+activation: paths
+summary: Give research documents FAIR frontmatter, verified identifiers, metric-bearing findings, GRADE quality, relevance fields, and PDF SHA-256 fixity records.
+bound_to:
+  skills:
+    - research-document
+    - research-acquire
+    - research-lint
+    - grade-on-ingest
+  agents:
+    - technical-researcher
+    - citation-verifier
+  flows: []
+paths:
+  - .aiwg/research/**
+  - agentic/code/frameworks/sdlc-complete/templates/research/**
+triggers:
+  - what metadata must research documents contain
 ---
 
 # Research Metadata Rules

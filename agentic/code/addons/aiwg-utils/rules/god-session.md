@@ -1,4 +1,17 @@
 ---
+activation: summary
+summary: "Keep agent definitions and sessions focused on bounded responsibilities; decompose broad scopes before context or coherence degrades."
+bound_to:
+  agents:
+    - agentsmith
+  skills:
+    - add-agent
+    - devkit-create-agent
+    - smith-agenticdef
+triggers:
+  - "agent has too many responsibilities"
+  - "how do I keep an agent focused"
+  - "avoid a god session"
 enforcement: high
 ---
 

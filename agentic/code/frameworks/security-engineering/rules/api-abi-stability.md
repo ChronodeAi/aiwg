@@ -2,8 +2,32 @@
 enforcement: high
 id: api-abi-stability
 severity: HIGH
-applies_to: [all-agents, architect, release-manager, code-reviewer]
-tags: [api, abi, semver, deprecation, library-governance]
+applies_to:
+  - all-agents
+  - architect
+  - release-manager
+  - code-reviewer
+tags:
+  - api
+  - abi
+  - semver
+  - deprecation
+  - library-governance
+activation: bound
+summary: Preserve declared stable API/ABI contracts, use compatible release versions, and document deprecations for two minor releases before removal.
+bound_to:
+  agents:
+    - architecture-designer
+    - code-reviewer
+    - deployment-manager
+    - software-implementer
+  skills:
+    - deprecation-policy
+    - flow-release
+  flows:
+    - flow-release
+triggers:
+  - preserve stable library API and ABI contracts
 ---
 
 # API and ABI Stability
