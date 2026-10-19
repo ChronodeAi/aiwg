@@ -286,6 +286,74 @@ describe('BehaviorRegistry', () => {
       expect(result.warnings).toHaveLength(0);
     });
 
+    it.each([
+      [10, 5],
+      [10, undefined],
+      [undefined, -1],
+    ])('should select higher priority (%s over %s) independent of attachment order', (high, low) => {
+      const winner = {
+        name: 'safety',
+        directives: [{ id: 'budget-gate', priority: high, rule: 'Keep the budget gate' }],
+      };
+      const loser = {
+        name: 'reporting',
+        directives: [{ id: 'budget-gate', priority: low, rule: 'Replace the budget gate' }],
+      };
+
+      for (const behaviors of [[winner, loser], [loser, winner]]) {
+        const result = registry.merge(behaviors);
+        expect(result.directives).toEqual([
+          { ...winner.directives[0], _behaviorName: 'safety' },
+        ]);
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0]).toContain("Directive 'budget-gate'");
+        expect(result.warnings[0]).toContain(`'safety' (priority ${high ?? 0}) wins over 'reporting' (priority ${low ?? 0})`);
+      }
+    });
+
+    it.each([
+      [undefined, undefined],
+      [undefined, 0],
+      [5, 5],
+    ])('should use later attachment for equal priorities (%s and %s)', (first, second) => {
+      const b1 = {
+        name: 'b1',
+        directives: [{ id: 'shared', priority: first, rule: 'from b1' }],
+      };
+      const b2 = {
+        name: 'b2',
+        directives: [{ id: 'shared', priority: second, rule: 'from b2' }],
+      };
+
+      for (const behaviors of [[b1, b2], [b2, b1]]) {
+        const later = behaviors[1];
+        const result = registry.merge(behaviors);
+        expect(result.directives).toEqual([
+          { ...later.directives[0], _behaviorName: later.name },
+        ]);
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0]).toContain(`'${later.name}' (priority ${second ?? 0}) wins over '${behaviors[0].name}'`);
+        expect(result.warnings[0]).toContain('later in attachment order');
+      }
+    });
+
+    it('should report each losing directive when a higher-priority winner is retained', () => {
+      const behaviors = [10, 5, 0].map(priority => ({
+        name: `priority-${priority}`,
+        directives: [{ id: 'shared', priority, rule: `from priority ${priority}` }],
+      }));
+
+      const result = registry.merge(behaviors);
+      expect(result.directives).toEqual([
+        { ...behaviors[0].directives[0], _behaviorName: 'priority-10' },
+      ]);
+      expect(result.warnings).toHaveLength(2);
+      for (const [index, priority] of [5, 0].entries()) {
+        expect(result.warnings[index]).toContain("Directive 'shared'");
+        expect(result.warnings[index]).toContain(`'priority-10' (priority 10) wins over 'priority-${priority}' (priority ${priority})`);
+      }
+    });
+
     it('should warn on directive override (same id)', () => {
       const b1 = {
         name: 'b1',
