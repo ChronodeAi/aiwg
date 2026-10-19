@@ -697,6 +697,52 @@ Offline stub tests prove validation and identity logic only. No real signed RC
 run, package installation from a release candidate, model comparison, publication,
 or end-to-end promotion was performed by this change.
 
+#### Production evidence and comparison approval contract
+
+`tools/release/release-evidence.mjs` provides a library-only trust boundary; it
+has no command that accepts run metadata or approvals from JSON files. A caller
+must construct a read-only GitHub API client implementing authenticated identity,
+workflow, run, exact-attempt jobs, artifact metadata/download, exact-commit
+workflow source, and paginated approval acquisition. The helper requires the API
+artifact's `sha256:` digest to match the downloaded archive, validates the exact
+extracted bundle with `verifyRcBundle`, and rejects incomplete pagination. The API
+client is still a caller trust boundary: this repository does not yet provide or
+attest the production token, TLS transport, or adapter implementation. The client
+currently supplies the archive and bundle directory separately. Matching the
+archive digest does not prove that the directory was extracted from those bytes;
+verified extraction-to-directory binding remains required production-transport
+work. Acquisition explicitly reports `extraction_verified: false` and
+`ready_for_publication: false`.
+
+Both the RC and stable tags are independently checked with the repository's
+maintainer keyring through `tools/ci/verify-signed-tag.sh`. They must be annotated,
+match the unchanged stable package version, peel to the same commit, and match the
+verifier's checked-out `HEAD`. The resulting in-process receipt cannot be replaced
+by serialized candidate data.
+
+The comparison gate consumes the unchanged #3298 report format. Trusted policy,
+separate from the reports, fixes all three providers, the subject and distinct
+judge snapshots, seed, `n=5`, baseline version, deployed bundle set, and allowed
+GitHub issuer IDs. Verification recomputes the canonical scenario plan and report
+aggregates, requires every expected provider/scenario/repetition exactly once,
+rejects invalid or incomplete subject/judge results, and binds the candidate
+tarball, corpus, package tree, deployed context, installation lock, report, and
+adapter digests. `fixture:`/`tree:` candidates and the shipped offline adapters —
+including copied adapters with the same digest — are rejected.
+
+Approval content uses `aiwg-release-comparison-approval/v1`. Candidate and report
+digests plus workflow/run/artifact and signed-tag identities must match exactly.
+Every measured regression needs one disposition for its provider, scenario,
+repetition, report digest, and precise regression signals. Issuer identity comes
+only from the authenticated GitHub API envelope and must match a trusted policy
+ID; an `issuer` claim inside approval content is rejected.
+
+Even complete structural evidence returns `ready_for_publication: false`. A
+reviewed production GitHub client with verified archive extraction-to-directory
+binding, run-time authentication of comparison adapter
+and remote model execution identity, and separate stable-publisher wiring remain
+unmet. No evidence helper invokes a model, creates a tag, or publishes a package.
+
 ### Publication surfaces
 
 - **npmjs.org (public) — GitHub Actions only.** `.github/workflows/npm-publish.yml`
