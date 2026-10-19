@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { syntheticSecrets } from '../../fixtures/sessions/redaction-secrets.js';
+import { median } from '../../helpers/cli-perf-policy.js';
 import { SessionRejectionDetailSchema } from '../../../src/sessions/contracts.js';
 import {
   SESSION_PROVIDER_IDS,
@@ -228,38 +229,77 @@ session_0123456789abcdef`;
   });
 
   it('bounds redaction of a 32 MiB record with malformed key blocks and long near matches', () => {
-    const recordSize = 32 * 1024 * 1024;
-    const benignChunk = 'ordinary session prose without sensitive content.\n';
-    const benign = benignChunk.repeat(Math.ceil(recordSize / benignChunk.length)).slice(0, recordSize);
-    const baselineStarted = performance.now();
-    const baseline = redactSessionText(benign);
-    const baselineMs = performance.now() - baselineStarted;
-    expect(baseline.text).toBe(benign);
-    // Compare equal-size records on this runner; shared CI load is not a benchmark.
-    // Local near-match runs take roughly 10x the benign scan; allow scheduling headroom.
+    const sizes = [16 * 1024 * 1024, 32 * 1024 * 1024];
+    const bySize = sizes.map((recordSize) => {
+      const benignChunk = 'ordinary session prose without sensitive content.\n';
+      const benign = benignChunk.repeat(Math.ceil(recordSize / benignChunk.length)).slice(0, recordSize);
+      const chunk = '-----BEGIN PRIVATE KEY-----\n'.repeat(32)
+        + 'password' + ' '.repeat(1024) + 'end\n'
+        + 'eyJ' + 'a-'.repeat(1024) + '\n'
+        + 'a.'.repeat(1024) + '\n';
+      const text = chunk.repeat(Math.ceil(recordSize / chunk.length)).slice(0, recordSize);
+      // Exercise every regex on a large record as well as the unfinished-key scanner.
+      const nearMatch = 'ordinary prose password' + ' '.repeat(1024) + '\neyJ' + 'a-'.repeat(1024) + '\n' + 'a.'.repeat(1024) + '\n';
+      const secretSuffix = '\n' + syntheticSecrets[0][1];
+      const plain = nearMatch.repeat(Math.ceil(recordSize / nearMatch.length))
+        .slice(0, recordSize - secretSuffix.length);
+      const plainInput = plain + secretSuffix;
+      // Sparse incomplete JWTs isolate repeated suffix searches from the
+      // expensive but linear whitespace and email near matches above.
+      const jwtChunk = 'eyJaaaaa\n' + '~'.repeat(4096);
+      const jwtInput = jwtChunk.repeat(Math.ceil(recordSize / jwtChunk.length)).slice(0, recordSize);
+      return [
+        { recordSize, name: 'benign', input: benign, expected: benign, samples: [] as number[] },
+        { recordSize, name: 'malformed key blocks', input: text, expected: '[REDACTED:private-key]', samples: [] as number[] },
+        { recordSize, name: 'JWT suffix near matches', input: jwtInput, expected: jwtInput, samples: [] as number[] },
+        { recordSize, name: 'near matches', input: plainInput, expected: plain + '\n[REDACTED:provider-token]', samples: [] as number[] },
+      ];
+    });
+
+    // Keep each size pair adjacent so unrelated slow paths cannot separate
+    // the measurements used by a growth ratio.
+    const cases = bySize[0].flatMap((entry, index) => entry.name === 'JWT suffix near matches'
+      ? bySize.map((entries) => entries[index]) : [bySize[1][index]]);
+
+    // Warm every full-size path before sampling: first-use JIT and string
+    // flattening costs must not skew either side of the ratio.
+    for (const entry of cases) expect(redactSessionText(entry.input).text).toBe(entry.expected);
+
+    // Scheduling pauses made a single wall-time ratio flaky (#3328). Count
+    // CPU on this Vitest worker thread, excluding waits and other threads.
+    // Interleave adjacent size pairs, alternating order to limit drift;
+    // five samples reject isolated outliers without hiding sustained slowdowns.
+    for (let sample = 0; sample < 5; sample++) {
+      const order = sample % 2 === 0 ? cases : [...cases].reverse();
+      for (const entry of order) {
+        const started = process.threadCpuUsage();
+        const result = redactSessionText(entry.input);
+        const elapsed = process.threadCpuUsage(started);
+        entry.samples.push((elapsed.user + elapsed.system) / 1000);
+        expect(result.text).toBe(entry.expected);
+      }
+    }
+
+    // Doubling linear work should cost about 2x; quadratic suffix rescans
+    // approach 4x. Check growth before the coarser ratio-to-baseline cap.
+    const maxGrowth = 3;
+    for (const small of cases.filter((entry) => entry.recordSize === sizes[0])) {
+      const large = cases.find((entry) => entry.recordSize === sizes[1] && entry.name === small.name)!;
+      const smallMs = median(small.samples);
+      const largeMs = median(large.samples);
+      expect(largeMs / smallMs, `${small.name} CPU growth (32 / 16 MiB; ${largeMs} / ${smallMs} ms)`)
+        .toBeLessThan(maxGrowth);
+    }
     const maxSlowdown = 20;
-    const chunk = '-----BEGIN PRIVATE KEY-----\n'.repeat(32)
-      + 'password' + ' '.repeat(1024) + 'end\n'
-      + 'eyJ' + 'a-'.repeat(1024) + '\n'
-      + 'a.'.repeat(1024) + '\n';
-    const text = chunk.repeat(Math.ceil(recordSize / chunk.length)).slice(0, recordSize);
-    const started = performance.now();
-    const result = redactSessionText(text);
-    const keyBlockMs = performance.now() - started;
-    expect(keyBlockMs / baselineMs, 'malformed key blocks / benign baseline').toBeLessThan(maxSlowdown);
-    expect(result.text).toBe('[REDACTED:private-key]');
-    // Exercise every regex on a large record as well as the unfinished-key scanner.
-    const nearMatch = 'ordinary prose password' + ' '.repeat(1024) + '\neyJ' + 'a-'.repeat(1024) + '\n' + 'a.'.repeat(1024) + '\n';
-    const secretSuffix = '\n' + syntheticSecrets[0][1];
-    const plain = nearMatch.repeat(Math.ceil(recordSize / nearMatch.length))
-      .slice(0, recordSize - secretSuffix.length);
-    const plainInput = plain + secretSuffix;
-    const plainStarted = performance.now();
-    const redacted = redactSessionText(plainInput);
-    const nearMatchMs = performance.now() - plainStarted;
-    expect(nearMatchMs / baselineMs, 'near matches / benign baseline').toBeLessThan(maxSlowdown);
-    expect(redacted.text).toBe(plain + '\n[REDACTED:provider-token]');
-  }, 120_000); // Hang guard only; performance is bounded relative to the baseline.
+    for (const recordSize of sizes.slice(1)) {
+      const sameSize = cases.filter((entry) => entry.recordSize === recordSize);
+      const baselineMs = median(sameSize[0].samples);
+      for (const entry of sameSize.slice(1)) {
+        expect(median(entry.samples) / baselineMs, `${entry.name} / benign baseline (${recordSize / 1024 / 1024} MiB)`)
+          .toBeLessThan(maxSlowdown);
+      }
+    }
+  }, 120_000); // Hang guard only; performance is bounded by CPU growth and baseline ratios.
 
   it('requires operation-specific network consent', () => {
     expect(() => requireNetworkConsent('codex.export', 'claude.export')).toThrowError(
