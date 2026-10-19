@@ -2748,6 +2748,13 @@ export async function runDoctor() {
     // Non-fatal — older installs may not expose the helper yet.
   }
 
+  try {
+    const { rulePinState } = await importImpl(import.meta.url, 'rules/pin-state.js');
+    const pins = rulePinState(process.cwd(), await getPackageRoot());
+    for (const rule of pins.rules) check('Rule pin', 'info', `${rule.name}: pinned kernel (canonical ${rule.canonical_activation}; ${rule.matches.map(match => match.source).join(', ')})`);
+    for (const warning of pins.warnings) check('Rule pins', 'warn', warning);
+  } catch (error) { check('Rule pins', 'warn', error.message); }
+
   // Print results
   console.log('');
 

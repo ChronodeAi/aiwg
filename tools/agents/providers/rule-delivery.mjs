@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { stringify } from 'yaml';
 import { createHash } from 'node:crypto';
 import { importImpl } from '../../_resolve-impl.mjs';
 import {
@@ -12,6 +13,7 @@ import {
 
 const { parseRuleFrontmatter, inferRuleActivation, RULE_BINDING_TYPES } = await importImpl(import.meta.url, 'rules/activation.mjs');
 const { trackTemporaryDirectory } = await importImpl(import.meta.url, 'utils/temporary-directory.js');
+const { loadRulePinConfigs, installedRuleCapabilities, resolveRulePins } = await importImpl(import.meta.url, 'rules/pins.mjs');
 const { guardRulesInlineBudget } = await importImpl(import.meta.url, 'rules/inline-budget.mjs');
 
 function walk(dir) {
@@ -51,6 +53,7 @@ const structural = file => /^(RULES-INDEX|RULES-ONDEMAND)\.(md|mdc)$/.test(path.
 
 /** Collect selected source contracts, before any tier filter or projection. */
 export function collectDeploymentRuleSources(opts) {
+  if (opts.ruleSources) return [...new Set([...opts.ruleSources, ...(opts.previousRuleSources || []).filter(file => fs.existsSync(file))])];
   const roots = [opts.srcRoot];
   for (const framework of getFrameworksForMode(opts.srcRoot, opts.mode)) roots.push(framework.path);
   for (const addon of discoverAddons(opts.srcRoot)) roots.push(addon.path);
@@ -73,6 +76,32 @@ export async function prepareRuleDelivery(opts) {
     }
     return rule;
   });
+  const configs = opts.pinConfigs || loadRulePinConfigs(opts.target, opts.config);
+  const installed = installedRuleCapabilities(configs);
+  const root = resolveAiwgRoot(opts.srcRoot) || opts.srcRoot;
+  const { loadRelations } = await importImpl(import.meta.url, 'artifacts/relations.js');
+  const relations = loadRelations(opts.target) || loadRelations(root, opts.target);
+  const ruleIdsByPath = new Map(Object.entries(relations?.index.rules || {}).map(([id, rule]) => [rule.path, id]));
+  const pinRules = rules.map(rule => {
+    const owner = rule.file.replaceAll('\\', '/').match(/(?:frameworks|addons|extensions|plugins)\/([^/]+)\//)?.[1];
+    const local = Object.entries(configs.project.installed || {}).find(([, entry]) => entry.localPath && rule.file.startsWith(path.resolve(opts.target, entry.localPath) + path.sep))?.[0];
+    const indexedPath = path.relative(root, rule.file);
+    return { ...rule, id: ruleIdsByPath.get(indexedPath) || rule.file, path: rule.file, indexedPath,
+      capability: local || owner || opts.capability, enforcement: ruleEnforcementLevel(rule.content) };
+  });
+  const pinned = resolveRulePins({ rules: pinRules, configs, installed, relations });
+  for (const warning of pinned.warnings) console.warn(warning);
+  const pinsByFile = new Map(pinned.rules.map(rule => [rule.file, rule]));
+  for (const rule of rules) {
+    const pin = pinsByFile.get(rule.file);
+    if (!pin) continue;
+    rule.canonicalActivation = rule.activation;
+    rule.pinMatches = pin.matches;
+    rule.pinned = true;
+    rule.activation = 'kernel';
+    // All pins use native kernel projection, including legacy untagged rules.
+    rule.tagged = true;
+  }
   const bindings = new Map();
   const targets = [];
   const targetKeys = new Set();
@@ -110,6 +139,22 @@ export async function prepareRuleDelivery(opts) {
       entries.push(...sourceEntries);
       if (!sourceEntries.length) entries.push(...await buildSourceEntries());
     }
+    // Project-local installed bundles are outside the package source index.
+    // Reuse the existing binding index builder only for those source roots.
+    if (!opts.bindingEntries) {
+      for (const entry of Object.values(configs.project.installed || {})) {
+        if (!entry.localPath) continue;
+        const localRoot = path.resolve(opts.target, entry.localPath);
+        if (localRoot === root || !fs.existsSync(localRoot)) continue;
+        const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-local-rule-index-'));
+        try {
+          const { buildIndex } = await importImpl(import.meta.url, 'artifacts/index-builder.js');
+          await buildIndex(localRoot, { scope: '.', outputDir: temp, force: true, quiet: true });
+          const index = JSON.parse(read(path.join(temp, '.aiwg', '.index', 'metadata.json')));
+          entries.push(...Object.values(index.entries).map(entry => ({ ...entry, path: path.resolve(localRoot, entry.path) })));
+        } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+      }
+    }
     // A stored index can predate the source tree (edge/dev checkouts). Rebuild once from source
     // before reporting a binding target as missing.
     const resolvedTargets = new Map();
@@ -145,12 +190,12 @@ export async function prepareRuleDelivery(opts) {
       }
     }
   }
-  return { rules, bindings, targets };
+  return { rules, bindings, targets, pins: pinned.rules, pinWarnings: pinned.warnings };
 }
 
 export function renderRuleKernelIndex(rules, nativePaths = false) {
-  const summary = rules.filter(rule => rule.tagged && rule.activation === 'summary');
-  const paths = nativePaths ? [] : rules.filter(rule => rule.tagged && rule.activation === 'paths');
+  const summary = rules.filter(rule => rule.tagged && (rule.canonicalActivation || rule.activation) === 'summary');
+  const paths = nativePaths ? [] : rules.filter(rule => rule.tagged && (rule.canonicalActivation || rule.activation) === 'paths');
   if (!summary.length && !paths.length) return '';
   const lines = ['# Rule kernel index', ''];
   for (const rule of summary) lines.push(`- ${rule.name} — ${rule.summary} Fetch and follow: \`aiwg show rule ${rule.name}\`.`, '');
@@ -211,6 +256,13 @@ function projectRules(opts, provider) {
   for (const rule of tagged) {
     if (rule.activation === 'kernel' || (nativePaths && rule.activation === 'paths')) {
       let content = stripTriggersFromContent(rule.content);
+      if (rule.pinned) {
+        const parsed = parseRuleFrontmatter(content);
+        const data = { ...parsed.data, activation: 'kernel' };
+        delete data.paths;
+        delete data.bound_to;
+        content = `---\n${stringify(data)}---\n${parsed.body}`;
+      }
       if (provider.name === 'cursor') content = provider.transformRule(rule.file, content, opts);
       writeRule(rule, content);
     }
@@ -219,10 +271,11 @@ function projectRules(opts, provider) {
   // activation-selected index when migration starts; pure legacy deployments keep it.
   // Hermes's 20K context limit requires a fixed provider projection: only
   // frontmatter-CRITICAL kernel bodies are inline (operator decision 2026-10-19).
-  // Keep activation and every other provider's projection unchanged.
+  // Explicit operator pins retain full bodies; other activation metadata and
+  // every other provider's projection remain unchanged.
   const isCritical = rule => String(rule.enforcement || '').trim().toLowerCase() === 'critical';
   const deferredKernels = provider.name === 'hermes'
-    ? rules.filter(rule => rule.tagged && rule.activation === 'kernel' && !isCritical(rule)) : [];
+    ? rules.filter(rule => rule.tagged && rule.activation === 'kernel' && !rule.pinned && !isCritical(rule)) : [];
   const indexRules = deferredKernels.length ? rules.map(rule => deferredKernels.includes(rule)
     ? { ...rule, activation: 'summary', summary: rule.summary || 'Fetch and follow the full rule before governed work.' } : rule) : rules;
   const index = renderRuleKernelIndex(indexRules, nativePaths);
@@ -247,7 +300,7 @@ function projectRules(opts, provider) {
     // The conventional directory is not a loader: startup reaches the complete
     // selected bodies through the provider's existing context owner.
     const kernels = rules.filter(rule => rule.activation === 'kernel' &&
-      rule.tagged && (provider.name !== 'hermes' || isCritical(rule)));
+      rule.tagged && (provider.name !== 'hermes' || rule.pinned || isCritical(rule)));
     const routes = [...new Set(opts.definitionRoutes || [])];
     const routing = routes.length ? `## Invoked artifact definitions\n\nRead the complete definition before invoking its artifact:\n${routes.map(route => `- ${route}`).join('\n')}` : '';
     let startupIndex = index;
@@ -525,15 +578,21 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
     const configFile = path.join(target, '.aiwg', 'aiwg.config');
     const config = original.config || (fs.existsSync(configFile) ? JSON.parse(read(configFile)) : {});
     const guarded = guardRulesInlineBudget({ provider: provider.name, files: projected, config,
-      reportOnly: original.reportOnly !== false && !original.strict && !process.env.CI });
+      reportOnly: delivery.pins.length ? original.allowOverBudget === true : original.reportOnly !== false && !original.strict && !process.env.CI });
+    guarded.report.pins = delivery.pins.map(rule => ({ id: rule.id, name: rule.name, matches: rule.matches, canonical_activation: rule.canonical_activation, bytes: Buffer.byteLength(rule.body || '') }));
+    const pinDetails = delivery.pins.map(rule => `${rule.name}: ${Buffer.byteLength(rule.body || '')} body bytes via ${JSON.stringify(rule.matches)}`).join('; ');
+    const budgetFailure = message => new Error(`${provider.name}: ${message}; ${guarded.report.selected_bytes} startup bytes. Pins: ${pinDetails || '(none)'}.${delivery.pins.length ? ' Use --allow-over-budget to retain every pinned body.' : ''}`);
     for (const diagnostic of guarded.diagnostics) console.warn(diagnostic.message);
-    if (!guarded.passed) throw new Error(guarded.diagnostics.map(d => d.message).join('\n'));
+    if (!guarded.passed) throw budgetFailure(guarded.diagnostics.map(d => d.message).join('\n'));
     const agents = normalize(read(path.join(stage, 'AGENTS.md')));
-    if (provider.name === 'codex' && Buffer.byteLength(agents) >= 32_768) throw new Error('Codex AGENTS.md exceeds its 32 KB hard cap');
+    if (provider.name === 'codex' && Buffer.byteLength(agents) >= 32_768 && !(delivery.pins.length && original.allowOverBudget)) throw budgetFailure(`Codex AGENTS.md (${Buffer.byteLength(agents)} bytes) exceeds its 32 KB hard cap`);
     if (provider.name === 'hermes') {
       for (const name of ['AGENTS.md', '.hermes.md']) {
         const content = normalize(read(path.join(stage, name)));
-        provider.assertContextBudget(content, name, delivery.rules);
+        if (!(delivery.pins.length && original.allowOverBudget)) {
+          try { provider.assertContextBudget(content, name, delivery.rules); }
+          catch (error) { throw budgetFailure(error.message); }
+        }
         if (content.length > 15_000) console.warn(`Hermes ${name} above 15000 character soft limit (${content.length})`);
       }
     }
@@ -543,6 +602,7 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
     const delegated = (from, rel) => mappings.some(mapping => mapping.from !== from
       && mapping.from.startsWith(`${from}${path.sep}`)
       && (path.join(from, rel) === mapping.from || path.join(from, rel).startsWith(`${mapping.from}${path.sep}`)));
+    if (original.previewReport) return guarded.report;
     if (original.dryRun) {
       // A validated plan must describe the operator's final paths, rather than
       // exposing only the temporary paths used to assemble that plan.

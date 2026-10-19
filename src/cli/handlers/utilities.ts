@@ -621,11 +621,13 @@ export const doctorHandler: CommandHandler = {
         bundle: values.get('--bundle'),
         scope: scopeValue as DeploymentScope | undefined,
       }, ctx.frameworkRoot);
+      const { rulePinState } = await import('../../rules/pin-state.js');
+      const pins = rulePinState(ctx.cwd, ctx.frameworkRoot);
       return {
         exitCode: result.exitCode,
         message: hasSwitch('--json')
-          ? JSON.stringify(result, null, 2)
-          : renderUseDeploymentResult(result),
+          ? JSON.stringify({ ...result, rule_pins: { rules: pins.rules, warnings: pins.warnings } }, null, 2)
+          : renderUseDeploymentResult(result) + '\n' + pins.rules.map(rule => `${rule.name}: pinned kernel (canonical ${rule.canonical_activation})`).concat(pins.warnings).join('\n'),
         rawOutput: hasSwitch('--json'),
       };
     }

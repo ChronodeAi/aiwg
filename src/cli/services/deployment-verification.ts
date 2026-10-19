@@ -1150,9 +1150,12 @@ export async function buildDeploymentStatusProbe(
   const notConfigured = result.requestedBundles.length === 0
     && result.findings.length > 0
     && result.findings.every((item) => item.id === 'deployment-not-configured');
+  const { rulePinState } = await import('../../rules/pin-state.js');
+  const rulePins = rulePinState(projectRoot, frameworkRoot);
   const engaged = result.outcome === 'ready' || result.outcome === 'ready-restart-required' || result.outcome === 'degraded';
   return {
     schema: 'aiwg.status.probe.v1',
+    rule_pins: { rules: rulePins.rules, warnings: rulePins.warnings },
     generated_at: result.generatedAt,
     project_root: result.projectRoot,
     engaged,

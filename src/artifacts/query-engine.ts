@@ -1369,6 +1369,8 @@ export async function discoverCapability(
     };
   };
 
+  const { loadRelations } = await import('./relations.js');
+  const ruleRelations = resourceSource === 'local' ? loadRelations(cwd) ?? (aiwgRoot ? loadRelations(aiwgRoot, cwd) : null) : null;
   if (params.json) {
     const jsonIndent = params.jsonPretty === false ? undefined : 2;
     console.log(JSON.stringify({
@@ -1409,6 +1411,9 @@ export async function discoverCapability(
         triggers: r.entry.triggers ?? [],
         capability: r.entry.capability ?? r.entry.summary,
         kernel: r.entry.kernel ?? false,
+        ...(['skill', 'agent', 'flow', 'command'].includes(r.entry.type) && ruleRelations ? {
+          rule_stats: ruleRelations.ruleStats(r.entry.type as 'skill' | 'agent' | 'flow' | 'command', r.entry.name || r.entry.path),
+        } : {}),
         provenance: {
           graph: (r.entry as ProvenancedEntry).indexGraph ?? null,
           scope: (r.entry as ProvenancedEntry).indexScope ?? null,
@@ -2191,6 +2196,7 @@ export async function showArtifact(
           console.error(`Error reading ${corpusMatch.path}: ${e.message ?? String(err)}`);
           process.exit(1);
         }
+        const localPin = corpusMatch.type === 'rule' ? (await import('../rules/pin-state.js')).rulePinState(cwd, aiwgRoot).rules.find(rule => rule.path === corpusMatch.path) : undefined;
         const installed = await isCorpusBundleInstalled(
           cwd, aiwgRoot, corpusMatch.bundleKind, corpusMatch.bundleId,
         );
@@ -2210,6 +2216,7 @@ export async function showArtifact(
             title: needle,
             kernel: false,
             uninstalled: !installed,
+            ...(localPin ? { local_pin: localPin } : {}),
             hint: installHint,
             content,
           }, null, 2));
@@ -2227,6 +2234,7 @@ export async function showArtifact(
           '',
         ].join('\n');
         process.stdout.write(banner);
+        if (localPin) process.stdout.write(`Pinned locally: kernel (canonical ${localPin.canonical_activation}; ${localPin.matches.map(match => match.source).join(', ')}).\n`);
         process.stdout.write(content);
         if (!content.endsWith('\n')) process.stdout.write('\n');
         if (bindings.text) process.stdout.write(bindings.text);
@@ -2314,6 +2322,7 @@ export async function showArtifact(
     }
   }
 
+  const localPin = entry.type === 'rule' ? (await import('../rules/pin-state.js')).rulePinState(cwd, aiwgRoot ?? cwd).rules.find(rule => rule.path === filePath) : undefined;
   const bindings = await showBindings(entries, entry, content, params, async rule => {
     if (resourceSource === 'local') return fs.readFile(resolvePath(rule), 'utf8');
     const { logicalIdFromFirstPartyPath, resolveAiwgResourceBytes } = await import('../resources/resolver.js');
@@ -2358,6 +2367,7 @@ export async function showArtifact(
         : {}),
       ...(providerModels ? { providerModels } : {}),
       ...bindings.fields,
+      ...(localPin ? { local_pin: localPin } : {}),
       content,
     }, null, 2));
     return;
@@ -2370,6 +2380,7 @@ export async function showArtifact(
     const hint = buildRunHint(entry);
     process.stdout.write(`<!-- AIWG: executable skill — run via: ${hint} -->\n`);
   }
+  if (localPin) process.stdout.write(`Pinned locally: kernel (canonical ${localPin.canonical_activation}; ${localPin.matches.map(match => match.source).join(', ')}).\n`);
   process.stdout.write(content);
   if (!content.endsWith('\n')) process.stdout.write('\n');
   if (bindings.text) process.stdout.write(bindings.text);

@@ -4,9 +4,28 @@ export const DEFAULT_RULES_INLINE_BUDGET_TOKENS = 64000;
 export function validateRulesConfig(rules) {
   if (rules === undefined) return [];
   if (rules === null || typeof rules !== 'object' || Array.isArray(rules)) return ['rules: must be an object'];
-  const errors = Object.keys(rules).filter(key => key !== 'inline_budget_tokens').map(key => `rules.${key}: unknown field`);
+  const errors = Object.keys(rules).filter(key => !['inline_budget_tokens', 'always_load', 'pin_groups'].includes(key)).map(key => `rules.${key}: unknown field`);
   if (rules.inline_budget_tokens !== undefined && (!Number.isSafeInteger(rules.inline_budget_tokens) || rules.inline_budget_tokens < 0)) {
     errors.push('rules.inline_budget_tokens: must be a non-negative safe integer');
+  }
+  const strings = value => Array.isArray(value) && value.length > 0 && value.every(id => typeof id === 'string' && id.trim() && !['__proto__', 'prototype', 'constructor'].includes(id));
+  if (rules.pin_groups !== undefined) {
+    if (!rules.pin_groups || typeof rules.pin_groups !== 'object' || Array.isArray(rules.pin_groups)) errors.push('rules.pin_groups: must be an object');
+    else for (const [name, ids] of Object.entries(rules.pin_groups)) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(name) || ['__proto__', 'prototype', 'constructor'].includes(name) || !strings(ids)) errors.push(`rules.pin_groups.${name}: must contain capability ids`);
+    }
+  }
+  if (rules.always_load !== undefined) {
+    if (!Array.isArray(rules.always_load)) errors.push('rules.always_load: must be an array');
+    else for (const selector of rules.always_load) {
+      if (!selector || typeof selector !== 'object' || Array.isArray(selector) || !Object.keys(selector).length) { errors.push('rules.always_load: each selector must be a non-empty object'); continue; }
+      for (const key of Object.keys(selector)) if (!['rules', 'enforcement', 'capabilities', 'group', 'all'].includes(key)) errors.push(`rules.always_load.${key}: unknown selector field`);
+      for (const key of ['rules', 'enforcement', 'capabilities']) if (selector[key] !== undefined && !strings(selector[key])) errors.push(`rules.always_load.${key}: must be a non-empty array of ids`);
+      if (Array.isArray(selector.enforcement) && selector.enforcement.some(tier => !['critical', 'high', 'medium', 'low'].includes(tier))) errors.push('rules.always_load.enforcement: expected critical, high, medium, low');
+      if (selector.group !== undefined && (typeof selector.group !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(selector.group) || ['__proto__', 'prototype', 'constructor'].includes(selector.group))) errors.push('rules.always_load.group: expected a group name');
+      if (selector.all !== undefined && (selector.all !== true || Object.keys(selector).length !== 1)) errors.push('rules.always_load.all: true must be the only selector field');
+      if (selector.group !== undefined && selector.capabilities !== undefined) errors.push('rules.always_load: group and capabilities are mutually exclusive');
+    }
   }
   return errors;
 }

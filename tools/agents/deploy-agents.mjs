@@ -553,6 +553,7 @@ export function parseArgs(args = process.argv.slice(2)) {
     else if (a === '--skills-only') cfg.skillsOnly = true;
     else if (a === '--rules-only') cfg.rulesOnly = true;
     else if (a === '--strict') { cfg.strict = true; cfg.reportOnly = false; }
+    else if (a === '--allow-over-budget') cfg.allowOverBudget = true;
     else if (a === '--report-only') cfg.reportOnly = true;
     else if (a === '--kernel-only') cfg.kernelOnly = true;
     else if (a === '--deploy-behaviors') cfg.deployBehaviors = true;
@@ -1041,6 +1042,7 @@ export async function main() {
     rulesOnly: cfg.rulesOnly,
     strict: cfg.strict,
     reportOnly: cfg.reportOnly,
+    allowOverBudget: cfg.allowOverBudget === true,
     kernelOnly: cfg.kernelOnly,
     filter: cfg.filter,
     filterRole: cfg.filterRole,
