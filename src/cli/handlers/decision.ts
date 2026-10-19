@@ -327,6 +327,7 @@ async function decisionStats(ctx: HandlerContext): Promise<HandlerResult> {
     `  confidence: mean=${group.confidence.mean?.toFixed(2) ?? '-'} min=${group.confidence.min?.toFixed(2) ?? '-'} max=${group.confidence.max?.toFixed(2) ?? '-'} (n=${group.confidence.count})`,
     `  agreement: mean=${group.agreement.mean?.toFixed(2) ?? '-'} escalated=${group.escalatedCalls} passes run=${group.passesRun}`,
     `  jev usage: input=${group.jevUsage.inputTokens} output=${group.jevUsage.outputTokens}`,
+    `  tokens per answered decision=${group.tokensPerAnsweredDecision?.toFixed(2) ?? '-'}`,
     `  estimated LLM tokens avoided=${group.estimatedLlmTokensAvoidedTotal} net savings=${group.netSavingsTokens}`,
   ]);
   return { exitCode: 0, message: [...header, ...lines].join('\n'), rawOutput: true };

@@ -387,6 +387,17 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
     }
     value = n;
   }
+  if (key === 'decision.ask.min_agreement' || key === 'decision.ask.agreement_confidence_floor') {
+    const n = Number(raw);
+    if (!raw.trim() || !Number.isFinite(n) || n < 0 || n > 1) {
+      throw new AiwgError({
+        code: 'ERR_INVALID_VALUE',
+        message: `${key} must be a probability from 0 to 1, got '${raw}'`,
+        exitCode: EXIT_CODES.USAGE,
+      });
+    }
+    value = n;
+  }
 
   // Read-modify-write — preserve unrelated fields. emptyConfig() seeds the
   // base shape when no config file exists yet (e.g. brand-new project).

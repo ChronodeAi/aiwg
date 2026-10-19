@@ -8,7 +8,13 @@ export interface DecisionConfig {
   /** Persistent runtime opt-in; environment overrides project, then user config. */
   enabled?: boolean;
   /** Ask sampling: product default 5 passes, escalating to twice that. */
-  ask?: { passes?: number; escalation_passes?: number };
+  ask?: {
+    passes?: number;
+    escalation_passes?: number;
+    /** Omit to disable agreement acceptance. */
+    min_agreement?: number;
+    agreement_confidence_floor?: number;
+  };
 }
 
 export interface DecisionEnablementOptions {
@@ -38,6 +44,11 @@ export function validateDecisionConfig(value: unknown): string[] {
   }
   if (!sampling.length && ask.escalation_passes !== undefined && ask.escalation_passes < (ask.passes ?? 5)) {
     sampling.push('decision.ask.escalation_passes must be >= decision.ask.passes');
+  }
+  for (const key of ['min_agreement', 'agreement_confidence_floor'] as const) {
+    if (ask[key] !== undefined && (typeof ask[key] !== 'number' || !Number.isFinite(ask[key]) || ask[key]! < 0 || ask[key]! > 1)) {
+      sampling.push(`decision.ask.${key} must be a probability from 0 to 1`);
+    }
   }
   return [...errors, ...sampling];
 }

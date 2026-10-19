@@ -112,7 +112,7 @@ Project `.aiwg/aiwg.config` can opt into independent repeated Jev requests:
 ```json
 {
   "decision": {
-    "ask": { "passes": 10, "escalation_passes": 20 }
+    "ask": { "passes": 10, "escalation_passes": 20, "min_agreement": 0.9 }
   }
 }
 ```
@@ -126,6 +126,18 @@ corresponding project values. MCP `decision-ask` accepts `passes` and
 `escalation_passes` with the same precedence and validation. Programmatic
 `askDecision` callers supply `options.cwd` to load project defaults, or pass
 `passes`/`escalationPasses` directly. Setup verification remains a single pass.
+
+Agreement acceptance is opt-in: omit `min_agreement` to keep confidence-only
+acceptance. With it set, an ask can also answer after at least `passes`
+successful samples when agreement reaches `min_agreement` and mean confidence
+reaches `agreement_confidence_floor` (default 0.55). Both settings accept numbers
+from 0 to 1 and can be written with `aiwg config set --project`, for example
+`aiwg config set --project decision.ask.min_agreement 0.9`. Programmatic inputs
+use `minAgreement` and `agreementConfidenceFloor`. Setting the floor alone does
+not enable the agreement rule. JSON and ledger `answeredBy` identify the rule:
+`confidence`, `agreement`, or null on fallback; confidence takes precedence if
+both qualify. Unanimous votes with mean confidence 0.59 can therefore answer
+under this example policy without lowering the normal threshold of 0.8.
 
 Each pass is a separate request with no retries. Up to four requests run at
 once, in bounded waves. One `--timeout-ms` budget covers credential lookup and
@@ -149,24 +161,25 @@ A round is problematic if agreement or mean confidence is below `--threshold`
 adds requests **up to the total**, retaining the first round's observations.
 A persistently problematic ask returns `status: "fallback"` with
 `reason: "low-agreement"`, `low-confidence`, or the existing error/abstention
-reason. An error or abstention cannot be repaired by later successful passes.
+reason. Under confidence-only acceptance, an error or abstention cannot be
+repaired by later successful passes. Agreement acceptance can recover if enough
+successful samples remain; every successful sample must have confidence.
 The two threshold checks use agreement and mean confidence separately, so an
 answered result's agreement-weighted confidence can be below the threshold.
 
-Calls stop early when failure is mathematically certain even if every remaining
-pass voted for the leading answer with confidence 1, or when an error,
-abstention, or missing confidence makes acceptance impossible. This can stop
-a problematic initial round before its full count; `escalated` records the
-extended budget considered. Successful asks run the entire initial or escalated
-round: an unseen pass could still fail, so early success cannot be guaranteed
-under the any-error rule. `earlyStop` records `certain-failure`, `timeout`, or
-null; `passesRun` counts started passes, including interrupted ones.
+Calls stop early when neither acceptance rule can succeed even if every remaining
+pass votes for the leading answer with confidence 1, considering both the initial
+round and escalation total. This can stop a problematic initial round before its
+full count. `escalated` is true only when at least one pass beyond the initial
+budget actually starts. Successful asks run the entire initial or escalated
+round. `earlyStop` records `certain-failure`, `timeout`, or null; `passesRun`
+counts started passes, including interrupted ones.
 
 `--json` includes `aggregate`: requested/total/run counts, escalation and early
 stop, votes, modal answer, agreement, confidence summary, and each pass's status,
 answer, confidence, probability (yes/no), model, token usage, and latency. Top-level
 usage sums known token counts across all passes; latency covers the whole ask.
-The ledger stores compact pass/confidence summaries, counts, agreement, escalation,
+The ledger stores the agreement policy, answer rule, compact pass/confidence summaries, counts, agreement, escalation,
 early stop, total usage, and total latency. Individual pass answers stay in JSON
 output, keeping the ledger's existing record-size and redaction limits.
 
@@ -177,7 +190,9 @@ aiwg decision stats --group-by escalation --json
 ```
 
 Stats report `hitRate = answered / totalCalls`, mean agreement, escalation count,
-passes run, and token usage. `passes` groups by initial/escalation policy (e.g.
+passes run, and token usage. `tokensPerAnsweredDecision` divides all recorded
+input and output tokens, including fallback costs, by answered calls; it is null
+when no calls answered (shown as `-` in text). `passes` groups by initial/escalation policy (e.g.
 `10/20`), while `escalation` groups by whether the extended budget was considered.
 Legacy ledger entries count as policy `1/1`, with no agreement observation. Use
 these measurements to compare hit rates, latency in history, and token costs

@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import Ajv from 'ajv';
 
 import { main } from '../../../src/config/cli.js';
 import { EXIT_CODES } from '../../../src/cli/errors.js';
@@ -41,6 +42,39 @@ describe('aiwg config get|set --project (#1006)', () => {
   afterEach(() => {
     consoleSpy?.mockRestore();
     rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('sets agreement probabilities as numbers and rejects invalid values without changing config', async () => {
+    for (const [key, value] of [['min_agreement', '0.9'], ['agreement_confidence_floor', '0.55']]) {
+      await main(['set', '--project', `decision.ask.${key}`, value!, '--target', tmp]);
+    }
+    expect(readConfig(tmp)).toMatchObject({ decision: { ask: { min_agreement: 0.9, agreement_confidence_floor: 0.55 } } });
+    const before = readFileSync(join(tmp, '.aiwg/aiwg.config'), 'utf8');
+    for (const key of ['min_agreement', 'agreement_confidence_floor']) {
+      for (const value of ['-0.1', '1.1', 'NaN', 'Infinity', 'true', '', ' ']) {
+        await expect(main(['set', '--project', `decision.ask.${key}`, value, '--target', tmp])).rejects.toThrow(/probability from 0 to 1/);
+        expect(readFileSync(join(tmp, '.aiwg/aiwg.config'), 'utf8')).toBe(before);
+      }
+    }
+    for (const value of ['0', '1']) {
+      await main(['set', '--project', 'decision.ask.min_agreement', value, '--target', tmp]);
+      expect(readConfig(tmp)).toMatchObject({ decision: { ask: { min_agreement: Number(value) } } });
+    }
+  });
+
+  it('validates agreement keys in the editor schema without enabling them by default', () => {
+    const schema = JSON.parse(readFileSync('vscode-extension/schemas/aiwg.config.v1.json', 'utf8'));
+    const ask = schema.properties.decision.properties.ask;
+    const validate = new Ajv().compile(ask);
+    expect(validate({})).toBe(true);
+    expect(ask.properties.min_agreement.default).toBeUndefined();
+    expect(ask.properties.agreement_confidence_floor.default).toBe(0.55);
+    for (const value of [0, 0.55, 0.9, 1]) {
+      expect(validate({ min_agreement: value, agreement_confidence_floor: value })).toBe(true);
+    }
+    for (const key of ['min_agreement', 'agreement_confidence_floor']) {
+      for (const value of [-0.1, 1.1, '0.9', null, true]) expect(validate({ [key]: value })).toBe(false);
+    }
   });
 
   describe('validate --project (#1789)', () => {

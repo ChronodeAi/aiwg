@@ -236,7 +236,7 @@ describe('decisionHandler', () => {
       const statsArgs = ['stats', '--group-by', groupBy, '--json'];
       const stats = await decisionHandler.execute({ args: statsArgs, rawArgs: ['decision', ...statsArgs], cwd: dir, frameworkRoot: process.cwd() });
       expect(stats.exitCode).toBe(0);
-      expect(JSON.parse(stats.message!).groups[0]).toMatchObject({ hitRate: 0, passesRun: 0 });
+      expect(JSON.parse(stats.message!).groups[0]).toMatchObject({ hitRate: 0, passesRun: 0, tokensPerAnsweredDecision: null });
     }
   });
 
@@ -258,6 +258,37 @@ describe('decisionHandler', () => {
       expect(JSON.parse(result.message!)).toMatchObject({ status: 'answered', answer: true, aggregate: { passesRun: count, passesRequested: count } });
       expect(fetchSpy).toHaveBeenCalledTimes(count);
     }
+  });
+
+  it('reports agreement answers and tokens per answered decision by pass policy in JSON and text', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'aiwg-decision-agreement-'));
+    cleanup.push(dir);
+    process.env.XDG_CONFIG_HOME = dir;
+    process.env.AIWG_DECISION_ENABLED = '1';
+    process.env.JEV_API_KEY = 'fixture-token';
+    await mkdir(path.join(dir, '.aiwg'));
+    await writeFile(path.join(dir, '.aiwg/aiwg.config'), JSON.stringify({ decision: { ask: {
+      passes: 10, escalation_passes: 20, min_agreement: 0.9,
+    } } }));
+    fetchSpy!.mockImplementation(async () => new Response(JSON.stringify({ model: 'jev-fixture', answers: { answer: { type: 'noul', noul: 0.41 } },
+      usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 }));
+    const execute = (args: string[]) => decisionHandler.execute({ args, rawArgs: ['decision', ...args], cwd: dir, frameworkRoot: process.cwd() });
+    const result = await execute(['ask', '--question', 'Proceed?', '--yes-no', '--json']);
+    expect(JSON.parse(result.message!)).toMatchObject({ status: 'answered', answer: false, answeredBy: 'agreement',
+      aggregate: { passesRun: 10, escalated: false } });
+    expect(fetchSpy).toHaveBeenCalledTimes(10);
+    // Include a fallback's tokens in the policy's cost per successful answer.
+    fetchSpy!.mockImplementation(async () => new Response(JSON.stringify({ model: 'jev-fixture', answers: { answer: { type: 'noul', noul: 0.5 } },
+      usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 }));
+    const fallback = await execute(['ask', '--question', 'Unclear?', '--yes-no', '--json']);
+    const fallbackPasses = JSON.parse(fallback.message!).aggregate.passesRun;
+    expect(JSON.parse(fallback.message!)).toMatchObject({ status: 'fallback', answeredBy: null });
+    const cost = (10 + fallbackPasses) * 12;
+    const stats = await execute(['stats', '--group-by', 'passes', '--json']);
+    expect(JSON.parse(stats.message!).groups).toEqual([expect.objectContaining({ key: '10/20', hitRate: 0.5, tokensPerAnsweredDecision: cost })]);
+    const text = await execute(['stats', '--group-by', 'passes']);
+    expect(text.message).toContain(`tokens per answered decision=${cost.toFixed(2)}`);
+    expect(fetchSpy).toHaveBeenCalledTimes(10 + fallbackPasses);
   });
 
   it('history and stats read the ledger offline, with --json, filters and --group-by', async () => {
