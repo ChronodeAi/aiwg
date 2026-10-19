@@ -147,7 +147,8 @@ describe('decision ask', () => {
       env: enabledEnv(), adapter: fake.adapter,
     });
     expect(result).toMatchObject({ status: 'fallback', reason: 'low-agreement',
-      aggregate: { escalated: true, earlyStop: 'certain-failure', passesRun: 10, agreementRatio: 0.5 } });
+      aggregate: { escalated: false, earlyStop: 'certain-failure', passesRun: 10, agreementRatio: 0.5 } });
+    expect(fake.evaluate).toHaveBeenCalledTimes(10);
   });
 
   it.each(['abstain', 'error'] as const)('handles a %s without trusting the other passes', async failure => {
@@ -156,7 +157,7 @@ describe('decision ask', () => {
       env: enabledEnv(), adapter: fake.adapter,
     });
     expect(result.status).toBe('fallback');
-    expect(result.aggregate).toMatchObject({ escalated: true, earlyStop: 'certain-failure', passesRun: 4 });
+    expect(result.aggregate).toMatchObject({ escalated: false, earlyStop: 'certain-failure', passesRun: 4 });
     expect(result.aggregate?.passes.some(pass => pass.status === (failure === 'abstain' ? 'abstained' : 'failed'))).toBe(true);
   });
 
@@ -167,6 +168,122 @@ describe('decision ask', () => {
     });
     expect(result).toMatchObject({ status: 'fallback', reason: 'low-confidence',
       aggregate: { escalated: true, passesRun: 4, agreementRatio: 1, confidenceSummary: { mean: 0.75 } } });
+  });
+
+  it.each([0.59, 0.41])('answers unanimous mid-confidence votes (%s) only when agreement is enabled', async probability => {
+    const input = { question: 'Proceed?', mode: { kind: 'yes-no' } as const, passes: 10, escalationPasses: 20 };
+    const disabled = await askDecision(input, { env: enabledEnv(), adapter: new FakeAdapter(probability) });
+    expect(disabled).toMatchObject({ status: 'fallback', answer: null, answeredBy: null });
+    const fake = scripted([probability]);
+    const enabled = await askDecision({ ...input, minAgreement: 0.9 }, { env: enabledEnv(), adapter: fake.adapter });
+    expect(enabled).toMatchObject({ status: 'answered', answer: probability > 0.5, answeredBy: 'agreement',
+      aggregate: { passesRun: 10, escalated: false, agreementRatio: 1, minAgreement: 0.9, agreementConfidenceFloor: 0.55 } });
+    expect(enabled.confidence).toBeCloseTo(0.59);
+    expect(fake.evaluate).toHaveBeenCalledTimes(10);
+  });
+
+  it('prefers the confidence rule when both acceptance paths qualify', async () => {
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 3, minAgreement: 0.9 }, {
+      env: enabledEnv(), adapter: new FakeAdapter(0.93),
+    });
+    expect(result).toMatchObject({ status: 'answered', answeredBy: 'confidence', aggregate: { passesRun: 3 } });
+  });
+
+  it.each(['choices', 'scale'] as const)('uses agreement for mid-confidence %s samples', async kind => {
+    const adapter = new FakeAdapter(0.59);
+    const original = adapter.evaluate.bind(adapter);
+    const evaluate = vi.spyOn(adapter, 'evaluate').mockImplementation(async request => {
+      const result = await original(request);
+      if (kind === 'scale') result.uncertainty!.distribution = { 0: 0.1, 1: 0.1, 2: 0.59, 3: 0.1, 4: 0.11 };
+      return result;
+    });
+    const mode = kind === 'choices' ? { kind, choices: ['alpha', 'beta'] } : { kind, low: 1, high: 5 };
+    const result = await askDecision({ question: 'Pick?', mode, passes: 5, minAgreement: 0.9 }, { env: enabledEnv(), adapter });
+    expect(result).toMatchObject({ status: 'answered', answeredBy: 'agreement', answer: kind === 'choices' ? 'beta' : 3 });
+    expect(evaluate).toHaveBeenCalledTimes(5);
+  });
+
+  it('does not treat missing successful-sample confidence as agreement evidence', async () => {
+    const adapter = new FakeAdapter();
+    const original = adapter.evaluate.bind(adapter);
+    const evaluate = vi.spyOn(adapter, 'evaluate').mockImplementation(async request => ({ ...await original(request), uncertainty: null }));
+    const result = await askDecision({ question: 'Pick?', mode: { kind: 'choices', choices: ['alpha', 'beta'] },
+      passes: 10, escalationPasses: 20, minAgreement: 0.9 }, { env: enabledEnv(), adapter });
+    expect(result).toMatchObject({ status: 'fallback', answeredBy: null,
+      aggregate: { passesRun: 4, escalated: false, earlyStop: 'certain-failure', confidenceSummary: { count: 0, mean: null } } });
+    expect(evaluate).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps split mid-confidence votes on fallback even with agreement enabled', async () => {
+    const fake = scripted([0.59, 0.41]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 10, escalationPasses: 20, minAgreement: 0.9 }, {
+      env: enabledEnv(), adapter: fake.adapter,
+    });
+    expect(result).toMatchObject({ status: 'fallback', answer: null, answeredBy: null, aggregate: { agreementRatio: 0.5 } });
+  });
+
+  it.each([undefined, 0.9])('stops in the first round when both paths are unreachable (minAgreement=%s)', async minAgreement => {
+    const fake = scripted([0.59]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 10, escalationPasses: 20,
+      threshold: 0.99, minAgreement, agreementConfidenceFloor: 0.99 }, { env: enabledEnv(), adapter: fake.adapter });
+    expect(result).toMatchObject({ status: 'fallback', answeredBy: null,
+      aggregate: { passesRun: 4, escalated: false, earlyStop: 'certain-failure' } });
+    expect(fake.evaluate).toHaveBeenCalledTimes(4);
+  });
+
+  it('stops a split vote before the first round finishes when no acceptance path can recover', async () => {
+    const fake = scripted([0.95, 0.05]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 20, escalationPasses: 20, minAgreement: 0.9 }, {
+      env: enabledEnv(), adapter: fake.adapter,
+    });
+    expect(result).toMatchObject({ status: 'fallback', aggregate: { passesRun: 12, escalated: false, earlyStop: 'certain-failure' } });
+    expect(fake.evaluate).toHaveBeenCalledTimes(12);
+  });
+
+  it('allows escalation to recover the agreement path after an abstention, with enough successful passes', async () => {
+    const fake = scripted(['abstain', ...Array(19).fill(0.59)]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 10, escalationPasses: 20, minAgreement: 0.9 }, {
+      env: enabledEnv(), adapter: fake.adapter,
+    });
+    expect(result).toMatchObject({ status: 'answered', answeredBy: 'agreement',
+      aggregate: { passesRun: 20, escalated: true, agreementRatio: 0.95, confidenceSummary: { count: 19, missing: 1 } } });
+    expect(result.probability).toBeCloseTo(0.59);
+    expect(fake.evaluate).toHaveBeenCalledTimes(20);
+  });
+
+  it('requires at least passes successful samples for agreement acceptance', async () => {
+    const fake = scripted(['abstain', 0.59]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 4, escalationPasses: 4, minAgreement: 0.4 }, {
+      env: enabledEnv(), adapter: fake.adapter,
+    });
+    expect(result).toMatchObject({ status: 'fallback', answeredBy: null, aggregate: { passesRun: 4, agreementRatio: 0.5 } });
+  });
+
+  it('does not accept unanimous votes below the agreement confidence floor', async () => {
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 4, escalationPasses: 8, minAgreement: 0.9 }, {
+      env: enabledEnv(), adapter: new FakeAdapter(0.51),
+    });
+    expect(result).toMatchObject({ status: 'fallback', answer: null, answeredBy: null });
+  });
+
+  it('accepts votes exactly at the agreement ratio and confidence floor boundaries', async () => {
+    const fake = scripted([...Array(9).fill(0.55), 0.45]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 10, escalationPasses: 20, minAgreement: 0.9 }, {
+      env: enabledEnv(), adapter: fake.adapter,
+    });
+    expect(result).toMatchObject({ status: 'answered', answeredBy: 'agreement', answer: true,
+      aggregate: { passesRun: 10, escalated: false, agreementRatio: 0.9 } });
+    expect(result.aggregate!.confidenceSummary.mean).toBeCloseTo(0.55);
+    expect(fake.evaluate).toHaveBeenCalledTimes(10);
+  });
+
+  it('escalates when the agreement mean can still recover above a custom floor', async () => {
+    const fake = scripted([0.59, 0.59, 0.95, 0.95]);
+    const result = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 2, escalationPasses: 4,
+      minAgreement: 1, agreementConfidenceFloor: 0.7 }, { env: enabledEnv(), adapter: fake.adapter });
+    expect(result).toMatchObject({ status: 'answered', answeredBy: 'agreement',
+      aggregate: { passesRun: 4, escalated: true, agreementRatio: 1, earlyStop: null } });
+    expect(fake.evaluate).toHaveBeenCalledTimes(4);
   });
 
   it('shares one timeout across waves and aborts in-flight passes', async () => {
@@ -227,11 +344,17 @@ describe('decision ask', () => {
     const defaultResult = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' } }, { cwd, env: enabledEnv(), adapter: defaultFake.adapter });
     expect(defaultResult.aggregate).toMatchObject({ passesRequested: 5, escalationPasses: 10, passesRun: 5, escalated: false });
     expect(defaultFake.evaluate).toHaveBeenCalledTimes(5);
-    const config = { ...emptyConfig(), decision: { ask: { passes: 3, escalation_passes: 6 } } };
+    const config = { ...emptyConfig(), decision: { ask: { passes: 3, escalation_passes: 6, min_agreement: 0.9 } } };
     await writeFile(path.join(cwd, '.aiwg/aiwg.config'), JSON.stringify(config));
     expect((await readAiwgConfigCandidate(cwd))?.decision?.ask?.passes).toBe(3);
     const fromConfig = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' } }, { cwd, env: enabledEnv(), adapter: new FakeAdapter() });
     expect(fromConfig.aggregate).toMatchObject({ passesRequested: 3, passesRun: 3, escalationPasses: 6 });
+    const agreement = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' } }, { cwd, env: enabledEnv(), adapter: new FakeAdapter(0.59) });
+    expect(agreement).toMatchObject({ status: 'answered', answeredBy: 'agreement', aggregate: { passesRun: 3 } });
+    const strictFloor = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, agreementConfidenceFloor: 0.7 }, {
+      cwd, env: enabledEnv(), adapter: new FakeAdapter(0.59),
+    });
+    expect(strictFloor).toMatchObject({ status: 'fallback', answeredBy: null, aggregate: { agreementConfidenceFloor: 0.7 } });
     const overridden = await askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 2, escalationPasses: 4 }, {
       cwd, env: enabledEnv(), adapter: new FakeAdapter(),
     });
@@ -239,12 +362,20 @@ describe('decision ask', () => {
     const verificationFake = scripted([0.93]);
     await setupJev({ token: SECRET, verify: true }, { cwd, configHome: cwd, env: {}, adapter: verificationFake.adapter });
     expect(verificationFake.evaluate).toHaveBeenCalledTimes(1);
-    for (const ask of [{ passes: 0 }, { passes: 1.2 }, { passes: '10' }, { passes: 3, escalation_passes: 2 }, { escalation_passes: 0 }]) {
+    for (const ask of [{ passes: 0 }, { passes: 1.2 }, { passes: '10' }, { passes: 3, escalation_passes: 2 }, { escalation_passes: 0 },
+      { min_agreement: -0.1 }, { min_agreement: 1.1 }, { min_agreement: '0.9' }, { min_agreement: null },
+      { agreement_confidence_floor: -0.1 }, { agreement_confidence_floor: 1.1 }, { agreement_confidence_floor: '0.55' }, { agreement_confidence_floor: null }]) {
       const invalid = { ...config, decision: { ask } };
       await writeFile(path.join(cwd, '.aiwg/aiwg.config'), JSON.stringify(invalid));
       await expect(readAiwgConfigCandidate(cwd)).rejects.toThrow(/decision.ask/);
       await expect(writeAiwgConfig(cwd, invalid as any)).rejects.toThrow(/decision.ask/);
     }
+  });
+
+  it.each([{ minAgreement: -0.1 }, { minAgreement: 1.1 }, { minAgreement: NaN }, { agreementConfidenceFloor: Infinity },
+    { agreementConfidenceFloor: -0.1 }, { agreementConfidenceFloor: 1.1 }])('rejects invalid agreement input %j', async policy => {
+    await expect(askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, ...policy }, { env: enabledEnv(), adapter: new FakeAdapter() }))
+      .rejects.toBeInstanceOf(DecisionAskUsageError);
   });
 
   it.each([{ passes: 0 }, { passes: 2.5 }, { passes: 3, escalationPasses: 2 }, { escalationPasses: NaN }])('rejects invalid sampling input %j', async sampling => {

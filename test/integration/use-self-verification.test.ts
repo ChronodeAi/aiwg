@@ -225,13 +225,15 @@ describe.sequential('aiwg use self-verifying provider deployment (#2069)', () =>
       expect(discovery.total).toBeGreaterThan(0);
       expect(discovery.results[0].provenance.graph).toBe('framework');
     }
-    const fortemiRoot = path.join(
-      homeRoot,
-      '.local', 'share', 'aiwg', 'index', 'fortemi-core', 'framework',
-    );
+    // The framework index is keyed by AIWG root (#3308); this run used exactly one root.
+    const rootsDir = path.join(homeRoot, '.local', 'share', 'aiwg', 'index', 'roots');
+    const rootKeys = readdirSync(rootsDir);
+    expect(rootKeys).toHaveLength(1);
+    const indexRoot = path.join(rootsDir, rootKeys[0]);
+    const fortemiRoot = path.join(indexRoot, 'fortemi-core', 'framework');
     const fortemiManifest = JSON.parse(readFileSync(path.join(fortemiRoot, 'manifest.json'), 'utf8'));
     const frameworkMetadata = JSON.parse(readFileSync(
-      path.join(homeRoot, '.local', 'share', 'aiwg', 'index', 'framework', 'metadata.json'),
+      path.join(indexRoot, 'framework', 'metadata.json'),
       'utf8',
     ));
     expect(existsSync(path.join(fortemiRoot, 'aiwg-fortemi-index-v2.json'))).toBe(true);

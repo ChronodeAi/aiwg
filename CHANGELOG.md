@@ -9,6 +9,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Opt-in decision ask agreement acceptance (`min_agreement`, confidence floor
+  default 0.55), answer-rule telemetry, early stopping when neither rule can
+  succeed, accurate escalation reporting, and tokens per answered decision in
+  stats grouped by pass policy (#3297).
 - Add configurable multi-pass Jev decision validation with escalation, bounded
   concurrency and a shared timeout; CLI/MCP sampling overrides, aggregate JSON,
   ledger agreement telemetry and hit rates grouped by pass policy/escalation.
@@ -41,6 +45,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Key framework indexes, Fortemi caches, fingerprint receipts and graph sidecars by the canonical AIWG package root, so switching installations cannot overwrite another root's capability index; legacy installs rebuild once into their root's directory (#3308).
 - `aiwg show` and `aiwg discover` reconcile the shared framework index with the runtime's sources when a cheap fingerprint (runtime version, Git HEAD, bundle manifests) changes, so skills such as research-complete `induct-research` are found after a runtime update; only one process rebuilds at a time. Installed frameworks are no longer labelled corpus-only, and `induct-research` gains natural-language triggers (#3304).
 - The by-grade index view, stale-queue grade column and corpus snapshot fall back to a reference's frontmatter `grade` when it has no radar sidecar, instead of listing graded papers as Ungraded (#2571).
 - Codex MCP profile launches and logins keep the operator's AIWG configuration directory (`AIWG_CONFIG`) when they switch `HOME` to the profile runtime home, so development installs and channels stay visible inside the profile (#3289).

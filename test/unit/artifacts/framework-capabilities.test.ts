@@ -13,6 +13,7 @@ import { refreshFrameworkCapabilities } from '../../../src/artifacts/framework-c
 import { getFortemiCoreSyncStatus, syncFortemiCoreIndex } from '../../../src/artifacts/fortemi-core-sync.js';
 import { loadFortemiCoreMetadataEntries } from '../../../src/artifacts/fortemi-core-query-adapter.js';
 import { getGraphIndexDir, type ArtifactIndex } from '../../../src/artifacts/types.js';
+import { loadGraphIndexFile } from '../../../src/artifacts/index-reader.js';
 
 const repo = fileURLToPath(new URL('../../../', import.meta.url));
 const research = 'agentic/code/frameworks/research-complete';
@@ -132,7 +133,7 @@ describe('framework capabilities outside provider directories (#3304)', () => {
 
   it('includes every canonical framework skill in a fresh runtime index', async () => {
     await buildIndex(repo, { graph: 'framework', quiet: true });
-    const entries = index().entries;
+    const entries = loadGraphIndexFile<ArtifactIndex>(repo, 'metadata.json', 'framework')!.entries;
     const frameworks = 'agentic/code/frameworks';
     for (const framework of fs.readdirSync(path.join(repo, frameworks))) {
       const skills = path.join(frameworks, framework, 'skills');
@@ -310,5 +311,125 @@ describe('framework capabilities outside provider directories (#3304)', () => {
     expect(after.exportChecksum).not.toBe(before.exportChecksum);
     await refreshFrameworkCapabilities(root);
     expect(getFortemiCoreSyncStatus(project, 'framework').generatedAt).toBe(after.generatedAt);
+  });
+});
+
+describe('root-isolated framework indexes (#3308)', () => {
+  function secondRoot(): string {
+    const other = path.join(tmp, 'edge');
+    fs.cpSync(root, other, { recursive: true });
+    fs.writeFileSync(path.join(other, `${research}/skills/corpus-health-audit/SKILL.md`),
+      '---\nname: corpus-health-audit\ndescription: Audit paper corpus health.\n---\n# Edge health audit\n');
+    return other;
+  }
+
+  it('keeps indexes, caches, receipts, and graph sidecars separate across alternating roots', async () => {
+    const other = secondRoot();
+    const builder = vi.spyOn(indexBuilder, 'buildIndex');
+    const sync = vi.spyOn(fortemiSync, 'syncFortemiCoreIndex');
+    const snapshots = new Map<string, string>();
+    for (const selected of [root, other, root, other, root]) {
+      vi.stubEnv('AIWG_ROOT', selected);
+      await refreshFrameworkCapabilities(selected);
+      const dir = getGraphIndexDir(project, 'framework');
+      expect(dir).toBe(getGraphIndexDir(selected, 'framework'));
+      const receipt = fs.readFileSync(path.join(dir, 'capability-sources.json'), 'utf8');
+      if (snapshots.has(selected)) expect(receipt).toBe(snapshots.get(selected));
+      else snapshots.set(selected, receipt);
+      // Relationship and other graph sidecars use the graph directory too.
+      fs.writeFileSync(path.join(dir, 'relationships.json'), JSON.stringify({ root: selected }));
+      expect(loadGraphIndexFile(project, 'relationships.json', 'framework')).toEqual({ root: selected });
+      expect(getFortemiCoreSyncStatus(project, 'framework').location).toContain(path.dirname(dir));
+      log.mockClear();
+      await showArtifact(project, { name: 'corpus-health-audit', typeFilter: ['skill'], backend: 'fortemi-core', json: true });
+      expect(json().path).toBe(path.join(selected, `${research}/skills/corpus-health-audit/SKILL.md`));
+      expect(json().content).toContain(selected === other ? 'Edge health audit' : 'Corpus Health Audit');
+    }
+    expect(builder).toHaveBeenCalledTimes(2);
+    expect(sync).toHaveBeenCalledTimes(2);
+    expect(getGraphIndexDir(root, 'framework')).not.toBe(getGraphIndexDir(other, 'framework'));
+    expect(loadGraphIndexFile(root, 'relationships.json', 'framework')).toEqual({ root });
+  });
+
+  it('canonicalizes symlinked roots and bundled subdirectories without another rebuild', async () => {
+    const alias = path.join(tmp, 'runtime-alias');
+    fs.symlinkSync(root, alias, 'dir');
+    const bundle = path.join(alias, research);
+    await refreshFrameworkCapabilities(root);
+    const builder = vi.spyOn(indexBuilder, 'buildIndex');
+    vi.stubEnv('AIWG_ROOT', alias);
+    for (const candidate of [alias, bundle, project]) {
+      expect(getGraphIndexDir(candidate, 'framework')).toBe(getGraphIndexDir(root, 'framework'));
+      expect(getFortemiCoreSyncStatus(candidate, 'framework').location)
+        .toBe(getFortemiCoreSyncStatus(root, 'framework').location);
+      await refreshFrameworkCapabilities(candidate);
+    }
+    vi.stubEnv('AIWG_ROOT', bundle);
+    expect(getGraphIndexDir(project, 'framework')).toBe(getGraphIndexDir(root, 'framework'));
+    log.mockClear();
+    await showArtifact(project, { name: 'corpus-health-audit', typeFilter: ['skill'], json: true });
+    expect(json().path).toBe(path.join(root, `${research}/skills/corpus-health-audit/SKILL.md`));
+    expect(builder).not.toHaveBeenCalled();
+  });
+
+  it('selects the executing package from a project without AIWG_ROOT and honors explicit corpus roots', async () => {
+    vi.stubEnv('AIWG_ROOT', undefined);
+    expect(getGraphIndexDir(project, 'framework')).toBe(getGraphIndexDir(repo, 'framework'));
+    expect(getGraphIndexDir(root, 'framework')).not.toBe(getGraphIndexDir(project, 'framework'));
+    const other = secondRoot();
+    for (const selected of [root, other, root, other]) {
+      log.mockClear();
+      await showArtifact(selected, { name: 'corpus-health-audit', typeFilter: ['skill'], json: true });
+      expect(json().path).toBe(path.join(selected, `${research}/skills/corpus-health-audit/SKILL.md`));
+      log.mockClear();
+      await discoverCapability(selected, { phrase: 'corpus health audit', json: true });
+      expect(json().results).toHaveLength(1);
+      expect(json().results[0].path).toBe(path.join(selected, `${research}/skills/corpus-health-audit/SKILL.md`));
+    }
+  });
+
+  it('does not block another root on an existing root lock, even on a cold start', async () => {
+    const other = secondRoot();
+    const release = await acquireDirectoryLock(path.join(getGraphIndexDir(root, 'framework'), 'capability-refresh.lock'));
+    try {
+      await refreshFrameworkCapabilities(other);
+      expect(loadGraphIndexFile<ArtifactIndex>(other, 'metadata.json', 'framework')?.entries).toBeDefined();
+      expect(loadGraphIndexFile(root, 'metadata.json', 'framework')).toBeNull();
+    } finally { await release(); }
+  });
+
+  it('migrates a legacy shared index once without reading or replacing its foreign paths', async () => {
+    const legacy = path.join(process.env.XDG_DATA_HOME!, 'aiwg/index/framework');
+    const legacyCache = path.join(process.env.XDG_DATA_HOME!, 'aiwg/index/fortemi-core/framework');
+    for (const dir of [legacy, legacyCache]) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'metadata.json'), '{"foreign":"/previous/root"}');
+      fs.writeFileSync(path.join(dir, 'capability-sources.json'), '{"source":"legacy"}');
+    }
+    const builder = vi.spyOn(indexBuilder, 'buildIndex');
+    const sync = vi.spyOn(fortemiSync, 'syncFortemiCoreIndex');
+    for (let i = 0; i < 3; i++) {
+      await refreshFrameworkCapabilities(root);
+      await showArtifact(project, { name: 'corpus-health-audit', typeFilter: ['skill'], json: true });
+      await discoverCapability(project, { phrase: 'corpus health audit', json: true });
+    }
+    expect(builder).toHaveBeenCalledTimes(1);
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(path.join(legacy, 'metadata.json'), 'utf8')).toBe('{"foreign":"/previous/root"}');
+    expect(fs.readFileSync(path.join(legacyCache, 'capability-sources.json'), 'utf8')).toBe('{"source":"legacy"}');
+  });
+
+  it('updates one root fingerprint without rebuilding the other root', async () => {
+    const other = secondRoot();
+    await Promise.all([refreshFrameworkCapabilities(root), refreshFrameworkCapabilities(other)]);
+    const before = getGraphIndexDir(root, 'framework');
+    const otherReceipt = fs.readFileSync(path.join(getGraphIndexDir(other, 'framework'), 'capability-sources.json'), 'utf8');
+    const builder = vi.spyOn(indexBuilder, 'buildIndex');
+    write('package.json', '{"name":"aiwg","version":"1.0.1"}');
+    await refreshFrameworkCapabilities(root);
+    await refreshFrameworkCapabilities(other);
+    expect(builder).toHaveBeenCalledTimes(1);
+    expect(getGraphIndexDir(root, 'framework')).toBe(before);
+    expect(fs.readFileSync(path.join(getGraphIndexDir(other, 'framework'), 'capability-sources.json'), 'utf8')).toBe(otherReceipt);
   });
 });

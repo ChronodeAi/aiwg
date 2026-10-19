@@ -13,6 +13,7 @@ import fs from 'fs';
 import { validateIndexGraphOverrides, type IndexBuiltinGraphOverride } from '../config/index-graph-overrides.js';
 import os from 'node:os';
 import path from 'node:path';
+import { getFrameworkIndexBaseDir } from './framework-index-paths.js';
 import { load as loadYaml } from 'js-yaml';
 import type { OperationalStateProvenance } from './operational-state.js';
 import type { StateTransferProjection } from './state-transfer.js';
@@ -1176,8 +1177,9 @@ let yamlIndexDeprecationWarned = false;
  * @returns Absolute path to the graph's index directory
  */
 export function getGraphIndexDir(cwd: string, graphType: GraphType): string {
+  if (graphType === 'framework') return path.join(getFrameworkIndexBaseDir(cwd), graphType);
   const config = GRAPH_CONFIGS[graphType];
-  if (graphType === 'framework' || config?.shared) {
+  if (config?.shared) {
     // Shared across projects — XDG data directory
     const xdgData = process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local', 'share');
     return path.join(xdgData, 'aiwg', 'index', graphType);

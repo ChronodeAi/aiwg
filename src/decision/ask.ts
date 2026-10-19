@@ -38,6 +38,8 @@ export interface DecisionAskInput {
   timeoutMs?: number;
   passes?: number;
   escalationPasses?: number;
+  minAgreement?: number;
+  agreementConfidenceFloor?: number;
 }
 
 export interface DecisionAskPass {
@@ -65,6 +67,8 @@ export interface DecisionAskAggregate {
   answer: string | boolean | number | null;
   confidenceSummary: { count: number; missing: number; mean: number | null; min: number | null; max: number | null };
   passes: DecisionAskPass[];
+  minAgreement?: number | null;
+  agreementConfidenceFloor?: number;
 }
 
 export interface DecisionAskResult {
@@ -79,6 +83,8 @@ export interface DecisionAskResult {
   usage: { inputTokens: number | null; outputTokens: number | null } | null;
   latencyMs: number;
   aggregate?: DecisionAskAggregate;
+  /** Absent on legacy results; null on fallback. */
+  answeredBy?: 'confidence' | 'agreement' | null;
 }
 
 export interface DecisionAskRuntimeOptions extends JevCredentialOptions {
@@ -149,6 +155,12 @@ export function validateDecisionAskInput(input: DecisionAskInput): void {
   const threshold = input.threshold ?? 0.8;
   if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
     usageError('invalid-threshold', '--threshold must be a probability from 0 to 1');
+  }
+  for (const key of ['minAgreement', 'agreementConfidenceFloor'] as const) {
+    const value = input[key];
+    if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1)) {
+      usageError('invalid-agreement-policy', `${key} must be a probability from 0 to 1`);
+    }
   }
   const timeoutMs = input.timeoutMs ?? 15_000;
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) usageError('invalid-timeout', '--timeout-ms must be a positive integer');
@@ -370,7 +382,9 @@ export async function askDecision(input: DecisionAskInput, options: DecisionAskR
     try { config = await readAiwgConfigCandidate(options.cwd); }
     catch (error) { usageError('invalid-config', error instanceof Error ? error.message : 'Invalid project config'); }
     input = { ...input, passes: input.passes ?? config?.decision?.ask?.passes,
-      escalationPasses: input.escalationPasses ?? config?.decision?.ask?.escalation_passes };
+      escalationPasses: input.escalationPasses ?? config?.decision?.ask?.escalation_passes,
+      minAgreement: input.minAgreement ?? config?.decision?.ask?.min_agreement,
+      agreementConfidenceFloor: input.agreementConfidenceFloor ?? config?.decision?.ask?.agreement_confidence_floor };
   }
   validateDecisionAskInput(input);
   const started = options.now?.() ?? Date.now();
@@ -378,6 +392,8 @@ export async function askDecision(input: DecisionAskInput, options: DecisionAskR
   const passesRequested = input.passes ?? DEFAULT_DECISION_PASSES;
   const escalationPasses = input.escalationPasses ?? defaultEscalationPasses(passesRequested);
   const threshold = input.threshold ?? 0.8;
+  const minAgreement = input.minAgreement;
+  const agreementConfidenceFloor = input.agreementConfidenceFloor ?? 0.55;
   const timeoutMs = input.timeoutMs ?? 15_000;
   const passes: DecisionAskPass[] = [];
   let escalated = false;
@@ -392,6 +408,7 @@ export async function askDecision(input: DecisionAskInput, options: DecisionAskR
     return {
       algorithm: 'majority-v1', semantics: 'stability-signal-not-correctness',
       passesRequested, escalationPasses, passesRun: passes.length, escalated, earlyStop,
+      minAgreement: minAgreement ?? null, agreementConfidenceFloor,
       // Failed/abstaining passes have no vote but remain in the denominator.
       agreementRatio: passes.length ? Math.max(0, ...Object.values(modal.votes)) / passes.length : 0,
       votes: modal.votes,
@@ -403,12 +420,25 @@ export async function askDecision(input: DecisionAskInput, options: DecisionAskR
       passes: [...passes],
     };
   };
+  // Sampling agreement is stability evidence, not calibrated correctness.
+  // Confidence acceptance retains the original requirement that every pass succeeds.
+  const answeredBy = (summary: DecisionAskAggregate): DecisionAskResult['answeredBy'] => {
+    const successful = passes.filter(pass => pass.status === 'succeeded');
+    if (successful.length < passesRequested || summary.answer === null) return null;
+    const mean = summary.confidenceSummary.mean;
+    if (successful.length === passes.length && !summary.confidenceSummary.missing
+      && summary.agreementRatio >= threshold && mean !== null && mean >= threshold) return 'confidence';
+    if (minAgreement !== undefined && summary.agreementRatio >= minAgreement
+      && summary.confidenceSummary.count === successful.length && mean !== null
+      && mean + Number.EPSILON >= agreementConfidenceFloor) return 'agreement';
+    return null;
+  };
   const problem = (summary: DecisionAskAggregate): string | null => {
+    if (answeredBy(summary)) return null;
     const failed = passes.find(pass => pass.status !== 'succeeded');
     if (failed) return failed.reason;
     if (summary.agreementRatio < threshold) return 'low-agreement';
-    if (summary.confidenceSummary.missing || summary.confidenceSummary.mean === null || summary.confidenceSummary.mean < threshold) return 'low-confidence';
-    return null;
+    return 'low-confidence';
   };
   const finish = (forcedReason?: string): DecisionAskResult => {
     const summary = aggregate();
@@ -425,9 +455,10 @@ export async function askDecision(input: DecisionAskInput, options: DecisionAskR
       schema: 'aiwg-decision-ask/v1' as const, status: 'answered' as const, answer: summary.answer,
       confidence: summary.agreementRatio * summary.confidenceSummary.mean!, fallback: null, reason: 'none',
       model, usage: combinedUsage, latencyMs,
-      ...(input.mode.kind === 'yes-no' ? { probability: passes.reduce((sum, pass) => sum + (pass.probability ?? 0), 0) / passes.length } : {}),
+      ...(input.mode.kind === 'yes-no' ? { probability: passes.reduce((sum, pass) => sum + (pass.probability ?? 0), 0)
+        / passes.filter(pass => pass.status === 'succeeded').length } : {}),
     };
-    return { ...result, model, usage: combinedUsage, aggregate: summary };
+    return { ...result, model, usage: combinedUsage, aggregate: summary, answeredBy: reason ? null : answeredBy(summary) };
   };
   let credential: Awaited<ReturnType<typeof lookupJevCredential>>;
   try { credential = await lookupJevCredential(options); }
@@ -477,24 +508,33 @@ export async function askDecision(input: DecisionAskInput, options: DecisionAskR
   const certainFailure = (total: number): boolean => {
     const summary = aggregate();
     const remaining = total - passes.length;
-    if (passes.some(pass => pass.status !== 'succeeded' || pass.confidence === null)) return true;
     const bestVotes = Math.max(0, ...Object.values(summary.votes));
-    const confidenceSum = passes.reduce((sum, pass) => sum + (pass.confidence ?? 0), 0);
-    return (bestVotes + remaining) / total < threshold || (confidenceSum + remaining) / total < threshold;
+    const successful = passes.filter(pass => pass.status === 'succeeded');
+    const confidenceSum = successful.reduce((sum, pass) => sum + (pass.confidence ?? 0), 0);
+    // Give every unspent pass a matching vote and perfect confidence. Stop only
+    // when even that best case cannot answer, allowing roundoff at the boundary.
+    const bestAgreement = (bestVotes + remaining) / total;
+    const knownConfidence = successful.every(pass => pass.confidence !== null);
+    const confidenceReachable = successful.length === passes.length && knownConfidence
+      && bestAgreement + 1e-12 >= threshold && (confidenceSum + remaining) / total + 1e-12 >= threshold;
+    const agreementReachable = minAgreement !== undefined && knownConfidence
+      && successful.length + remaining >= passesRequested
+      && bestAgreement + 1e-12 >= minAgreement
+      && (confidenceSum + remaining) / (successful.length + remaining) + 1e-12 >= agreementConfidenceFloor;
+    return !confidenceReachable && !agreementReachable;
   };
   try {
     let target = passesRequested;
     while (passes.length < target) {
       if (controller.signal.aborted || remainingMs() <= 0) { earlyStop = 'timeout'; return finish('timeout'); }
       const offset = passes.length;
+      if (offset >= passesRequested) escalated = true;
       passes.push(...await Promise.all(Array.from({ length: Math.min(4, target - offset) }, (_, index) => runPass(offset + index))));
       if (controller.signal.aborted || remainingMs() <= 0) { earlyStop = 'timeout'; return finish('timeout'); }
       if (passes.length >= passesRequested && problem(aggregate()) && escalationPasses > passesRequested) {
-        escalated = true;
         target = escalationPasses;
       }
-      if (passes.length < target && certainFailure(escalationPasses)) {
-        if (escalationPasses > passesRequested) escalated = true;
+      if (passes.length < target && (passes.length >= passesRequested || certainFailure(passesRequested)) && certainFailure(escalationPasses)) {
         earlyStop = 'certain-failure';
         return finish();
       }

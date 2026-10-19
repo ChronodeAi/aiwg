@@ -4,26 +4,12 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { getGraphIndexDir } from './types.js';
 import { acquireDirectoryLock, DirectoryLockContentionError } from './prebuilt-build-lock.js';
+import { FRAMEWORK_CORPUS_KINDS as CORPUS_KINDS, resolveFrameworkCorpusRoot } from './framework-index-paths.js';
 
-const CORPUS_KINDS = ['frameworks', 'addons', 'extensions', 'agents', 'behaviors'] as const;
+export { resolveFrameworkCorpusRoot } from './framework-index-paths.js';
 
 function readText(file: string): string {
   try { return fs.readFileSync(file, 'utf8'); } catch { return ''; }
-}
-
-/** Only an AIWG package/repository owns the shared corpus, never a project or bundle. */
-export function resolveFrameworkCorpusRoot(candidate: string): string | null {
-  let root = path.resolve(candidate);
-  while (true) {
-    try {
-      const pkg = JSON.parse(readText(path.join(root, 'package.json')));
-      if (pkg.name === 'aiwg' && CORPUS_KINDS.every(kind =>
-        fs.statSync(path.join(root, 'agentic/code', kind)).isDirectory())) return root;
-    } catch { /* keep looking for the owning package */ }
-    const parent = path.dirname(root);
-    if (parent === root) return null;
-    root = parent;
-  }
 }
 
 /** Resolve HEAD without spawning git, including worktrees and packed refs. */

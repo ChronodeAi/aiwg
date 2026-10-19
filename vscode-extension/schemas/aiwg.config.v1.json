@@ -14,7 +14,9 @@
           "type": "object",
           "properties": {
             "passes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "default": 5 },
-            "escalation_passes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "Total passes after a problematic first round; must be >= passes (validated by the loader). Defaults to twice passes (10 for the default of 5)." }
+            "escalation_passes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "Total passes after a problematic first round; must be >= passes (validated by the loader). Defaults to twice passes (10 for the default of 5)." },
+            "min_agreement": { "type": "number", "minimum": 0, "maximum": 1, "description": "Opt in to agreement acceptance after at least passes successful samples. Omit to retain confidence-only acceptance." },
+            "agreement_confidence_floor": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.55, "description": "Minimum mean confidence for agreement acceptance; has no effect unless min_agreement is set." }
           }
         }
       }

@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { getFrameworkIndexBaseDir } from '../../../src/artifacts/framework-index-paths.js';
 import { parseFrontmatter, extractMentions, extractMarkdownLinks, buildIndex, normalizeNamedCaptures, buildFilenameMetadataEntry } from '../../../src/artifacts/index-builder.js';
 import { INDEX_DIR, GRAPH_CONFIGS, loadUserGraphConfigs, loadModuleGraphConfigs, loadGlobalGraphConfigs, normalizeEdge, normalizeEdges, getGraphIndexDir } from '../../../src/artifacts/types.js';
 import type { TypedEdge, DependencyGraph } from '../../../src/artifacts/types.js';
@@ -411,7 +412,10 @@ describe('getGraphIndexDir', () => {
     delete process.env.XDG_DATA_HOME;
 
     expect(getGraphIndexDir(tmpDir, 'framework')).toBe(
-      path.join(os.homedir(), '.local', 'share', 'aiwg', 'index', 'framework'),
+      path.join(getFrameworkIndexBaseDir(tmpDir), 'framework'),
+    );
+    expect(getFrameworkIndexBaseDir(tmpDir)).toMatch(
+      new RegExp(`^${path.join(os.homedir(), '.local', 'share', 'aiwg', 'index', 'roots')}/[a-f0-9]{64}$`),
     );
     expect(getGraphIndexDir(tmpDir, 'framework')).not.toContain('undefined');
   });
@@ -420,8 +424,9 @@ describe('getGraphIndexDir', () => {
     process.env.XDG_DATA_HOME = path.join(tmpDir, 'xdg-data');
 
     expect(getGraphIndexDir(tmpDir, 'framework')).toBe(
-      path.join(tmpDir, 'xdg-data', 'aiwg', 'index', 'framework'),
+      path.join(getFrameworkIndexBaseDir(tmpDir), 'framework'),
     );
+    expect(getFrameworkIndexBaseDir(tmpDir)).toContain(path.join(tmpDir, 'xdg-data', 'aiwg', 'index', 'roots'));
   });
 });
 
@@ -815,6 +820,7 @@ description: Preserve forensic evidence.
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
+      const indexDir = getGraphIndexDir(tmpDir, 'framework');
       try {
         await buildIndex(tmpDir, { graph: 'framework', force: true, explicit: true });
       } finally {
@@ -824,7 +830,6 @@ description: Preserve forensic evidence.
         else process.env.XDG_DATA_HOME = oldXdgData;
       }
 
-      const indexDir = path.join(tmpDir, 'xdg', 'aiwg', 'index', 'framework');
       const deps = JSON.parse(fs.readFileSync(path.join(indexDir, 'dependencies.json'), 'utf-8')) as DependencyGraph;
       const skillPath = 'agentic/code/frameworks/forensics-complete/skills/evidence-preservation/SKILL.md';
       const rulePath = 'agentic/code/frameworks/forensics-complete/rules/evidence-integrity.md';
