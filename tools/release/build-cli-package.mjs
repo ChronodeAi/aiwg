@@ -50,6 +50,7 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     path.join(repoRoot, 'dist', 'src', 'api', 'index.d.ts'),
     path.join(repoRoot, 'dist', 'src', 'resources', 'index.js'),
     path.join(repoRoot, 'dist', 'src', 'resources', 'index.d.ts'),
+    path.join(repoRoot, 'dist', 'src', 'artifacts', 'index-worker.mjs'),
     path.join(repoRoot, 'schemas', 'decision', 'DecisionJob.v1.schema.json'),
     path.join(repoRoot, 'schemas', 'dataset', 'dataset-contracts.v1.schema.json'),
     path.join(repoRoot, 'schemas', 'dataset', 'dataset-schema-governance.v1.schema.json'),
