@@ -20,7 +20,7 @@ import {
 } from '../../../src/artifacts/index-builder.js';
 import { discoverCapability } from '../../../src/artifacts/query-engine.js';
 import type { ArtifactIndex } from '../../../src/artifacts/types.js';
-import { GRAPH_CONFIGS, OPERATIONAL_DISCOVERY_TYPES } from '../../../src/artifacts/types.js';
+import { getGraphIndexDir, GRAPH_CONFIGS, OPERATIONAL_DISCOVERY_TYPES } from '../../../src/artifacts/types.js';
 
 let tmpRoot: string;
 let cwd: string;
@@ -261,13 +261,8 @@ describe('buildIndex → type inference', () => {
     consoleSpy.mockRestore();
     consoleErrSpy.mockRestore();
 
-    const indexDir = path.join(process.env.XDG_DATA_HOME as string, 'aiwg', 'index', 'framework');
+    const indexDir = getGraphIndexDir(cwd, 'framework');
     const metadataPath = path.join(indexDir, 'metadata.json');
-    if (!fs.existsSync(metadataPath)) {
-      // Test environment may have a different writer; skip the rest
-      // gracefully rather than failing on env drift.
-      return;
-    }
     const idx: ArtifactIndex = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
     const byPath = new Map<string, string>();
     for (const e of Object.values(idx.entries)) {

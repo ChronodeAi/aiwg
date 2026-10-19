@@ -4420,8 +4420,16 @@ The index uses a **multi-graph architecture** with three built-in graph types pl
 | ---------------- | ------------------------------------------------------- | ---------------------------------- | ---------------------------- |
 | `project`        | configured AIWG artifact root (virtualized as `.aiwg/`) | `<artifact-root>/.index/project/`  | Yes                          |
 | `codebase`       | JS/TS: `src/`, `test/`, `tools/`; Python: detected package, `tests/`, `scripts/` roots | `<artifact-root>/.index/codebase/` | Yes (skipped if dirs absent) |
-| `framework`      | `agentic/code/`, `docs/`                                | `.aiwg/.index/framework/`          | No (use `--graph framework`) |
+| `framework`      | `agentic/code/`, `docs/`                                | `$XDG_DATA_HOME/aiwg/index/roots/<root-key>/framework/` | No (use `--graph framework`) |
 | _(user-defined)_ | configured in the artifact root's `aiwg.config` (#1491) | `<artifact-root>/.index/<name>/`   | Configurable                 |
+
+The framework root key is the SHA-256 of the canonical AIWG package path.
+Its fingerprint receipt and graph sidecars stay beside the index; its Fortemi
+cache lives in `roots/<root-key>/fortemi-core/framework/`. Projects using the
+same package share these files, while separate installations and worktrees
+keep separate files. Source updates reconcile within the existing key. Legacy
+unkeyed indexes are left in place, with one rebuild into the keyed directory.
+`XDG_DATA_HOME` defaults to `~/.local/share`.
 
 The artifact root defaults to `<project>/.aiwg`, but `AIWG_ARTIFACTS_PATH` or
 `.aiwg-location` may point it elsewhere or rename it. Index entries for project

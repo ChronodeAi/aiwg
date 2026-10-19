@@ -130,6 +130,7 @@ describe('aiwg use addon requiring aiwg-utils across providers (#3035)', () => {
     const { USER_SCOPE_PATHS } = await import('../../../../src/cli/scope-resolver.js');
     const { recordUserDeploy, userRegistryPath } = await import('../../../../src/config/user-registry.js');
     const { resolveIndexDir } = await import('../../../../src/artifacts/index-reader.js');
+    const { getFrameworkIndexBaseDir } = await import('../../../../src/artifacts/framework-index-paths.js');
     const { removeHandler } = await import('../../../../src/cli/handlers/subcommands.js');
     const home = process.env.HOME!;
     const expected = {
@@ -155,7 +156,50 @@ describe('aiwg use addon requiring aiwg-utils across providers (#3035)', () => {
       expect(result.message).toContain(join(roots.user, 'legacy'));
     }
     expect(userRegistryPath()).toBe(join(home, '.aiwg/installed.json'));
-    expect(resolveIndexDir(project, 'framework')).toBe(join(process.env.XDG_DATA_HOME!, 'aiwg/index/framework'));
+    expect(resolveIndexDir(project, 'framework')).toBe(join(getFrameworkIndexBaseDir(project), 'framework'));
+  });
+
+  it.each(['local', 'fortemi-core'] as const)('alternates use/show/discover between two package roots in one HOME (%s)', { timeout: 60000 }, async backend => {
+    vi.resetModules();
+    const { useHandler } = await import('../../../../src/cli/handlers/use.js');
+    const { showArtifact, discoverCapability } = await import('../../../../src/artifacts/query-engine.js');
+    const { getGraphIndexDir } = await import('../../../../src/artifacts/types.js');
+    const { getFortemiCoreSyncStatus } = await import('../../../../src/artifacts/fortemi-core-sync.js');
+    const roots = [join(tempRoot, 'runtime'), join(tempRoot, 'edge')];
+    for (const root of roots) {
+      writeSources(root);
+      write(root, 'package.json', '{"name":"aiwg","version":"1.0.0"}');
+      for (const kind of ['extensions', 'agents', 'behaviors']) mkdirSync(join(root, 'agentic/code', kind), { recursive: true });
+      write(root, 'agentic/code/addons/decision-engine/skills/de-check/SKILL.md',
+        `---\nname: de-check\ndescription: synthetic decision check\nplatforms: [all]\n---\nDecision check from ${root}.\n`);
+    }
+    await writeAiwgConfig(project, emptyConfig(['claude']));
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const snapshots = new Map<string, string>();
+    try {
+      for (const root of [...roots, ...roots]) {
+        vi.stubEnv('AIWG_ROOT', root);
+        const args = ['decision-engine', '--provider', 'claude', '--target', project];
+        const result = await useHandler.execute({ cwd: project, frameworkRoot: root, rawArgs: ['use', ...args], args });
+        expect(result.exitCode, result.message).toBe(0);
+        output.mockClear();
+        await showArtifact(project, { name: 'de-check', typeFilter: ['skill'], backend, json: true });
+        const shown = JSON.parse(output.mock.calls.map(call => call[0]).join(''));
+        expect(shown.path).toBe(join(root, 'agentic/code/addons/decision-engine/skills/de-check/SKILL.md'));
+        expect(shown.content).toContain(`Decision check from ${root}.`);
+        output.mockClear();
+        await discoverCapability(project, { phrase: 'synthetic decision check', backend, json: true });
+        const found = JSON.parse(output.mock.calls.map(call => call[0]).join(''));
+        expect(found.results.length).toBeGreaterThan(0);
+        expect(found.results.every((entry: { path: string }) => entry.path.startsWith(`${root}/`))).toBe(true);
+        const dir = getGraphIndexDir(project, 'framework');
+        const metadata = readFileSync(join(dir, 'metadata.json'), 'utf8');
+        if (snapshots.has(root)) expect(metadata).toBe(snapshots.get(root));
+        else snapshots.set(root, metadata);
+        expect(getFortemiCoreSyncStatus(project, 'framework').stale).toBe(false);
+      }
+      expect(getGraphIndexDir(roots[0], 'framework')).not.toBe(getGraphIndexDir(roots[1], 'framework'));
+    } finally { output.mockRestore(); }
   });
 
   for (const provider of PROVIDERS) {
