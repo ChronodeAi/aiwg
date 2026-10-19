@@ -20,6 +20,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - `decision.enabled` in project or user config enables the decision runtime
   persistently; `AIWG_DECISION_ENABLED` still overrides, and status reports
   `enabledSource` (#3275).
+- Operator rule pins: project/user selectors, reusable capability groups, `aiwg rules` commands, six-provider always-loaded projection, budget previews, and local pin visibility (#3295).
 
 - Session import size limits are configurable: `sessions.import.max_record_bytes`
   (default 64 MiB) and `sessions.import.max_source_bytes` (default 1 GiB, `0` means

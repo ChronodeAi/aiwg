@@ -667,6 +667,7 @@ export const refreshHandler: CommandHandler = {
             // #2507: give operators a reclaim path for artifacts an older
             // AIWG left behind without a managed marker.
             ...(forceDeploy ? ['--force'] : []),
+            ...(hasFlag(ctx.args, '--allow-over-budget') ? ['--allow-over-budget'] : []),
             ...modelDeployArgs,
           ],
           rawArgs: ['use', fw],

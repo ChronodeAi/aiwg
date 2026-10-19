@@ -213,6 +213,25 @@ export const decisionCommand: Extension = {
   } satisfies CommandMetadata,
 };
 
+export const rulesCommand: Extension = {
+  id: 'rules',
+  type: 'command',
+  name: 'Rule Pins',
+  description: 'Pin installed rules to every request and manage reusable capability groups',
+  version: '1.0.0',
+  capabilities: ['cli', 'rules', 'configuration', 'activation'],
+  keywords: ['rules', 'pin', 'unpin', 'pinned', 'tier', 'capability', 'group'],
+  category: 'config',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<pin|unpin|pinned|group> [rules...] [--tier tiers] [--capability ids] [--group name] [--all] [--dry-run] [--json]',
+    allowedTools: ['Read', 'Write', 'Bash'],
+  } satisfies CommandMetadata,
+};
+
 export const gatesCommand: Extension = {
   id: 'gates',
   type: 'command',
@@ -3929,6 +3948,7 @@ export const commandDefinitions: Extension[] = [
   updateCommand,
   installationCommand,
   decisionCommand,
+  rulesCommand,
   gatesCommand,
   refreshCommand,
   regenerateCommand,

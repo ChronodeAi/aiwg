@@ -3423,6 +3423,7 @@ export class UseHandler implements CommandHandler {
 
       const runner = createScriptRunner(frameworkRoot);
       const addonBaseArgs = ['--deploy-commands', '--deploy-skills', '--deploy-rules'];
+      if (remainingArgs.includes('--allow-over-budget')) addonBaseArgs.push('--allow-over-budget');
       if (addonScope === 'user') addonBaseArgs.push('--scope', 'user');
       // An explicitly selected upstream addon must be self-contained in the
       // project. Unlike a full framework deploy, its standard skills cannot be
@@ -3914,6 +3915,7 @@ export class UseHandler implements CommandHandler {
 
     // Build common args for addon deployments (inherit provider and target)
     const addonBaseArgs = ['--deploy-commands', '--deploy-skills', '--deploy-rules'];
+    if (remainingArgs.includes('--allow-over-budget')) addonBaseArgs.push('--allow-over-budget');
     if (scope === 'user') addonBaseArgs.push('--scope', 'user');
     if (bulkKernelOnly) addonBaseArgs.push('--kernel-only');
     addonBaseArgs.push(...modelDeployArgs);

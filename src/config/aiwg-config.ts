@@ -18,10 +18,12 @@ export { DEFAULT_DISPATCH_HOST_THRESHOLDS, resolveDispatchHostThresholds } from 
 import { validateIndexGraphOverrides, type IndexBuiltinGraphOverride } from './index-graph-overrides.js';
 export type { IndexBuiltinGraphOverride } from './index-graph-overrides.js';
 
-import { DEFAULT_RULES_INLINE_BUDGET_TOKENS, validateRulesConfig } from '../rules/inline-budget.mjs';
+import { DEFAULT_RULES_INLINE_BUDGET_TOKENS } from '../rules/inline-budget.mjs';
 import type { RulesConfig } from '../rules/inline-budget.mjs';
 export { validateRulesConfig, resolveRulesInlineBudget } from '../rules/inline-budget.mjs';
 export type { RulesConfig } from '../rules/inline-budget.mjs';
+
+import { loadRulePinConfigs, installedRuleCapabilities, validateRulePinCapabilities } from '../rules/pins.mjs';
 
 import Ajv, { type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
@@ -2032,8 +2034,8 @@ export async function readAiwgConfigCandidate(projectDir: string): Promise<AiwgC
     ...validateThreatAssessmentConfig(parsed.security?.threatAssessment),
     ...validateProjectConfig(parsed.project),
     ...validateParallelismConfig(parsed.parallelism),
-    ...validateRulesConfig(parsed.rules),
     ...validateDecisionConfig(parsed.decision),
+    ...validateRulePinCapabilities(parsed.rules, installedRuleCapabilities(loadRulePinConfigs(projectDir, parsed)), loadRulePinConfigs(projectDir, parsed).user.rules?.pin_groups),
   ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
@@ -2080,12 +2082,39 @@ export async function readAiwgConfig(projectDir: string, options?: { aiwgHome?: 
  * sync so split-root health remains deterministic.
  */
 export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): Promise<void> {
+  // Uninstall is an explicit capability change. Retire project selectors for
+  // removed capabilities before strict validation, and tell the operator.
+  const previousFile = getConfigPath(projectDir);
+  let previous: AiwgConfig | null = null;
+  if (existsSync(previousFile)) {
+    try { previous = JSON.parse(readFileSync(previousFile, 'utf8')) as AiwgConfig; }
+    catch (error) { if (!(error instanceof SyntaxError)) throw error; }
+  }
+  const pinConfigs = loadRulePinConfigs(projectDir, config);
+  const currentCapabilities = new Set(installedRuleCapabilities(pinConfigs));
+  const removed = previous ? installedRuleCapabilities({ ...pinConfigs, project: previous }).filter(id => !currentCapabilities.has(id)) : [];
+  if (removed.length && (config.rules?.always_load?.length || Object.keys(config.rules?.pin_groups ?? {}).length)) {
+    const removedSet = new Set(removed);
+    const rules = config.rules!;
+    const userGroups = loadRulePinConfigs(projectDir, config).user.rules?.pin_groups ?? {};
+    const pinGroups = Object.fromEntries(Object.entries(rules.pin_groups ?? {})
+      .map(([name, ids]) => [name, ids.filter(id => !removedSet.has(id))] as const).filter(([, ids]) => ids.length));
+    const selectors = (rules.always_load ?? []).flatMap(selector => {
+      if (selector.group && ((!Object.hasOwn(pinGroups, selector.group) && Object.hasOwn(rules.pin_groups ?? {}, selector.group))
+        || (!Object.hasOwn(pinGroups, selector.group) && userGroups[selector.group]?.some(id => removedSet.has(id))))) return [];
+      if (!selector.capabilities) return [selector];
+      const capabilities = selector.capabilities.filter(id => !removedSet.has(id));
+      return capabilities.length ? [{ ...selector, capabilities }] : [];
+    });
+    config = { ...config, rules: { ...config.rules, pin_groups: pinGroups, always_load: selectors } };
+    console.warn(`Uninstalled ${removed.join(', ')}: their rules leave the effective pinned set; retired project capability selectors/groups. User pins remain visible as inactive warnings.`);
+  }
   const threatAssessmentErrors = [
     ...validateThreatAssessmentConfig(config.security?.threatAssessment),
     ...validateProjectConfig(config.project),
     ...validateParallelismConfig(config.parallelism),
-    ...validateRulesConfig(config.rules),
     ...validateDecisionConfig(config.decision),
+    ...validateRulePinCapabilities(config.rules, installedRuleCapabilities(loadRulePinConfigs(projectDir, config)), loadRulePinConfigs(projectDir, config).user.rules?.pin_groups),
   ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);

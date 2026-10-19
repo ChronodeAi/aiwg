@@ -832,3 +832,76 @@ mirror on GitHub (tags pushed on release).
   `aiwg activity-log`
 - **Setup manifests** (separate language for installer addon): see
   [`setup-manifest.md`](./setup-manifest.md)
+
+## Operator rule pins
+
+Use local pins when a binding or discovery lookup is too weak for a critical
+process, or when your project requires certain rules on every request. For
+example, pin a compliance rule while investigating a missed lookup, or keep
+every CRITICAL rule active. Pins are operator policy; they leave the canonical
+rule frontmatter untouched.
+
+Project pins live in `.aiwg/aiwg.config`. User pins live in the active user
+configuration directory's `aiwg.config` (normally `~/.aiwg/aiwg.config`).
+Both scopes contribute selectors; project definitions override user definitions
+of the same group. Selectors are ORed; fields within one selector are ANDed.
+Omitted enforcement means every tier; omitted capabilities means every installed
+capability. Rule ids can be combined with a tier or capability filter.
+
+```json
+{
+  "rules": {
+    "always_load": [
+      { "rules": ["token-security", "no-attribution"] },
+      { "enforcement": ["critical"] },
+      { "enforcement": ["critical", "high"], "capabilities": ["sdlc-complete", "security-engineering"] },
+      { "capabilities": ["aiwg-utils"] },
+      { "group": "compliance" }
+    ],
+    "pin_groups": {
+      "compliance": ["security-engineering", "forensics-complete", "ops-complete"]
+    }
+  }
+}
+```
+
+Use installed capability ids, including framework, addon, extension and plugin
+ids. Unknown or uninstalled ids fail configuration validation with the installed
+list. Uninstalling a capability removes its rules from the effective pinned
+set with a warning and retires project selectors/groups referencing it. Saved
+user pins remain inactive and `rules pinned` warns about them. An
+`{ "all": true }` selector tracks every currently installed capability.
+
+```bash
+aiwg rules pin token-security no-attribution
+aiwg rules pin --tier critical
+aiwg rules pin --tier high --capability sdlc-complete,security-engineering
+aiwg rules pin --capability aiwg-utils --all-tiers
+aiwg rules group set compliance security-engineering forensics-complete ops-complete
+aiwg rules pin --group compliance --tier critical,high
+aiwg rules pin --all --dry-run
+aiwg rules pinned --capability aiwg-utils --json
+aiwg rules unpin --tier critical
+```
+
+Commands default to project scope; `--user` edits the user scope. `unpin`
+removes exactly the matching selector (list order does not matter). Other
+selectors, including user selectors, can still pin the same rule. `group list`
+shows both scopes. All inputs have command arguments or flags; commands never
+prompt.
+
+`--dry-run` previews the effective rules and exact staged startup bytes for each
+configured provider without changing config or deployment. `--no-deploy` writes
+validated config and prints the redeploy command. Pins deploy complete native
+always-loaded rule bodies for Claude, Codex, Cursor, Hermes, Warp and OpenClaw.
+Bindings, summaries and discovery remain available. Removing the last matching
+selector and redeploying restores canonical activation.
+
+Pins never silently demote, truncate or drop bodies. Budget overruns fail before
+config writes and report the provider, startup bytes, rule contributors and
+matching pins. This includes the inline token budget, Codex's 32 KB AGENTS.md cap
+and Hermes's 19,000 character cap. `--allow-over-budget` explicitly overrides
+these deployment guards for pinned content; the harness itself may still impose
+its own limit. Use small selectors and inspect the preview before overriding.
+`status`, `doctor`, and `show rule <id>` expose local pins and canonical activation;
+discovery relationship statistics count pinned contracts as kernel rules.

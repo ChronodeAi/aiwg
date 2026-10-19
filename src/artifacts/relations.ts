@@ -5,6 +5,7 @@ import { getGraphIndexDir, type MetadataEntry } from './types.js';
 import { resolveFrameworkIndexRoot } from './framework-index-paths.js';
 import { frameworkSourceDigest } from './framework-source-digest.js';
 import { createHash } from 'node:crypto';
+import { loadRulePinConfigs, resolveRulePins } from '../rules/pins.mjs';
 
 export const RELATIONS_VERSION = 1;
 export const RELATIONS_SCHEMA = 'https://aiwg.io/schemas/artifacts/relations.v1.schema.json';
@@ -61,7 +62,7 @@ function lookupAlias(aliases: Record<string, string[]>, id: string): string | un
 }
 
 export class RelationsReader {
-  constructor(readonly index: RelationsIndex) {}
+  constructor(readonly index: RelationsIndex, readonly pinnedRuleIds: ReadonlySet<string> = new Set()) {}
 
   rulesForTarget(type: RelationTargetType, id: string): string[] {
     const key = `${type}:${id}`;
@@ -83,23 +84,37 @@ export class RelationsReader {
     const key = `${type}:${id}`;
     const resolved = Object.hasOwn(this.index.targets, key) ? key : lookupAlias(this.index.aliases.targets, key);
     const stats = resolved ? this.index.targets[resolved]?.rule_stats : undefined;
-    return stats ? { by_enforcement: { ...stats.by_enforcement }, by_activation: { ...stats.by_activation }, required_checks: stats.required_checks } : emptyRuleStats();
+    if (!stats) return emptyRuleStats();
+    const result = { by_enforcement: { ...stats.by_enforcement }, by_activation: { ...stats.by_activation }, required_checks: stats.required_checks };
+    for (const ruleId of this.index.targets[resolved!].rules) {
+      if (!this.pinnedRuleIds.has(ruleId)) continue;
+      const activation = this.index.rules[ruleId]?.activation ?? 'unknown';
+      if (activation === 'kernel') continue;
+      result.by_activation[activation] = Math.max(0, (result.by_activation[activation] ?? 0) - 1);
+      if (!result.by_activation[activation]) delete result.by_activation[activation];
+      result.by_activation.kernel = (result.by_activation.kernel ?? 0) + 1;
+    }
+    return result;
   }
 }
 
-/** Missing, corrupt, or unsupported sidecars return null; never fall back to the full index. */
-export function loadBuiltRelations(cwd: string): RelationsReader | null {
+function readerWithPins(index: RelationsIndex, pinCwd: string): RelationsReader {
+  const pins = resolveRulePins({ configs: loadRulePinConfigs(pinCwd),
+    rules: Object.entries(index.rules).map(([id, rule]) => ({ ...rule, id })) });
+  return new RelationsReader(index, new Set(pins.rules.map(rule => rule.id)));
+}
+
+/** Missing, corrupt, or unsupported sidecars return null; invalid pin policy remains an explicit error. */
+export function loadBuiltRelations(cwd: string, pinCwd = cwd): RelationsReader | null {
+  let index: RelationsIndex;
   try {
-    const index = JSON.parse(fs.readFileSync(path.join(getGraphIndexDir(cwd, 'framework'), 'relations.json'), 'utf8')) as RelationsIndex;
+    index = JSON.parse(fs.readFileSync(path.join(getGraphIndexDir(cwd, 'framework'), 'relations.json'), 'utf8')) as RelationsIndex;
     if (index.version !== RELATIONS_VERSION || index.$schema !== RELATIONS_SCHEMA
       || index.fingerprint?.version !== RELATIONS_VERSION || !/^sha256:[a-f0-9]{64}$/.test(index.fingerprint.sources)
       || !index.rules || !index.targets || !index.capabilities || !index.aliases?.targets || !index.aliases.rules) return null;
-    return new RelationsReader(index);
-  } catch {
-    return null;
-  }
+  } catch { return null; }
+  return readerWithPins(index, pinCwd);
 }
-
 
 export const PREBUILT_RELATIONS_DIR = 'prebuilt/framework-relations';
 export interface RelationsStamp {
@@ -112,7 +127,7 @@ export interface RelationsStamp {
 export interface PrebuiltSelection { reader: RelationsReader | null; reason?: string }
 
 /** Validate the running root, never the root from which this module was loaded. */
-export function selectPrebuiltRelations(cwd: string): PrebuiltSelection {
+function selectPrebuiltRelationsSource(cwd: string): PrebuiltSelection {
   const root = resolveFrameworkIndexRoot(cwd);
   const dir = path.join(root, PREBUILT_RELATIONS_DIR);
   try {
@@ -133,14 +148,20 @@ export function selectPrebuiltRelations(cwd: string): PrebuiltSelection {
   } catch { return { reader: null, reason: 'prebuilt relationship tables unavailable or corrupt' }; }
 }
 
+/** Apply local pins only after cache validation so policy errors cannot masquerade as cache misses. */
+export function selectPrebuiltRelations(cwd: string, pinCwd = cwd): PrebuiltSelection {
+  const selected = selectPrebuiltRelationsSource(cwd);
+  return selected.reader ? { reader: readerWithPins(selected.reader.index, pinCwd) } : selected;
+}
+
 /** Synchronous read API: prebuilt first, then this root's built sidecar. */
-export function loadRelations(cwd: string): RelationsReader | null {
-  return selectPrebuiltRelations(cwd).reader ?? loadBuiltRelations(cwd);
+export function loadRelations(cwd: string, pinCwd = cwd): RelationsReader | null {
+  return selectPrebuiltRelations(cwd, pinCwd).reader ?? loadBuiltRelations(cwd, pinCwd);
 }
 
 /** Read paths reconcile through the existing lock/receipt when prebuilt is stale. */
-export async function ensureRelations(cwd: string): Promise<RelationsReader | null> {
-  const selected = selectPrebuiltRelations(cwd);
+export async function ensureRelations(cwd: string, pinCwd = cwd): Promise<RelationsReader | null> {
+  const selected = selectPrebuiltRelations(cwd, pinCwd);
   if (selected.reader) return selected.reader;
   const root = resolveFrameworkIndexRoot(cwd);
   if (fs.existsSync(path.join(root, PREBUILT_RELATIONS_DIR, 'manifest.json'))) {
@@ -148,7 +169,7 @@ export async function ensureRelations(cwd: string): Promise<RelationsReader | nu
   }
   const { refreshFrameworkCapabilities } = await import('./framework-capabilities.js');
   await refreshFrameworkCapabilities(root, false);
-  return loadBuiltRelations(cwd);
+  return loadBuiltRelations(cwd, pinCwd);
 }
 
 // Convenience entry points; use one loaded reader for a batch of lookups.

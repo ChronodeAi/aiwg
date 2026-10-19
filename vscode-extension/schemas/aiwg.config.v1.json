@@ -39,14 +39,47 @@
     "sessions": {
       "type": "object",
       "properties": {
-        "codex_roots": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "discovery_manifests": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "codex_roots": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "discovery_manifests": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "import": {
           "type": "object",
           "properties": {
-            "exclude": { "type": "array", "default": [], "items": { "type": "string", "minLength": 1, "pattern": "^(?:/.*|~(?:/.*)?|[^\\s/*?\\\\~][^/*?\\\\~]*)$" }, "description": "Native session IDs or absolute path globs (*, **, ?); ~ expands to home. AIWG_SESSIONS_IMPORT_EXCLUDE and repeatable --exclude add entries. Excluded sources are skipped before reading." },
-            "max_record_bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "default": 67108864, "description": "Maximum bytes per imported record (default 64 MiB). Overridden by AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES, then --max-record-bytes." },
-            "max_source_bytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 1073741824, "description": "Maximum bytes per imported source (default 1 GiB); 0 means unlimited and streamed. Overridden by AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES, then --max-source-bytes." }
+            "exclude": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?:/.*|~(?:/.*)?|[^\\s/*?\\\\~][^/*?\\\\~]*)$"
+              },
+              "description": "Native session IDs or absolute path globs (*, **, ?); ~ expands to home. AIWG_SESSIONS_IMPORT_EXCLUDE and repeatable --exclude add entries. Excluded sources are skipped before reading."
+            },
+            "max_record_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "default": 67108864,
+              "description": "Maximum bytes per imported record (default 64 MiB). Overridden by AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES, then --max-record-bytes."
+            },
+            "max_source_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "default": 1073741824,
+              "description": "Maximum bytes per imported source (default 1 GiB); 0 means unlimited and streamed. Overridden by AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES, then --max-source-bytes."
+            }
           }
         }
       }
@@ -1192,6 +1225,103 @@
           "maximum": 9007199254740991,
           "default": 64000,
           "description": "Startup lint guard, estimated UTF-8 bytes / 4. AIWG_RULES_INLINE_BUDGET_TOKENS overrides this value; 0 disables only this guard, never provider hard caps."
+        },
+        "pin_groups": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "not": {
+              "enum": [
+                "__proto__",
+                "prototype",
+                "constructor"
+              ]
+            }
+          },
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uniqueItems": true
+          }
+        },
+        "always_load": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": false,
+            "properties": {
+              "rules": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "enforcement": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ]
+                }
+              },
+              "capabilities": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "group": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9_-]+$",
+                "not": {
+                  "enum": [
+                    "__proto__",
+                    "prototype",
+                    "constructor"
+                  ]
+                }
+              },
+              "all": {
+                "const": true
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "required": [
+                    "all"
+                  ]
+                },
+                "then": {
+                  "maxProperties": 1
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "group",
+                    "capabilities"
+                  ]
+                }
+              }
+            ]
+          }
         }
       }
     }

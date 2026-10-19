@@ -120,6 +120,11 @@ async function handleGet(config: UserConfig, args: string[]): Promise<void> {
     return;
   }
 
+  if (key === 'rules' || key.startsWith('rules.')) {
+    const { loadRulePinConfigs } = await import('../rules/pins.mjs');
+    console.log(JSON.stringify(getDottedPath(loadRulePinConfigs(process.cwd(), undefined, config.getPath()).user as Record<string, unknown>, key)) ?? '(not set)');
+    return;
+  }
   const value = await config.get(key);
   if (value === undefined) {
     console.log(`(not set)`);
@@ -150,6 +155,11 @@ async function handleSet(config: UserConfig, args: string[]): Promise<void> {
     return;
   }
 
+  if (key === 'rules' || key.startsWith('rules.')) {
+    await setRuleConfigKey(process.cwd(), 'user', key, value, config.getPath());
+    console.log(`Set --user ${key} = ${value}`);
+    return;
+  }
   await config.set(key, value);
   console.log(`Set ${key} = ${value}`);
 }
@@ -273,7 +283,7 @@ async function projectConfigGet(key: string, args: string[]): Promise<void> {
   }
 }
 
-async function projectConfigSet(key: string, raw: string, args: string[]): Promise<void> {
+async function projectConfigSet(key: string, raw: string, args: string[], quiet = false): Promise<void> {
   assertSafeConfigPath(key);
   if (key === 'defaults' || key.startsWith('defaults.')) {
     throw new AiwgError({
@@ -314,7 +324,7 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
 
   // Coerce booleans for known boolean fields
   let value: unknown = raw;
-  if (key === 'parallelism' || /^parallelism\.(worker_dispatch|worker_mode|groups|clis|admission|budgets|health|retry|activation)(\.|$)/.test(key)) {
+  if (key === 'rules' || key.startsWith('rules.') || key === 'parallelism' || /^parallelism\.(worker_dispatch|worker_mode|groups|clis|admission|budgets|health|retry|activation)(\.|$)/.test(key)) {
     try { value = JSON.parse(raw); } catch { /* String leaves are validated by the whole-object writer. */ }
   }
   if (/^externalLinks\.[^.]+$/.test(key) || key === 'security.threatAssessment') {
@@ -410,7 +420,11 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
 
   // Read-modify-write — preserve unrelated fields. emptyConfig() seeds the
   // base shape when no config file exists yet (e.g. brand-new project).
-  const cfg = (await readAiwgConfig(projectDir)) ?? emptyConfig();
+  const { existsSync, readFileSync } = await import('node:fs');
+  const file = projectControlPath(projectDir, 'aiwg.config');
+  const cfg = key === 'rules' || key.startsWith('rules.')
+    ? (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : emptyConfig())
+    : (await readAiwgConfig(projectDir)) ?? emptyConfig();
   setDottedPath(cfg as unknown as Record<string, unknown>, key, value);
   const externalLinkErrors = validateExternalLinks(cfg.externalLinks);
   if (externalLinkErrors.length > 0) {
@@ -432,7 +446,7 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
     });
   }
   await writeAiwgConfig(projectDir, cfg);
-  console.log(`Set --project ${key} = ${raw}`);
+  if (!quiet) console.log(`Set --project ${key} = ${raw}`);
 }
 
 /** Read a dotted path from a nested record. Returns undefined when any segment is missing. */
@@ -501,6 +515,15 @@ async function handleValidate(config: UserConfig, args: string[]): Promise<void>
     return;
   }
   const issues = await config.validate();
+  try {
+    const { loadRulePinConfigs, installedRuleCapabilities, validateRulePinCapabilities } = await import('../rules/pins.mjs');
+    const configs = loadRulePinConfigs(process.cwd(), undefined, config.getPath());
+    for (const message of validateRulePinCapabilities(configs.user.rules, installedRuleCapabilities(configs), configs.project.rules?.pin_groups)) {
+      issues.push({ file: 'aiwg.config', severity: 'error', message });
+    }
+  } catch (error) {
+    issues.push({ file: 'aiwg.config', severity: 'error', message: error instanceof Error ? error.message : String(error) });
+  }
 
   console.log(`Config directory: ${config.getPath()}\n`);
 
@@ -974,4 +997,26 @@ Examples:
   aiwg config gitignore
   aiwg config gitignore --fix
   aiwg config gitignore --check`);
+}
+
+/** Same configuration owner and validation used by the rules command wrappers. */
+export async function setRuleConfigKey(cwd: string, source: 'project' | 'user', key: string, raw: string, userConfigDir?: string): Promise<void> {
+  assertSafeConfigPath(key);
+  if (source === 'project') {
+    await projectConfigSet(key, raw, ['--project', '--target', cwd], true);
+    return;
+  }
+  const { loadRulePinConfigs, rulePinConfigPath, installedRuleCapabilities, validateRulePinCapabilities } = await import('../rules/pins.mjs');
+  const { mkdir, writeFile, rename } = await import('node:fs/promises');
+  const configs = loadRulePinConfigs(cwd, undefined, userConfigDir);
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { value = raw; }
+  setDottedPath(configs.user as Record<string, unknown>, key, value);
+  const errors = validateRulePinCapabilities(configs.user.rules, installedRuleCapabilities(configs), configs.project.rules?.pin_groups);
+  if (errors.length) throw new Error(errors.join('\n'));
+  const file = rulePinConfigPath(cwd, 'user', userConfigDir);
+  await mkdir(path.dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  await writeFile(temp, JSON.stringify(configs.user, null, 2) + '\n');
+  await rename(temp, file);
 }

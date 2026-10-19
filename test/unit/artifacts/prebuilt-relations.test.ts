@@ -44,6 +44,33 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); fs.rmSync(tmp, { recursive: true, force: true }); });
 
 describe('prebuilt relationship selection', () => {
+  it('applies project pins equally to prebuilt and built readers without changing canonical tables', () => {
+    const project = path.join(tmp, 'project');
+    fs.mkdirSync(path.join(project, '.aiwg'), { recursive: true });
+    fs.writeFileSync(path.join(project, '.aiwg/aiwg.config'), JSON.stringify({
+      installed: { example: { source: 'project-local' } },
+      rules: { always_load: [{ rules: ['first'] }] },
+    }));
+    const build = vi.spyOn(builder, 'buildIndex');
+    for (const reader of [selectPrebuiltRelations(root, project).reader!, loadBuiltRelations(root, project)!]) {
+      expect(reader.ruleStats('skill', 'work').by_activation).toEqual({ kernel: 1 });
+      expect(Object.values(reader.index.rules)[0].activation).toBe('bound');
+    }
+    expect(selectPrebuiltRelations(root).reader!.ruleStats('skill', 'work').by_activation).toEqual({ bound: 1 });
+    expect(build).not.toHaveBeenCalled();
+  });
+
+  it('reports invalid project pin policy instead of hiding it as a missing relationship cache', async () => {
+    const project = path.join(tmp, 'project');
+    fs.mkdirSync(path.join(project, '.aiwg'), { recursive: true });
+    fs.writeFileSync(path.join(project, '.aiwg/aiwg.config'), JSON.stringify({ rules: { always_load: [{ all: 'yes' }] } }));
+    const build = vi.spyOn(builder, 'buildIndex');
+    expect(() => selectPrebuiltRelations(root, project)).toThrow(/always_load|all/);
+    expect(() => loadBuiltRelations(root, project)).toThrow(/always_load|all/);
+    await expect(ensureRelations(root, project)).rejects.toThrow(/always_load|all/);
+    expect(build).not.toHaveBeenCalled();
+  });
+
   it('is portable, byte reproducible, and selected on a fresh HOME without source index reads/builds', async () => {
     put('src/rules/activation.mjs', '// byte-identical shipped module\n');
     const tables = writeTables();

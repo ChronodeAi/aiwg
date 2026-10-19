@@ -20,6 +20,7 @@
  */
 
 import fs from 'fs/promises';
+import { importImpl } from '../_resolve-impl.mjs';
 import { existsSync } from 'fs';
 import http from 'http';
 import os from 'os';
@@ -351,7 +352,10 @@ async function collectActiveOperations(projectRoot) {
 async function buildWorkspaceStatus(projectRoot) {
   const aiwgPath = resolveProjectAiwgDir(projectRoot);
   const artifactHealth = auditProjectArtifactHealth(projectRoot);
+  const { rulePinState } = await importImpl(import.meta.url, 'rules/pin-state.js');
+  const pins = rulePinState(projectRoot, packageRoot);
   const result = {
+    rule_pins: { rules: pins.rules, warnings: pins.warnings },
     workspace: {
       path: aiwgPath,
       exists: false,
@@ -539,6 +543,7 @@ async function buildVerificationProbe(projectRoot) {
 
   return {
     schema: 'aiwg.status.probe.v1',
+    rule_pins: workspace.rule_pins,
     generated_at: new Date().toISOString(),
     project_root: path.resolve(projectRoot),
     engaged: ready && !artifactNeedsRepair,
@@ -737,6 +742,9 @@ async function workspaceStatus(args) {
     console.log('\nAIWG - Workspace Status');
     console.log('='.repeat(60));
     console.log('');
+
+    for (const rule of result.rule_pins.rules) console.log(`${rule.name}: pinned kernel (canonical ${rule.canonical_activation})`);
+    for (const warning of result.rule_pins.warnings) console.log(warning);
 
     // Workspace info
     console.log('Workspace:');
