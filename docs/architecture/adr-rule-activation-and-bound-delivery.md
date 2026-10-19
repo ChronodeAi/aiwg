@@ -192,7 +192,7 @@ below are work for #2939, not descriptions of already-shipping bindings.
 | [Cursor](../../tools/agents/providers/cursor.mjs): native MDC rules; conventional agents/commands | Full kernel MDC with `alwaysApply: true`; always-applied summary index. Optional full summary-mode rule uses `alwaysApply: false` plus `description` for native auto selection. | Bound artifact blocks and show/MCP; no auto description or always-applied body for bound rules. On-demand bodies use explicit show/manual reference. | Native MDC `globs` from `paths`, `alwaysApply: false`; no severity prefilter. |
 | [Claude](../../tools/agents/providers/claude.mjs): native `.claude/rules`, agents and skills | Complete kernel bodies and summary-only `RULES-INDEX.md` in native rules. | Blocks in native artifact bodies plus show/MCP. Keep bound/on-demand full bodies outside the recursively loaded rules tree. | Native rule frontmatter `paths`; preserve any tier. |
 | [Codex](../../tools/agents/providers/codex.mjs): conventional `.codex/rules`, native skill/agent deployment | Managed startup context reached through `AGENTS.md` must carry full trimmed kernel bodies and the summary index; a conventional rules directory alone is insufficient. | Blocks in loaded artifacts plus show/MCP; no assumed rule-directory loader. | Emulated path index/check through the startup instruction; fetch matches before file work. No native glob attachment in this adapter. |
-| [Hermes](../../tools/agents/providers/hermes.mjs): native home skills, aggregated agent routing, no rule loader | Startup context reached through `.hermes.md`/`AGENTS.md`. Replace hardcoded compressed CRITICAL directives with activation-selected kernel and summary content. | Blocks in skills and fetched agent/flow definitions plus show/MCP. Aggregated routing entries point to definitions rather than inlining bound blocks. | Emulated path index/check; no native glob loader in this adapter. |
+| [Hermes](../../tools/agents/providers/hermes.mjs): native home skills, aggregated agent routing, no rule loader | Startup context reached through `.hermes.md`/`AGENTS.md`. Per operator decision **2026-10-19**, inline complete kernel bodies only when frontmatter `enforcement: critical`; deliver every other kernel rule as its one-line summary plus `aiwg show rule <name>`, with an explicit fetch-and-follow obligation before every task and subagent task. Summary-mode rules retain their kernel index delivery. | Blocks in skills and fetched agent/flow definitions plus show/MCP. Aggregated routing entries point to definitions rather than inlining bound blocks. | Emulated path index/check; no native glob loader in this adapter. |
 | [Warp](../../tools/agents/providers/warp.mjs): native skills; agents/rules aggregated into `WARP.md` via setup script | Managed kernel/summary section in startup context reached through `WARP.md`. Include the aggregate writer in the change; discrete `.warp/rules` copies are insufficient. | Blocks in skills/fetched definitions plus show/MCP; keep only agent/flow routing pointers in startup aggregation. | Emulated path index/check; no native glob attachment in this adapter. |
 | [OpenClaw](../../tools/agents/providers/openclaw.mjs): native rule/behavior directories, active workspace `AGENTS.md` bridge | Kernel/summary delivery through native rules and the active-workspace bridge; verify actual loading, not just home-directory file existence. | Blocks in artifact definitions plus show/MCP; native behavior activation remains available. | Emulated path index/check: the adapter has no path-condition translator despite its native rule directory. |
 
@@ -217,10 +217,29 @@ claimed token saving. Kernel parity may add text there; deduplicate existing
 startup directives and measure total startup context, including bridge reads.
 The epic's no-provider-regression gate still applies; an adapter that cannot
 meet parity and its budget blocks that wave rather than claiming a free gain.
-Keep Codex `AGENTS.md` below 32 KB. Hermes currently warns above 15,000 characters
-and fails above 19,000; full kernel projection must fit those limits after
-trimming, or report failure. Do not silently compress a tagged `kernel` rule
-into `summary` to fit. Reuse the existing bootstrap/context owners and preserve
+Keep Codex `AGENTS.md` below 32 KB. Hermes warns above 15,000 characters
+and fails above 19,000. **Operator decision, 2026-10-19:** Hermes truncates
+context above 20,000 characters, and main shipped a thin startup file (1,334
+characters). Inlining every kernel body on this stack produced 41,931 characters
+and broke otherwise successful deployments. For Hermes only, inline the full
+bodies of kernel rules with frontmatter `enforcement: critical` (for example,
+no-attribution, token-security, and citation-policy when installed). Deliver all
+other kernel rules in the kernel index as authored one-line summaries plus
+`aiwg show rule <name>` pointers, with an explicit instruction to fetch and
+follow them before governed work, including subagent work. If an optional kernel
+summary is absent, use an imperative fetch instruction rather than truncating
+or synthesizing a summary from its body. This is a fixed Hermes projection,
+not activation demotion; other providers retain complete kernel bodies.
+When the remaining summary/path index and definition routes would overflow
+startup, preserve them in the existing `.hermes/rules/RULES-INDEX.md` and require
+reading that index before every task/subagent task. Non-critical kernel
+summaries and fetch pointers remain inline in either case. If the CRITICAL set
+alone exceeds 19,000 characters, fail atomically with the total and a per-rule
+character report. Preserve the final context cap for wrappers and
+operator-authored additions as well.
+Bulk `use all` retains its kernel-skill-only selection; a full all-framework
+rule deployment can still fail when its CRITICAL set alone exceeds the cap.
+Reuse the existing bootstrap/context owners and preserve
 operator content instead of creating a second provider policy file hierarchy.
 
 ### Budget is a guard, never an activation selector
@@ -297,8 +316,14 @@ A proposed kernel rule must pass **all** of these review/fixture checks:
    kernel rule or startup template; verify generated startup output for repeats.
 4. **Provider fit:** a deployment fixture for all six providers loads the
    complete selected kernel once, including subagent dispatch, and passes the
-   configured guard and provider caps. References without demonstrated loading
-   fail this check.
+   configured guard and provider caps. The **2026-10-19 Hermes exception**
+   admits complete CRITICAL kernel bodies plus summaries and fetch pointers for
+   all other kernel rules: Hermes has a 20K context limit and main shipped a
+   thin startup file. Its fixture must verify CRITICAL bodies verbatim,
+   non-critical summaries without their bodies, and explicit retrieval before
+   governed work. Other providers still require complete kernel bodies.
+   References without demonstrated loading or this explicit Hermes retrieval
+   obligation fail this check.
 5. **Observed compliance:** provide positive probes for the universal invariant
    and ordinary tasks outside its originating workflow, n=5 each. Meet or
    exceed baseline with no probe below 80%. Failed admission retains the prior

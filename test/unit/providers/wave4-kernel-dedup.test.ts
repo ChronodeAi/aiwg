@@ -112,7 +112,12 @@ describe('Wave 4 compact kernel and startup deduplication (#2944)', () => {
     for (const name of names) {
       // Some adapters shift heading depth; compare every imperative paragraph verbatim.
       const core = body(read(path.join(source, 'rules', `${name}.md`))).split('\n').filter(line => line.startsWith('- '));
-      for (const paragraph of core) expect(startup.split(paragraph).length - 1, `${provider}: ${name}`).toBe(1);
+      for (const paragraph of core) expect(startup.split(paragraph).length - 1, `${provider}: ${name}`).toBe(provider === 'hermes' ? 0 : 1);
+      if (provider === 'hermes') {
+        expect(startup).toContain(meta(read(path.join(source, 'rules', `${name}.md`))).summary || 'Fetch and follow the full rule before governed work.');
+        expect(startup).toContain(`aiwg show rule ${name}`);
+        expect(startup).toContain('Before every task and subagent task, fetch and follow');
+      }
       const guidance = body(read(path.join(source, 'rules', `${name}-guidance.md`))).split('\n').find(line => line.startsWith('# '))!;
       expect(startup).not.toContain(guidance);
     }

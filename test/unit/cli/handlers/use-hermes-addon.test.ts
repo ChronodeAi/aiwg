@@ -126,6 +126,13 @@ function writeSyntheticFrameworkRoot(root: string): void {
   );
   writeFileSync(join(kernDir, 'references', 'notes.md'), '# synthetic kernel notes\n');
 
+  const rulesDir = join(utilsDir, 'rules');
+  mkdirSync(rulesDir);
+  writeFileSync(join(rulesDir, 'critical-probe.md'),
+    '---\nname: critical-probe\nactivation: kernel\nenforcement: critical\n---\n# Critical probe\n\nCRITICAL_ADDON_BODY must remain verbatim.\n');
+  writeFileSync(join(rulesDir, 'fetch-probe.md'),
+    '---\nname: fetch-probe\nactivation: kernel\nenforcement: high\nsummary: Follow the addon fetch policy.\n---\nNONCRITICAL_ADDON_BODY must be fetched.\n');
+
   const engineDir = join(root, 'agentic', 'code', 'addons', 'decision-engine');
   const checkDir = join(engineDir, 'skills', 'de-check');
   mkdirSync(checkDir, { recursive: true });
@@ -217,6 +224,14 @@ describe('aiwg use decision-engine --provider hermes (#2873)', () => {
     const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
 
     expect(result.exitCode).toBe(0);
+    const agents = readFileSync(join(projectDir, 'AGENTS.md'), 'utf8');
+    const routing = readFileSync(join(projectDir, '.hermes.md'), 'utf8');
+    console.info(`Hermes decision-engine addon: AGENTS.md=${agents.length}, .hermes.md=${routing.length} chars`);
+    expect(agents.length).toBeLessThanOrEqual(19000);
+    expect(routing.length).toBeLessThanOrEqual(19000);
+    expect(agents).toContain('# Critical probe\n\nCRITICAL_ADDON_BODY must remain verbatim.');
+    expect(agents).toContain('fetch-probe — Follow the addon fetch policy. Fetch and follow: `aiwg show rule fetch-probe`.');
+    expect(agents).not.toContain('NONCRITICAL_ADDON_BODY');
     // Kernel-tier skill lands at the platform-native skills root...
     expect(existsSync(join(hermesHome, 'skills', 'kern-probe', 'SKILL.md'))).toBe(true);
     expect(readFileSync(join(hermesHome, 'skills', 'kern-probe', 'SKILL.md'), 'utf8')).toContain('Kernel probe body');

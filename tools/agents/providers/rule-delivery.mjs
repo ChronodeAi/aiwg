@@ -217,7 +217,15 @@ function projectRules(opts, provider) {
   }
   // A legacy consolidated index can mention now-bound rules. Replace it with an
   // activation-selected index when migration starts; pure legacy deployments keep it.
-  const index = renderRuleKernelIndex(rules, nativePaths);
+  // Hermes's 20K context limit requires a fixed provider projection: only
+  // frontmatter-CRITICAL kernel bodies are inline (operator decision 2026-10-19).
+  // Keep activation and every other provider's projection unchanged.
+  const isCritical = rule => String(rule.enforcement || '').trim().toLowerCase() === 'critical';
+  const deferredKernels = provider.name === 'hermes'
+    ? rules.filter(rule => rule.tagged && rule.activation === 'kernel' && !isCritical(rule)) : [];
+  const indexRules = deferredKernels.length ? rules.map(rule => deferredKernels.includes(rule)
+    ? { ...rule, activation: 'summary', summary: rule.summary || 'Fetch and follow the full rule before governed work.' } : rule) : rules;
+  const index = renderRuleKernelIndex(indexRules, nativePaths);
   if (tagged.length) {
     for (const ext of ['.md', '.mdc']) {
       const file = path.join(rulesDir, `RULES-INDEX${ext}`);
@@ -239,10 +247,33 @@ function projectRules(opts, provider) {
     // The conventional directory is not a loader: startup reaches the complete
     // selected bodies through the provider's existing context owner.
     const kernels = rules.filter(rule => rule.activation === 'kernel' &&
-      rule.tagged);
+      rule.tagged && (provider.name !== 'hermes' || isCritical(rule)));
     const routes = [...new Set(opts.definitionRoutes || [])];
     const routing = routes.length ? `## Invoked artifact definitions\n\nRead the complete definition before invoking its artifact:\n${routes.map(route => `- ${route}`).join('\n')}` : '';
-    const body = [...kernels.map(rule => `## Rule: ${rule.name}\n\n${rule.body.trim()}`), index, routing].filter(Boolean).join('\n\n');
+    let startupIndex = index;
+    let startupRouting = routing;
+    const fetchKernels = deferredKernels.length ? 'Before every task and subagent task, fetch and follow the kernel rules listed below with `aiwg show rule <name>` before governed work. Their full rules are binding.' : '';
+    const renderBody = () => [...kernels.map(rule => `## Rule: ${rule.name}\n\n${rule.body.trim()}`), fetchKernels, startupIndex, startupRouting].filter(Boolean).join('\n\n');
+    const dest = path.join(opts.target, 'AGENTS.md');
+    if (provider.name === 'hermes' && block(read(dest), renderBody()).length > 19_000) {
+      // The complete summary/path index and definition routes can themselves
+      // exceed 10K. Keep kernel fetch obligations inline and explicitly reach
+      // the rest through the existing index, rather than dropping contracts.
+      if (index || routing) {
+        const name = `RULES-INDEX${extension}`;
+        const content = managed([index, routing].filter(Boolean).join('\n\n'), opts);
+        put(path.join(rulesDir, name), content);
+        manifest.managed[name] = { ...manifest.managed[name], hash: `sha256:${contentHash(content)}` };
+        put(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      }
+      const deferredFiles = new Set(deferredKernels.map(rule => rule.file));
+      const kernelIndex = renderRuleKernelIndex(indexRules.filter(rule => deferredFiles.has(rule.file)));
+      startupIndex = [kernelIndex,
+        index || routing ? 'Before every task and subagent task, read and follow `.hermes/rules/RULES-INDEX.md` for summary rules, path checks, and invoked artifact definitions. Fetch matching full rules before governed work.' : '',
+      ].filter(Boolean).join('\n\n');
+      startupRouting = '';
+    }
+    const body = renderBody();
     if (!body) {
       // No activation-selected startup contract: retain legacy context owners
       // without inventing an empty policy file or a dangling bootstrap read.
@@ -489,7 +520,7 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
     if (provider.name === 'hermes') {
       for (const name of ['AGENTS.md', '.hermes.md']) {
         const content = normalize(read(path.join(stage, name)));
-        if (content.length > 19_000) throw new Error(`Hermes ${name} (${content.length} chars) exceeds hard cap of 19000`);
+        provider.assertContextBudget(content, name, delivery.rules);
         if (content.length > 15_000) console.warn(`Hermes ${name} above 15000 character soft limit (${content.length})`);
       }
     }

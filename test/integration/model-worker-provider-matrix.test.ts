@@ -25,7 +25,8 @@ function deploy(provider: string, target: string, home: string, dryRun = false, 
     ...(dryRun ? ['--dry-run'] : []),
   ], { timeout: 60_000,
     cwd: REPO_ROOT,
-    env: { ...process.env, HOME: home, USERPROFILE: home },
+    env: { ...process.env, HOME: home, USERPROFILE: home, HERMES_HOME: join(home, '.hermes'),
+      XDG_DATA_HOME: join(home, 'data'), XDG_CONFIG_HOME: join(home, 'config') },
     encoding: 'utf8',
   });
 }
@@ -156,12 +157,12 @@ describe('model worker provider matrix', () => {
     }
 
     if (provider === 'hermes') {
-      // ADR: a full selected kernel that exceeds Hermes's hard cap must fail,
-      // preserving the prior deployment. The worker-only addon fits independently.
-      const fullHermesTarget = join(root, 'hermes-full');
-      expect(() => deploy('hermes', fullHermesTarget, home)).toThrow(/19000/);
-      await expect(access(join(fullHermesTarget, 'AGENTS.md'))).rejects.toThrow();
       const hermesTarget = join(root, 'hermes');
+      // Full all-framework rules exceed the cap in CRITICAL bodies alone;
+      // unlike `use all` (kernel skills only), this requests the full rules.
+      const fullHermesTarget = join(root, 'hermes-full');
+      expect(() => deploy('hermes', fullHermesTarget, home)).toThrow(/CRITICAL kernel set alone/);
+      await expect(access(join(fullHermesTarget, 'AGENTS.md'))).rejects.toThrow();
       deploy('hermes', hermesTarget, home, false, join(REPO_ROOT, 'agentic/code/addons/aiwg-utils'));
       const hermes = await readFile(join(hermesTarget, 'AGENTS.md'), 'utf8');
       for (const role of roles) {
@@ -170,6 +171,7 @@ describe('model worker provider matrix', () => {
         const content = await readFile(join(hermesTarget, definition), 'utf8');
         expect(content).toContain('exactly pinned, semantically hinted, or inherited');
       }
+      expect(hermes.length).toBeLessThanOrEqual(19000);
       expect(hermes).not.toContain('<!-- AIWG:bound-rules:start -->');
     }
   });

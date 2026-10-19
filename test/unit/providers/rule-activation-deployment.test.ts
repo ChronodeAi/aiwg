@@ -16,6 +16,9 @@ function setup() {
   roots.push(root);
   mkdirSync(join(root, 'target'));
   cpSync(fixture, join(root, 'source'), { recursive: true });
+  const kernel = join(root, 'source/rules/fixture-kernel.md');
+  writeFileSync(kernel, readFileSync(kernel, 'utf8').replace('enforcement: medium',
+    'enforcement: medium\nsummary: Follow the fixture kernel policy.'));
   return root;
 }
 function deploy(root: string, provider: string, extra = {}) {
@@ -46,7 +49,10 @@ describe('activation-selected provider deployment (#2939)', () => {
       const report = JSON.parse(out.split('REPORT:')[1].trim());
       expect(report.selected_bytes).toBeGreaterThan(0);
       const startup = report.contributors.map((file: any) => readFileSync(file.path, 'utf8')).join('\n');
-      expect(startup).toContain('FIXTURE_KERNEL_BODY');
+      if (provider === 'hermes') {
+        expect(startup).toContain('fixture-kernel — Follow the fixture kernel policy. Fetch and follow: `aiwg show rule fixture-kernel`.');
+        expect(readFileSync(join(root, 'target/AGENTS.md'), 'utf8')).not.toContain('FIXTURE_KERNEL_BODY');
+      } else expect(startup).toContain('FIXTURE_KERNEL_BODY');
       expect(startup).toContain('Follow the fixture summary policy.');
       expect(startup).not.toContain('FIXTURE_SUMMARY_BODY');
       expect(startup).not.toContain('fixture-bound');
@@ -264,11 +270,46 @@ describe('activation-selected provider deployment (#2939)', () => {
     expect(readFileSync(join(root, 'target/AGENTS.md'), 'utf8')).toHaveLength(32787);
     writeFileSync(join(root, 'target/AGENTS.md'), '# Authored context\n');
     const kernel = readFileSync(join(root, 'source/rules/fixture-kernel.md'), 'utf8');
-    writeFileSync(join(root, 'source/rules/fixture-kernel.md'), '---\nactivation: kernel\n---\n' + 'x'.repeat(20000));
+    writeFileSync(join(root, 'source/rules/fixture-kernel.md'), '---\nactivation: kernel\nenforcement: critical\n---\n' + 'x'.repeat(20000));
     expect(() => deploy(root, 'hermes')).toThrow('19000');
     writeFileSync(join(root, 'source/rules/fixture-kernel.md'), kernel);
     writeFileSync(join(root, 'target/.hermes.md'), '# Operator routing\n' + 'x'.repeat(20000));
     expect(() => deploy(root, 'hermes')).toThrow('19000');
+  }, 90_000);
+
+  it('reports every CRITICAL kernel size and preserves output when their set alone exceeds the cap', () => {
+    const root = setup();
+    deploy(root, 'hermes');
+    const before = contents(root);
+    for (const name of ['critical-one', 'critical-two']) {
+      writeFileSync(join(root, 'source/rules', `${name}.md`),
+        `---\nname: ${name}\nactivation: kernel\nenforcement: critical\n---\n${name}\n${'x'.repeat(10000)}`);
+    }
+    let error = '';
+    try { deploy(root, 'hermes'); } catch (caught) { error = String(caught); }
+    expect(error).toContain('CRITICAL kernel set alone');
+    expect(error).toContain('19000');
+    expect(error).toMatch(/critical-one: \d+ chars/);
+    expect(error).toMatch(/critical-two: \d+ chars/);
+    expect(contents(join(root, 'target'))).toEqual(new Map([...before].filter(([file]) => file.startsWith('target/')).map(([file, content]) => [file.slice(7), content])));
+  }, 90_000);
+
+  it('keeps a large non-critical kernel as its authored summary and pointer while preserving CRITICAL bodies', () => {
+    const root = setup();
+    const noncritical = join(root, 'source/rules/fixture-kernel.md');
+    writeFileSync(noncritical, readFileSync(noncritical, 'utf8') + '\n' + 'LARGE_NONCRITICAL_BODY'.repeat(2000));
+    const criticalBody = '# Critical core\n\nPreserve every character of this policy.\nSecond paragraph with Unicode: é λ.';
+    writeFileSync(join(root, 'source/rules/critical-core.md'),
+      `---\nname: critical-core\nactivation: kernel\nenforcement: critical\n---\n${criticalBody}`);
+    deploy(root, 'hermes');
+    const startup = readFileSync(join(root, 'target/AGENTS.md'), 'utf8');
+    expect(startup).toContain(criticalBody);
+    expect(startup).toContain('fixture-kernel — Follow the fixture kernel policy. Fetch and follow: `aiwg show rule fixture-kernel`.');
+    expect(startup).not.toContain('LARGE_NONCRITICAL_BODY');
+    expect(startup.length).toBeLessThanOrEqual(19000);
+    const before = contents(root);
+    deploy(root, 'hermes');
+    expect(contents(root)).toEqual(before);
   }, 90_000);
 
   it('retains activation and legacy provider directives when the final context owner regenerates startup', async () => {
@@ -279,7 +320,10 @@ describe('activation-selected provider deployment (#2939)', () => {
       await generate({ provider, projectPath: join(root, 'target'), sections: [], force: true });
       const file = provider === 'codex' ? 'AIWG.md' : provider === 'hermes' ? 'AGENTS.md' : 'WARP.md';
       const content = readFileSync(join(root, 'target', file), 'utf8');
-      expect(content).toContain('FIXTURE_KERNEL_BODY');
+      if (provider === 'hermes') {
+        expect(content).toContain('Follow the fixture kernel policy.');
+        expect(content).not.toContain('FIXTURE_KERNEL_BODY');
+      } else expect(content).toContain('FIXTURE_KERNEL_BODY');
       expect(content).toContain('Follow the fixture summary policy.');
       expect(content).not.toContain('fixture-bound');
       if (provider === 'hermes') expect(content).toContain('Never delete tests to make them pass.');
