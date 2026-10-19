@@ -1,3 +1,4 @@
+import { trackTemporaryDirectory } from '../../utils/temporary-directory.js';
 /**
  * Use Command Handler
  *
@@ -2701,6 +2702,7 @@ export class UseHandler implements CommandHandler {
     // addon still resolves and validates its bindings through the common query
     // engine, without rebuilding the entire corpus on every additive pass.
     const bindingCache = await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-use-bindings-'));
+    const removeBindingCache = trackTemporaryDirectory(bindingCache);
     const previousBindingCache = process.env.AIWG_RULE_BINDING_INDEX_CACHE;
     process.env.AIWG_RULE_BINDING_INDEX_CACHE = bindingCache;
     this.orchestrationDepth += 1;
@@ -2710,7 +2712,7 @@ export class UseHandler implements CommandHandler {
       this.orchestrationDepth -= 1;
       if (previousBindingCache === undefined) delete process.env.AIWG_RULE_BINDING_INDEX_CACHE;
       else process.env.AIWG_RULE_BINDING_INDEX_CACHE = previousBindingCache;
-      await fs.rm(bindingCache, { recursive: true, force: true });
+      removeBindingCache();
     }
   }
 

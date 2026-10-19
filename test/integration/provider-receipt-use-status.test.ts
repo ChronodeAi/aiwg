@@ -44,7 +44,7 @@ function runSourceCli(args: string[]): { status: number; json: Record<string, an
   return {
     status: result.status ?? 1,
     json: result.stdout ? JSON.parse(result.stdout) : {},
-    stderr: result.stderr ?? '',
+    stderr: [result.stderr, result.error?.message, result.signal].filter(Boolean).join('\n'),
   };
 }
 
@@ -52,9 +52,9 @@ describe('local-source user-scope use/status receipt integration (#2137)', () =>
   it('deploys then probes without an impossible missing-receipt remediation', () => {
     const use = runSourceCli([
       'use', 'sdlc', '--target', PROJECT_ROOT, '--provider', 'codex', '--scope', 'user',
-      '--no-project-local', '--copy-all', '--json',
+      '--no-project-local', '--no-utils', '--copy-all', '--json',
     ]);
-    expect(use.status, use.stderr).toBe(0);
+    expect(use.status, JSON.stringify({ stderr: use.stderr, result: use.json })).toBe(0);
     expect(use.json).toMatchObject({
       scope: 'user',
       // Codex refreshes deployed skills live; no restart is claimed (#2309).

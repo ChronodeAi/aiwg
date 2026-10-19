@@ -1,9 +1,10 @@
+import { mkdtempSync } from '../../helpers/temp-dir.js';
+import { showBindingEnvelopes } from '../../helpers/show-binding-envelopes.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile, execFileSync } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFileSync } from 'node:child_process';
 import { parse } from 'yaml';
 import { buildIndex } from '../../../src/artifacts/index-builder.js';
 import { resolveRuleBindingTarget } from '../../../src/artifacts/query-engine.js';
@@ -12,7 +13,6 @@ import type { ArtifactIndex } from '../../../src/artifacts/types.js';
 const repo = path.resolve(import.meta.dirname, '../../..');
 const wave = ['delivery-policy', 'sdlc-right-sizing', 'vague-discretion', 'respect-repo-access-manifest', 'native-ux-tools'];
 const providers = ['claude', 'codex', 'cursor', 'hermes', 'warp', 'openclaw'];
-const execFileAsync = promisify(execFile);
 const read = (file: string) => fs.readFileSync(file, 'utf8');
 const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
   entry.isDirectory() ? walk(path.join(dir, entry.name)) : [path.join(dir, entry.name)]);
@@ -25,7 +25,7 @@ describe('Wave 2 canonical rule delivery (#2942)', () => {
   let entries: ArtifactIndex['entries'];
   let rules: Array<{ name: string; data: any }>;
   beforeAll(async () => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-wave2-'));
+    root = mkdtempSync(path.join(os.tmpdir(), 'aiwg-wave2-'));
     source = path.join(root, 'source');
     bundle = path.join(source, 'agentic/code/addons/wave2');
     fs.mkdirSync(path.join(bundle, 'rules'), { recursive: true });
@@ -96,16 +96,13 @@ describe('Wave 2 canonical rule delivery (#2942)', () => {
         requests.set(key, request);
       }
     }
-    // Vitest already parallelizes files. Each CLI loads the full search index;
-    // nested fan-out multiplies that memory by four in every active worker.
-    for (const request of requests.values()) {
-      const { stdout } = await execFileAsync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
-        'show', request.type, request.id, '--json'], { cwd: repo, env, encoding: 'utf8', timeout: 30_000 });
-      const shown = JSON.parse(stdout);
-      expect(shown.bound_rules, `${request.type}:${request.id}`).toEqual(expect.arrayContaining(
+    const batch = [...requests.values()];
+    const shown = showBindingEnvelopes(repo, env, batch);
+    batch.forEach((request, index) => {
+      expect(shown[index].bound_rules, `${request.type}:${request.id}`).toEqual(expect.arrayContaining(
         request.expected.map(expected => expect.objectContaining(expected))));
-    }
-  }, 300_000);
+    });
+  }, 90_000);
 
   it('ranks each moved rule in the top three for its natural need (U6)', () => {
     const home = path.join(root, 'discover-home');

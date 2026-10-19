@@ -193,8 +193,8 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
 /**
  * Generate a lean AGENTS.md for Hermes
  *
- * Hermes loads AGENTS.md on every turn — keep it under 1,000 characters
- * to preserve context budget on 12GB VRAM setups.
+ * Hermes reaches AGENTS.md through its startup pointer on every task. Reserve
+ * the 19,000-character budget for complete activation-selected rule contracts.
  * See: docs/integrations/hermes-quickstart.md (Part 3)
  */
 // Hermes context cap is 20K chars (head-tail truncated above). Hard limit
@@ -316,38 +316,14 @@ function mergeHermesContext(file, generated, kind) {
 export function generateAgentsMd(agentCount, skillCount, targetDir, opts) {
   const { dryRun } = opts;
 
+  // Startup is reserved for rule contracts. Workflow routing, artifact catalogs,
+  // and the optional MCP tool inventory duplicate discover/show and consume
+  // Hermes's finite per-turn context before the kernel is appended.
   const header = `# AIWG Integration
 
-AIWG connected through file-based deployment. Native Hermes skills are available
-at \`$HERMES_HOME/skills/\` (kernel) and \`$HERMES_HOME/skills/.aiwg/\` (standard).
-When unset, \`HERMES_HOME\` defaults to the platform-native Hermes home.
-Use \`aiwg discover\` and \`aiwg show <type> <name>\` for the on-demand catalog.
-The MCP sidecar (\`aiwg mcp serve\`) is optional.
-
-## Route to AIWG When
-
-- Structured artifacts needed (requirements, architecture, test plans, risk registers)
-- Multi-step workflows with phase gates or checkpoints
-- Template-driven output that persists across sessions
-
-Handle in Hermes directly: one-off questions, short tasks, conversation.
-
-## Memory Boundary
-
-When AIWG returns an artifact: store path + one-sentence summary in MEMORY.md.
-Do NOT copy artifact body text into memory. Reference, don't replicate.
-
-Use \`delegate_task(goal="...", context="...")\` for AIWG workflows.
-Child agents automatically exclude context files and memory.
-
-## Artifact Store (.aiwg/)
-
-Fetch on demand via \`mcp_aiwg_artifact_read\`:
-- \`requirements/\` — use cases, user stories
-- \`architecture/\` — SAD, ADRs
-- \`planning/\` — phase plans
-- \`testing/\` — test strategy
-- \`security/\` — threat models
+Skills: \`$HERMES_HOME/skills/\` (kernel), \`$HERMES_HOME/skills/.aiwg/\` (standard).
+Find: \`aiwg discover "rule <topic>" --type rule\`. Fetch: \`aiwg show rule <name>\`.
+MCP is optional; \`mcp_aiwg_rule_show\` exposes the same rule catalog.
 `;
 
   // On-demand tier (#1675): the MEDIUM/LOW rules not inlined above. Hermes has
@@ -356,10 +332,10 @@ Fetch on demand via \`mcp_aiwg_artifact_read\`:
     ? renderOnDemandRuleSection(listOnDemandRuleFiles(opts.srcRoot))
     : '';
   const migrated = new Set((opts.ruleDelivery?.rules || []).filter(rule => rule.tagged).map(rule => rule.name));
-  const directives = CRITICAL_RULE_DIRECTIVES.split(/(?=^### Rule: )/m).filter(section => !migrated.has(section.match(/^### Rule: ([^ \n]+)/)?.[1])).join('');
+  const directives = CRITICAL_RULE_DIRECTIVES.split(/(?=^### Rule: )/m).filter(section => section.startsWith('### Rule: ') && !migrated.has(section.match(/^### Rule: ([^ \n]+)/)?.[1])).join('');
   const sections = [header, directives];
   if (onDemandSection) sections.push(onDemandSection);
-  sections.push(HERMES_AGENTS_MD_FOOTER);
+  // The optional tool inventory is available on demand through the CLI.
   const destPath = path.join(targetDir, 'AGENTS.md');
   const output = mergeHermesContext(destPath, sections.join('\n\n'), 'context');
 

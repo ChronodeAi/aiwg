@@ -346,37 +346,35 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
   });
 
   describe('Provider Isolation', () => {
-    it('each provider creates only its own directories', async () => {
-      const providerDirs: Record<string, string[]> = {
-        claude: ['.claude'],
-        codex: ['.codex', '.agents'],  // .agents/skills/ cross-agent compat (#766)
-        factory: ['.factory'],
-        copilot: ['.github', '.agents'],   // PUW-012 #1113
-        cursor: ['.cursor'],
-        opencode: ['.opencode', '.agents'], // PUW-012 #1113
-        warp: ['.warp', '.agents'],  // Discrete files + WARP.md aggregated + .agents/skills/ cross-agent compat (#771)
-        windsurf: ['.windsurf', '.windsurfrules', '.agents'],  // .agents/skills/ cross-agent compat (#576)
-      };
+    const providerDirs: Record<string, string[]> = {
+      claude: ['.claude'],
+      codex: ['.codex', '.agents'],  // .agents/skills/ cross-agent compat (#766)
+      factory: ['.factory'],
+      copilot: ['.github', '.agents'],   // PUW-012 #1113
+      cursor: ['.cursor'],
+      opencode: ['.opencode', '.agents'], // PUW-012 #1113
+      warp: ['.warp', '.agents'],  // Discrete files + WARP.md aggregated + .agents/skills/ cross-agent compat (#771)
+      windsurf: ['.windsurf', '.windsurfrules', '.agents'],  // .agents/skills/ cross-agent compat (#576)
+    };
 
-      for (const [provider, expectedDirs] of Object.entries(providerDirs)) {
-        const { projectDir, homeDir } = await createTestEnv(`isolation-${provider}`);
+    it.each(Object.entries(providerDirs))('%s creates only its own directories', async (provider, expectedDirs) => {
+      const { projectDir, homeDir } = await createTestEnv(`isolation-${provider}`);
 
-        try {
-          runDeploy(provider, projectDir, homeDir);
+      try {
+        runDeploy(provider, projectDir, homeDir);
 
-          const rootContents = await fs.readdir(projectDir);
-          const createdDirs = rootContents.filter(item =>
-            item.startsWith('.') && !['.',  '.git', '.aiwg'].includes(item)
-          );
+        const rootContents = await fs.readdir(projectDir);
+        const createdDirs = rootContents.filter(item =>
+          item.startsWith('.') && !['.',  '.git', '.aiwg'].includes(item)
+        );
 
-          // Should only have expected provider-specific dirs
-          for (const dir of createdDirs) {
-            const isExpected = expectedDirs.some(ed => dir === ed);
-            expect(isExpected, `${provider} created unexpected directory: ${dir}`).toBe(true);
-          }
-        } finally {
-          await cleanupTestEnv(projectDir, homeDir);
+        // Should only have expected provider-specific dirs
+        for (const dir of createdDirs) {
+          const isExpected = expectedDirs.some(ed => dir === ed);
+          expect(isExpected, `${provider} created unexpected directory: ${dir}`).toBe(true);
         }
+      } finally {
+        await cleanupTestEnv(projectDir, homeDir);
       }
     });
   });
@@ -394,24 +392,18 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
           USERPROFILE: homeDir,
         };
 
-        // Run aiwg use with provider. This is the only call in this file that
-        // goes through the full bin/aiwg.mjs router → tsx cold-compile path
-        // (other calls here invoke deploy-agents.mjs directly, or git); under
-        // CPU contention from adjacent heavy integration suites (use-all-
-        // deployment.test.ts, mixed-addon-deployment.test.ts) on a
-        // resource-constrained CI runner, 60s was measured too tight and
-        // produced a deterministic spawnSync ETIMEDOUT (3/3 GitHub Actions
-        // npm-publish runs for v2026.9.14, never observed on self-hosted
-        // Gitea runners).
+        // This checks provider forwarding for agents, commands, skills and rules.
+        // Optional addon sweeps belong to use-all-deployment, not this smoke test.
         execFileSync(
           process.execPath,
-          [path.join(REPO_ROOT, 'bin/aiwg.mjs'), 'use', 'sdlc', '--provider', 'codex', '--target', projectDir],
+          [path.join(REPO_ROOT, 'bin/aiwg.mjs'), 'use', 'sdlc', '--no-utils', '--provider', 'codex', '--target', projectDir],
           { timeout: 150_000, cwd: REPO_ROOT, env, encoding: 'utf-8' }
         );
 
-        // Should have .codex directory
-        const hasCodex = await pathExists(path.join(projectDir, '.codex'));
-        expect(hasCodex, '.codex should exist').toBe(true);
+        for (const deployed of ['.codex/agents', '.codex/rules', '.agents/skills']) {
+          expect(await pathExists(path.join(projectDir, deployed)), deployed).toBe(true);
+        }
+        expect(await pathExists(path.join(homeDir, '.codex/prompts'))).toBe(true);
 
         // Should NOT have .claude directory
         const hasClaude = await pathExists(path.join(projectDir, '.claude'));

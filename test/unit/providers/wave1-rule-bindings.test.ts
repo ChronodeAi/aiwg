@@ -1,3 +1,5 @@
+import { mkdtempSync } from '../../helpers/temp-dir.js';
+import { showBindingEnvelopes } from '../../helpers/show-binding-envelopes.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -23,7 +25,7 @@ describe('Wave 1 canonical rule delivery (#2941)', () => {
   let entries: ArtifactIndex['entries'];
   let rules: Array<{ name: string; data: any }>;
   beforeAll(async () => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-wave1-'));
+    root = mkdtempSync(path.join(os.tmpdir(), 'aiwg-wave1-'));
     source = path.join(root, 'source');
     bundle = path.join(source, 'agentic/code/addons/wave1');
     fs.mkdirSync(path.join(bundle, 'rules'), { recursive: true });
@@ -81,18 +83,17 @@ describe('Wave 1 canonical rule delivery (#2941)', () => {
       'index', 'build', '--graph', 'framework', '--force'], {
       cwd: repo, env, encoding: 'utf8', timeout: 30_000, stdio: 'pipe',
     });
-    for (const { name, data } of rules) for (const [kind, ids] of Object.entries(data.bound_to) as Array<[string, string[]]>) {
-      for (const id of ids) {
-        const shown = JSON.parse(execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
-          'show', kind.slice(0, -1), id, '--json'], {
-          cwd: repo, env, encoding: 'utf8', timeout: 30_000, stdio: 'pipe',
-        }));
-        expect(shown.bound_rules, `${kind}:${id}`).toEqual(expect.arrayContaining([
-          expect.objectContaining({ name, activation: data.activation, summary: data.summary,
-            show_command: `aiwg show rule ${name}` }),
-        ]));
-      }
-    }
+    const requests = rules.flatMap(({ name, data }) =>
+      Object.entries(data.bound_to).flatMap(([kind, ids]) => (ids as string[]).map(id => ({
+        type: kind.slice(0, -1), id, expected: { name, activation: data.activation,
+          summary: data.summary, show_command: `aiwg show rule ${name}` },
+      }))));
+    const shown = showBindingEnvelopes(repo, env, requests);
+    requests.forEach((request, index) => {
+      expect(shown[index].bound_rules, `${request.type}:${request.id}`).toEqual(expect.arrayContaining([
+        expect.objectContaining(request.expected),
+      ]));
+    });
   }, 90_000);
 
   it('ranks each moved rule in the top three for its natural need (U6)', () => {

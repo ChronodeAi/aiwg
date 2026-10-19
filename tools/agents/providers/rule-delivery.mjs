@@ -11,6 +11,7 @@ import {
 } from './base.mjs';
 
 const { parseRuleFrontmatter, inferRuleActivation, RULE_BINDING_TYPES } = await importImpl(import.meta.url, 'rules/activation.mjs');
+const { trackTemporaryDirectory } = await importImpl(import.meta.url, 'utils/temporary-directory.js');
 const { guardRulesInlineBudget } = await importImpl(import.meta.url, 'rules/inline-budget.mjs');
 
 function walk(dir) {
@@ -394,6 +395,7 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
   const previous = fs.existsSync(manifestFile) ? JSON.parse(read(manifestFile)) : {};
   const delivery = await prepareRuleDelivery({ ...original, previousRuleSources: previous.ruleSources || [] });
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rule-deploy-'));
+  const removeTemp = trackTemporaryDirectory(temp);
   const mappings = [];
   const originals = { ...provider.paths };
   try {
@@ -546,6 +548,6 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
     return guarded.report;
   } finally {
     Object.assign(provider.paths, originals);
-    fs.rmSync(temp, { recursive: true, force: true });
+    removeTemp();
   }
 }
