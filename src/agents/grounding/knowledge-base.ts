@@ -8,7 +8,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
-import type { KnowledgeBase, KnowledgeEntry, KnowledgeFragment, VerificationResult } from './types.js';
+import type { KnowledgeBase, KnowledgeEntry, KnowledgeFragment, VerificationEvidence, VerificationResult } from './types.js';
 
 // ============================================================================
 // KnowledgeStore
@@ -123,7 +123,11 @@ export class KnowledgeStore {
   }
 
   /**
-   * Verify a claim against domain knowledge
+   * Verify literal support against the top three retrieved knowledge entries.
+   * Only a whole-entry statement match establishes support; direct copular
+   * negation vetoes it. Other wording abstains, including paraphrases and
+   * multi-sentence passages. This is not a general semantic entailment judge
+   * or a check that the stored knowledge is itself true.
    */
   verifyClaim(claim: string, domain?: string): VerificationResult {
     const fragments = this.search(claim, { domain, limit: 3 });
@@ -134,19 +138,33 @@ export class KnowledgeStore {
         verified: false,
         confidence: 0,
         sources: [],
+        evidence: [],
         correction: 'No relevant knowledge found in knowledge base',
       };
     }
 
-    // Simple verification: check if top fragments support or contradict
-    const topFragment = fragments[0];
-    const confidence = Math.min(topFragment.relevance_score, 1.0);
+    // Relevance selects candidates; only their content can establish support.
+    const evidence: VerificationEvidence[] = fragments.map((fragment) => ({
+      source: fragment.source,
+      entry_id: fragment.metadata?.id,
+      content: fragment.content,
+      relation: compareStatements(claim, fragment.content),
+    }));
+    const contradictions = evidence.filter((item) => item.relation === 'contradicts');
+    const verified = contradictions.length === 0
+      && evidence.some((item) => item.relation === 'supports');
 
     return {
       claim,
-      verified: confidence > 0.3,
-      confidence,
+      verified,
+      confidence: verified ? 1 : 0,
       sources: fragments.map((f) => f.source),
+      evidence,
+      ...(!verified && {
+        correction: contradictions.length > 0
+          ? `Conflicting knowledge: ${contradictions.map((item) => item.content).join(' | ')}`
+          : 'Relevant knowledge was retrieved, but explicit support was not established',
+      }),
     };
   }
 
@@ -165,6 +183,34 @@ export class KnowledgeStore {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+function normalizeStatement(text: string): string {
+  // Preserve case, numbers and internal punctuation: they can change meaning.
+  return text.trim().replace(/\s+/g, ' ').replace(/\.$/, '');
+}
+
+function compareStatements(claim: string, content: string): VerificationEvidence['relation'] {
+  const statement = normalizeStatement(claim);
+  const evidence = normalizeStatement(content);
+  if (!statement || !evidence) return 'unknown';
+  // Do not extract assertions from questions, quotations or multi-sentence text.
+  if ([statement, evidence].some((text) => /[?!;"“”]|\.(?:\s|$)/.test(text))) return 'unknown';
+  if (statement === evidence) return 'supports';
+
+  // A deliberately limited conflict rule: the same whole statement with a
+  // single "not" following is/are/was/were. Never infer support by dropping
+  // negation, and abstain on complex negation (e.g. "not only" or "not always").
+  const affirmative = (text: string): string | undefined => {
+    if (/[.!?;:\n]/.test(text)) return undefined;
+    const match = text.match(/^(.+?\b(?:is|are|was|were)) not (.+)$/);
+    if (!match || /\b(?:not|only|just|always|necessarily)\b/.test(match[2])) return undefined;
+    return `${match[1]} ${match[2]}`;
+  };
+  if (affirmative(statement) === evidence || affirmative(evidence) === statement) {
+    return 'contradicts';
+  }
+  return 'unknown';
+}
 
 function calculateRelevance(entry: KnowledgeEntry, queryTerms: string[]): number {
   const searchable = [
