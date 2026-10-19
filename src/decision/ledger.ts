@@ -64,8 +64,11 @@ import { redactText } from '../governance/redaction.js';
 import { CanonicalJsonByteEstimator } from './context-plan.js';
 import { resolveActiveProvider, type ProviderResolution } from '../cli/provider-resolution.js';
 import type { DecisionAskInput, DecisionAskResult } from './ask.js';
+import { readAiwgConfig } from '../config/aiwg-config.js';
+import { decisionSavingsWeights, estimateDecisionSavings, type DecisionSavingsMethod, type DecisionSavingsWeights } from './savings.js';
 
-export const DECISION_LEDGER_SCHEMA = 'aiwg-decision-ledger-record/v1';
+export const DECISION_LEDGER_SCHEMA = 'aiwg-decision-ledger-record/v2';
+export const DECISION_LEDGER_SCHEMA_V1 = 'aiwg-decision-ledger-record/v1';
 const DECISION_LEDGER_DIR_NAME = 'decision';
 const DECISION_LEDGER_FILE_NAME = 'ledger.jsonl';
 
@@ -75,12 +78,13 @@ const DECISION_LEDGER_KINDS: readonly DecisionLedgerKind[] = ['yes-no', 'choices
 const DECISION_LEDGER_STATUSES: readonly DecisionAskResult['status'][] = ['answered', 'fallback'];
 
 export interface DecisionLedgerRecord {
-  schema: typeof DECISION_LEDGER_SCHEMA;
+  schema: typeof DECISION_LEDGER_SCHEMA | typeof DECISION_LEDGER_SCHEMA_V1;
   id: string;
   timestamp: string;
   transport: DecisionLedgerTransport;
   provider: string;
   sessionId: string;
+  sessionSource?: string;
   projectRoot: string;
   decisionKind: DecisionLedgerKind;
   choiceIds: string[] | null;
@@ -115,13 +119,18 @@ export interface DecisionLedgerRecord {
   agreementConfidenceFloor?: number;
   passConfidenceSummary?: NonNullable<DecisionAskResult['aggregate']>['confidenceSummary'];
   estimatedLlmTokensAvoided: number;
-  estimationMethod: string;
+  /** Legacy v1 figure above is retained for comparison only. */
+  estimationMethodV1?: string;
+  llm_tokens_avoided?: number;
+  jev_tokens?: number;
+  cost_weighted_net_usd?: number;
+  estimationMethod: string | DecisionSavingsMethod;
   caller: string | null;
 }
 
 /**
- * Per-decision-kind reasoning/output token allowance folded into the
- * "tokens avoided" estimate for answered calls. Named and recorded with
+ * Legacy v1 per-kind allowance, retained only for comparison and replay.
+ * Named and recorded with
  * every estimate (not just referenced) so the figure can be recomputed
  * later per the issue's proposal item 3.
  */
@@ -238,7 +247,7 @@ function contextMessageForEstimate(input: DecisionAskInput): string {
   return input.context === undefined || input.context === '' ? input.question : `${input.question}\n\nContext:\n${input.context}`;
 }
 
-function estimateSavings(input: DecisionAskInput, result: DecisionAskResult): { estimatedLlmTokensAvoided: number; estimationMethod: string } {
+function estimateSavingsV1(input: DecisionAskInput, result: DecisionAskResult): { estimatedLlmTokensAvoided: number; estimationMethod: string } {
   if (result.status === 'answered') {
     const inputTokens = new CanonicalJsonByteEstimator().estimate(contextMessageForEstimate(input)).tokens;
     const allowance = DECISION_SAVINGS_REASONING_ALLOWANCE_TOKENS[input.mode.kind];
@@ -249,26 +258,32 @@ function estimateSavings(input: DecisionAskInput, result: DecisionAskResult): { 
   return { estimatedLlmTokensAvoided: jevCost === 0 ? 0 : -jevCost, estimationMethod: DECISION_SAVINGS_ESTIMATION_METHOD };
 }
 
-/**
- * `--session`, then `AIWG_SESSION_ID`, else the literal "unknown" (no
- * harness-specific session env helper exists in this repo yet). Either
- * source is rejected down to "unknown" if it does not match the
- * attribution identifier shape — this is the safety net for the
- * environment-derived value, which (unlike `--session`) has no CLI exit
- * code to reject through.
- */
-export function resolveDecisionSessionId(explicitSessionId: string | undefined, env: NodeJS.ProcessEnv): string {
+/** Ordered harness session markers; never substitute provider/process ids. */
+export const DECISION_SESSION_ENV_VARS = [
+  'AIWG_SESSION_ID', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID',
+  'HERMES_SESSION_ID', 'OPENCODE_SESSION_ID', 'MUSE_SESSION_ID', 'GROK_SESSION_ID', 'WARP_SESSION_ID',
+] as const;
+
+export function resolveDecisionSession(explicitSessionId: string | undefined, env: NodeJS.ProcessEnv): { sessionId: string; sessionSource: string } {
   const explicit = explicitSessionId?.trim();
-  if (explicit && ATTRIBUTION_FIELD_PATTERN.test(explicit)) return explicit;
-  const fromEnv = env.AIWG_SESSION_ID?.trim();
-  if (fromEnv && ATTRIBUTION_FIELD_PATTERN.test(fromEnv)) return fromEnv;
-  return 'unknown';
+  if (explicit && ATTRIBUTION_FIELD_PATTERN.test(explicit)) return { sessionId: explicit, sessionSource: '--session' };
+  for (const key of DECISION_SESSION_ENV_VARS) {
+    const value = env[key]?.trim();
+    if (value && ATTRIBUTION_FIELD_PATTERN.test(value)) return { sessionId: value, sessionSource: key };
+  }
+  return { sessionId: 'unknown', sessionSource: 'unknown' };
+}
+
+export function resolveDecisionSessionId(explicitSessionId: string | undefined, env: NodeJS.ProcessEnv): string {
+  return resolveDecisionSession(explicitSessionId, env).sessionId;
 }
 
 export interface DecisionLedgerBuildContext {
   transport: DecisionLedgerTransport;
   provider: string;
   sessionId: string;
+  sessionSource?: string;
+  savingsWeights?: DecisionSavingsWeights;
   /** Project root; stored (redacted) as the record's own `projectRoot` field. */
   projectRoot: string;
   caller?: string | null;
@@ -306,7 +321,10 @@ export function buildDecisionLedgerRecord(
   context: DecisionLedgerBuildContext,
 ): DecisionLedgerRecord {
   const timestamp = new Date((context.now ?? Date.now)()).toISOString();
-  const { estimatedLlmTokensAvoided, estimationMethod } = estimateSavings(input, result);
+  const legacy = estimateSavingsV1(input, result);
+  const inputTokens = new CanonicalJsonByteEstimator().estimate(contextMessageForEstimate(input)).tokens;
+  const savings = estimateDecisionSavings(inputTokens, result.status === 'answered',
+    (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0), context.savingsWeights ?? decisionSavingsWeights());
   const caller = context.caller && ATTRIBUTION_FIELD_PATTERN.test(context.caller) ? context.caller : null;
   const rawAnswer = result.answer;
   const answer = typeof rawAnswer === 'string' ? sanitizeField(rawAnswer) : rawAnswer;
@@ -321,6 +339,7 @@ export function buildDecisionLedgerRecord(
     transport: context.transport,
     provider: sanitizeField(context.provider) ?? 'unknown',
     sessionId: sanitizeField(context.sessionId) ?? 'unknown',
+    sessionSource: sanitizeField(context.sessionSource) ?? 'unknown',
     projectRoot: sanitizeField(context.projectRoot) ?? '',
     decisionKind: input.mode.kind,
     choiceIds,
@@ -345,8 +364,9 @@ export function buildDecisionLedgerRecord(
       minAgreement: result.aggregate.minAgreement, agreementConfidenceFloor: result.aggregate.agreementConfidenceFloor,
       passConfidenceSummary: result.aggregate.confidenceSummary,
     } : {}),
-    estimatedLlmTokensAvoided,
-    estimationMethod,
+    estimatedLlmTokensAvoided: legacy.estimatedLlmTokensAvoided,
+    estimationMethodV1: legacy.estimationMethod,
+    ...savings,
     caller: sanitizeField(caller, MAX_METADATA_FIELD_BYTES),
   };
   if (context.recordText) {
@@ -566,7 +586,7 @@ export interface RecordDecisionAskOptions {
   env?: NodeJS.ProcessEnv;
   /** `--provider` override. */
   explicitProvider?: string;
-  /** `--session` override (CLI only; MCP relies on `AIWG_SESSION_ID`). */
+  /** `--session` override; both transports also resolve harness environment ids. */
   explicitSessionId?: string;
   /** Pre-validated attribution tag; an invalid shape is coerced to `null` defensively. */
   caller?: string | null;
@@ -607,11 +627,13 @@ async function performRecord(
   try {
     const provider = await resolveProviderSafely(options);
     if (flag.cancelled) return null;
-    const sessionId = resolveDecisionSessionId(options.explicitSessionId, options.env ?? process.env);
+    const session = resolveDecisionSession(options.explicitSessionId, options.env ?? process.env);
+    const config = await readAiwgConfig(options.projectRoot);
     const record = buildDecisionLedgerRecord(input, result, {
       transport: options.transport,
       provider,
-      sessionId,
+      ...session,
+      savingsWeights: decisionSavingsWeights(config?.decision?.ask),
       projectRoot: options.projectRoot,
       caller: options.caller,
       recordText: options.recordText,
@@ -720,7 +742,7 @@ function isUsageShape(value: unknown): value is DecisionAskResult['usage'] {
 function isDecisionLedgerRecord(value: unknown): value is DecisionLedgerRecord {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
-  if (record.schema !== DECISION_LEDGER_SCHEMA) return false;
+  if (record.schema !== DECISION_LEDGER_SCHEMA && record.schema !== DECISION_LEDGER_SCHEMA_V1) return false;
   if (typeof record.id !== 'string' || record.id.length === 0) return false;
   if (!isStrictRecordTimestamp(record.timestamp)) return false;
   if (record.transport !== 'cli' && record.transport !== 'mcp') return false;
@@ -744,7 +766,21 @@ function isDecisionLedgerRecord(value: unknown): value is DecisionLedgerRecord {
   if (!isUsageShape(record.usage)) return false;
   if (!isNonNegativeOrNull(record.latencyMs) || record.latencyMs === null) return false;
   if (!isFiniteNumber(record.estimatedLlmTokensAvoided)) return false; // may be negative
-  if (typeof record.estimationMethod !== 'string') return false;
+  if (record.schema === DECISION_LEDGER_SCHEMA_V1) {
+    if (typeof record.estimationMethod !== 'string') return false;
+  } else {
+    const method = record.estimationMethod as Record<string, unknown> | null;
+    if (!method || typeof method !== 'object' || method.version !== 'aiwg-decision-savings/v2') return false;
+    if (!['standard', 'reasoning'].includes(method.caller_model_class as string)) return false;
+    for (const key of ['input_tokens', 'reasoning_tokens', 'output_tokens', 'llm_per_mtok', 'jev_per_mtok']) {
+      if (!isFiniteNumber(method[key]) || (method[key] as number) < 0 || (method[key] as number) > 1_000_000) return false;
+    }
+    if (typeof record.sessionSource !== 'string') return false;
+    for (const key of ['llm_tokens_avoided', 'jev_tokens']) {
+      if (!isFiniteNumber(record[key]) || (record[key] as number) < 0) return false;
+    }
+    if (!isFiniteNumber(record.cost_weighted_net_usd)) return false;
+  }
   if (record.caller !== null && typeof record.caller !== 'string') return false;
   for (const key of ['passesRequested', 'escalationPasses', 'passesRun'] as const) {
     if (record[key] !== undefined && (!Number.isSafeInteger(record[key]) || (record[key] as number) < (key === 'passesRun' ? 0 : 1))) return false;
@@ -847,6 +883,11 @@ export interface DecisionLedgerStatsFilters extends DecisionLedgerFilters {
 }
 
 export interface DecisionLedgerStatsGroup {
+  llm_tokens_avoided: number;
+  jev_tokens: number;
+  cost_weighted_net_usd: number;
+  /** v1 inputs recovered from the legacy credit, using the current config. */
+  legacyReestimatedCalls: number;
   /** `null` only for the caller group when no record in the group carries a `--caller` tag — distinct from the literal string "unattributed". */
   key: string | null;
   totalCalls: number;
@@ -883,6 +924,8 @@ export interface DecisionLedgerStatsResult {
   groups: DecisionLedgerStatsGroup[];
   /** The filters applied to produce this result, so a `--json` consumer can see what was selected. */
   filters: DecisionLedgerStatsFilters;
+  /** Applied only to v1 records; v2 records retain their recorded weights. */
+  legacyEstimationWeights: DecisionSavingsWeights;
 }
 
 function groupKeyFor(record: DecisionLedgerRecord, groupBy: DecisionLedgerGroupBy | undefined): string | null {
@@ -896,6 +939,9 @@ function groupKeyFor(record: DecisionLedgerRecord, groupBy: DecisionLedgerGroupB
 }
 
 interface StatsAccumulator {
+  llmTokensAvoided: number;
+  costWeightedNetUsd: number;
+  legacyReestimatedCalls: number;
   agreementCount: number;
   agreementSum: number;
   escalatedCalls: number;
@@ -917,6 +963,7 @@ interface StatsAccumulator {
 
 function newAccumulator(): StatsAccumulator {
   return {
+    llmTokensAvoided: 0, costWeightedNetUsd: 0, legacyReestimatedCalls: 0,
     totalCalls: 0, answered: 0, fallback: 0, fallbackCountByReason: {},
     agreementCount: 0, agreementSum: 0, escalatedCalls: 0, passesRun: 0,
     confidenceCount: 0, confidenceSum: 0, confidenceMin: null, confidenceMax: null,
@@ -925,13 +972,26 @@ function newAccumulator(): StatsAccumulator {
   };
 }
 
-function accumulate(acc: StatsAccumulator, record: DecisionLedgerRecord): void {
+function accumulate(acc: StatsAccumulator, record: DecisionLedgerRecord, weights: DecisionSavingsWeights): void {
   acc.totalCalls += 1;
   if (record.agreementRatio !== undefined) { acc.agreementCount += 1; acc.agreementSum += record.agreementRatio; }
   if (record.escalated) acc.escalatedCalls += 1;
   acc.passesRun += record.passesRun ?? (record.fallbackReason === 'not-configured' ? 0 : 1);
   const inputTokens = record.usage?.inputTokens ?? 0;
   const outputTokens = record.usage?.outputTokens ?? 0;
+  if (record.schema === DECISION_LEDGER_SCHEMA) {
+    acc.llmTokensAvoided += record.llm_tokens_avoided!;
+    acc.costWeightedNetUsd += record.cost_weighted_net_usd!;
+  } else {
+    // v1 answered credit contains the original input estimate plus the known
+    // per-kind allowance. Digests alone cannot reconstruct caller text.
+    const recoveredInput = record.status === 'answered'
+      ? Math.max(0, record.estimatedLlmTokensAvoided - DECISION_SAVINGS_REASONING_ALLOWANCE_TOKENS[record.decisionKind]) : 0;
+    const estimate = estimateDecisionSavings(recoveredInput, record.status === 'answered', inputTokens + outputTokens, weights);
+    acc.llmTokensAvoided += estimate.llm_tokens_avoided;
+    acc.costWeightedNetUsd += estimate.cost_weighted_net_usd;
+    acc.legacyReestimatedCalls += 1;
+  }
   if (record.status === 'answered') {
     acc.answered += 1;
     if (record.confidence !== null) {
@@ -959,6 +1019,10 @@ function finalizeGroup(key: string | null, acc: StatsAccumulator): DecisionLedge
   }
   return {
     key,
+    llm_tokens_avoided: acc.llmTokensAvoided,
+    jev_tokens: acc.jevInputTokens + acc.jevOutputTokens,
+    cost_weighted_net_usd: acc.costWeightedNetUsd,
+    legacyReestimatedCalls: acc.legacyReestimatedCalls,
     totalCalls: acc.totalCalls,
     answered: acc.answered,
     fallback: acc.fallback,
@@ -983,6 +1047,8 @@ function finalizeGroup(key: string | null, acc: StatsAccumulator): DecisionLedge
 
 /** Reads, validates, filters and aggregates the ledger offline, streaming line-by-line with incremental min/max; no network, no Jev call. Tolerates a missing ledger file (empty result). */
 export async function decisionLedgerStats(projectRoot: string, filters: DecisionLedgerStatsFilters = {}): Promise<DecisionLedgerStatsResult> {
+  const config = await readAiwgConfig(projectRoot);
+  const weights = decisionSavingsWeights(config?.decision?.ask);
   const groups = new Map<string | null, StatsAccumulator>();
   let skipped = 0;
   for await (const record of streamDecisionLedgerRecords(projectRoot)) {
@@ -991,7 +1057,7 @@ export async function decisionLedgerStats(projectRoot: string, filters: Decision
     const key = groupKeyFor(record, filters.groupBy);
     let acc = groups.get(key);
     if (!acc) { acc = newAccumulator(); groups.set(key, acc); }
-    accumulate(acc, record);
+    accumulate(acc, record, weights);
   }
   const sortedKeys = [...groups.keys()].sort((a, b) => (a ?? '').localeCompare(b ?? ''));
   return {
@@ -1000,6 +1066,7 @@ export async function decisionLedgerStats(projectRoot: string, filters: Decision
     skipped,
     groups: sortedKeys.map(key => finalizeGroup(key, groups.get(key) as StatsAccumulator)),
     filters: { ...filters },
+    legacyEstimationWeights: weights,
   };
 }
 

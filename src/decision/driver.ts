@@ -20,9 +20,12 @@ import {
   decisionLedgerHistory,
   decisionLedgerStats,
   resolveDecisionSessionId,
+  resolveDecisionSession,
+  DECISION_SESSION_ENV_VARS,
   parseDecisionLedgerSince,
   DecisionLedgerSinceError,
   DECISION_LEDGER_SCHEMA,
+  DECISION_LEDGER_SCHEMA_V1,
   ATTRIBUTION_FIELD_PATTERN,
   MAX_ATTRIBUTION_FIELD_LENGTH,
   MAX_RECORDED_CHOICE_IDS,
@@ -47,6 +50,7 @@ import {
   type RecordDecisionAskOptions,
   type LedgerWriteChunk,
 } from './ledger.js';
+export { DEFAULT_DECISION_SAVINGS_WEIGHTS, decisionSavingsWeights, type DecisionSavingsWeights, type DecisionSavingsMethod } from './savings.js';
 import { resolveActiveProvider } from '../cli/provider-resolution.js';
 import {
   assertDecisionEvaluateDispatcherConfig,
@@ -112,9 +116,12 @@ export {
   decisionLedgerHistory,
   decisionLedgerStats,
   resolveDecisionSessionId,
+  resolveDecisionSession,
+  DECISION_SESSION_ENV_VARS,
   parseDecisionLedgerSince,
   DecisionLedgerSinceError,
   DECISION_LEDGER_SCHEMA,
+  DECISION_LEDGER_SCHEMA_V1,
   ATTRIBUTION_FIELD_PATTERN,
   MAX_ATTRIBUTION_FIELD_LENGTH,
   MAX_RECORDED_CHOICE_IDS,

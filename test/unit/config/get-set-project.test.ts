@@ -44,6 +44,38 @@ describe('aiwg config get|set --project (#1006)', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
+  it('validates savings weights through config set, the loader, and the JSON schema', async () => {
+    const { readAiwgConfig } = await import('../../../src/config/aiwg-config.js');
+    const schema = JSON.parse(readFileSync(join(process.cwd(), 'vscode-extension/schemas/aiwg.config.v1.json'), 'utf8'));
+    const validate = new Ajv({ strict: false }).compile(schema.properties.decision);
+    for (const [key, value] of [
+      ['cost.llm_per_mtok', '12.5'], ['cost.jev_per_mtok', '0.1'],
+      ['savings.caller_model_class', 'standard'], ['savings.reasoning_tokens', '512'], ['savings.output_tokens', '64'],
+    ]) await main(['set', '--project', `decision.ask.${key}`, value!, '--target', tmp]);
+    const decision = (await readAiwgConfig(tmp))!.decision!;
+    expect(decision.ask).toMatchObject({ cost: { llm_per_mtok: 12.5, jev_per_mtok: 0.1 },
+      savings: { caller_model_class: 'standard', reasoning_tokens: 512, output_tokens: 64 } });
+    expect(validate(decision)).toBe(true);
+    const before = readConfig(tmp);
+    for (const [key, value] of [
+      ['cost.llm_per_mtok', '-1'], ['cost.jev_per_mtok', 'Infinity'], ['cost.jev_per_mtok', ''],
+      ['savings.reasoning_tokens', '1.5'], ['savings.output_tokens', '-1'], ['savings.output_tokens', '1000001'],
+      ['savings.reasoning_tokens', ''],
+      ['savings.caller_model_class', 'imaginary'], ['cost.typo', '1'],
+    ]) {
+      await expect(main(['set', '--project', `decision.ask.${key}`, value!, '--target', tmp])).rejects.toThrow();
+      expect(readConfig(tmp)).toEqual(before);
+    }
+    for (const ask of [
+      { cost: { llm_per_mtok: -1 } }, { cost: [] }, { savings: { reasoning_tokens: 1.5 } },
+      { savings: { caller_model_class: 'imaginary' } }, { savings: { output_tokens: 1000001 } },
+    ]) {
+      expect(validate({ ask })).toBe(false);
+      writeFileSync(join(tmp, '.aiwg', 'aiwg.config'), JSON.stringify({ decision: { ask } }));
+      await expect(readAiwgConfig(tmp)).rejects.toThrow(/decision.ask/);
+    }
+  });
+
   it('sets agreement probabilities as numbers and rejects invalid values without changing config', async () => {
     for (const [key, value] of [['min_agreement', '0.9'], ['agreement_confidence_floor', '0.55']]) {
       await main(['set', '--project', `decision.ask.${key}`, value!, '--target', tmp]);

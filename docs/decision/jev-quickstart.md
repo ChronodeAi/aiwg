@@ -262,18 +262,19 @@ delay the write past the deadline.
 
 Records carry the resolved provider (`--provider` to override; otherwise
 the same runtime detection `aiwg steward` uses, degrading to `unknown` if
-detection itself fails), a session id (`--session`, else `AIWG_SESSION_ID`,
-else the literal `unknown`), the decision kind and choice ids (at most 10
+detection itself fails), a session id and `sessionSource`. Resolution order is
+`--session`, `AIWG_SESSION_ID`, `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`,
+`CODEX_SESSION_ID`, `HERMES_SESSION_ID`, `OPENCODE_SESSION_ID`, `MUSE_SESSION_ID`,
+`GROK_SESSION_ID`, `WARP_SESSION_ID`, then the literal `unknown`. Empty or
+malformed environment values are skipped. `sessionSource` records the winning
+flag/environment name (or `unknown`). Records also carry the decision kind and choice ids (at most 10
 recorded, regardless of how many the `ask` call itself allowed —
 `choiceCount` and `choiceIdsTruncated` say how many there really were),
 `answerIndex` (the selected option's position in the original list — this
 survives redaction even when two different secret-shaped choice ids redact
 to the same display marker), SHA-256 digests of the question and context,
-the outcome, model, Jev usage, latency, and an estimated-LLM-tokens-avoided
-figure with the method that produced it (the D06 context-token estimator
-plus a named per-kind reasoning allowance for answered calls; the negative
-of the Jev usage spent for a fallback that actually called Jev; zero for
-`not-configured`, which never calls Jev).
+the outcome, model, Jev usage, latency, and v2 savings telemetry described below.
+Both CLI and MCP calls use the same attribution and estimation code.
 
 An optional `--caller <tag>` names the decision point for later attribution,
 for example `--caller "address-issues:worker-pick"`. `--session` and
@@ -331,14 +332,66 @@ arguments on either command are usage errors (exit 2) naming the offender.
 human-readable output prints one `Caller filter:` header line when a caller
 filter is set. It reports answered/fallback counts, a
 fallback rate (and a per-reason rate) as a fraction of the group's total
-calls, the confidence distribution, Jev tokens spent, the estimated LLM
-tokens avoided, and net savings (the avoided-tokens total minus Jev usage
-actually spent on *answered* calls only — a fallback's own estimate already
-nets out its own Jev cost, so it is not subtracted a second time). Both
+calls, the confidence distribution, and three separate savings quantities in
+both text and JSON. Both
 commands report how many stored lines failed validation as `skipped`.
 Retention (archiving or pruning old entries) is a documented follow-up, not
 implemented yet — delete or truncate `.aiwg/decision/ledger.jsonl` yourself
 if it grows too large; both commands tolerate a missing file.
+
+### Reading savings and setting weights
+
+New ledger records use `aiwg-decision-ledger-record/v2`:
+
+- `llm_tokens_avoided`: estimated caller input + reasoning + output tokens for
+  an answered call; zero for a fallback. Input uses the D06 canonical JSON
+  UTF-8 estimator on question and context, not Jev's prompt overhead.
+- `jev_tokens`: recorded Jev input + output tokens across **all** passes,
+  including escalation and fallbacks. Missing usage components count as zero;
+  check the original `usage` for unknown measurements.
+- `cost_weighted_net_usd`: `(llm_tokens_avoided * llm_per_mtok - jev_tokens *
+  jev_per_mtok) / 1,000,000`. Positive means estimated dollars saved; negative
+  means estimated added cost. A fallback charges Jev once and credits no
+  frontier avoidance. These are estimates, not billing measurements.
+
+`estimationMethod` is an object with `version: aiwg-decision-savings/v2`,
+`input_tokens`, `caller_model_class`, `reasoning_tokens`, `output_tokens`,
+`llm_per_mtok`, and `jev_per_mtok`. Weights are captured when recording, so
+later config changes do not rewrite a v2 record's economics.
+
+Project config sets the caller class explicitly; it is not inferred from the
+Jev model or harness. Default class `reasoning` assumes 1,024 reasoning tokens;
+`standard` assumes 256. Both assume 128 output tokens, separate from reasoning.
+These are adjustable planning allowances, not empirically calibrated savings
+claims. Calibrate them against representative caller usage for your workload.
+Defaults are **$15 per million frontier tokens** and **$0.20 per million Jev
+tokens**. These are planning weights, not current vendor price quotes; use
+blended input/output rates appropriate to your models and cache usage.
+
+```bash
+aiwg config set --project decision.ask.cost.llm_per_mtok 15
+aiwg config set --project decision.ask.cost.jev_per_mtok 0.2
+aiwg config set --project decision.ask.savings.caller_model_class reasoning
+aiwg config set --project decision.ask.savings.reasoning_tokens 1024
+aiwg config set --project decision.ask.savings.output_tokens 128
+aiwg decision stats --group-by session
+aiwg decision stats --group-by caller --json
+```
+
+Prices must be finite numbers from 0 to 1,000,000; allowances must be integers
+in the same range. Zero is supported. The schema, loader, and `config set`
+validate these settings. Omitted keys use the defaults above.
+
+The original `estimatedLlmTokensAvoided` and `estimationMethodV1` remain on new
+records for comparison. Stats retains `estimatedLlmTokensAvoidedTotal` and
+`netSavingsTokens` as **v1 comparison only**, explicitly labeled in text.
+Do not interpret that subtraction of unlike tokens as monetary savings.
+Old v1 ledgers remain readable without migration. For their v2 stats estimates,
+answered input tokens are recovered by removing the old per-kind allowance
+(50 yes/no, 120 choices, 80 scale), then applying the current class/allowances.
+Fallbacks have zero avoided tokens. `legacyReestimatedCalls` counts these rows;
+`legacyEstimationWeights` reports their current weights. No ledger is rewritten.
+Session ids missing in old records cannot be recovered retroactively.
 
 ## 10. Troubleshooting
 

@@ -6,6 +6,7 @@ import { allHandlers } from '../../../../src/cli/handlers/index.js';
 import { decisionHandler } from '../../../../src/cli/handlers/decision.js';
 import { getCommandDefinition, getCommandIds, searchCommandsByKeyword } from '../../../../src/extensions/commands/definitions.js';
 import { listProviderDefinitions } from '../../../../src/providers/provider-definitions.js';
+import { appendDecisionLedgerRecord, buildDecisionLedgerRecord, DECISION_SESSION_ENV_VARS } from '../../../../src/decision/ledger.js';
 
 // Review r1 finding 10 / review r2 item 14: isolate every credential, session,
 // artifact-root-override and harness-detection environment variable the
@@ -25,6 +26,7 @@ const ISOLATED_ENV_KEYS = [
   'AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH', 'AIWG_PROJECT_AIWG_DIR',
   'AIWG_PROVIDER', 'CLAUDECODE_PROVIDER', 'AIWG_TEST_PROCESS_PROVIDER', 'AIWG_DISABLE_PROCESS_PROVIDER_DETECTION',
   'AIWG_DECISION_ENABLED', 'JEV_API_KEY', 'AIWG_DECISION_JEV_API_KEY', 'XDG_CONFIG_HOME',
+  ...DECISION_SESSION_ENV_VARS,
   ...allHarnessMarkerEnvKeys(),
 ] as const;
 
@@ -64,6 +66,25 @@ describe('decisionHandler', () => {
     });
     expect(getCommandIds()).toContain('decision');
     expect(searchCommandsByKeyword('classification').map(command => command.id)).toContain('decision');
+  });
+
+  it('shows separate token and dollar estimates in text and JSON for session and caller groups', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'aiwg-decision-cli-'));
+    cleanup.push(dir);
+    const record = buildDecisionLedgerRecord({ question: 'Proceed?', mode: { kind: 'yes-no' } }, {
+      schema: 'aiwg-decision-ask/v1', status: 'answered', answer: true, confidence: 0.95, probability: 0.95,
+      reason: 'none', fallback: null, model: 'mock', usage: { inputTokens: 400, outputTokens: 10 }, latencyMs: 1,
+    }, { transport: 'cli', projectRoot: dir, provider: 'codex', sessionId: 'sess-42', sessionSource: 'CODEX_THREAD_ID', caller: 'worker' });
+    await appendDecisionLedgerRecord(record, { projectRoot: dir });
+    const run = (args: string[]) => decisionHandler.execute({ args, rawArgs: [], cwd: dir, frameworkRoot: process.cwd() });
+    const text = await run(['stats', '--group-by', 'session']);
+    expect(text.exitCode).toBe(0);
+    expect(text.message).toContain('session=sess-42');
+    expect(text.message).toContain(`llm_tokens_avoided=${record.llm_tokens_avoided} jev_tokens=410 cost_weighted_net_usd=`);
+    expect(text.message).toContain('v1 comparison only:');
+    const json = await run(['stats', '--group-by', 'caller', '--json']);
+    expect(JSON.parse(json.message!).groups[0]).toMatchObject({ key: 'worker', llm_tokens_avoided: record.llm_tokens_avoided,
+      jev_tokens: 410, cost_weighted_net_usd: record.cost_weighted_net_usd });
   });
 
   it('returns machine-readable capabilities', async () => {
@@ -141,7 +162,8 @@ describe('decisionHandler', () => {
     const ledger = await readFile(path.join(dir, '.aiwg', 'decision', 'ledger.jsonl'), 'utf8');
     const record = JSON.parse(ledger.trim().split('\n')[0]);
     expect(record).toMatchObject({
-      schema: 'aiwg-decision-ledger-record/v1',
+      schema: 'aiwg-decision-ledger-record/v2',
+      sessionSource: '--session',
       transport: 'cli',
       provider: 'codex',
       sessionId: 'sess-123',
