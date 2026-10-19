@@ -399,6 +399,15 @@ function projectBoundFlowSkills(opts, provider, selected) {
   }
 }
 
+/** Count rule sections, excluding aggregated agent/command definitions and project prose. */
+export function warpRuleContent(content) {
+  const blocks = [...content.matchAll(/<!-- AIWG:rule-startup:start -->[\s\S]*?<!-- AIWG:rule-startup:end -->/g)].map(match => match[0]);
+  // Remove managed blocks first so their internal headings cannot be counted twice.
+  const remaining = content.replace(/<!-- AIWG:rule-startup:start -->[\s\S]*?<!-- AIWG:rule-startup:end -->/g, '');
+  const sections = [...remaining.matchAll(/^## (?:AIWG Rules|On-Demand Rules)\r?\n[\s\S]*?(?=^## |(?![\s\S]))/gm)].map(match => match[0]);
+  return [...sections, ...blocks].join('\n');
+}
+
 function startupFiles(opts, provider) {
   const bridgeNames = { claude: ['CLAUDE.md'], cursor: ['AGENTS.md'], codex: ['AGENTS.md'], hermes: ['AGENTS.md', '.hermes.md'], warp: ['WARP.md'], openclaw: [] };
   const paths = ['AIWG.md', 'WORKSPACE.md', '.aiwg/AIWG.md', ...bridgeNames[provider.name]].map(name => path.join(opts.target, name));
@@ -413,6 +422,10 @@ function startupFiles(opts, provider) {
       const parsed = parseRuleFrontmatter(content);
       if (parsed.data?.paths || parsed.data?.globs) content = content.slice(0, content.length - parsed.body.length);
     }
+    // WARP.md aggregates agents and commands as well; only its rule content
+    // (managed startup blocks, legacy inline rules, and on-demand lists) counts
+    // toward the rules startup budget.
+    if (provider.name === 'warp' && path.basename(file) === 'WARP.md') content = warpRuleContent(content);
     return { path: file, content };
   });
 }
