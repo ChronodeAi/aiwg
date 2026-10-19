@@ -834,6 +834,16 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     const configPath = path.join(root, 'fixture-config.json');
     await writeFile(configPath, JSON.stringify({ recordPath, scenario: 'stall' }));
     const f = buildFixture(root, 'mcp');
+    // This case intentionally leaves the fixture request pending after the
+    // cancellation notification: delivery alone is not stop proof. Bound the
+    // request so the test can await the complete run lifecycle instead of
+    // leaking it into later tests until the fixture's default 30s deadline.
+    const buildInvocation = f.drivers.codex.buildInvocation;
+    f.drivers.codex.buildInvocation = async input => {
+      const built = await buildInvocation(input);
+      built.mcp.timeoutSeconds = 2;
+      return built;
+    };
     f.drivers.codex.mcpRegistry = {
       get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
         args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: configPath } }),
@@ -878,6 +888,12 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     // The ACTUAL in-flight tools/call request id, not a caller-opaque value.
     expect(cancelEvent.requestId).toBe(callEvent.requestId);
     expect(cancelEvent.requestId).not.toBeNull();
+    const completed = JSON.parse((await runPromise).content[0].text);
+    expect(completed).toMatchObject({
+      requestId: 'f2-reqid', status: 'uncertain', termination: 'uncertain',
+      cancelRequested: true, cancelDelivered: true,
+      diagnostics: ['worker timeout; cancellation delivered'],
+    });
   });
 
   it('cancel delivers a real stop signal, and a later completion is recorded cancelled, never completed', async () => {
