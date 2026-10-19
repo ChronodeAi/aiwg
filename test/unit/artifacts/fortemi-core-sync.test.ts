@@ -10,6 +10,7 @@ import {
 } from "../../../src/artifacts/fortemi-core-sync.js";
 import { buildAiwgFortemiIndexExport } from "../../../src/artifacts/browser-export.js";
 import { collectIndexStatus } from "../../../src/artifacts/index-status.js";
+import { loadFortemiCoreExport } from "../../../src/artifacts/fortemi-core-query-adapter.js";
 import { main } from "../../../src/artifacts/cli.js";
 import {
   GRAPH_CONFIGS,
@@ -85,6 +86,40 @@ describe("Fortemi Core static index sync (#1687)", () => {
     else process.env.XDG_DATA_HOME = prevXdg;
     resetRegistry();
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('reads unchanged exports once across status checks and query loading, without sharing mutable results', () => {
+    writeProjectIndex(tmp, entry());
+    syncFortemiCoreIndex(tmp, { graph: 'project' });
+    const exportPath = path.join(getGraphIndexDir(tmp, 'project'), '../fortemi-core/project/aiwg-fortemi-index-v2.json');
+    const reads = vi.spyOn(fs, 'readFileSync');
+    for (let i = 0; i < 3; i++) expect(getFortemiCoreSyncStatus(tmp, 'project').stale).toBe(false);
+    const first = loadFortemiCoreExport(tmp, 'project').exported!;
+    const originalTitle = first.items[0].title;
+    expect(reads.mock.calls.filter(args => args[0] === exportPath)).toHaveLength(1);
+    first.items[0].title = 'Caller mutation';
+    expect(loadFortemiCoreExport(tmp, 'project').exported!.items[0].title).toBe(originalTitle);
+    expect(reads.mock.calls.filter(args => args[0] === exportPath)).toHaveLength(2);
+  });
+
+  it('invalidates cached validation for same-size tampering with a restored mtime', () => {
+    writeProjectIndex(tmp, entry());
+    syncFortemiCoreIndex(tmp, { graph: 'project' });
+    const status = getFortemiCoreSyncStatus(tmp, 'project');
+    const fixed = 1_700_000_000;
+    fs.utimesSync(status.exportPath, fixed, fixed);
+    expect(getFortemiCoreSyncStatus(tmp, 'project').stale).toBe(false);
+    const before = fs.statSync(status.exportPath, { bigint: true });
+    const text = fs.readFileSync(status.exportPath, 'utf8');
+    fs.writeFileSync(status.exportPath, text.replace('AIWG Doctor', 'AIWG Tester'));
+    fs.utimesSync(status.exportPath, fixed, fixed);
+    const after = fs.statSync(status.exportPath, { bigint: true });
+    expect(after.size).toBe(before.size);
+    expect(after.mtimeNs).toBe(before.mtimeNs);
+    expect(after.ctimeNs).not.toBe(before.ctimeNs);
+    expect(getFortemiCoreSyncStatus(tmp, 'project')).toMatchObject({ stale: true,
+      reason: 'export checksum does not match manifest' });
+    expect(loadFortemiCoreExport(tmp, 'project').exported).toBeUndefined();
   });
 
   it("serializes records separately and preserves exact JSON bytes and checksums (#3185)", () => {

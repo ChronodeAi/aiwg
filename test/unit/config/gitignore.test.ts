@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile, mkdir } from 'fs/promises';
+import { mkdtemp, rm, readFile, writeFile, mkdir, symlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile } from 'child_process';
@@ -286,5 +286,40 @@ describe('dropGitignored', () => {
   it('keeps files outside Git worktrees and handles an empty set', () => {
     expect(dropGitignored(root, ['canonical.md'])).toEqual(['canonical.md']);
     expect(dropGitignored(root, [])).toEqual([]);
+  });
+
+  it('discovers a repository initialized after an earlier non-repository scan', async () => {
+    await writeFile(join(root, '.gitignore'), 'draft.md\n');
+    expect(dropGitignored(root, ['draft.md', 'keep.md'])).toEqual(['draft.md', 'keep.md']);
+    await execFileAsync('git', ['init', '-q'], { cwd: root });
+    expect(dropGitignored(root, ['draft.md', 'keep.md'])).toEqual(['keep.md']);
+  });
+
+  it('discovers the repository through a symlinked working directory', async () => {
+    await mkdir(join(root, 'repo'));
+    await execFileAsync('git', ['init', '-q'], { cwd: join(root, 'repo') });
+    await writeFile(join(root, 'repo', '.gitignore'), 'draft.md\n');
+    await symlink(join(root, 'repo'), join(root, 'alias'), 'dir');
+    expect(dropGitignored(join(root, 'alias'), ['draft.md', 'keep.md'])).toEqual(['keep.md']);
+  });
+
+  it('honors an explicitly configured Git directory outside the working tree', async () => {
+    const repository = join(root, 'repository');
+    const worktree = join(root, 'worktree');
+    await mkdir(worktree);
+    await execFileAsync('git', ['init', '-q', '--separate-git-dir', repository, worktree]);
+    await rm(join(worktree, '.git'));
+    await writeFile(join(worktree, '.gitignore'), 'draft.md\n');
+    const previous = { GIT_DIR: process.env.GIT_DIR, GIT_WORK_TREE: process.env.GIT_WORK_TREE };
+    try {
+      process.env.GIT_DIR = repository;
+      process.env.GIT_WORK_TREE = worktree;
+      expect(dropGitignored(worktree, ['draft.md', 'keep.md'])).toEqual(['keep.md']);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });

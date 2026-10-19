@@ -254,6 +254,7 @@ describe('activation-selected provider deployment (#2939)', () => {
 
     deploy(root, 'claude', { bindingEntries: undefined, env: {
       AIWG_ARTIFACTS_PATH: 'artifacts',
+      AIWG_RULE_BINDING_INDEX_CACHE: '',
       XDG_DATA_HOME: join(root, 'xdg-data'),
       XDG_CONFIG_HOME: join(root, 'xdg-config'),
     } });
@@ -261,6 +262,22 @@ describe('activation-selected provider deployment (#2939)', () => {
     expect(agent.match(/<!-- AIWG:bound-rules:start -->/g)).toHaveLength(1);
     expect(agent).toContain('aiwg show rule fixture-bound');
     expect(agent).not.toContain('FIXTURE_BOUND_BODY');
+  }, 90_000);
+
+  it('rebuilds a malformed shared binding snapshot instead of failing deployment', () => {
+    const root = setup();
+    const cache = join(root, 'binding-cache');
+    const env = { AIWG_RULE_BINDING_INDEX_CACHE: cache,
+      XDG_DATA_HOME: join(root, 'xdg-data'), XDG_CONFIG_HOME: join(root, 'xdg-config') };
+    deploy(root, 'claude', { bindingEntries: undefined, env });
+    const files = readdirSync(cache);
+    expect(files).toHaveLength(1);
+    writeFileSync(join(cache, files[0]), '{interrupted snapshot');
+    deploy(root, 'claude', { bindingEntries: undefined, env });
+    expect(JSON.parse(readFileSync(join(cache, files[0]), 'utf8'))).toEqual(expect.any(Array));
+    expect(readdirSync(cache)).toEqual(files);
+    expect(readFileSync(join(root, 'target/.claude/agents/fixture-agent.md'), 'utf8'))
+      .toContain('aiwg show rule fixture-bound');
   }, 90_000);
 
   it('enforces provider hard caps even with a disabled configurable budget', () => {

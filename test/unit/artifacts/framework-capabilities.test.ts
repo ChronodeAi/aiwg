@@ -74,6 +74,28 @@ afterEach(() => {
 });
 
 describe('framework capabilities outside provider directories (#3304)', () => {
+  it('shares only the declared corpus cache across homes and keeps fixture roots isolated', async () => {
+    const shared = path.join(tmp, 'source-cache');
+    vi.stubEnv('AIWG_FRAMEWORK_INDEX_CACHE', shared);
+    vi.stubEnv('AIWG_FRAMEWORK_INDEX_CACHE_SOURCE', root);
+    await refreshFrameworkCapabilities(root);
+    const directory = getGraphIndexDir(root, 'framework');
+    const builtAt = index().builtAt;
+    const builder = vi.spyOn(indexBuilder, 'buildIndex');
+    vi.stubEnv('XDG_DATA_HOME', path.join(tmp, 'another-home/data'));
+    await refreshFrameworkCapabilities(root);
+    expect(getGraphIndexDir(root, 'framework')).toBe(directory);
+    expect(directory.startsWith(shared + path.sep)).toBe(true);
+    expect(index().builtAt).toBe(builtAt);
+    expect(builder).not.toHaveBeenCalled();
+    const other = path.join(tmp, 'other-runtime');
+    fs.cpSync(root, other, { recursive: true });
+    expect(getGraphIndexDir(other, 'framework').startsWith(shared + path.sep)).toBe(false);
+    await refreshFrameworkCapabilities(other);
+    expect(builder).toHaveBeenCalledTimes(1);
+    expect(getGraphIndexDir(project, 'project').startsWith(shared + path.sep)).toBe(false);
+  });
+
   it.each(['show', 'discover'] as const)('does not replace the shared runtime graph from a partial project corpus (%s)', async query => {
     copySkill('induct-research');
     await refreshFrameworkCapabilities(root);
@@ -289,6 +311,35 @@ describe('framework capabilities outside provider directories (#3304)', () => {
     await refreshFrameworkCapabilities(root);
     expect(builder).not.toHaveBeenCalled();
     expect(sync).toHaveBeenCalledTimes(1);
+  });
+
+  it('validates forced source scans without revalidating an unchanged export receipt', async () => {
+    await refreshFrameworkCapabilities(root);
+    const builder = vi.spyOn(indexBuilder, 'buildIndex');
+    const status = vi.spyOn(fortemiSync, 'getFortemiCoreSyncStatus');
+    const sync = vi.spyOn(fortemiSync, 'syncFortemiCoreIndex');
+    const before = index().builtAt;
+    await refreshFrameworkCapabilities(root, true, { force: true });
+    expect(builder).toHaveBeenCalledTimes(1);
+    expect(index().builtAt).toBe(before);
+    expect(status).not.toHaveBeenCalled();
+    expect(sync).not.toHaveBeenCalled();
+  });
+
+  it('refreshes changed metadata even when two builds have the same timestamp', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-01T00:00:00Z'));
+    try {
+      await refreshFrameworkCapabilities(root);
+      const before = getFortemiCoreSyncStatus(root, 'framework').exportChecksum;
+      copySkill('induct-research');
+      await refreshFrameworkCapabilities(root, true, { force: true });
+      expect(getFortemiCoreSyncStatus(root, 'framework').exportChecksum).not.toBe(before);
+      expect(loadFortemiCoreMetadataEntries(root, 'framework').entries.map(entry => entry.name))
+        .toContain('induct-research');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refreshes the derived cache after a runtime update and preserves unchanged cache generation', async () => {

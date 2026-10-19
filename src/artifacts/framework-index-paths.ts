@@ -55,7 +55,14 @@ export function resolveFrameworkIndexRoot(cwd: string): string {
  * Legacy unkeyed indexes are left alone; reconciliation builds once here.
  */
 export function getFrameworkIndexBaseDir(cwd: string): string {
-  const key = createHash('sha256').update(resolveFrameworkIndexRoot(cwd)).digest('hex');
-  const xdgData = process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local', 'share');
+  const root = resolveFrameworkIndexRoot(cwd);
+  const key = createHash('sha256').update(root).digest('hex');
+  // A lane may share the immutable checkout corpus across isolated homes.
+  // Restrict the override to its declared source: fixture/package roots,
+  // project graphs and user graphs retain their normal isolation.
+  const shared = process.env.AIWG_FRAMEWORK_INDEX_CACHE;
+  const source = process.env.AIWG_FRAMEWORK_INDEX_CACHE_SOURCE;
+  const xdgData = shared && source && canonicalPath(source) === root
+    ? shared : process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local', 'share');
   return path.join(xdgData, 'aiwg', 'index', 'roots', key);
 }

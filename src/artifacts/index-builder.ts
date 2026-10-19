@@ -34,6 +34,7 @@ import {
 import { parseCitationSidecar, citationResultToEdges, buildRefToPathMap } from './citation-parser.js';
 import { writeIndexFile, resolveIndexDir, loadGraphIndexFile } from './index-reader.js';
 import { loadManifest, writeManifest, statMatches, makeEntry, type ChecksumManifest, type ManifestStats } from './checksum-manifest.js';
+import { FRAMEWORK_RELATIONS_REVISION } from './framework-source-digest.js';
 import { normalizeOperationalState } from './operational-state.js';
 import {
   DEFAULT_PROJECT_AIWG_DIR,
@@ -1019,21 +1020,12 @@ export async function buildIndex(
   const buildConfigHash = createHash('sha256')
     .update(JSON.stringify({ graphConfig, backendType }))
     .digest('hex');
-  const existingIndex = force
-    ? null
-    : outputDir
-      ? loadIndexFromDir<ArtifactIndex>(indexOutputDir, 'metadata.json')
-      : loadGraphIndexFile<ArtifactIndex>(effectiveOutputCwd, 'metadata.json', graph);
-  const canReuseExisting = existingIndex?.version === INDEX_VERSION
-    && existingIndex.extractorVersion === INDEX_EXTRACTOR_VERSION
-    && existingIndex.buildConfigHash === buildConfigHash;
-  const existingEntries = canReuseExisting ? existingIndex.entries : {};
-
-  // Load checksum manifest for fast stat-based change detection (#794).
-  // When --force is set we skip the manifest entirely and rebuild everything.
-  const manifest: ChecksumManifest = force || !canReuseExisting
+  const storedManifest: ChecksumManifest = force
     ? { version: 1, generated: '', entries: {} }
     : loadManifest(indexOutputDir);
+  const useFilenameMetadata = graphConfig?.nodeStrategy === 'filename-metadata';
+  const reusable = !useFilenameMetadata && !graphConfig?.metadataSupplements?.length && !graphConfig?.edgeExtraction;
+  const fileStats = !force && reusable ? new Map<string, fs.Stats>() : undefined;
   const nextManifestEntries: Record<string, import('./checksum-manifest.js').ManifestEntry> = {};
   const manifestStats: ManifestStats = {
     checked: 0,
@@ -1044,7 +1036,7 @@ export async function buildIndex(
   };
 
   // Collect files from all scan directories
-  const files = await collectGraphIndexFiles(cwd, graph, { scope, includeIgnored });
+  const files = await collectGraphIndexFiles(cwd, graph, { scope, includeIgnored, fileStats });
   const entries: Record<string, MetadataEntry> = {};
   const tagIndex: TagIndex = {};
   const depGraph: DependencyGraph = {};
@@ -1052,8 +1044,6 @@ export async function buildIndex(
   let newCount = 0;
   let updatedCount = 0;
   let unchangedCount = 0;
-
-  const useFilenameMetadata = graphConfig?.nodeStrategy === 'filename-metadata';
 
   const reportBuild = (buildTimeMs: number, total: number): void => {
     log(`Artifact index built in ${buildTimeMs}ms`);
@@ -1070,6 +1060,67 @@ export async function buildIndex(
     const displayDir = graph ? indexOutputDir : `${INDEX_DIR}/`;
     log(`  Output: ${displayDir}`);
   };
+
+  const requiredFiles = ['tags.json', 'dependencies.json'];
+  if (backendType === 'sqlite') requiredFiles.push('graph.db');
+  const fileSignature = (filename: string): string => {
+    try {
+      const stat = fs.statSync(path.join(indexOutputDir, filename), { bigint: true });
+      return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
+    } catch { return ''; }
+  };
+  const relationsReceiptMatches = (): boolean => {
+    const projection = storedManifest.receipt?.relations;
+    return graph !== 'framework' || Boolean(projection?.revision === FRAMEWORK_RELATIONS_REVISION
+      && projection.signature && projection.signature === fileSignature('relations.json'));
+  };
+  const entriesDigest = (values: ChecksumManifest['entries']): string =>
+    createHash('sha256').update(JSON.stringify(values)).digest('hex');
+  const writeBuildManifest = (values: ChecksumManifest['entries']): void => {
+    writeManifest(indexOutputDir, { version: 1, generated: new Date().toISOString(), entries: values,
+      ...(reusable ? { receipt: {
+        indexVersion: INDEX_VERSION, extractorVersion: INDEX_EXTRACTOR_VERSION, buildConfigHash,
+        sourceRoot: path.resolve(cwd), metadataSignature: fileSignature('metadata.json'), entriesDigest: entriesDigest(values),
+        ...(graph === 'framework' ? { relations: { revision: FRAMEWORK_RELATIONS_REVISION, signature: fileSignature('relations.json') } } : {}),
+      } } : {}),
+    });
+  };
+
+  // A successful receipt proves the manifest belongs to this exact metadata
+  // file. Still enumerate/stat every source and verify the complete file set;
+  // unchanged builds need not parse the much larger metadata/dependency data.
+  const receipt = storedManifest.receipt;
+  if (!force && reusable && storedManifest.generated && receipt
+    && receipt.indexVersion === INDEX_VERSION && receipt.extractorVersion === INDEX_EXTRACTOR_VERSION
+    && receipt.buildConfigHash === buildConfigHash && receipt.sourceRoot === path.resolve(cwd)
+    && receipt.metadataSignature && receipt.metadataSignature === fileSignature('metadata.json')
+    && relationsReceiptMatches()
+    && receipt.entriesDigest === entriesDigest(storedManifest.entries)
+    && files.length === Object.keys(storedManifest.entries).length
+    && requiredFiles.every(filename => fs.existsSync(path.join(indexOutputDir, filename)))) {
+    const stats = loadIndexFromDir<IndexStats>(indexOutputDir, 'stats.json');
+    if (stats?.version === INDEX_VERSION && stats.extractorVersion === INDEX_EXTRACTOR_VERSION
+      && stats.totalArtifacts === files.length && files.every(file => {
+        try { return statMatches(fileStats?.get(file) ?? fs.statSync(file), storedManifest.entries[indexPathFor(cwd, file, graph)]); }
+        catch { return false; }
+      })) {
+      unchangedCount = files.length;
+      manifestStats.checked = files.length;
+      manifestStats.statSkipped = files.length;
+      const buildTimeMs = Date.now() - startTime;
+      writeIndexFile(effectiveOutputCwd, 'stats.json', { ...stats, builtAt: new Date().toISOString(), buildTimeMs }, indexOutputDir);
+      reportBuild(buildTimeMs, files.length);
+      return;
+    }
+  }
+
+  const existingIndex = force ? null : outputDir
+    ? loadIndexFromDir<ArtifactIndex>(indexOutputDir, 'metadata.json')
+    : loadGraphIndexFile<ArtifactIndex>(effectiveOutputCwd, 'metadata.json', graph);
+  const canReuseExisting = existingIndex?.version === INDEX_VERSION
+    && existingIndex.extractorVersion === INDEX_EXTRACTOR_VERSION && existingIndex.buildConfigHash === buildConfigHash;
+  const existingEntries = canReuseExisting ? existingIndex.entries : {};
+  const manifest: ChecksumManifest = canReuseExisting ? storedManifest : { version: 1, generated: '', entries: {} };
 
   for (const fullPath of files) {
     const relativePath = indexPathFor(cwd, fullPath, graph);
@@ -1103,7 +1154,7 @@ export async function buildIndex(
       // This is the fast path: unchanged files don't touch the filesystem beyond fs.statSync.
       let stat: fs.Stats;
       try {
-        stat = fs.statSync(fullPath);
+        stat = fileStats?.get(fullPath) ?? fs.statSync(fullPath);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           manifestStats.pruned++;
@@ -1236,23 +1287,16 @@ export async function buildIndex(
     && manifest.generated && total === Object.keys(manifest.entries).length
     && manifestStats.pruned === 0) {
     const stats = loadIndexFromDir<IndexStats>(indexOutputDir, 'stats.json');
-    const requiredFiles = ['tags.json', 'dependencies.json'];
-    if (backendType === 'sqlite') requiredFiles.push('graph.db');
     if (stats?.version === INDEX_VERSION && stats.extractorVersion === INDEX_EXTRACTOR_VERSION
       && stats.totalArtifacts === total
       && requiredFiles.every(filename => fs.existsSync(path.join(indexOutputDir, filename)))) {
       // A timestamp-only source change needs a manifest refresh, but does not
       // invalidate metadata, tags, dependencies, or the persistent backend.
-      if (manifestStats.checksumSkipped > 0) {
-        writeManifest(indexOutputDir, {
-          version: 1,
-          generated: new Date().toISOString(),
-          entries: nextManifestEntries,
-        });
-      }
+      const projectionNeedsRepair = graph === 'framework' && !relationsReceiptMatches();
       if (graph === 'framework') {
         const { writeRelations } = await import('./relations-builder.js');
-        await writeRelations(entries, effectiveOutputCwd, indexOutputDir, force);
+        await writeRelations(entries, effectiveOutputCwd, indexOutputDir,
+          force || !relationsReceiptMatches());
       }
       const buildTimeMs = Date.now() - startTime;
       writeIndexFile(effectiveOutputCwd, 'stats.json', {
@@ -1260,6 +1304,9 @@ export async function buildIndex(
         builtAt: new Date().toISOString(),
         buildTimeMs,
       }, indexOutputDir);
+      // Preserve no-op manifest bytes after output-only timestamp drift.
+      // Renew receipts only for changed source stats or repaired projections.
+      if (manifestStats.checksumSkipped > 0 || projectionNeedsRepair) writeBuildManifest(nextManifestEntries);
       reportBuild(buildTimeMs, total);
       return;
     }
@@ -1280,6 +1327,8 @@ export async function buildIndex(
 
   // Build dependency graph and compute dependents
   let markdownLinkEdgeCount = 0;
+  const entryPaths = Object.keys(entries);
+  const dependencyPaths = new Map<string, string | undefined>();
   for (const entry of Object.values(entries)) {
     if (!depGraph[entry.path]) {
       depGraph[entry.path] = { upstream: [], downstream: [] };
@@ -1287,9 +1336,10 @@ export async function buildIndex(
 
     for (const dep of entry.dependencies) {
       // Normalize: check if referenced path exists in the index
-      const normalizedDep = Object.keys(entries).find(
-        p => p === dep || p.endsWith(dep)
-      );
+      if (!dependencyPaths.has(dep)) {
+        dependencyPaths.set(dep, entryPaths.find(p => p === dep || p.endsWith(dep)));
+      }
+      const normalizedDep = dependencyPaths.get(dep);
       if (normalizedDep && normalizedDep !== entry.path) {
         addDependencyEdge(depGraph, entries, entry.path, normalizedDep, 'depends-on');
       }
@@ -1398,7 +1448,8 @@ export async function buildIndex(
 
   if (graph === 'framework') {
     const { writeRelations } = await import('./relations-builder.js');
-    await writeRelations(entries, effectiveOutputCwd, indexOutputDir, force);
+    await writeRelations(entries, effectiveOutputCwd, indexOutputDir,
+      force || !relationsReceiptMatches());
   }
 
   const buildTimeMs = Date.now() - startTime;
@@ -1433,14 +1484,8 @@ export async function buildIndex(
   // The next manifest contains entries for every file we processed this build.
   // Files that disappeared from disk are pruned; the resulting manifest is
   // written atomically.
-  const nextManifest: ChecksumManifest = {
-    version: 1,
-    generated: new Date().toISOString(),
-    entries: nextManifestEntries,
-  };
   manifestStats.pruned = Object.keys(manifest.entries).length - Object.keys(nextManifestEntries).length;
   if (manifestStats.pruned < 0) manifestStats.pruned = 0;
-  writeManifest(indexOutputDir, nextManifest);
 
   // Write stats
   const downstreamEdges = Object.values(depGraph).reduce(
@@ -1494,6 +1539,7 @@ export async function buildIndex(
       mostReferenced,
     },
   }, indexOutputDir);
+  writeBuildManifest(nextManifestEntries);
 
   // Report
   reportBuild(buildTimeMs, total);

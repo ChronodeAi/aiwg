@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
+import { FRAMEWORK_RELATIONS_REVISION } from '../../../src/artifacts/framework-source-digest.js';
 import { buildIndex } from '../../../src/artifacts/index-builder.js';
 import { buildRelations, relationId, relationsFingerprint } from '../../../src/artifacts/relations-builder.js';
 import { loadBuiltRelations as loadRelations, rulesForTarget, targetsForRule, rulesForCapability, ruleStats } from '../../../src/artifacts/relations.js';
@@ -39,6 +40,51 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('framework relationship sidecar', () => {
+  it('keeps the valid framework receipt fast path free of full metadata reads', async () => {
+    await build();
+    const before = fs.statSync(sidecar(), { bigint: true });
+    const read = vi.spyOn(fs, 'readFileSync');
+    await build();
+    expect(read.mock.calls.some(([file]) => String(file).endsWith('/metadata.json'))).toBe(false);
+    expect(read.mock.calls.some(([file]) => String(file).endsWith('/relations.json'))).toBe(false);
+    expect(fs.statSync(sidecar(), { bigint: true }).mtimeNs).toBe(before.mtimeNs);
+  });
+  it.each(['missing', 'corrupt', 'replaced', 'revision', 'old-receipt'] as const)(
+    'repairs %s relation projections before publishing a reusable framework receipt', async kind => {
+      await build();
+      const dir = getGraphIndexDir(root, 'framework');
+      const manifestFile = path.join(dir, 'checksum-manifest.json');
+      const receipt = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+      const metadataStat = fs.statSync(path.join(dir, 'metadata.json'), { bigint: true });
+      if (kind === 'missing') fs.rmSync(sidecar());
+      else if (kind === 'corrupt') fs.writeFileSync(sidecar(), '{broken');
+      else {
+        // Retain the correct input fingerprint but change the projection. A
+        // revision/receipt mismatch must regenerate, not trust this fingerprint.
+        const changed = JSON.parse(fs.readFileSync(sidecar(), 'utf8'));
+        changed.targets = {};
+        const replacement = `${sidecar()}.replacement`;
+        fs.writeFileSync(replacement, JSON.stringify(changed));
+        fs.renameSync(replacement, sidecar());
+      }
+      if (kind === 'revision') {
+        const stat = fs.statSync(sidecar(), { bigint: true });
+        receipt.receipt.relations.signature = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
+        receipt.receipt.relations.revision = FRAMEWORK_RELATIONS_REVISION - 1;
+      }
+      if (kind === 'old-receipt') delete receipt.receipt.relations;
+      if (kind === 'revision' || kind === 'old-receipt') fs.writeFileSync(manifestFile, JSON.stringify(receipt));
+      await build();
+      expect(loadRelations(root)!.rulesForTarget('skill', 'work')).toHaveLength(2);
+      expect(fs.statSync(path.join(dir, 'metadata.json'), { bigint: true }).mtimeNs).toBe(metadataStat.mtimeNs);
+      const renewed = JSON.parse(fs.readFileSync(manifestFile, 'utf8')).receipt.relations;
+      const stat = fs.statSync(sidecar(), { bigint: true });
+      expect(renewed).toEqual({ revision: FRAMEWORK_RELATIONS_REVISION,
+        signature: [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':') });
+      const read = vi.spyOn(fs, 'readFileSync');
+      await build();
+      expect(read.mock.calls.some(([file]) => String(file).endsWith('/metadata.json'))).toBe(false);
+    });
   it('writes a schema-valid index with deduplicated edges, projections, stats, and capability tiers', async () => {
     await build();
     const reader = loadRelations(root)!;
