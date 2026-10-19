@@ -110,9 +110,9 @@ function parseDecision(text) {
 // A mention in the final answer, discover result, or index read is not a fetch.
 export function parseTrace(stdout, provider) {
   const events = stdout.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
-  const tools = [], texts = [], pending = new Map();
+  const tools = [], texts = [], pending = new Map(), starts = new Map();
   let finalText, completed = false, failed = false;
-  for (const event of events) {
+  for (const [eventIndex, event] of events.entries()) {
     if (provider === 'claude') {
       if (event.type === 'result') {
         completed = true;
@@ -122,25 +122,26 @@ export function parseTrace(stdout, provider) {
       for (const block of event.message?.content ?? []) {
         if (block.type === 'text' && event.type === 'assistant') texts.push(block.text);
         if (block.type === 'tool_use') {
-          const tool = { name: block.name, input: block.input, success: null };
+          const tool = { name: block.name, input: block.input, success: null, start_event: eventIndex };
           tools.push(tool); pending.set(block.id, tool);
         }
         if (block.type === 'tool_result' && pending.has(block.tool_use_id)) {
           const tool = pending.get(block.tool_use_id);
           tool.success = !block.is_error && JSON.stringify(block.content ?? '').length > 2;
-          tool.output = block.content;
+          tool.output = block.content; tool.completed_event = eventIndex;
         }
       }
     } else {
+      if (event.type === 'item.started' && event.item?.id) starts.set(event.item.id, eventIndex);
       if (event.type === 'turn.completed') completed = true;
       if (event.type === 'turn.failed' || event.type === 'error') failed = true;
       if (event.type === 'item.completed') {
         const item = event.item;
         if (item?.type === 'agent_message') texts.push(item.text);
         if (item?.type === 'command_execution') tools.push({ name: 'shell', input: item.command,
-          output: item.aggregated_output, success: item.exit_code === 0 && item.status === 'completed' });
+          output: item.aggregated_output, start_event: starts.get(item.id), completed_event: eventIndex, success: item.exit_code === 0 && item.status === 'completed' });
         if (item?.type === 'mcp_tool_call') tools.push({ name: `${item.server}.${item.tool}`, input: item.arguments,
-          output: item.result, success: item.status === 'completed' && !item.error && !item.result?.isError });
+          output: item.result, start_event: starts.get(item.id), completed_event: eventIndex, success: item.status === 'completed' && !item.error && !item.result?.isError });
       }
     }
   }
@@ -159,9 +160,9 @@ function outputText(value) {
   return '';
 }
 
-export function ruleFetches(tools, rule, bodyFingerprint = '') {
+export function ruleFetches(tools, rule, bodyFingerprint = '', artifactType = 'rule') {
   const escaped = rule.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const show = new RegExp(`\\baiwg\\s+show\\s+rule\\s+['\"]?${escaped}(?=['\"\\s;&|]|$)`, 'i');
+  const show = new RegExp(`\\baiwg\\s+show\\s+${artifactType}\\s+['\"]?${escaped}(?=['\"\\s;&|]|$)`, 'i');
   const file = new RegExp(`(?:^|[/\\\\])${escaped}\\.(?:md|mdc)(?=[\"'\\s:]|$)`, 'i');
   const matches = tools.filter(tool => {
     const input = typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input);
@@ -170,7 +171,7 @@ export function ruleFetches(tools, rule, bodyFingerprint = '') {
     const readsBody = file.test(input) && (isRead || (isExec && /\b(cat|sed|head|tail|less)\b/.test(input)));
     const mcpShow = /(?:rule[_-]show|show[_-]rule|show_artifact)/i.test(tool.name)
       && (tool.input?.name === rule || tool.input?.rule === rule || tool.input?.ruleName === rule)
-      && (tool.input?.type === undefined || tool.input.type === 'rule');
+      && (tool.input?.type === undefined || tool.input.type === artifactType);
     const output = outputText(tool.output);
     const returnedBody = bodyFingerprint.length >= 80 && output.replace(/\s+/g, ' ').includes(bodyFingerprint);
     return (isExec && show.test(input)) || readsBody || mcpShow || returnedBody;
@@ -179,6 +180,20 @@ export function ruleFetches(tools, rule, bodyFingerprint = '') {
     fetched: matches.some(tool => tool.success === true && outputText(tool.output).trim().length > 0),
     unknown: matches.some(tool => tool.success === null || (tool.success === true && !outputText(tool.output).trim())),
     calls: matches };
+}
+
+/** Offline/probe gate: a successful full rule fetch must finish before governed action begins. */
+export function evaluateRequiredRuleChecks(checks, trace, actionPattern) {
+  const actions = actionPattern ? trace.tools.filter(tool => new RegExp(actionPattern, 'i').test(`${tool.name} ${JSON.stringify(tool.input)}`)) : [];
+  const terminal = trace.events?.findIndex(event => event.type === 'result' || event.type === 'turn.completed');
+  const boundary = actions.length ? Math.min(...actions.map(tool => tool.start_event ?? -1)) : terminal;
+  return checks.map(check => {
+    const fetch = check.fetch_command?.match(/^aiwg show (rule|behavior) ([a-z0-9:-]+)$/);
+    const fetched = fetch ? ruleFetches(trace.tools, fetch[2], '', fetch[1]).calls : [];
+    const pass = Number.isInteger(boundary) && boundary >= 0 && fetched.some(tool => tool.success === true
+      && outputText(tool.output).trim() && Number.isInteger(tool.completed_event) && tool.completed_event < boundary);
+    return { rule_id: check.rule_id, pass, reason: pass ? 'Required rule fetched before governed action' : 'Missing successful rule fetch before action (or ordering unknown)' };
+  });
 }
 
 export function evaluateAssertions(assertions, trace) {

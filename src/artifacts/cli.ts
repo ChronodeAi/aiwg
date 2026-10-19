@@ -1771,6 +1771,7 @@ async function handleShow(args: string[]): Promise<void> {
     '  aiwg show skill intake-wizard --resource-source web --aiwg-version stable',
     '',
     'Bound rules: summaries and show pointers are appended for bound skills, agents, and flows.',
+    'Fetch and follow every required_rule_checks entry before starting governed work; summaries do not replace full rules.',
     'Use --bound-rule-bodies to include their full text (JSON: bound_rules[].content).',
     '',
     'Tip: use `aiwg discover "<phrase>" --json` first to find the stable id.',

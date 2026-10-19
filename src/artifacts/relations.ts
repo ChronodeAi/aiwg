@@ -28,6 +28,7 @@ export interface RelationRule {
   summary: string;
   capability: string | null;
   paths?: string[];
+  triggers?: string[];
   targets: RelationTarget[];
   /** Original patterns support project/user overrides with distinct stable IDs. */
   bound_to?: MetadataEntry['bound_to'];
@@ -47,7 +48,7 @@ export interface RelationsIndex {
   }>;
   capabilities: Record<string, { kind: 'framework' | 'addon' | 'extension'; rules_by_tier: Record<RuleTier, string[]> }>;
   /** Pre-resolved aliases retain ambiguity rather than choosing an arbitrary artifact. */
-  artifacts?: Record<string, Pick<MetadataEntry, 'path' | 'type' | 'name' | 'title' | 'kernel' | 'script'>>;
+  artifacts?: Record<string, Pick<MetadataEntry, 'path' | 'type' | 'name' | 'title' | 'kernel' | 'script' | 'governedPaths'>>;
   aliases: { targets: Record<string, string[]>; rules: Record<string, string[]> };
 }
 

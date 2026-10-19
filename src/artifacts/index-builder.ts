@@ -1206,7 +1206,8 @@ export async function buildIndex(
         ...(searchTerms && searchTerms.length > 0 ? { searchTerms } : {}),
         ...(kernel ? { kernel } : {}),
         ...(script ? { script } : {}),
-        ...(type === 'rule' || type === 'behavior' ? extractRuleBindings(data, body) : {}),
+        ...(type === 'rule' || type === 'behavior' ? extractRuleBindings(data, body) :
+          Array.isArray(data.paths) ? { governedPaths: data.paths.filter((value): value is string => typeof value === 'string') } : {}),
         ...(operationalState ? { operationalState } : {}),
         ...(stateTransfer ? { stateTransfer } : {}),
       };
