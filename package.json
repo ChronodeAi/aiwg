@@ -64,7 +64,7 @@
     "test:security:attestation-conformance": "node test/fixtures/security/generate-adversarial-attestation-conformance.mjs && git diff --exit-code -- test/fixtures/security/adversarial-attestation-conformance-v1.json && vitest run --config config/vitest.config.js test/conformance/security/adversarial-attestation-transports.test.ts",
     "security:threat-assess": "node tools/security/assess-forge-content.mjs",
     "benchmark:threat-assessment": "node tools/security/evaluate-threat-policy.mjs",
-    "ci:fortemi-index": "npm run lint:discovery-coverage && npm run test:release-discovery && npm run lint:fortemi-prebuilt-package",
+    "ci:fortemi-index": "npm run lint:discovery-coverage && npm run test:release-discovery && npm run lint:fortemi-prebuilt-package && npm run lint:relations-prebuilt-package",
     "smoke:web-resources:live": "node tools/release/web-resource-live-smoke.mjs",
     "smoke:pi:live": "node tools/providers/pi-live-smoke.mjs",
     "smoke:omp:live": "node tools/providers/omp-live-smoke.mjs",
@@ -193,7 +193,8 @@
     "test:coverage:testing-quality": "vitest run --config config/vitest.testing-quality-coverage.config.js",
     "test:coverage:audit-foundations": "vitest run --config config/vitest.audit-foundations-coverage.config.js",
     "test:coverage:enforcement": "node tools/testing/verify-coverage-enforcement.mjs",
-    "test:conformance:audit": "node tools/testing/audit-conformance-inventory.mjs"
+    "test:conformance:audit": "node tools/testing/audit-conformance-inventory.mjs",
+    "lint:relations-prebuilt-package": "tsx tools/lint/relations-prebuilt-package.mjs"
   },
   "files": [
     "THIRD_PARTY_NOTICES.md",
@@ -261,6 +262,7 @@
     "schemas/providers/",
     "schemas/models/",
     "schemas/activity/",
+    "schemas/artifacts/",
     "schemas/dataset/",
     "schemas/deploy/",
     "schemas/decision/",

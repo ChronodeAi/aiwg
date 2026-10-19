@@ -146,7 +146,7 @@ describe('global install native lifecycle-script policy', () => {
     );
     const installArgs = [
         'install', '--global', '--prefix', prefix,
-        '--cache', path.join(tempRoot, 'cache'), '--userconfig', npmrc,
+        '--cache', process.env.AIWG_PACKAGE_TEST_NPM_CACHE ?? path.join(tempRoot, 'cache'), '--userconfig', npmrc,
         '--min-release-age=7', '--no-audit', '--no-fund', tarball,
     ];
     // Probe the actual install options after environment/userconfig isolation.

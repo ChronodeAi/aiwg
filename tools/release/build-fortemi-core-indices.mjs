@@ -12,6 +12,9 @@ import {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { buildPrebuiltRelations } from '../../src/artifacts/prebuilt-relations.ts';
+import { getGraphIndexDir } from '../../src/artifacts/types.ts';
+import { PREBUILT_RELATIONS_DIR } from '../../src/artifacts/relations.ts';
 import { acquireDirectoryLock } from '../../src/artifacts/prebuilt-build-lock.ts';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -36,6 +39,17 @@ try {
   nextRoot = mkdtempSync(path.join(prebuiltRoot, '.framework-next-'));
 
   await buildIndex(repoRoot, { graph: 'framework', force: true, explicit: true });
+
+  const metadata = JSON.parse(readFileSync(path.join(getGraphIndexDir(repoRoot, 'framework'), 'metadata.json'), 'utf8'));
+  const tables = buildPrebuiltRelations(repoRoot, Object.values(metadata.entries));
+  const relationDir = path.join(repoRoot, PREBUILT_RELATIONS_DIR);
+  mkdirSync(relationDir, { recursive: true });
+  // Manifest is published last: partial writes fail checksum validation.
+  for (const [file, text] of Object.entries(tables)) {
+    const temp = path.join(relationDir, `${file}.${process.pid}.tmp`);
+    writeFileSync(temp, text);
+    renameSync(temp, path.join(relationDir, file));
+  }
 
   const exported = buildAiwgFortemiIndexExport(repoRoot, {
     graph: 'framework',

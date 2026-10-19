@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { createHash } from 'node:crypto';
 import { getGraphIndexDir } from './types.js';
+import { frameworkSourceDigest } from './framework-source-digest.js';
 import { acquireDirectoryLock, DirectoryLockContentionError } from './prebuilt-build-lock.js';
 import { FRAMEWORK_CORPUS_KINDS as CORPUS_KINDS, resolveFrameworkCorpusRoot } from './framework-index-paths.js';
 
@@ -29,15 +30,16 @@ function gitHead(root: string): string {
 }
 
 /**
- * Bounded source probe: read package/HEAD and immediate bundle manifests only.
- * Never recurse through capability files. Uncommitted capability-only edits
- * require `aiwg refresh` (which forces reconciliation) or an explicit index build.
+ * Root/version identity plus the portable corpus digest. Its per-root stat
+ * receipt avoids rereading unchanged source contents and detects uncommitted
+ * edits as well as manifest/package/HEAD changes.
  */
 function sourceFingerprint(root: string): string {
   const hash = createHash('sha256').update('framework-capabilities-v2');
   hash.update(path.resolve(root));
   try { hash.update(JSON.parse(readText(path.join(root, 'package.json'))).version ?? ''); } catch { /* fixture root */ }
   hash.update(gitHead(root));
+  hash.update(frameworkSourceDigest(root));
   for (const kind of CORPUS_KINDS) {
     const dir = path.join(root, 'agentic/code', kind);
     let entries: fs.Dirent[];
@@ -63,6 +65,7 @@ interface CapabilityReceipt {
   source: string;
   index: string;
   fortemi?: string;
+  relations: string;
 }
 
 function readReceipt(file: string): CapabilityReceipt | null {
@@ -91,10 +94,10 @@ export async function refreshFrameworkCapabilities(
   ].map(file => fileSignature(path.join(fortemiDir, file))).join('|');
   const source = sourceFingerprint(root);
   const current = (): CapabilityReceipt => ({
-    source, index: fileSignature(metadataPath), ...(syncFortemi ? { fortemi: fortemiSignature() } : {}),
+    source, index: fileSignature(metadataPath), relations: fileSignature(path.join(dir, 'relations.json')), ...(syncFortemi ? { fortemi: fortemiSignature() } : {}),
   });
   const matches = (receipt: CapabilityReceipt | null, probe: CapabilityReceipt): boolean =>
-    Boolean(!options.force && receipt && probe.index && receipt.source === probe.source
+    Boolean(!options.force && receipt && probe.index && probe.relations && receipt.relations === probe.relations && receipt.source === probe.source
       && receipt.index === probe.index && (!syncFortemi || receipt.fortemi === probe.fortemi));
   if (matches(readReceipt(receiptPath), current())) return;
 
@@ -114,7 +117,7 @@ export async function refreshFrameworkCapabilities(
     const receipt = readReceipt(receiptPath);
     const probe = current();
     if (matches(receipt, probe)) return;
-    if (options.force || !receipt || !probe.index || receipt.source !== source || receipt.index !== probe.index) {
+    if (options.force || !receipt || !probe.index || receipt.source !== source || receipt.index !== probe.index || !probe.relations || receipt.relations !== probe.relations) {
       const { buildIndex } = await import('./index-builder.js');
       await buildIndex(root, { graph: 'framework', explicit: false, quiet: true });
     }

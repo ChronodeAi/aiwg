@@ -124,9 +124,7 @@ describe('Wave 5 secops canonical rule delivery (#2945)', () => {
     const home = path.join(root, 'show-home');
     fs.mkdirSync(home);
     const env = isolatedEnv(home);
-    execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'), 'index', 'build', '--graph', 'framework', '--force'], {
-      cwd: repo, env, encoding: 'utf8', timeout: 60_000, stdio: 'pipe',
-    });
+    // Shipped prebuilt tables cover read gates; cold builds have isolated tests.
     const targets = new Map<string, { type: string; id: string; rules: typeof rules }>();
     for (const rule of rules) for (const [kind, ids] of Object.entries(rule.data.bound_to ?? {}) as Array<[string, string[]]>) {
       for (const id of ids) {
@@ -136,8 +134,7 @@ describe('Wave 5 secops canonical rule delivery (#2945)', () => {
         targets.set(key, target);
       }
     }
-    // Vitest already parallelizes files. Each CLI loads the full search index;
-    // nested fan-out multiplies that memory by four in every active worker.
+    // Vitest parallelizes files; keep per-file lookups serial to bound resources.
     for (const target of targets.values()) {
       const { stdout } = await execFileAsync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
         'show', target.type, target.id, '--json'], { cwd: repo, env, encoding: 'utf8', timeout: 30_000 });
@@ -156,9 +153,7 @@ describe('Wave 5 secops canonical rule delivery (#2945)', () => {
     fs.mkdirSync(home);
     const env = isolatedEnv(home);
     // Discovery must never depend on another test having populated this HOME.
-    execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'), 'index', 'build', '--graph', 'framework', '--force'], {
-      cwd: repo, env, encoding: 'utf8', timeout: 60_000, stdio: 'pipe',
-    });
+    // Shipped prebuilt tables cover read gates; cold builds have isolated tests.
     for (const { name, data } of rules.filter(rule => rule.data.activation !== 'kernel')) {
       const phrase = data.triggers.at(-1);
       const result = JSON.parse(execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),

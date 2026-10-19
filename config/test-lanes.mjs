@@ -1,5 +1,6 @@
 // Required offline lane ownership. Live UAT is separately declared by its configs.
 export const packagingFiles = [
+  'test/integration/relations-prebuilt-packaging.test.ts',
   'test/integration/artifacts/aiwg-tracking.test.ts',
   'test/smoke/cockpit-base-footprint.test.js',
   'test/integration/network-analysis-addon.test.ts',
@@ -15,6 +16,7 @@ export const packagingFiles = [
   'test/integration/tools-packed-relative-imports.test.ts',
 ];
 export const artifactIndexFiles = [
+  'test/unit/artifacts/relations-corpus.test.ts',
   'test/integration/artifacts/dependency-graph.test.ts',
   'test/integration/artifacts/incremental-build.test.ts',
   'test/integration/artifacts/multi-graph.test.ts',

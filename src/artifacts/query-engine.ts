@@ -11,6 +11,7 @@
 
 import { refreshFrameworkCapabilities, resolveFrameworkCorpusRoot, isCorpusBundleInstalled } from './framework-capabilities.js';
 import { resolveFrameworkIndexRoot } from './framework-index-paths.js';
+import { ensureRelations, selectPrebuiltRelations, emptyRuleStats, type RelationsReader, type RelationTargetType, type RuleStats } from './relations.js';
 import { minimatch } from 'minimatch';
 import type { DiscoveryShadowRoute } from './discovery-shadow.js';
 import * as fs from 'node:fs';
@@ -1031,7 +1032,10 @@ export async function discoverCapability(
     | import('./fortemi-core-query-adapter.js').FortemiCoreVerifiedSourcePaths
     | undefined;
 
-  if (resourceSource !== 'web' && (!params.graph || params.graph === 'framework')) {
+  const prebuiltRelations = resourceSource !== 'web' && (!params.graph || params.graph === 'framework')
+    ? selectPrebuiltRelations(cwd).reader : null;
+
+  if ((!prebuiltRelations || backend === 'local') && resourceSource !== 'web' && (!params.graph || params.graph === 'framework')) {
     const root = resolveFrameworkCorpusRoot(cwd) ?? aiwgRoot;
     if (root) {
       try {
@@ -1321,6 +1325,8 @@ export async function discoverCapability(
       : `No capability matched "${params.phrase}" among ${entries.length} indexed capabilities. Try a broader phrase or a \`--type\` filter. If you just installed or authored capabilities, refresh discovery with \`aiwg use <framework>\` (or \`aiwg index build\`).`
     : null;
 
+  const relations = resourceSource === 'local' && (!params.graph || params.graph === 'framework')
+    ? prebuiltRelations ?? await ensureRelations(cwd) : undefined;
   const includePaths = params.includePaths ?? true;
   const facetActivations = diagnoseFacetActivations(params.phrase);
   const roundDiagnostic = (value: number): number => Math.round(value * 1_000_000) / 1_000_000;
@@ -1393,6 +1399,13 @@ export async function discoverCapability(
         title: r.entry.title,
         score: Math.round(r.score * 100) / 100,
         ranking: rankingDiagnostic(r.entry, r.score, r.facetDiagnostics),
+        ...(relations && ['skill', 'agent', 'flow', 'command'].includes(r.entry.type) ? {
+          bound_rules: relationshipRules(entries, r.entry, relations).map(rule => ({
+            name: rule.name ?? path.basename(rule.path, '.md'), activation: rule.activation ?? null,
+            summary: rule.ruleSummary ?? '', show_command: `aiwg show ${rule.type} ${rule.name ?? path.basename(rule.path, '.md')}`,
+          })),
+          rule_stats: relationshipRuleStats(entries, r.entry, relations),
+        } : {}),
         triggers: r.entry.triggers ?? [],
         capability: r.entry.capability ?? r.entry.summary,
         kernel: r.entry.kernel ?? false,
@@ -1535,19 +1548,37 @@ async function loadShowEntries(
   cwd: string,
   params: Pick<
     ShowParams,
-    'backend' | 'graph' | 'json' | 'name' | 'resourceSource' | 'aiwgVersion' | 'offline' | 'webReleaseOptions'
+    'backend' | 'graph' | 'json' | 'name' | 'resourceSource' | 'aiwgVersion' | 'offline' | 'webReleaseOptions' | 'typeFilter'
   >,
+  compact = false,
 ): Promise<{
   entries: MetadataEntry[];
   aiwgRoot: string | null;
   resourceSource: 'local' | 'web';
   webRelease?: VerifiedWebRelease;
   sourcePaths?: import('./fortemi-core-query-adapter.js').FortemiCoreVerifiedSourcePaths;
+  relations?: RelationsReader;
 }> {
   const aiwgRoot = resolveFrameworkIndexRoot(cwd);
   const backend = params.backend ?? DEFAULT_ARTIFACT_SEARCH_BACKEND;
   let resourceSource: ResourceSource = params.resourceSource ?? 'local';
   let entries: MetadataEntry[] = [];
+  let relations: RelationsReader | undefined;
+
+  if (compact && resourceSource !== 'web' && (!params.graph || params.graph === 'framework')) {
+    relations = await ensureRelations(cwd) ?? undefined;
+    if (relations?.index.artifacts) {
+      const frameworkEntries = Object.values(relations.index.artifacts).map(entry => withIndexProvenance({
+        phase: '', tags: [], created: '', updated: '', checksum: '', summary: '', dependencies: [], dependents: [], ...entry,
+      } as MetadataEntry, 'framework'));
+      const localEntries = params.graph ? [] : defaultCapabilityGraphs(cwd).filter(graph => graph !== 'framework')
+        .flatMap(graph => loadLocalCapabilityEntries(cwd, graph));
+      const compactEntries = [...localEntries, ...frameworkEntries];
+      if (findShowMatches(compactEntries, params.typeFilter ?? [...OPERATIONAL_SHOW_TYPES], params.name.trim()).length) {
+        return { entries: compactEntries, aiwgRoot, resourceSource: 'local', relations };
+      }
+    }
+  }
 
   if (resourceSource !== 'web' && (!params.graph || params.graph === 'framework')) {
     const root = resolveFrameworkCorpusRoot(cwd) ?? aiwgRoot;
@@ -1644,7 +1675,7 @@ async function loadShowEntries(
   } else {
     entries = loadLocalCapabilityEntries(cwd, params.graph);
   }
-  return { entries, aiwgRoot, resourceSource: 'local' };
+  return { entries, aiwgRoot, resourceSource: 'local', relations };
 }
 
 /** Local index inputs shared by show and exact rule-binding validation (#2938). */
@@ -2008,7 +2039,7 @@ async function findAgentInCorpus(
 }
 
 /** Build an ephemeral reverse lookup from the already-loaded rule metadata. */
-function rulesBoundTo(entries: MetadataEntry[], target: MetadataEntry): MetadataEntry[] {
+export function rulesBoundTo(entries: MetadataEntry[], target: MetadataEntry): MetadataEntry[] {
   const key = ({ skill: 'skills', agent: 'agents', flow: 'flows' } as const)[target.type as 'skill' | 'agent' | 'flow'];
   if (!key) return [];
   const file = path.basename(normalizeIndexedPath(target.path));
@@ -2028,11 +2059,46 @@ function rulesBoundTo(entries: MetadataEntry[], target: MetadataEntry): Metadata
   }).sort((a, b) => (a.name ?? a.path).localeCompare(b.name ?? b.path) || a.path.localeCompare(b.path));
 }
 
+/** Relationship metadata for shipped targets, merged with project/user contracts. */
+export function relationshipRules(entries: MetadataEntry[], target: MetadataEntry, relations?: RelationsReader): MetadataEntry[] {
+  const local = rulesBoundTo(relations ? entries.filter(entry => !normalizeIndexedPath(entry.path).startsWith('agentic/code/')) : entries, target);
+  if (!relations || !['skill', 'agent', 'flow', 'command'].includes(target.type)) return local;
+  const asMetadata = (id: string): MetadataEntry => {
+    const rule = relations.index.rules[id];
+    return { path: rule.path, type: rule.type, name: rule.name, activation: rule.activation ?? undefined,
+      bound_to: rule.bound_to, ruleSummary: rule.summary, ruleEnforcement: rule.enforcement ?? undefined } as MetadataEntry;
+  };
+  const key = `${target.type}:${discoveryIdForEntry(target)}`;
+  const shipped = Object.hasOwn(relations.index.targets, key)
+    ? relations.rulesForTarget(target.type as RelationTargetType, discoveryIdForEntry(target)).map(asMetadata)
+    // Project/user overrides keep the old alias/glob behavior using only small records.
+    : rulesBoundTo(Object.keys(relations.index.rules).map(asMetadata), target);
+  const merged = new Map([...local, ...shipped].map(rule => [`${rule.type}:${rule.path}`, rule]));
+  return [...merged.values()].sort((a, b) => (a.name ?? a.path).localeCompare(b.name ?? b.path) || a.path.localeCompare(b.path));
+}
+
+export function relationshipRuleStats(entries: MetadataEntry[], target: MetadataEntry, relations: RelationsReader): RuleStats {
+  const shipped = Object.hasOwn(relations.index.targets, `${target.type}:${discoveryIdForEntry(target)}`);
+  const stats = shipped ? relations.ruleStats(target.type as RelationTargetType, discoveryIdForEntry(target)) : emptyRuleStats();
+  // Shipped counts are precomputed; project/user contracts and overrides are overlays.
+  const overlay = shipped ? rulesBoundTo(entries.filter(entry => !normalizeIndexedPath(entry.path).startsWith('agentic/code/')), target)
+    : relationshipRules(entries, target, relations);
+  for (const rule of overlay) {
+    const enforcement = rule.ruleEnforcement ?? 'unknown';
+    const activation = rule.activation ?? 'unknown';
+    stats.by_enforcement[enforcement] = (stats.by_enforcement[enforcement] ?? 0) + 1;
+    stats.by_activation[activation] = (stats.by_activation[activation] ?? 0) + 1;
+    if (enforcement === 'critical' || enforcement === 'high') stats.required_checks++;
+  }
+  return stats;
+}
+
 async function showBindings(
   entries: MetadataEntry[], target: MetadataEntry, content: string, params: ShowParams,
   read: (entry: MetadataEntry) => Promise<string>,
+  relations?: RelationsReader,
 ): Promise<{ fields: Record<string, unknown>; text: string }> {
-  const rules = rulesBoundTo(entries, target);
+  const rules = relationshipRules(entries, target, relations);
   const boundRules = await Promise.all(rules.map(async rule => ({
     name: rule.name ?? path.basename(rule.path, '.md'),
     activation: rule.activation ?? null,
@@ -2096,7 +2162,8 @@ export async function showArtifact(
     aiwgRoot,
     resourceSource,
     webRelease,
-  } = await loadShowEntries(cwd, params);
+    relations,
+  } = await loadShowEntries(cwd, params, true);
 
   if (entries.length === 0 && params.backend !== 'fortemi-core') {
     console.error('Error: No artifact index found.');
@@ -2134,7 +2201,7 @@ export async function showArtifact(
           : 'Run `aiwg index build --graph framework` to refresh the artifact index.';
         const bindings = await showBindings(entries, {
           path: corpusMatch.path, type: corpusMatch.type, name: needle, title: needle,
-        } as MetadataEntry, content, params, rule => fs.readFile(resolveMetadataPath(cwd, aiwgRoot, rule), 'utf8'));
+        } as MetadataEntry, content, params, rule => fs.readFile(resolveMetadataPath(cwd, aiwgRoot, rule), 'utf8'), relations);
         if (params.json) {
           console.log(JSON.stringify({
             ...bindings.fields,
@@ -2257,7 +2324,7 @@ export async function showArtifact(
       webReleaseOptions: params.webReleaseOptions, offline: params.offline,
     });
     return resolved.bytes.toString('utf8');
-  });
+  }, relations);
 
   if (params.json) {
     const providerModels = resourceSource === 'local'

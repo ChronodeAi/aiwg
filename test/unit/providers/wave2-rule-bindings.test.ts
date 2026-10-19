@@ -81,10 +81,7 @@ describe('Wave 2 canonical rule delivery (#2942)', () => {
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'),
       XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'),
       AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' };
-    execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
-      'index', 'build', '--graph', 'framework', '--force'], {
-      cwd: repo, env, encoding: 'utf8', timeout: 30_000, stdio: 'pipe',
-    });
+    // Shipped prebuilt tables cover read gates; cold builds have isolated tests.
     // One CLI response per distinct artifact; verify every rule/artifact pair.
     const requests = new Map<string, { type: string; id: string; expected: any[] }>();
     for (const { name, data } of rules) for (const [kind, ids] of Object.entries(data.bound_to) as Array<[string, string[]]>) {
@@ -120,9 +117,7 @@ describe('Wave 2 canonical rule delivery (#2942)', () => {
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'),
       XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'),
       AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' };
-    execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'), 'index', 'build', '--graph', 'framework', '--force'], {
-      cwd: repo, env: discoverEnv, encoding: 'utf8', timeout: 30_000, stdio: 'pipe',
-    });
+    // Shipped prebuilt tables cover read gates; cold builds have isolated tests.
     for (const [name, phrase] of Object.entries(needs)) {
       const result = JSON.parse(execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
         'discover', phrase, '--type', 'rule', '--json'], {

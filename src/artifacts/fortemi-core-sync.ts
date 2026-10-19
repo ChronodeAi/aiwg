@@ -377,8 +377,9 @@ export function getFortemiCoreSyncStatus(
 
 export function getFortemiCorePrebuiltStatus(
   graph: string = "framework",
+  packageRoot?: string,
 ): FortemiCoreSyncStatus {
-  const dir = prebuiltDir(graph) ?? path.join(process.cwd(), "prebuilt", "fortemi-core", graph);
+  const dir = (packageRoot ? path.join(packageRoot, "prebuilt", "fortemi-core", graph) : prebuiltDir(graph)) ?? path.join(process.cwd(), "prebuilt", "fortemi-core", graph);
   const manifestPath = path.join(dir, "manifest.json");
   const exportPath = path.join(dir, "aiwg-fortemi-index-v2.json");
   const { manifest, reason: manifestReadReason } = readManifestResult(manifestPath);

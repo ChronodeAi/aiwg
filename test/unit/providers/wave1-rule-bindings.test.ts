@@ -79,10 +79,7 @@ describe('Wave 1 canonical rule delivery (#2941)', () => {
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'),
       XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'),
       AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' };
-    execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
-      'index', 'build', '--graph', 'framework', '--force'], {
-      cwd: repo, env, encoding: 'utf8', timeout: 30_000, stdio: 'pipe',
-    });
+    // Shipped prebuilt tables cover read gates; cold builds have isolated tests.
     const requests = rules.flatMap(({ name, data }) =>
       Object.entries(data.bound_to).flatMap(([kind, ids]) => (ids as string[]).map(id => ({
         type: kind.slice(0, -1), id, expected: { name, activation: data.activation,
@@ -112,9 +109,7 @@ describe('Wave 1 canonical rule delivery (#2941)', () => {
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'),
       XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'),
       AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' };
-    execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'), 'index', 'build', '--graph', 'framework', '--force'], {
-      cwd: repo, env: discoverEnv, encoding: 'utf8', timeout: 30_000, stdio: 'pipe',
-    });
+    // Shipped prebuilt tables cover read gates; cold builds have isolated tests.
     for (const [name, phrase] of Object.entries(needs)) {
       const result = JSON.parse(execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
         'discover', phrase, '--type', 'rule', '--json'], {

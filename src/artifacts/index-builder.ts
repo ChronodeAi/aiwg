@@ -85,7 +85,7 @@ export function parseFrontmatter(content: string): { data: Record<string, unknow
 }
 
 /** Read the target rule schema tolerantly while older rules remain untagged. */
-export function extractRuleBindings(data: Record<string, unknown>): Pick<MetadataEntry, 'activation' | 'bound_to' | 'ruleSummary'> {
+export function extractRuleBindings(data: Record<string, unknown>, body = ''): Pick<MetadataEntry, 'activation' | 'bound_to' | 'ruleSummary' | 'ruleEnforcement' | 'rulePaths'> {
   const bound_to: NonNullable<MetadataEntry['bound_to']> = {};
   const raw = data.bound_to;
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -97,7 +97,11 @@ export function extractRuleBindings(data: Record<string, unknown>): Pick<Metadat
       }
     }
   }
+  const enforcement = typeof data.enforcement === 'string' ? data.enforcement
+    : body.match(/^\*\*Enforcement Level\*\*:\s*([A-Za-z]+)/m)?.[1];
   return {
+    ...(enforcement ? { ruleEnforcement: enforcement.trim().toLowerCase() } : {}),
+    ...(Array.isArray(data.paths) ? { rulePaths: data.paths.filter((value): value is string => typeof value === 'string') } : {}),
     ...(typeof data.activation === 'string' ? { activation: data.activation } : {}),
     ...(typeof data.summary === 'string' ? { ruleSummary: data.summary } : {}),
     ...(Object.keys(bound_to).length ? { bound_to } : {}),
@@ -1202,7 +1206,7 @@ export async function buildIndex(
         ...(searchTerms && searchTerms.length > 0 ? { searchTerms } : {}),
         ...(kernel ? { kernel } : {}),
         ...(script ? { script } : {}),
-        ...(type === 'rule' || type === 'behavior' ? extractRuleBindings(data) : {}),
+        ...(type === 'rule' || type === 'behavior' ? extractRuleBindings(data, body) : {}),
         ...(operationalState ? { operationalState } : {}),
         ...(stateTransfer ? { stateTransfer } : {}),
       };
@@ -1244,6 +1248,10 @@ export async function buildIndex(
           generated: new Date().toISOString(),
           entries: nextManifestEntries,
         });
+      }
+      if (graph === 'framework') {
+        const { writeRelations } = await import('./relations-builder.js');
+        await writeRelations(entries, effectiveOutputCwd, indexOutputDir, force);
       }
       const buildTimeMs = Date.now() - startTime;
       writeIndexFile(effectiveOutputCwd, 'stats.json', {
@@ -1385,6 +1393,11 @@ export async function buildIndex(
   // Deduplicate dependents
   for (const entry of Object.values(entries)) {
     entry.dependents = [...new Set(entry.dependents)];
+  }
+
+  if (graph === 'framework') {
+    const { writeRelations } = await import('./relations-builder.js');
+    await writeRelations(entries, effectiveOutputCwd, indexOutputDir, force);
   }
 
   const buildTimeMs = Date.now() - startTime;
