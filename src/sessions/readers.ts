@@ -40,6 +40,8 @@ export const DEFAULT_READER_LIMITS: ReaderLimits = Object.freeze({
   maxNestingDepth: 64,
 });
 
+const JSONL_READ_CHUNK_BYTES = 1024 * 1024;
+
 export async function* streamJsonLines(
   path: string,
   options: {
@@ -48,7 +50,11 @@ export async function* streamJsonLines(
     limits?: ImportByteLimits;
   } = {},
 ): AsyncGenerator<{ line: string; byteLength: number }> {
-  const input = createReadStream(path, { start: options.start, end: options.end });
+  const input = createReadStream(path, {
+    start: options.start,
+    end: options.end,
+    highWaterMark: JSONL_READ_CHUNK_BYTES,
+  });
   let parts: Buffer[] = [];
   let length = 0;
   let total = 0;
@@ -61,8 +67,16 @@ export async function* streamJsonLines(
         const end = newline === -1 ? buffer.length : newline + 1;
         const segment = buffer.subarray(start, end);
         if (options.limits) {
-          assertImportByteLimit('maxRecordBytes', options.limits, length + segment.length);
-          assertImportByteLimit('maxTotalBytes', options.limits, (options.start ?? 0) + total + segment.length);
+          const recordBytes = length + segment.length;
+          const totalBytes = (options.start ?? 0) + total + segment.length;
+          // For an incomplete segment, report the first byte known to exceed
+          // the limit instead of making diagnostics depend on read-buffer size.
+          assertImportByteLimit('maxRecordBytes', options.limits,
+            newline === -1 && recordBytes > options.limits.maxRecordBytes
+              ? options.limits.maxRecordBytes + 1 : recordBytes);
+          assertImportByteLimit('maxTotalBytes', options.limits,
+            newline === -1 && options.limits.maxTotalBytes !== 0 && totalBytes > options.limits.maxTotalBytes
+              ? options.limits.maxTotalBytes + 1 : totalBytes);
         }
         // Bound the raw bytes before copying or decoding a record. Only LF
         // separates records; CRLF and Unicode separators remain JSON input.
@@ -71,7 +85,7 @@ export async function* streamJsonLines(
         total += segment.length;
         start = end;
         if (newline !== -1) {
-          const line = Buffer.concat(parts, length).toString('utf8');
+          const line = (parts.length === 1 ? parts[0] : Buffer.concat(parts, length)).toString('utf8');
           const byteLength = length;
           parts = [];
           length = 0;
@@ -79,7 +93,9 @@ export async function* streamJsonLines(
         }
       }
     }
-    if (length > 0) yield { line: Buffer.concat(parts, length).toString('utf8'), byteLength: length };
+    if (length > 0) {
+      yield { line: (parts.length === 1 ? parts[0] : Buffer.concat(parts, length)).toString('utf8'), byteLength: length };
+    }
   } finally {
     input.destroy();
   }
