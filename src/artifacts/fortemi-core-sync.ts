@@ -12,6 +12,7 @@ import {
 } from "./browser-export.js";
 import type { ArtifactIndex } from "./types.js";
 import { loadGraphIndexFile } from "./index-reader.js";
+import { getFrameworkIndexBaseDir } from './framework-index-paths.js';
 
 export interface FortemiCoreSyncOptions {
   graph?: GraphType;
@@ -78,8 +79,9 @@ export interface FortemiCoreExecutableSkillStatus {
 
 function syncDir(cwd: string, graph: string): string {
   loadGlobalGraphConfigs();
+  if (graph === 'framework') return path.join(getFrameworkIndexBaseDir(cwd), 'fortemi-core', graph);
   const config = GRAPH_CONFIGS[graph];
-  if (graph === "framework" || config?.shared) {
+  if (config?.shared) {
     const xdgData = process.env.XDG_DATA_HOME ?? path.join(process.env.HOME ?? cwd, ".local", "share");
     return path.join(xdgData, "aiwg", "index", "fortemi-core", graph);
   }

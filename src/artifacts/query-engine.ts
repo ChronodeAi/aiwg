@@ -10,6 +10,7 @@
  */
 
 import { refreshFrameworkCapabilities, resolveFrameworkCorpusRoot, isCorpusBundleInstalled } from './framework-capabilities.js';
+import { resolveFrameworkIndexRoot } from './framework-index-paths.js';
 import { minimatch } from 'minimatch';
 import type { DiscoveryShadowRoute } from './discovery-shadow.js';
 import * as fs from 'node:fs';
@@ -1000,21 +1001,6 @@ function showHintForDiscoverResult(entry: MetadataEntry, id: string): string {
   return `aiwg show ${id}`;
 }
 
-async function getAiwgRootForDiscover(): Promise<string | null> {
-  if (process.env.AIWG_ROOT) return process.env.AIWG_ROOT;
-  try {
-    const mod: { getFrameworkRoot?: () => Promise<string | null> } =
-      await import('../channel/manager.mjs');
-    if (typeof mod.getFrameworkRoot === 'function') {
-      const r = await mod.getFrameworkRoot();
-      return r || null;
-    }
-  } catch {
-    // channel manager unavailable — fall through
-  }
-  return null;
-}
-
 export async function discoverCapability(
   cwd: string,
   params: DiscoverParams,
@@ -1032,7 +1018,7 @@ export async function discoverCapability(
   const limit = params.limit ?? 5;
   // For framework-graph entries, anchor returned paths to AIWG_ROOT so
   // they resolve from any project working directory (#1217).
-  const aiwgRoot = await getAiwgRootForDiscover();
+  const aiwgRoot = resolveFrameworkIndexRoot(cwd);
 
   // Source: prefer `framework` graph (built post-deploy), fall back to
   // project / codebase / legacy depending on what's available.
@@ -1556,7 +1542,7 @@ async function loadShowEntries(
   webRelease?: VerifiedWebRelease;
   sourcePaths?: import('./fortemi-core-query-adapter.js').FortemiCoreVerifiedSourcePaths;
 }> {
-  const aiwgRoot = await getAiwgRootForDiscover();
+  const aiwgRoot = resolveFrameworkIndexRoot(cwd);
   const backend = params.backend ?? DEFAULT_ARTIFACT_SEARCH_BACKEND;
   let resourceSource: ResourceSource = params.resourceSource ?? 'local';
   let entries: MetadataEntry[] = [];
