@@ -270,9 +270,9 @@ describe('bounded session readers', () => {
       const root = await mkdtemp(join(tmpdir(), 'session-reader-unicode-'));
       const path = join(root, 'session.jsonl');
       const prefix = '\r\n \t\n';
-      // Put the first separator across the stream's 64 KiB chunk boundary.
+      // Put the first separator across the stream's 1 MiB chunk boundary.
       const values = [
-        { text: 'x'.repeat(64 * 1024 - Buffer.byteLength(prefix + '{"text":"') - 1) + '\u2028\u2029é' },
+        { text: 'x'.repeat(1024 * 1024 - Buffer.byteLength(prefix + '{"text":"') - 1) + '\u2028\u2029é' },
         { text: 'a\u2028b\u2029c' },
       ];
       const lines = values.map((value, index) => JSON.stringify(value) + (index === 0 ? '\r\n' : ''));
