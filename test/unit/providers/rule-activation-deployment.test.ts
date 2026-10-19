@@ -381,6 +381,24 @@ describe('activation-selected provider deployment (#2939)', () => {
     expect(contents(join(root, 'target'))).toEqual(before);
   }, 90_000);
 
+  it('counts Warp rule startup bytes while excluding large aggregated agent bodies', () => {
+    const root = setup();
+    const extra = { strict: true, config: { rules: { inline_budget_tokens: 2000 } },
+      env: { AIWG_RULES_INLINE_BUDGET_TOKENS: undefined } };
+    const baseline = JSON.parse(deploy(root, 'warp', extra).split('REPORT:')[1].trim());
+    expect(baseline.selected_bytes).toBeGreaterThan(0);
+    const aggregate = join(root, 'target/WARP.md');
+    writeFileSync(aggregate, '# Project agent definitions\n' + 'AGENT_PAYLOAD '.repeat(30000) + '\n' + readFileSync(aggregate, 'utf8'));
+    const enlarged = JSON.parse(deploy(root, 'warp', extra).split('REPORT:')[1].trim());
+    expect(readFileSync(join(root, 'target/WARP.md'), 'utf8')).toContain('AGENT_PAYLOAD');
+    expect(enlarged.selected_bytes).toBe(baseline.selected_bytes);
+    const kernel = join(root, 'source/rules/fixture-kernel.md');
+    writeFileSync(kernel, readFileSync(kernel, 'utf8') + '\n' + 'RULE_PAYLOAD '.repeat(2000));
+    const before = contents(join(root, 'target'));
+    expect(() => deploy(root, 'warp', extra)).toThrow(/Rules startup budget exceeded for warp/);
+    expect(contents(join(root, 'target'))).toEqual(before);
+  }, 90_000);
+
   it('accounts for behavior wrappers and config budgets before promotion', () => {
     const root = setup();
     const behavior = join(root, 'source/behaviors/fixture-behavior');
