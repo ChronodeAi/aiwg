@@ -56,8 +56,8 @@ function sourceFingerprint(root: string): string {
 /** Stat signatures also notice manual rebuilds, deleted caches, and replacement indexes. */
 function fileSignature(file: string): string {
   try {
-    const stat = fs.statSync(file);
-    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+    const stat = fs.statSync(file, { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
   } catch { return ''; }
 }
 
@@ -121,10 +121,16 @@ export async function refreshFrameworkCapabilities(
       const { buildIndex } = await import('./index-builder.js');
       await buildIndex(root, { graph: 'framework', explicit: false, quiet: true });
     }
-    if (syncFortemi) {
+    // A forced source scan can be a no-op. The prior successful receipt still
+    // validates the exact index/export files, so avoid hashing the export again.
+    const updated = current();
+    const cacheUnchanged = receipt && updated.index && receipt.source === source
+      && receipt.index === updated.index && receipt.fortemi === updated.fortemi;
+    if (syncFortemi && !cacheUnchanged) {
       const { getFortemiCoreSyncStatus, syncFortemiCoreIndex } = await import('./fortemi-core-sync.js');
       const status = getFortemiCoreSyncStatus(root, 'framework');
-      if (!status.built || status.stale) syncFortemiCoreIndex(root, { graph: 'framework' });
+      const indexChanged = receipt?.index ? receipt.index !== updated.index : probe.index !== updated.index;
+      if (indexChanged || !status.built || status.stale) syncFortemiCoreIndex(root, { graph: 'framework' });
     }
     // Publish only after success. A failed rebuild/sync is retried next call.
     const temp = `${receiptPath}.${process.pid}.tmp`;

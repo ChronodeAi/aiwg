@@ -1054,6 +1054,27 @@ type: use-case
       expect(fs.existsSync(path.join(indexDir, 'graph.db'))).toBe(true);
     });
 
+    it('reuses unchanged metadata without reading it and rejects a changed manifest receipt', async () => {
+      const source = path.join(tmpDir, '.aiwg/requirements/a.md');
+      fs.mkdirSync(path.dirname(source), { recursive: true });
+      fs.writeFileSync(source, '# A\n');
+      await buildIndex(tmpDir, { force: true, quiet: true });
+      const metadata = path.join(tmpDir, INDEX_DIR, 'metadata.json');
+      const manifestFile = path.join(tmpDir, INDEX_DIR, 'checksum-manifest.json');
+      const reads = vi.spyOn(fs, 'readFileSync');
+      await buildIndex(tmpDir, { quiet: true });
+      expect(reads.mock.calls.filter(args => args[0] === metadata)).toHaveLength(0);
+
+      const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+      manifest.entries['.aiwg/requirements/a.md'].checksum = 'tampered';
+      fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+      await buildIndex(tmpDir, { quiet: true });
+      expect(reads.mock.calls.filter(args => args[0] === metadata)).toHaveLength(1);
+      const rebuilt = JSON.parse(fs.readFileSync(metadata, 'utf8'));
+      expect(JSON.parse(fs.readFileSync(manifestFile, 'utf8')).entries['.aiwg/requirements/a.md'].checksum)
+        .toBe(rebuilt.entries['.aiwg/requirements/a.md'].checksum);
+    });
+
     it('completes a no-op 3000-artifact build in under 25 percent of a forced build', async () => {
       const sourceDir = path.join(tmpDir, 'src');
       fs.mkdirSync(sourceDir, { recursive: true });

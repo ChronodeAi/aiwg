@@ -79,8 +79,9 @@ export async function prepareRuleDelivery(opts) {
   const configs = opts.pinConfigs || loadRulePinConfigs(opts.target, opts.config);
   const installed = installedRuleCapabilities(configs);
   const root = resolveAiwgRoot(opts.srcRoot) || opts.srcRoot;
-  const { loadRelations } = await importImpl(import.meta.url, 'artifacts/relations.js');
-  const relations = loadRelations(opts.target) || loadRelations(root, opts.target);
+  const { loadRelations, selectPrebuiltRelations } = await importImpl(import.meta.url, 'artifacts/relations.js');
+  const packageRelations = selectPrebuiltRelations(root, opts.target).reader;
+  const relations = packageRelations || loadRelations(opts.target) || loadRelations(root, opts.target);
   const ruleIdsByPath = new Map(Object.entries(relations?.index.rules || {}).map(([id, rule]) => [rule.path, id]));
   const pinRules = rules.map(rule => {
     const owner = rule.file.replaceAll('\\', '/').match(/(?:frameworks|addons|extensions|plugins)\/([^/]+)\//)?.[1];
@@ -106,19 +107,31 @@ export async function prepareRuleDelivery(opts) {
   const targets = [];
   const targetKeys = new Set();
   if (rules.some(rule => Object.values(rule.bound_to).some(ids => ids.length))) {
-    const { loadLocalCapabilityEntries, resolveRuleBindingTarget } = await importImpl(import.meta.url, 'artifacts/query-engine.js');
+    const { loadLocalCapabilityEntries, loadLocalOverrideCapabilityEntries, createRuleBindingTargetResolver } = await importImpl(import.meta.url, 'artifacts/query-engine.js');
     const root = resolveAiwgRoot(opts.srcRoot) || opts.srcRoot;
     // Framework graph paths are package-relative; project graph paths belong
     // to the queried project. Normalize before merging so one source cannot
     // become two apparently ambiguous targets after a source-index rebuild.
-    const loadEntries = cwd => loadLocalCapabilityEntries(cwd).map(entry => ({ ...entry,
-      path: path.resolve(entry.path.startsWith('agentic/code/') ? root : cwd, entry.path),
-    }));
+    const indexEntries = new Map();
+    const entryPaths = new Map();
+    const loadEntries = (cwd, overridesOnly = false) => (overridesOnly
+      ? loadLocalOverrideCapabilityEntries(cwd)
+      : loadLocalCapabilityEntries(cwd, undefined, indexEntries)).map(entry => {
+      const anchor = entry.path.startsWith('agentic/code/') ? root : cwd;
+      const key = `${anchor}\0${entry.path}`;
+      if (!entryPaths.has(key)) entryPaths.set(key, path.resolve(anchor, entry.path));
+      return { ...entry, path: entryPaths.get(key) };
+    });
     let rebuilt = false;
     const cacheDir = process.env.AIWG_RULE_BINDING_INDEX_CACHE;
     const cacheFile = cacheDir && path.join(cacheDir, `${contentHash(root)}.json`);
     const buildSourceEntries = async (refresh = false) => {
-      if (!refresh && cacheFile && fs.existsSync(cacheFile)) return JSON.parse(read(cacheFile));
+      if (!refresh && cacheFile) {
+        try { return JSON.parse(fs.readFileSync(cacheFile, 'utf8')); }
+        catch (error) {
+          if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+        }
+      }
       const indexTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rule-index-'));
       try {
         const { buildIndex } = await importImpl(import.meta.url, 'artifacts/index-builder.js');
@@ -128,14 +141,23 @@ export async function prepareRuleDelivery(opts) {
         const entries = Object.values(index.entries).map(entry => ({ ...entry, path: path.resolve(root, entry.path) }));
         if (cacheFile) {
           fs.mkdirSync(cacheDir, { recursive: true });
-          fs.writeFileSync(cacheFile, JSON.stringify(entries));
+          // Workers may publish the same immutable source snapshot concurrently.
+          const temporary = `${cacheFile}.${process.pid}.tmp`;
+          fs.writeFileSync(temporary, JSON.stringify(entries));
+          fs.renameSync(temporary, cacheFile);
         }
         return entries;
       } finally { fs.rmSync(indexTemp, { recursive: true, force: true }); }
     };
-    let entries = opts.bindingEntries || loadEntries(opts.target);
+    const localEntries = opts.bindingEntries || loadEntries(opts.target, Boolean(packageRelations));
+    let entries = [...localEntries];
     if (!opts.bindingEntries) {
-      const sourceEntries = loadEntries(root);
+      // The validated package table is authoritative for its exact source digest.
+      // Keep the canonical resolver for aliases, local overrides and ambiguity.
+      const sourceEntries = packageRelations
+        ? Object.values(packageRelations.index.artifacts).map(entry => ({ ...entry,
+          indexScope: 'packaged', indexGraph: 'framework' }))
+        : loadEntries(root);
       entries.push(...sourceEntries);
       if (!sourceEntries.length) entries.push(...await buildSourceEntries());
     }
@@ -151,23 +173,29 @@ export async function prepareRuleDelivery(opts) {
           const { buildIndex } = await importImpl(import.meta.url, 'artifacts/index-builder.js');
           await buildIndex(localRoot, { scope: '.', outputDir: temp, force: true, quiet: true });
           const index = JSON.parse(read(path.join(temp, '.aiwg', '.index', 'metadata.json')));
-          entries.push(...Object.values(index.entries).map(entry => ({ ...entry, path: path.resolve(localRoot, entry.path) })));
+          const scoped = Object.values(index.entries).map(entry => ({ ...entry, path: path.resolve(localRoot, entry.path) }));
+          localEntries.push(...scoped);
+          entries.push(...scoped);
         } finally { fs.rmSync(temp, { recursive: true, force: true }); }
       }
     }
     // A stored index can predate the source tree (edge/dev checkouts). Rebuild once from source
     // before reporting a binding target as missing.
     const resolvedTargets = new Map();
+    let resolveBinding = createRuleBindingTargetResolver(entries);
     const resolveTarget = async (type, id) => {
       const key = `${type}:${id}`;
       if (resolvedTargets.has(key)) return resolvedTargets.get(key);
       let target;
-      try { target = resolveRuleBindingTarget(entries, type, id); }
+      try { target = resolveBinding(type, id); }
       catch (error) {
-        if (rebuilt || opts.bindingEntries || !/^Missing /.test(error.message)) throw error;
-        entries = [...loadEntries(opts.target), ...await buildSourceEntries(true)];
+        if (packageRelations || rebuilt || opts.bindingEntries || !/^Missing /.test(error.message)) throw error;
+        indexEntries.clear();
+        entryPaths.clear();
+        entries = [...localEntries, ...await buildSourceEntries(true)];
         rebuilt = true;
-        target = resolveRuleBindingTarget(entries, type, id);
+        resolveBinding = createRuleBindingTargetResolver(entries);
+        target = resolveBinding(type, id);
         // A rebuild replaces the input set for every lookup.
         resolvedTargets.clear();
       }

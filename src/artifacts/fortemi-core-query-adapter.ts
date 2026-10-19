@@ -14,7 +14,7 @@ import type {
   AiwgFortemiRecord,
 } from "./browser-export.js";
 import { bm25Rank, type FullTextDoc } from "./fulltext.js";
-import { getFortemiCorePrebuiltStatus, getFortemiCoreSyncStatus } from "./fortemi-core-sync.js";
+import { consumeFortemiCoreExport, getFortemiCorePrebuiltStatus, getFortemiCoreSyncStatus } from "./fortemi-core-sync.js";
 import { loadGraphIndexFile } from "./index-reader.js";
 import {
   operationalStateQueryProjection,
@@ -349,9 +349,7 @@ export function loadFortemiCoreExport(
   }
 
   try {
-    const exported = JSON.parse(
-      fs.readFileSync(status.exportPath, "utf-8"),
-    ) as AiwgFortemiIndexExport;
+    const exported = consumeFortemiCoreExport(status.exportPath, status.exportChecksum);
     if (exported.schema_version !== "aiwg.fortemi.index.export.v2") {
       return {
         reason: `Fortemi Core static index has schema '${exported.schema_version}', expected 'aiwg.fortemi.index.export.v2'. Re-run 'aiwg index sync'.`,

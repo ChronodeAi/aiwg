@@ -9,6 +9,7 @@
  */
 
 import * as fs from 'fs/promises';
+import { existsSync, realpathSync } from 'fs';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -271,6 +272,21 @@ export async function appendGitignore(
 export function dropGitignored(targetDir: string, files: string[]): string[] {
   if (files.length === 0) return files;
   try {
+    // Avoid starting Git for synthetic/source trees outside a repository. Resolve
+    // symlinked working directories just as Git does, and probe on every call so
+    // initializing a repository between scans takes effect immediately. Explicit
+    // Git environment and bare repositories still use Git's own discovery.
+    if (!process.env.GIT_DIR && !process.env.GIT_WORK_TREE && !process.env.GIT_COMMON_DIR) {
+      let directory = realpathSync(targetDir);
+      for (;;) {
+        if (existsSync(path.join(directory, '.git')) ||
+            (existsSync(path.join(directory, 'HEAD')) &&
+             (existsSync(path.join(directory, 'objects')) || existsSync(path.join(directory, 'commondir'))))) break;
+        const parent = path.dirname(directory);
+        if (parent === directory) return files;
+        directory = parent;
+      }
+    }
     const result = boundedSpawnSync('git', ['check-ignore', '-z', '--stdin'], 'quick', {
       cwd: targetDir,
       input: `${files.join('\0')}\0`,

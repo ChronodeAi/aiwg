@@ -23,6 +23,7 @@ import {
   OPERATIONAL_SHOW_TYPES,
   isOperationalShowType,
   loadGlobalGraphConfigs,
+  getGraphIndexDir,
 } from './types.js';
 import { loadMetadataIndex, loadGraphIndexFile } from './index-reader.js';
 import { bm25Rank, type FullTextDoc } from './fulltext.js';
@@ -1698,17 +1699,46 @@ async function loadShowEntries(
 }
 
 /** Local index inputs shared by show and exact rule-binding validation (#2938). */
-export function loadLocalCapabilityEntries(cwd: string, graph?: GraphType): MetadataEntry[] {
+export function loadLocalCapabilityEntries(
+  cwd: string, graph?: GraphType, snapshot?: Map<string, MetadataEntry[]>,
+): MetadataEntry[] {
   const entries: MetadataEntry[] = [];
   for (const selectedGraph of graph ? [graph] : defaultCapabilityGraphs(cwd)) {
-    const index = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', selectedGraph);
-    if (index) entries.push(...Object.values(index.entries).map(entry => withIndexProvenance(entry, selectedGraph)));
+    const key = snapshot && `${selectedGraph}:${getGraphIndexDir(cwd, selectedGraph)}`;
+    let selected = key ? snapshot!.get(key) : undefined;
+    if (!selected) {
+      const index = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', selectedGraph);
+      selected = index ? Object.values(index.entries).map(entry => withIndexProvenance(entry, selectedGraph)) : [];
+      if (key) snapshot!.set(key, selected);
+    }
+    entries.push(...selected);
   }
   if (!graph && entries.length === 0) {
     const legacy = loadMetadataIndex(cwd);
     if (legacy) entries.push(...Object.values(legacy.entries));
   }
   return entries;
+}
+
+/** Project/user inputs only; package artifacts come from a validated compact table. */
+export function loadLocalOverrideCapabilityEntries(cwd: string): MetadataEntry[] {
+  const local = defaultCapabilityGraphs(cwd).filter(graph => graph !== 'framework')
+    .flatMap(graph => loadLocalCapabilityEntries(cwd, graph));
+  if (local.length) return local;
+  const canonical = (directory: string): string => {
+    try { return fs.realpathSync(directory); } catch { return path.resolve(directory); }
+  };
+  const packageRoot = canonical(resolveFrameworkIndexRoot(cwd));
+  // Retain the legacy PROJECT index, never use the package's full index as a fallback.
+  if (canonical(cwd) === packageRoot) return [];
+  const legacy = loadMetadataIndex(cwd);
+  return Object.values(legacy?.entries ?? {}).filter(entry => {
+    const provenance = entry as ProvenancedEntry;
+    if (provenance.indexGraph === 'framework' || provenance.indexScope === 'packaged'
+      || normalizeIndexedPath(entry.path).startsWith('agentic/code/')) return false;
+    const relative = path.relative(packageRoot, path.resolve(cwd, entry.path));
+    return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  }).map(entry => withIndexProvenance(entry, 'project'));
 }
 
 function findShowMatches(entries: MetadataEntry[], types: string[], needle: string): MetadataEntry[] {
@@ -1780,6 +1810,29 @@ function findShowMatches(entries: MetadataEntry[], types: string[], needle: stri
     if (nonPersonaMatches.length === 1) matches = nonPersonaMatches;
   }
   return matches;
+}
+
+/** Preselect exact candidates once; the canonical resolver still owns precedence and ambiguity. */
+export function createRuleBindingTargetResolver(entries: MetadataEntry[]): (
+  type: 'skill' | 'agent' | 'flow', id: string,
+) => MetadataEntry {
+  const candidates = new Map<string, MetadataEntry[]>();
+  for (const entry of entries) {
+    if (!['skill', 'agent', 'flow'].includes(entry.type)) continue;
+    const normalized = normalizeIndexedPath(entry.path);
+    const basename = path.posix.basename(normalized);
+    const slug = /^(?:SKILL|AGENT|FLOW)\.md$/i.test(basename)
+      ? path.posix.basename(path.posix.dirname(normalized))
+      : basename.replace(/\.[^.]+$/, '');
+    for (const id of new Set([entry.name, discoveryIdForEntry(entry), slug])) {
+      if (typeof id !== 'string') continue;
+      const key = `${entry.type}\0${id}`;
+      const selected = candidates.get(key) ?? [];
+      selected.push(entry);
+      candidates.set(key, selected);
+    }
+  }
+  return (type, id) => resolveRuleBindingTarget(candidates.get(`${type}\0${id}`) ?? [], type, id);
 }
 
 /** Resolve exact rule binding IDs using the same precedence and ambiguity as show.

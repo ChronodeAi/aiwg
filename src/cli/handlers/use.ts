@@ -2325,18 +2325,30 @@ async function generateGlobalProjectContext(opts: {
   });
 }
 
+/** Receipt reuse applies to complete packages; selected partial sources still need an actual build. */
+async function reconcileSelectedFrameworkSource(root: string): Promise<void> {
+  const { refreshFrameworkCapabilities, resolveFrameworkCorpusRoot } = await import('../../artifacts/framework-capabilities.js');
+  if (resolveFrameworkCorpusRoot(root)) {
+    await refreshFrameworkCapabilities(root, true, { force: true });
+    return;
+  }
+  const { buildIndex } = await import('../../artifacts/index-builder.js');
+  await buildIndex(root, { graph: 'framework', explicit: false });
+  const { syncFortemiCoreIndex } = await import('../../artifacts/fortemi-core-sync.js');
+  syncFortemiCoreIndex(root, { graph: 'framework' });
+}
+
 async function ensurePostDeployPhases(opts: {
   frameworkRoot: string;
   projectPath: string;
   provider: string;
   args: string[];
 }): Promise<void> {
-  // This shared graph may have just been built from another runtime or a
-  // scoped source. Its timestamp (and a query receipt) cannot prove coverage
-  // for this deploy. Always run the incremental build from the selected root.
+  // Validate source files once after deployment, including uncommitted edits
+  // that the cheap HEAD/manifest receipt intentionally cannot detect. Earlier
+  // deployment/query phases can reuse that receipt instead of rescanning.
   try {
-    const { buildIndex } = await import('../../artifacts/index-builder.js');
-    await buildIndex(opts.frameworkRoot, { graph: 'framework', explicit: false });
+    await reconcileSelectedFrameworkSource(opts.frameworkRoot);
   } catch {
     // The shared verifier reports the index failure with stable remediation.
   }
@@ -2696,9 +2708,9 @@ export class UseHandler implements CommandHandler {
     // Child deployers share one source-index snapshot for this invocation. Each
     // addon still resolves and validates its bindings through the common query
     // engine, without rebuilding the entire corpus on every additive pass.
-    const bindingCache = await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-use-bindings-'));
-    const removeBindingCache = trackTemporaryDirectory(bindingCache);
     const previousBindingCache = process.env.AIWG_RULE_BINDING_INDEX_CACHE;
+    const bindingCache = previousBindingCache || await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-use-bindings-'));
+    const removeBindingCache = previousBindingCache ? () => {} : trackTemporaryDirectory(bindingCache);
     process.env.AIWG_RULE_BINDING_INDEX_CACHE = bindingCache;
     this.orchestrationDepth += 1;
     try {
@@ -4181,13 +4193,9 @@ export class UseHandler implements CommandHandler {
         const origLog = console.log;
         if (!verbose) console.log = () => {};
         try {
-          const { buildIndex } = await import('../../artifacts/index-builder.js');
-          // Build against AIWG_ROOT so stored paths resolve from any
-          // project (#1217). The output index location is XDG-shared
-          // regardless of build cwd.
-          await buildIndex(aiwgRootForIndex, { graph: 'framework', explicit: false });
-          const { syncFortemiCoreIndex } = await import('../../artifacts/fortemi-core-sync.js');
-          syncFortemiCoreIndex(aiwgRootForIndex, { graph: 'framework' });
+          // Validate uncommitted sources once and publish the receipt so
+          // verification/discovery do not immediately scan the corpus again.
+          await reconcileSelectedFrameworkSource(aiwgRootForIndex);
           console.log = origLog;
           const indexElapsedSec = ((Date.now() - indexStart) / 1000).toFixed(1);
           ui.success(`Capability index ready (${indexElapsedSec}s).`);

@@ -109,6 +109,48 @@ function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
+interface ExportSnapshot {
+  signature: string;
+  checksum: string;
+  exported: AiwgFortemiIndexExport;
+}
+// Status checks and the query reader often inspect the same large export.
+// Keep at most two private snapshots, and never retain an object exposed to a
+// caller: query results have always been fresh, mutable objects.
+const exportSnapshots = new Map<string, ExportSnapshot>();
+
+function exportSignature(file: string): string {
+  const stat = fs.statSync(file, { bigint: true });
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+}
+
+function readExportSnapshot(file: string): ExportSnapshot {
+  const signature = exportSignature(file);
+  const cached = exportSnapshots.get(file);
+  if (cached?.signature === signature) return cached;
+  exportSnapshots.delete(file);
+  const text = fs.readFileSync(file, "utf-8");
+  const exported = JSON.parse(text) as AiwgFortemiIndexExport;
+  const snapshot = { signature, exported, checksum: sha256(text) };
+  // A concurrent replacement cannot publish a snapshot under the wrong stamp.
+  if (exportSignature(file) === signature) {
+    exportSnapshots.set(file, snapshot);
+    while (exportSnapshots.size > 2) exportSnapshots.delete(exportSnapshots.keys().next().value!);
+  }
+  return snapshot;
+}
+
+/** Transfer a checked snapshot to the query reader without sharing mutable results. */
+export function consumeFortemiCoreExport(file: string, expectedChecksum: string | null): AiwgFortemiIndexExport {
+  try {
+    const snapshot = readExportSnapshot(file);
+    if (snapshot.checksum !== expectedChecksum) throw new Error("export checksum does not match manifest");
+    return snapshot.exported;
+  } finally {
+    exportSnapshots.delete(file);
+  }
+}
+
 function readManifest(manifestPath: string): FortemiCoreSyncManifest | null {
   return readManifestResult(manifestPath).manifest;
 }
@@ -328,9 +370,8 @@ export function getFortemiCoreSyncStatus(
   let exportChecksumMatches = false;
   if (exportExists) {
     try {
-      const exportText = fs.readFileSync(exportPath, "utf-8");
-      const exported = JSON.parse(exportText) as AiwgFortemiIndexExport;
-      exportChecksumMatches = sha256(exportText) === manifest.export_checksum;
+      const { exported, checksum } = readExportSnapshot(exportPath);
+      exportChecksumMatches = checksum === manifest.export_checksum;
       if (exportChecksumMatches) {
         if (exported.schema_version !== manifest.export_schema_version) {
           exportReadReason = `export schema '${exported.schema_version}' does not match manifest '${manifest.export_schema_version}'`;
@@ -406,8 +447,7 @@ export function getFortemiCorePrebuiltStatus(
   let reason: string | null = null;
   if (exportExists) {
     try {
-      const exportText = fs.readFileSync(exportPath, "utf-8");
-      const exported = JSON.parse(exportText) as AiwgFortemiIndexExport;
+      const { exported, checksum } = readExportSnapshot(exportPath);
       if (
         prebuiltManifest.schema_version !== "aiwg.fortemi.prebuilt.v1" ||
         prebuiltManifest.backend !== "fortemi-core" ||
@@ -416,7 +456,7 @@ export function getFortemiCorePrebuiltStatus(
         prebuiltManifest.export_schema_version !== "aiwg.fortemi.index.export.v2"
       ) {
         reason = "prebuilt manifest is incompatible with the requested graph";
-      } else if (sha256(exportText) !== prebuiltManifest.export_checksum) {
+      } else if (checksum !== prebuiltManifest.export_checksum) {
         reason = "prebuilt export checksum does not match manifest";
       } else if (exported.schema_version !== prebuiltManifest.export_schema_version) {
         reason = `prebuilt export schema '${exported.schema_version}' does not match manifest '${prebuiltManifest.export_schema_version}'`;
