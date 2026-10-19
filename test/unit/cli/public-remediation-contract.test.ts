@@ -20,6 +20,7 @@ const EXEMPTIONS: Exemption[] = [
   { path: /^src\/channel\/manager\.mjs$/, text: /npm (?:run build|install -g aiwg)/, classification: 'bootstrap', rationale: 'channel switching and source checkout builds are the distribution mechanism' },
   { path: /^src\/update\/checker\.mjs$/, text: /npm install -g aiwg/, classification: 'bootstrap', rationale: 'self-update fallback repairs the base package itself' },
   { path: /^src\/update\/service\.mjs$/, text: /npm ci && npm run build/, classification: 'contributor', rationale: 'a source checkout must be built by its owner' },
+  { path: /^src\/artifacts\/prebuilt-relations\.ts$/, text: /npm run release:fortemi-index/, classification: 'contributor', rationale: 'immutable relationship tables are release-package outputs regenerated only from a source checkout' },
   { path: /^src\/cli\/handlers\/session\.ts$/, text: /npm install -g aiwg/, classification: 'bootstrap', rationale: 'session recovery can repair a broken base install' },
   { path: /^src\/cli\/handlers\/use\.ts$/, text: /^'  npm install -g aiwg',$/, classification: 'bootstrap', rationale: 'switching from the corpus-free @aiwg/cli distribution to full aiwg requires package installation; self-update retains the current distribution' },
   { path: /^tools\/cli\/doctor\.mjs$/, text: /(?:npm install -g aiwg|npx aiwg)/, classification: 'bootstrap', rationale: 'doctor must recover when the public CLI install is missing or broken' },
