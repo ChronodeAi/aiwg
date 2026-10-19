@@ -80,6 +80,10 @@ export interface MissionLedger {
   missionId: string;
   goal: string;
   completionCriterion: string;
+  /** Mode of this conductor pass. Absent on legacy ledgers. */
+  executionMode?: 'plan-only' | 'executed';
+  /** Scorer used by this pass; null means best-output selection is unavailable. */
+  scorerId?: string | null;
   /** Append-only audit trail (one line per conductor decision/observation). */
   activityLog: string[];
   cycles: CycleResult[];
@@ -98,7 +102,7 @@ export interface MissionLedger {
 /**
  * Runs a single dispatched worker on its selected executor. The real seam to
  * `aiwg serve`'s dispatch-router + WS event stream plugs in here; tests inject
- * a fake. The default planner marks the cycle as routed-but-not-executed so the
+ * a fake. Without a worker, planning marks the cycle as routed-but-not-executed so the
  * conductor is honest about what is wired vs. pending the live transport.
  */
 export type RunWorker = (
@@ -107,21 +111,20 @@ export type RunWorker = (
   invocation: { runtimeCapability: string; primitive: string; describe: string },
 ) => { output?: string; cost?: number } | Promise<{ output?: string; cost?: number }>;
 
-/** Scores a worker output for best-output selection. Default: output length. */
+/** Scores a worker output against the mission's outcome; higher is better. */
 export type ScoreOutput = (result: CycleResult) => number;
 
 export interface ConductorOptions {
   adapters?: StackAdapterRegistry;
   /** Worker execution seam (default: plan-only, no execution). */
   runWorker?: RunWorker;
-  /** Best-output scorer (default: output length). */
+  /** Outcome scorer (e.g. executable checks). Without one, no best output is reported. */
   scoreOutput?: ScoreOutput;
+  /** Stable evaluator identity/version. Defaults to 'custom' when scoreOutput is supplied. */
+  scorerId?: string;
   /** Resume from a prior ledger's checkpoint (skip already-completed cycles). */
   resumeFrom?: MissionLedger;
 }
-
-const defaultRunWorker: RunWorker = () => ({ output: undefined, cost: 0 });
-const defaultScore: ScoreOutput = (r) => (r.output ? r.output.length : 0);
 
 /**
  * The cross-stack Mission conductor. Decomposes a Mission into worker cycles,
@@ -130,13 +133,15 @@ const defaultScore: ScoreOutput = (r) => (r.output ? r.output.length : 0);
  */
 export class MissionConductor {
   private adapters: StackAdapterRegistry;
-  private runWorker: RunWorker;
-  private scoreOutput: ScoreOutput;
+  private runWorker?: RunWorker;
+  private scoreOutput?: ScoreOutput;
+  private scorerId: string | null;
 
   constructor(opts: ConductorOptions = {}) {
     this.adapters = opts.adapters ?? new StackAdapterRegistry();
-    this.runWorker = opts.runWorker ?? defaultRunWorker;
-    this.scoreOutput = opts.scoreOutput ?? defaultScore;
+    this.runWorker = opts.runWorker;
+    this.scoreOutput = opts.scoreOutput;
+    this.scorerId = opts.scoreOutput ? (opts.scorerId ?? 'custom') : null;
   }
 
   /**
@@ -165,6 +170,8 @@ export class MissionConductor {
       missionId: plan.missionId,
       goal: plan.goal,
       completionCriterion: plan.completionCriterion,
+      executionMode: this.runWorker ? 'executed' : 'plan-only',
+      scorerId: this.scorerId,
       activityLog: [],
       cycles: [],
       totalCost: 0,
@@ -175,6 +182,7 @@ export class MissionConductor {
 
     ledger.activityLog.push(
       `mission ${plan.missionId} start — goal: ${plan.goal} — ${plan.cycles.length} cycle(s)` +
+        ` — mode: ${ledger.executionMode}, scorer: ${ledger.scorerId ?? '(none)'}` +
         (resumeFrom ? ` (resume: ${carried.size} carried)` : ''),
     );
 
@@ -240,6 +248,21 @@ export class MissionConductor {
         `cycle ${cycle.id} → executor ${executor.name} (${executor.executorId}) on ${cycle.runtime}: ${invocation.describe}`,
       );
 
+      if (!this.runWorker) {
+        ledger.cycles.push({
+          cycleId: cycle.id,
+          runtime: cycle.runtime,
+          primitive: adapter.primitive,
+          executorId: executor.executorId,
+          routed: true,
+          reason: 'plan-only: worker not configured; execution pending',
+          cost: 0,
+          ...(graph ? { graph } : {}),
+        });
+        ledger.activityLog.push(`cycle ${cycle.id} PLANNED on ${cycle.runtime} — execution pending`);
+        continue;
+      }
+
       let output: string | undefined;
       let cost = 0;
       try {
@@ -280,23 +303,31 @@ export class MissionConductor {
       ledger.activityLog.push(`cycle ${cycle.id} done on ${cycle.runtime} (cost ${cost})`);
     }
 
-    // Pending = cycles neither completed nor failed (none, here — full pass).
+    // Planned cycles remain pending until a worker executes them.
     const accounted = new Set([...ledger.checkpoint.completed, ...ledger.checkpoint.failed]);
     ledger.checkpoint.pending = plan.cycles.map((c) => c.id).filter((id) => !accounted.has(id));
 
     // Cross-stack aggregation: distinct runtimes that actually ran a worker.
     ledger.runtimesUsed = [
-      ...new Set(ledger.cycles.filter((c) => c.routed).map((c) => c.runtime)),
+      ...new Set(ledger.cycles.filter((c) => c.routed && accounted.has(c.cycleId)).map((c) => c.runtime)),
     ];
 
     // Best-output selection (REF-015) — conductor-side, across stacks.
     let best: MissionLedger['bestOutput'] | undefined;
-    for (const c of ledger.cycles) {
-      if (!c.output) continue;
-      const score = this.scoreOutput(c);
-      if (!best || score > best.score) {
-        best = { cycleId: c.cycleId, runtime: c.runtime, output: c.output, score };
+    if (this.scoreOutput) {
+      for (const c of ledger.cycles) {
+        if (c.output === undefined) continue;
+        const score = this.scoreOutput(c);
+        if (!Number.isFinite(score)) {
+          ledger.activityLog.push(`cycle ${c.cycleId} UNSCORED — scorer ${this.scorerId} returned a non-finite score`);
+          continue;
+        }
+        if (!best || score > best.score) {
+          best = { cycleId: c.cycleId, runtime: c.runtime, output: c.output, score };
+        }
       }
+    } else {
+      ledger.activityLog.push('best-output unavailable: no scorer configured');
     }
     ledger.bestOutput = best;
 

@@ -160,14 +160,28 @@ describe('MissionConductor cross-stack dispatch (#1546)', () => {
     }
   });
 
-  it('best-output selection runs conductor-side across stacks (REF-015)', async () => {
+  it('refuses to name a best output without a configured scorer (#3314)', async () => {
     const conductor = new MissionConductor({ runWorker: fakeRun });
     const ledger = await conductor.conduct(mixedPlan(), fleet);
-    // Default scorer = output length; both outputs differ only by the runtime
-    // suffix, so the longer (`claude-code`) wins — the point is it selects ONE
-    // best across heterogeneous stacks.
-    expect(ledger.bestOutput).toBeTruthy();
-    expect(['cycle-codex', 'cycle-claude']).toContain(ledger.bestOutput!.cycleId);
+    expect(ledger.bestOutput).toBeUndefined();
+    expect(ledger.scorerId).toBeNull();
+    expect(ledger.executionMode).toBe('executed');
+    expect(ledger.activityLog.join('\n')).toContain('best-output unavailable: no scorer configured');
+  });
+
+  it('a shorter correct output beats a longer incorrect one using an executable check (#3314)', async () => {
+    const conductor = new MissionConductor({
+      runWorker: (cycle) => ({ output: cycle.runtime === 'codex' ? '4' : 'The answer to 2 + 2 is definitely 5.' }),
+      scoreOutput: (result) => Number(Number(result.output) === 2 + 2),
+      scorerId: 'arithmetic-check-v1',
+    });
+    const plan = mixedPlan();
+    plan.goal = 'Compute 2 + 2';
+    plan.completionCriterion = 'Answer equals 4';
+    const ledger = await conductor.conduct(plan, fleet);
+    expect(ledger.bestOutput).toEqual({ cycleId: 'cycle-codex', runtime: 'codex', output: '4', score: 1 });
+    expect(ledger.scorerId).toBe('arithmetic-check-v1');
+    expect(ledger.executionMode).toBe('executed');
   });
 
   it('honors a custom best-output scorer across stacks', async () => {
@@ -179,10 +193,32 @@ describe('MissionConductor cross-stack dispatch (#1546)', () => {
     const ledger = await conductor.conduct(mixedPlan(), fleet);
     expect(ledger.bestOutput!.cycleId).toBe('cycle-claude');
     expect(ledger.bestOutput!.runtime).toBe('claude-code');
+    expect(ledger.scorerId).toBe('custom');
+  });
+
+  it.each([NaN, Infinity, -Infinity])('ignores non-finite scores (%s) when selecting best output', async (invalidScore) => {
+    const ledger = await new MissionConductor({
+      runWorker: fakeRun,
+      scoreOutput: (result) => result.runtime === 'codex' ? invalidScore : -1,
+      scorerId: 'finite-check-v1',
+    }).conduct(mixedPlan(), fleet);
+    expect(ledger.bestOutput).toMatchObject({ cycleId: 'cycle-claude', score: -1 });
+    expect(ledger.activityLog.join('\n')).toContain('returned a non-finite score');
   });
 });
 
 describe('MissionConductor no-silent-drop (#1546)', () => {
+  it('reports plan-only mode and leaves routed cycles pending without a worker (#3314)', async () => {
+    const ledger = await new MissionConductor().conduct(mixedPlan(), fleet);
+    expect(ledger.executionMode).toBe('plan-only');
+    expect(ledger.scorerId).toBeNull();
+    expect(ledger.checkpoint).toEqual({ completed: [], pending: ['cycle-codex', 'cycle-claude'], failed: [] });
+    expect(ledger.cycles.every((cycle) => cycle.routed && cycle.reason.includes('plan-only'))).toBe(true);
+    expect(ledger.runtimesUsed).toEqual([]);
+    expect(ledger.totalCost).toBe(0);
+    expect(ledger.bestOutput).toBeUndefined();
+  });
+
   it('records an unroutable cycle when no adapter is registered for its runtime', async () => {
     const conductor = new MissionConductor({ runWorker: fakeRun });
     const plan: MissionPlan = {
@@ -236,6 +272,33 @@ describe('MissionConductor no-silent-drop (#1546)', () => {
 });
 
 describe('MissionConductor crash-resilient resume (#1546)', () => {
+  it('executes every pending cycle when resuming a plan-only ledger (#3314)', async () => {
+    const planned = await new MissionConductor().conduct(mixedPlan(), fleet);
+    const executed: string[] = [];
+    const ledger = await new MissionConductor({
+      runWorker: (cycle) => {
+        executed.push(cycle.id);
+        return fakeRun(cycle, codexExec, codexAdapter.invoke(cycle.prompt));
+      },
+    }).conduct(mixedPlan(), fleet, planned);
+    expect(executed).toEqual(['cycle-codex', 'cycle-claude']);
+    expect(ledger.checkpoint.completed).toEqual(executed);
+    expect(ledger.checkpoint.pending).toEqual([]);
+    expect(ledger.executionMode).toBe('executed');
+    expect(ledger.runtimesUsed).toEqual(['codex', 'claude-code']);
+  });
+
+  it('does not carry a prior best output into a pass without a scorer (#3314)', async () => {
+    const first = await new MissionConductor({ runWorker: fakeRun, scoreOutput: (result) => result.cost })
+      .conduct(mixedPlan(), fleet);
+    expect(first.bestOutput).toBeDefined();
+    const resumed = await new MissionConductor({ runWorker: () => { throw new Error('must not rerun'); } })
+      .conduct(mixedPlan(), fleet, first);
+    expect(resumed.checkpoint.completed).toEqual(first.checkpoint.completed);
+    expect(resumed.bestOutput).toBeUndefined();
+    expect(resumed.scorerId).toBeNull();
+  });
+
   it('carries forward completed cycles from a prior ledger and skips re-running them', async () => {
     let runCount = 0;
     const countingRun: RunWorker = (cycle) => {
