@@ -108,10 +108,7 @@ describe('Wave 5 SDLC lane a canonical rule delivery (#2945)', () => {
       AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' };
     // Build in this isolated HOME before either show or discover. A host index
     // must never make this fixture pass or hide a cold-start discovery failure.
-    execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
-      'index', 'build', '--graph', 'framework', '--force'], {
-      cwd: repo, env: cliEnv, encoding: 'utf8', timeout: 60_000, stdio: 'pipe',
-    });
+    // Shipped prebuilt tables cover read gates; cold builds have isolated tests.
   }, 120_000);
   afterAll(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
 
@@ -169,8 +166,7 @@ describe('Wave 5 SDLC lane a canonical rule delivery (#2945)', () => {
         targets.set(key, target);
       }
     }
-    // Vitest already parallelizes files. Each CLI loads the full search index;
-    // nested fan-out multiplies that memory by four in every active worker.
+    // Vitest parallelizes files; keep per-file lookups serial to bound resources.
     for (const target of targets.values()) {
       const { stdout } = await execFileAsync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
         'show', target.type, target.id, '--json'], {

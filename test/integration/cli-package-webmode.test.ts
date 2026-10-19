@@ -264,7 +264,7 @@ describe('@aiwg/cli packaged web distribution', () => {
     const prefix = path.join(tempRoot, 'prefix');
     const installArgs = [
         'install', '--prefix', prefix,
-        '--cache', path.join(tempRoot, 'npm-cache'),
+        '--cache', process.env.AIWG_PACKAGE_TEST_NPM_CACHE ?? path.join(tempRoot, 'npm-cache'),
         '--min-release-age=7', '--ignore-scripts', '--no-audit', '--no-fund',
         path.join(tempRoot, packed[0]!.filename),
     ];

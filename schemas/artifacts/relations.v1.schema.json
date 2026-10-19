@@ -1,0 +1,353 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/artifacts/relations.v1.schema.json",
+  "title": "Framework rule relationship index v1",
+  "description": "Small derived framework sidecar. IDs are stable discover IDs; target keys are type:id. Projected flow skills use projected:<flow ID>. Fingerprints hash sorted source paths and content checksums. required_checks counts critical/high contracts, not mechanically enforced checks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "version",
+    "generatedAt",
+    "fingerprint",
+    "rules",
+    "targets",
+    "capabilities",
+    "aliases"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://aiwg.io/schemas/artifacts/relations.v1.schema.json"
+    },
+    "version": {
+      "const": 1
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "fingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "sources"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "sources": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/rule"
+      }
+    },
+    "targets": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/target"
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "rules_by_tier"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "framework",
+              "addon",
+              "extension"
+            ]
+          },
+          "rules_by_tier": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "properties": {
+              "critical": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true
+              },
+              "high": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true
+              },
+              "medium": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true
+              },
+              "low": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "aliases": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targets",
+        "rules"
+      ],
+      "properties": {
+        "targets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "rules": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "path",
+          "type",
+          "title"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "kernel": {
+            "type": "boolean"
+          },
+          "script": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "skill",
+            "agent",
+            "flow",
+            "command"
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "by_enforcement",
+        "by_activation",
+        "required_checks"
+      ],
+      "properties": {
+        "by_enforcement": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "by_activation": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required_checks": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "path",
+        "type",
+        "activation",
+        "enforcement",
+        "summary",
+        "capability",
+        "targets"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "rule",
+            "behavior"
+          ]
+        },
+        "activation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enforcement": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "capability": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/edge"
+          },
+          "uniqueItems": true
+        },
+        "bound_to": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "agents": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "flows": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          }
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "path",
+        "rules",
+        "rule_stats"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "rule_stats": {
+          "$ref": "#/$defs/stats"
+        },
+        "projected_from": {
+          "$ref": "#/$defs/edge"
+        }
+      }
+    }
+  }
+}

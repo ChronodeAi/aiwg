@@ -19,6 +19,9 @@ export default defineConfig({
       'agentic/code/frameworks/*/test/**/*.spec.ts'
     ],
 
+    // Build shipped tables once; fresh worker HOMEs use the same immutable corpus.
+    globalSetup: ['./test/helpers/prebuilt-relations-setup.mjs'],
+
     // Runner ownership follows imported APIs, not the .mjs extension.
     // Node unit tests and all UAT tests have their own required lanes.
     // UAT tests run in their own vitest config to avoid thread-pool conflicts

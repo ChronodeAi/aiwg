@@ -155,10 +155,9 @@ describe('framework capabilities outside provider directories (#3304)', () => {
     expect(json().content).toContain('# Induct Research');
     expect(json().uninstalled).not.toBe(true);
     expect(index().entries[induction]?.type).toBe('skill');
-    if (backend === 'fortemi-core') {
-      expect(loadFortemiCoreMetadataEntries(project, 'framework').entries.some(e => e.name === 'induct-research')).toBe(true);
-      expect(getFortemiCoreSyncStatus(project, 'framework').stale).toBe(false);
-    }
+    // Show reads the rebuilt relationship catalog; discovery materializes its
+    // text-search cache when next requested.
+    expect(fs.existsSync(path.join(getGraphIndexDir(root, 'framework'), 'relations.json'))).toBe(true);
   });
 
   it.each(['local', 'fortemi-core'] as const)('refreshes before discovery and ranks natural phrases in top three (%s)', async backend => {
@@ -207,19 +206,14 @@ describe('framework capabilities outside provider directories (#3304)', () => {
     expect(status.mock.calls.filter(([cwd]) => cwd === root)).toHaveLength(0);
   });
 
-  it('uses only shallow manifest reads and stat checks on an unchanged receipt', async () => {
+  it('uses cached content digests and stat checks on an unchanged receipt', async () => {
     await refreshFrameworkCapabilities(root);
     const read = vi.spyOn(fs, 'readFileSync');
     const list = vi.spyOn(fs, 'readdirSync');
     await refreshFrameworkCapabilities(root);
     expect(read.mock.calls.some(([file]) => /metadata\.json|aiwg-fortemi-index/.test(String(file)))).toBe(false);
-    expect(list.mock.calls.map(([dir]) => String(dir))).toEqual([
-      path.join(root, 'agentic/code/frameworks'),
-      path.join(root, 'agentic/code/addons'),
-      path.join(root, 'agentic/code/extensions'),
-      path.join(root, 'agentic/code/agents'),
-      path.join(root, 'agentic/code/behaviors'),
-    ]);
+    expect(list.mock.calls.length).toBeGreaterThan(5);
+    expect(read.mock.calls.some(([file]) => String(file).endsWith('SKILL.md'))).toBe(false);
   });
 
   it('serializes concurrent cold starts into one rebuild', async () => {

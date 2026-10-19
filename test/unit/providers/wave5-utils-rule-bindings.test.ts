@@ -119,10 +119,7 @@ describe('Wave 5 utils canonical rule delivery (#2945)', () => {
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'),
       XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'),
       AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' };
-    execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
-      'index', 'build', '--graph', 'framework', '--force'], {
-      cwd: repo, env, encoding: 'utf8', timeout: 30_000, stdio: 'pipe',
-    });
+    // Shipped prebuilt tables cover read gates; cold builds have isolated tests.
     const targets = new Map<string, { type: string; id: string; rules: Array<{ name: string; data: any }> }>();
     for (const rule of rules) for (const [kind, ids] of Object.entries(rule.data.bound_to) as Array<[string, string[]]>) {
       for (const id of ids) {
@@ -133,8 +130,7 @@ describe('Wave 5 utils canonical rule delivery (#2945)', () => {
       }
     }
     // Check every distinct artifact and every declared rule-artifact pair.
-    // Vitest already parallelizes files. Each CLI loads the full search index;
-    // nested fan-out multiplies that memory by four in every active worker.
+    // Vitest parallelizes files; keep per-file lookups serial to bound resources.
     for (const target of targets.values()) {
       const { stdout } = await execFileAsync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
         'show', target.type, target.id, '--json'], {
@@ -158,10 +154,7 @@ describe('Wave 5 utils canonical rule delivery (#2945)', () => {
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'),
       XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'),
       AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' };
-    execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
-      'index', 'build', '--graph', 'framework', '--force'], {
-      cwd: repo, env, encoding: 'utf8', timeout: 30_000, stdio: 'pipe',
-    });
+    // Shipped prebuilt tables cover read gates; cold builds have isolated tests.
     const needs: Record<string, string> = {
       'addon-boundaries': 'addon boundaries',
       'aiwg-ci-safety': 'aiwg ci safety',

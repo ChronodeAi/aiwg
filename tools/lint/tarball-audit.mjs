@@ -133,6 +133,15 @@ if (!Array.isArray(packJson) || packJson.length === 0 || !Array.isArray(packJson
   process.exit(2);
 }
 
+// Relationship tables are part of the shipped discovery contract (#3305).
+const packedFiles = new Set(packJson[0].files.map(file => file.path));
+for (const file of ['relations.json', 'bindings.json', 'manifest.json']) {
+  if (!packedFiles.has(`prebuilt/framework-relations/${file}`)) {
+    console.error(`✗ Missing prebuilt relationship table: ${file}`);
+    process.exit(1);
+  }
+}
+
 // Extract unique top-level entries: anything before the first `/` in each
 // file path. Paths from `npm pack --dry-run --json` use forward slashes
 // regardless of platform.

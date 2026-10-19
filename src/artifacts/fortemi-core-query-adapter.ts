@@ -1,3 +1,5 @@
+import { selectPrebuiltRelations } from './relations.js';
+import { resolveFrameworkIndexRoot } from './framework-index-paths.js';
 import { extractRuleBindings } from './index-builder.js';
 import fs from "node:fs";
 import { createHash } from "node:crypto";
@@ -294,6 +296,14 @@ export function loadFortemiCoreExport(
       return {
         reason: `Verified Fortemi Core source could not be read: ${err instanceof Error ? err.message : String(err)}`,
       };
+    }
+  }
+  // A content-validated shipped corpus does not need the source metadata index.
+  // This also avoids preferring a much larger locally materialized text cache.
+  if (graph === 'framework' && selectPrebuiltRelations(cwd).reader) {
+    const prebuilt = getFortemiCorePrebuiltStatus(graph, resolveFrameworkIndexRoot(cwd));
+    if (prebuilt.built && !prebuilt.stale) {
+      return { exported: JSON.parse(fs.readFileSync(prebuilt.exportPath, 'utf8')) as AiwgFortemiIndexExport };
     }
   }
   let status = getFortemiCoreSyncStatus(cwd, graph);
