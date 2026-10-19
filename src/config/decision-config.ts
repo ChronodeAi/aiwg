@@ -14,6 +14,13 @@ export interface DecisionConfig {
     /** Omit to disable agreement acceptance. */
     min_agreement?: number;
     agreement_confidence_floor?: number;
+    /** USD per million tokens; blended input/output prices for planning estimates. */
+    cost?: { llm_per_mtok?: number; jev_per_mtok?: number };
+    savings?: {
+      caller_model_class?: 'standard' | 'reasoning';
+      reasoning_tokens?: number;
+      output_tokens?: number;
+    };
   };
 }
 
@@ -48,6 +55,24 @@ export function validateDecisionConfig(value: unknown): string[] {
   for (const key of ['min_agreement', 'agreement_confidence_floor'] as const) {
     if (ask[key] !== undefined && (typeof ask[key] !== 'number' || !Number.isFinite(ask[key]) || ask[key]! < 0 || ask[key]! > 1)) {
       sampling.push(`decision.ask.${key} must be a probability from 0 to 1`);
+    }
+  }
+  for (const section of ['cost', 'savings'] as const) {
+    const settings = ask[section];
+    if (settings === undefined) continue;
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+      sampling.push(`decision.ask.${section} must be an object`);
+      continue;
+    }
+    const allowed = section === 'cost' ? ['llm_per_mtok', 'jev_per_mtok'] : ['caller_model_class', 'reasoning_tokens', 'output_tokens'];
+    for (const [key, value] of Object.entries(settings)) {
+      if (!allowed.includes(key)) sampling.push(`unknown decision.ask.${section}.${key}`);
+      else if (key === 'caller_model_class') {
+        if (value !== 'standard' && value !== 'reasoning') sampling.push('decision.ask.savings.caller_model_class must be standard or reasoning');
+      } else if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1_000_000
+        || (section === 'savings' && !Number.isSafeInteger(value))) {
+        sampling.push(`decision.ask.${section}.${key} must be a non-negative ${section === 'savings' ? 'integer' : 'number'} <= 1000000`);
+      }
     }
   }
   return [...errors, ...sampling];

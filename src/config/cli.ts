@@ -225,6 +225,8 @@ const STRING_ARRAY_FIELDS = new Set([
 const INTEGER_FIELDS: Record<string, { min: number; max: number }> = {
   'decision.ask.passes': { min: 1, max: Number.MAX_SAFE_INTEGER },
   'decision.ask.escalation_passes': { min: 1, max: Number.MAX_SAFE_INTEGER },
+  'decision.ask.savings.reasoning_tokens': { min: 0, max: 1_000_000 },
+  'decision.ask.savings.output_tokens': { min: 0, max: 1_000_000 },
   'parallelism.max_parallel_subagents': { min: 1, max: 50 },
   'parallelism.max_parallel_ralph_loops': { min: 1, max: 20 },
   'parallelism.max_parallel_mc_missions': { min: 1, max: 20 },
@@ -377,7 +379,7 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
   const intRule = INTEGER_FIELDS[key];
   if (intRule) {
     const n = Number(raw);
-    if (!Number.isInteger(n) || n < intRule.min || n > intRule.max) {
+    if (!raw.trim() || !Number.isInteger(n) || n < intRule.min || n > intRule.max) {
       throw new AiwgError({
         code: 'ERR_INVALID_VALUE',
         message: `${key} must be an integer between ${intRule.min} and ${intRule.max}, got '${raw}'`,
@@ -395,6 +397,13 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
         message: `${key} must be a probability from 0 to 1, got '${raw}'`,
         exitCode: EXIT_CODES.USAGE,
       });
+    }
+    value = n;
+  }
+  if (key === 'decision.ask.cost.llm_per_mtok' || key === 'decision.ask.cost.jev_per_mtok') {
+    const n = Number(raw);
+    if (!raw.trim() || !Number.isFinite(n) || n < 0 || n > 1_000_000) {
+      throw new AiwgError({ code: 'ERR_INVALID_VALUE', message: `${key} must be a non-negative number <= 1000000`, exitCode: EXIT_CODES.USAGE });
     }
     value = n;
   }

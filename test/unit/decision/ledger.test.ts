@@ -7,6 +7,9 @@ import {
   ATTRIBUTION_FIELD_PATTERN,
   buildDecisionLedgerRecord,
   DECISION_LEDGER_SCHEMA,
+  DECISION_LEDGER_SCHEMA_V1,
+  DECISION_SESSION_ENV_VARS,
+  resolveDecisionSession,
   DecisionLedgerSinceError,
   decisionLedgerHistory,
   decisionLedgerStats,
@@ -43,6 +46,7 @@ const ISOLATED_ENV_KEYS = [
   'AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH', 'AIWG_PROJECT_AIWG_DIR',
   'AIWG_PROVIDER', 'CLAUDECODE_PROVIDER', 'AIWG_TEST_PROCESS_PROVIDER', 'AIWG_DISABLE_PROCESS_PROVIDER_DETECTION',
   'AIWG_DECISION_ENABLED', 'JEV_API_KEY', 'AIWG_DECISION_JEV_API_KEY', 'XDG_CONFIG_HOME',
+  ...DECISION_SESSION_ENV_VARS,
   ...allHarnessMarkerEnvKeys(),
 ] as const;
 
@@ -135,6 +139,69 @@ describe('decision ledger', () => {
     return path.join(projectRoot, '.aiwg', 'decision', 'ledger.jsonl');
   }
 
+  it.each(DECISION_SESSION_ENV_VARS)('records session and source from %s on both transports', async key => {
+    const projectRoot = await tempRoot();
+    for (const transport of ['cli', 'mcp'] as const) {
+      const record = await recordDecisionAsk(yesNoInput, answeredResult, askOptions(projectRoot, {
+        transport, explicitSessionId: undefined, env: { [key]: ' session-42 ' },
+      }));
+      expect(record).toMatchObject({ sessionId: 'session-42', sessionSource: key, transport });
+    }
+    expect((await decisionLedgerStats(projectRoot, { groupBy: 'session' })).groups[0]).toMatchObject({ key: 'session-42', totalCalls: 2 });
+  });
+
+  it('resolves session precedence and ignores malformed or empty harness markers', () => {
+    const env = Object.fromEntries(DECISION_SESSION_ENV_VARS.map(key => [key, key]));
+    expect(resolveDecisionSession('explicit', env)).toEqual({ sessionId: 'explicit', sessionSource: '--session' });
+    for (const key of DECISION_SESSION_ENV_VARS) {
+      expect(resolveDecisionSession(undefined, env)).toEqual({ sessionId: key, sessionSource: key });
+      delete env[key];
+    }
+    expect(resolveDecisionSession(undefined, env)).toEqual({ sessionId: 'unknown', sessionSource: 'unknown' });
+    expect(resolveDecisionSession('bad value', { AIWG_SESSION_ID: ' ', CLAUDE_CODE_SESSION_ID: 'bad value', CODEX_THREAD_ID: 'valid' }))
+      .toEqual({ sessionId: 'valid', sessionSource: 'CODEX_THREAD_ID' });
+  });
+
+  it('separates frontier avoidance from all Jev usage, preserving weights across config changes', async () => {
+    const projectRoot = await tempRoot();
+    await mkdir(path.join(projectRoot, '.aiwg'));
+    await writeFile(path.join(projectRoot, '.aiwg', 'aiwg.config'), JSON.stringify({ decision: { ask: {
+      cost: { llm_per_mtok: 20, jev_per_mtok: 0.5 }, savings: { caller_model_class: 'standard', output_tokens: 32 },
+    } } }));
+    const answered = (await recordDecisionAsk(yesNoInput, answeredResult, askOptions(projectRoot, { caller: 'worker' })))!;
+    const fallback = (await recordDecisionAsk(yesNoInput, fallbackResult, askOptions(projectRoot, { caller: 'worker' })))!;
+    const noCall = (await recordDecisionAsk(yesNoInput, notConfiguredResult, askOptions(projectRoot, { caller: 'worker' })))!;
+    expect(answered.llm_tokens_avoided).toBe(answered.estimatedLlmTokensAvoided - 50 + 256 + 32);
+    expect(answered.estimationMethod).toMatchObject({ reasoning_tokens: 256, output_tokens: 32, llm_per_mtok: 20, jev_per_mtok: 0.5 });
+    expect(answered.cost_weighted_net_usd).toBeCloseTo((answered.llm_tokens_avoided! * 20 - 15 * 0.5) / 1e6, 12);
+    expect(fallback).toMatchObject({ llm_tokens_avoided: 0, jev_tokens: 25, cost_weighted_net_usd: -25 * 0.5 / 1e6 });
+    expect(noCall).toMatchObject({ llm_tokens_avoided: 0, jev_tokens: 0, cost_weighted_net_usd: 0 });
+    await writeFile(path.join(projectRoot, '.aiwg', 'aiwg.config'), '{}');
+    const group = (await decisionLedgerStats(projectRoot, { groupBy: 'caller' })).groups[0];
+    expect(group).toMatchObject({ key: 'worker', jev_tokens: 40, llm_tokens_avoided: answered.llm_tokens_avoided, legacyReestimatedCalls: 0 });
+    expect(group.cost_weighted_net_usd).toBeCloseTo(answered.cost_weighted_net_usd! + fallback.cost_weighted_net_usd!, 12);
+  });
+
+  it('reads mixed v1/v2 ledgers, re-estimates legacy answers and rejects malformed v2 economics', async () => {
+    const projectRoot = await tempRoot();
+    const answered = buildDecisionLedgerRecord(yesNoInput, answeredResult, buildContext({ projectRoot }));
+    const fallback = buildDecisionLedgerRecord(yesNoInput, fallbackResult, buildContext({ projectRoot }));
+    const legacy = (record: typeof answered) => {
+      const { llm_tokens_avoided, jev_tokens, cost_weighted_net_usd, sessionSource, estimationMethodV1, ...rest } = record;
+      return { ...rest, schema: DECISION_LEDGER_SCHEMA_V1, estimationMethod: estimationMethodV1 };
+    };
+    await mkdir(path.dirname(ledgerFilePath(projectRoot)), { recursive: true });
+    const records = [legacy(answered), legacy(fallback), answered,
+      { ...answered, llm_tokens_avoided: -1 }, { ...answered, estimationMethod: 'v2' },
+      { ...answered, estimationMethod: { ...answered.estimationMethod as object, jev_per_mtok: -1 } }];
+    await writeFile(ledgerFilePath(projectRoot), records.map(record => JSON.stringify(record)).join('\n'));
+    const stats = await decisionLedgerStats(projectRoot);
+    expect(stats.skipped).toBe(3);
+    expect(stats.groups[0]).toMatchObject({ totalCalls: 3, legacyReestimatedCalls: 2, jev_tokens: 55, llm_tokens_avoided: answered.llm_tokens_avoided! * 2 });
+    expect(stats.groups[0].cost_weighted_net_usd).toBeCloseTo(answered.cost_weighted_net_usd! * 2 - 25 * 0.2 / 1e6, 12);
+    expect((await decisionLedgerHistory(projectRoot)).records).toHaveLength(3);
+  });
+
   // ---------------------------------------------------------------------
   // Baseline acceptance criteria (#2946)
   // ---------------------------------------------------------------------
@@ -195,7 +262,7 @@ describe('decision ledger', () => {
     expect(record.questionDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(record.contextDigest).toBeNull();
     expect(record.estimatedLlmTokensAvoided).toBeGreaterThan(0);
-    expect(record.estimationMethod.length).toBeGreaterThan(0);
+    expect(record.estimationMethod).toMatchObject({ version: 'aiwg-decision-savings/v2', llm_per_mtok: 15, jev_per_mtok: 0.2 });
     expect(record).not.toHaveProperty('questionText');
     expect(record).not.toHaveProperty('contextText');
   });

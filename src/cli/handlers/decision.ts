@@ -328,7 +328,9 @@ async function decisionStats(ctx: HandlerContext): Promise<HandlerResult> {
     `  agreement: mean=${group.agreement.mean?.toFixed(2) ?? '-'} escalated=${group.escalatedCalls} passes run=${group.passesRun}`,
     `  jev usage: input=${group.jevUsage.inputTokens} output=${group.jevUsage.outputTokens}`,
     `  tokens per answered decision=${group.tokensPerAnsweredDecision?.toFixed(2) ?? '-'}`,
-    `  estimated LLM tokens avoided=${group.estimatedLlmTokensAvoidedTotal} net savings=${group.netSavingsTokens}`,
+    `  llm_tokens_avoided=${group.llm_tokens_avoided} jev_tokens=${group.jev_tokens} cost_weighted_net_usd=${group.cost_weighted_net_usd.toFixed(6)}`,
+    `  v1 comparison only: estimated LLM tokens avoided=${group.estimatedLlmTokensAvoidedTotal} net savings=${group.netSavingsTokens}`,
+    ...(group.legacyReestimatedCalls ? [`  v1 records re-estimated=${group.legacyReestimatedCalls} weights=${JSON.stringify(result.legacyEstimationWeights)}`] : []),
   ]);
   return { exitCode: 0, message: [...header, ...lines].join('\n'), rawOutput: true };
 }
