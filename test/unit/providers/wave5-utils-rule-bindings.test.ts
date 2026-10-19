@@ -129,23 +129,21 @@ describe('Wave 5 utils canonical rule delivery (#2945)', () => {
         targets.set(key, target);
       }
     }
-    // The index is already built. Bound read-only CLI calls run four at a time;
-    // every distinct artifact and every declared rule-artifact pair is checked.
-    const pending = [...targets.values()];
-    for (let offset = 0; offset < pending.length; offset += 4) {
-      await Promise.all(pending.slice(offset, offset + 4).map(async target => {
-        const { stdout } = await execFileAsync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
-          'show', target.type, target.id, '--json'], {
-          cwd: repo, env, encoding: 'utf8', timeout: 30_000,
-        });
-        const shown = JSON.parse(stdout);
-        for (const { name, data } of target.rules) {
-          expect(shown.bound_rules, `${target.type}:${target.id}`).toEqual(expect.arrayContaining([
-            expect.objectContaining({ name, activation: data.activation, summary: data.summary,
-              show_command: `aiwg show rule ${name}` }),
-          ]));
-        }
-      }));
+    // Check every distinct artifact and every declared rule-artifact pair.
+    // Vitest already parallelizes files. Each CLI loads the full search index;
+    // nested fan-out multiplies that memory by four in every active worker.
+    for (const target of targets.values()) {
+      const { stdout } = await execFileAsync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
+        'show', target.type, target.id, '--json'], {
+        cwd: repo, env, encoding: 'utf8', timeout: 30_000,
+      });
+      const shown = JSON.parse(stdout);
+      for (const { name, data } of target.rules) {
+        expect(shown.bound_rules, `${target.type}:${target.id}`).toEqual(expect.arrayContaining([
+          expect.objectContaining({ name, activation: data.activation, summary: data.summary,
+            show_command: `aiwg show rule ${name}` }),
+        ]));
+      }
     }
   }, 600_000);
 

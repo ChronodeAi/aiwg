@@ -96,14 +96,15 @@ describe('Wave 2 canonical rule delivery (#2942)', () => {
         requests.set(key, request);
       }
     }
-    const pending = [...requests.values()];
-    for (let i = 0; i < pending.length; i += 4) await Promise.all(pending.slice(i, i + 4).map(async request => {
+    // Vitest already parallelizes files. Each CLI loads the full search index;
+    // nested fan-out multiplies that memory by four in every active worker.
+    for (const request of requests.values()) {
       const { stdout } = await execFileAsync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
         'show', request.type, request.id, '--json'], { cwd: repo, env, encoding: 'utf8', timeout: 30_000 });
       const shown = JSON.parse(stdout);
       expect(shown.bound_rules, `${request.type}:${request.id}`).toEqual(expect.arrayContaining(
         request.expected.map(expected => expect.objectContaining(expected))));
-    }));
+    }
   }, 300_000);
 
   it('ranks each moved rule in the top three for its natural need (U6)', () => {

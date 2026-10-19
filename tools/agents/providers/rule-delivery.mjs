@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { createHash } from 'node:crypto';
 import { importImpl } from '../../_resolve-impl.mjs';
 import {
   listMdFiles, discoverAddons, getFrameworksForMode, collectBehaviorDirs,
@@ -18,6 +19,20 @@ function walk(dir) {
     const file = path.join(dir, entry.name);
     return entry.isDirectory() ? walk(file) : entry.isFile() ? [file] : [];
   });
+}
+// Keep only digests in the transaction snapshot. Artifact stores and binary skill
+// resources can be much larger than the provider output being changed.
+function fileDigest(file) {
+  const hash = createHash('sha256');
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  const fd = fs.openSync(file, 'r');
+  try {
+    let count;
+    while ((count = fs.readSync(fd, buffer, 0, buffer.length, null))) hash.update(buffer.subarray(0, count));
+    return hash.digest('hex');
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 // Empty directories are part of workspace and skill-resource scaffolds too.
 function promoteDirectories(source, destination, skip = () => false, prefix = '') {
@@ -387,7 +402,7 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
     fs.mkdirSync(stage);
     const mount = (from, to) => {
       if (mappings.some(mapping => mapping.from === from)) return;
-      const before = new Map(walk(from).map(file => [path.relative(from, file), fs.readFileSync(file)]));
+      const before = new Map(walk(from).map(file => [path.relative(from, file), fileDigest(file)]));
       if (fs.existsSync(from)) fs.cpSync(from, to, { recursive: true, dereference: true });
       mappings.push({ from, to, before });
     };
@@ -489,7 +504,7 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
         const after = new Set(walk(to).map(file => path.relative(to, file)).filter(rel => !delegated(from, rel)));
         for (const rel of after) {
           const file = path.join(to, rel);
-          if (!before.get(rel)?.equals(fs.readFileSync(file))) console.log(`[dry-run] Would write ${normalize(file)}`);
+          if (before.get(rel) !== fileDigest(file)) console.log(`[dry-run] Would write ${normalize(file)}`);
         }
         for (const rel of before.keys()) if (!delegated(from, rel) && !after.has(rel)) console.log(`[dry-run] Would remove ${path.join(from, rel)}`);
       }
@@ -518,8 +533,9 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
         }
       }
       for (const rel of after) {
-        const buffer = fs.readFileSync(path.join(to, rel));
-        if (before.get(rel)?.equals(buffer)) continue;
+        const file = path.join(to, rel);
+        if (before.get(rel) === fileDigest(file)) continue;
+        const buffer = fs.readFileSync(file);
         // Provider output includes binary skill resources; normalize text only.
         const output = buffer.includes(0) ? buffer : Buffer.from(normalize(buffer.toString('utf8')));
         fs.mkdirSync(path.dirname(path.join(from, rel)), { recursive: true });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync, cpSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync, cpSync, statSync, truncateSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -346,6 +346,30 @@ describe('activation-selected provider deployment (#2939)', () => {
     expect(contents(join(root, 'target')).size).toBe(0);
     deploy(root, 'claude', { strict: true, config: { rules: { inline_budget_tokens: 1000 } }, env: { AIWG_RULES_INLINE_BUDGET_TOKENS: '0' } });
     expect(readFileSync(join(root, 'target/.claude/rules/behaviors/fixture-behavior.md'), 'utf8')).toContain('AIWG Behavior: fixture-behavior');
+  }, 90_000);
+
+  it('preserves large artifact payloads without buffering them during deployment or dry-run', () => {
+    const root = setup();
+    const payload = join(root, 'target/.aiwg/working/payload.bin');
+    mkdirSync(join(root, 'target/.aiwg/working'), { recursive: true });
+    writeFileSync(payload, Buffer.from([0, 255, 1, 254]));
+    truncateSync(payload, 64 * 1024 * 1024);
+    const prior = statSync(payload);
+    const hook = join(root, 'bounded-read.mjs');
+    writeFileSync(hook, `
+      import fs from 'node:fs';
+      const read = fs.readFileSync;
+      fs.readFileSync = (file, ...args) => {
+        if (String(file).endsWith('/payload.bin')) throw new Error('Artifact payload must not be buffered');
+        return read(file, ...args);
+      };
+    `);
+    const env = { NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import=${hook}` };
+    deploy(root, 'claude', { env });
+    const output = deploy(root, 'claude', { env, dryRun: true });
+    expect(output).not.toContain('payload.bin');
+    expect(statSync(payload).size).toBe(prior.size);
+    expect(statSync(payload).mtimeMs).toBe(prior.mtimeMs);
   }, 90_000);
 
   it('dry-run stages and validates the full result without promoting output', () => {
