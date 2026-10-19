@@ -354,7 +354,9 @@ shared by several ranked artifacts, merging their applicability reasons.
 This differs intentionally from the small relationship reader's existing
 `required_checks` severity inventory (CRITICAL/HIGH), which remains unchanged.
 A response checklist is an obligation for every governing rule, not a severity
-filter. Unbound result rows retain their previous fields; no empty
+filter. Per-result `startup_rule_stats` separately reports the relationship
+inventory, including operator pins counted as kernel activation. Look it up by
+the result's stable source identity; display names can be ambiguous. Unbound result rows retain their previous fields; no empty
 `bound_rules` or check list is added.
 
 The five core candidates below satisfy the universal-guard rationale:

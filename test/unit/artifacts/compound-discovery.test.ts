@@ -95,6 +95,35 @@ describe('compound action discovery (#3292)', () => {
     const row = unbound.results.find((row: any) => row.name === 'unbound');
     expect(row).not.toHaveProperty('bound_rules'); expect(row).not.toHaveProperty('required_rule_checks'); expect(row).not.toHaveProperty('rule_stats');
   });
+  it('uses source identities for startup inventory and preserves attached rule statistics', async () => {
+    const index = buildRelations(entries);
+    const bound = Object.keys(index.rules).find(id => index.rules[id].name === 'bound')!;
+    index.rules[bound].capability = 'addon:fixture';
+    put('aiwg.config', JSON.stringify({ installed: { fixture: { source: 'project-local' } }, rules: { always_load: [{ rules: ['bound'] }] } }));
+    const dir = getGraphIndexDir(root, 'framework');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'relations.json'), JSON.stringify(index));
+    const response = await discover('work');
+    const row = response.results.find((item: any) => item.name === 'work');
+    expect(row.rule_stats.required_checks).toBe(2);
+    expect(row.rule_stats.by_activation).toEqual({ bound: 1, paths: 1 });
+    expect(row.startup_rule_stats.by_activation.kernel).toBe(1);
+    expect(row.required_rule_checks).toHaveLength(2);
+
+    put('agents/first.md', '---\nname: Shared display name\n---\n# Shared first\n');
+    put('agents/second.md', '---\nname: Shared display name\n---\n# Shared second\n');
+    await buildIndex(root, { graph: 'project', quiet: true });
+    const updated = Object.values((JSON.parse(fs.readFileSync(path.join(getGraphIndexDir(root, 'project'), 'metadata.json'), 'utf8')) as ArtifactIndex).entries);
+    const duplicateIndex = buildRelations(updated);
+    expect(duplicateIndex.aliases.targets['agent:Shared display name']).toHaveLength(2);
+    fs.writeFileSync(path.join(dir, 'relations.json'), JSON.stringify(duplicateIndex));
+    log.mockClear();
+    await discoverCapability(root, { phrase: 'Shared', typeFilter: ['agent'], graph: 'project', backend: 'local', json: true, limit: 10 });
+    const agents = JSON.parse(String(log.mock.calls.at(-1)?.[0])).results;
+    expect(agents).toHaveLength(1); // Ranking deduplicates shared display names.
+    expect(agents[0].id).toMatch(/^aiwg:agent:/);
+    expect(agents.every((item: any) => !Object.hasOwn(item, 'startup_rule_stats'))).toBe(true);
+  });
   it('text output groups governing pointers and an obligatory check summary under each result', async () => {
     const text = await discover('work', false);
     expect(text).toContain('rules:'); expect(text).toContain('required checks');

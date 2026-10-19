@@ -904,4 +904,5 @@ and Hermes's 19,000 character cap. `--allow-over-budget` explicitly overrides
 these deployment guards for pinned content; the harness itself may still impose
 its own limit. Use small selectors and inspect the preview before overriding.
 `status`, `doctor`, and `show rule <id>` expose local pins and canonical activation;
-discovery relationship statistics count pinned contracts as kernel rules.
+discovery `startup_rule_stats` counts pinned contracts as kernel rules while
+`rule_stats` counts the attached rules requiring a fetch.

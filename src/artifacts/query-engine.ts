@@ -1416,8 +1416,9 @@ export async function discoverCapability(
         triggers: r.entry.triggers ?? [],
         capability: r.entry.capability ?? r.entry.summary,
         kernel: r.entry.kernel ?? false,
-        ...(['skill', 'agent', 'flow', 'command'].includes(r.entry.type) && ruleRelations ? {
-          rule_stats: ruleRelations.ruleStats(r.entry.type as 'skill' | 'agent' | 'flow' | 'command', r.entry.name || r.entry.path),
+        ...(['skill', 'agent', 'flow', 'command'].includes(r.entry.type) && ruleRelations
+          && ruleRelations.rulesForTarget(r.entry.type as RelationTargetType, discoveryIdForEntry(r.entry)).length ? {
+          startup_rule_stats: ruleRelations.ruleStats(r.entry.type as 'skill' | 'agent' | 'flow' | 'command', discoveryIdForEntry(r.entry)),
         } : {}),
         provenance: {
           graph: (r.entry as ProvenancedEntry).indexGraph ?? null,
