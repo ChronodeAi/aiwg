@@ -1,3 +1,4 @@
+import { validateDecisionConfig, type DecisionConfig } from './decision-config.js';
 /**
  * Project-Level AIWG Config
  *
@@ -473,6 +474,7 @@ export interface ProjectLocalConfig {
 export interface AiwgConfig {
   /** Configurable startup lint guard; never selects or demotes rules. */
   rules?: RulesConfig;
+  decision?: DecisionConfig;
   sessions?: {
     /** Explicitly authorized Codex discovery roots, relative to the workspace or absolute. */
     codex_roots?: string[];
@@ -2031,6 +2033,7 @@ export async function readAiwgConfigCandidate(projectDir: string): Promise<AiwgC
     ...validateProjectConfig(parsed.project),
     ...validateParallelismConfig(parsed.parallelism),
     ...validateRulesConfig(parsed.rules),
+    ...validateDecisionConfig(parsed.decision),
   ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
@@ -2082,6 +2085,7 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
     ...validateProjectConfig(config.project),
     ...validateParallelismConfig(config.parallelism),
     ...validateRulesConfig(config.rules),
+    ...validateDecisionConfig(config.decision),
   ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);

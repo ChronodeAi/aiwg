@@ -1045,6 +1045,10 @@ async function captureOneWorker(owner, ctx) {
   const done = new Promise(resolve => { resolveDone = resolve; });
   const finish = async () => {
     if (settled) return;
+    // The first stop cause wins. Snapshot before async capture/metadata
+    // cleanup: crossing the deadline while finalizing cannot turn an
+    // earlier cancellation (or an already finished child) into a timeout.
+    const resultTimedOut = timedOut || (stopReason === null && hardRemaining() === 0);
     settled = true;
     identityObservation = identity ? 'stable-owned-group' : 'no-stable-owned-group';
     for (const timer of timers) clearTimeout(timer);
@@ -1094,7 +1098,7 @@ async function captureOneWorker(owner, ctx) {
       : outcome.mode === 'systemd-unit' && native?.execMainCode === 1 ? native.execMainStatus : waitCode;
     const result = { invocationId, exitCode, signal: resultSignal,
       endedAt: new Date().toISOString(), termination: confirmed ? 'confirmed' : 'uncertain',
-      descendants: confirmed ? 'stopped' : 'unknown', timedOut: timedOut || hardRemaining() === 0,
+      descendants: confirmed ? 'stopped' : 'unknown', timedOut: resultTimedOut,
       cancelled: stopReason === 'CANCELLED', stopReason, errorCode: errorCode ?? null, capturedBytes: Math.min(total, output.length),
       // Unauthenticated: reported by the worker-writable transport record, not
       // kernel-observed. Never used above for exitCode/signal/termination.
@@ -1410,11 +1414,14 @@ async function captureOneWorker(owner, ctx) {
 }
 
 // ===========================================================================
-// FROZEN TO a4085b86a (#2915 round 8, D6) — do not modify.
+// BASED ON a4085b86a (#2915 round 8, D6).
+// Exception: finish() snapshots timeout classification before cleanup and
+// respects the winning stop cause, matching captureOneWorker's race fix.
+// The test/fixtures frozen reference remains unchanged.
 //
-// `launchOneWorkerBaseline` and `captureOneWorkerBaseline` are a literal,
-// byte-for-byte reproduction of `launchOneWorker`/`captureOneWorker` as
-// they existed at base commit `a4085b86a` (`git show
+// `launchOneWorkerBaseline` and `captureOneWorkerBaseline` reproduce
+// `launchOneWorker`/`captureOneWorker`, apart from the timeout race fix above,
+// as they existed at base commit `a4085b86a` (`git show
 // a4085b86a:tools/ralph-external/session-launcher.mjs`) — before any
 // #2915 direct-recovery code existed in this file. `launchOneWorker`
 // above calls `launchOneWorkerBaseline` for every attempt
@@ -1430,7 +1437,7 @@ async function captureOneWorker(owner, ctx) {
 // separate, frozen function makes that class of defect structurally
 // impossible for the code below: there is no gated-path line for a
 // future change to add without touching this delimited block, and
-// touching this block is exactly what the comment above forbids.
+// changing recovery behavior in this block is forbidden.
 //
 // Both functions below call ONLY:
 //   - helpers in this same file that are BYTE-IDENTICAL to their
@@ -1668,6 +1675,10 @@ async function captureOneWorkerBaseline(owner, ctx) {
   const done = new Promise(resolve => { resolveDone = resolve; });
   const finish = async () => {
     if (settled) return;
+    // The first stop cause wins. Snapshot before async capture/metadata
+    // cleanup: crossing the deadline while finalizing cannot turn an
+    // earlier cancellation (or an already finished child) into a timeout.
+    const resultTimedOut = timedOut || (stopReason === null && hardRemaining() === 0);
     settled = true;
     identityObservation = identity ? 'stable-owned-group' : 'no-stable-owned-group';
     for (const timer of timers) clearTimeout(timer);
@@ -1697,7 +1708,7 @@ async function captureOneWorkerBaseline(owner, ctx) {
       : outcome.mode === 'systemd-unit' && native?.execMainCode === 1 ? native.execMainStatus : waitCode;
     const result = { invocationId, exitCode, signal: resultSignal,
       endedAt: new Date().toISOString(), termination: confirmed ? 'confirmed' : 'uncertain',
-      descendants: confirmed ? 'stopped' : 'unknown', timedOut: timedOut || hardRemaining() === 0,
+      descendants: confirmed ? 'stopped' : 'unknown', timedOut: resultTimedOut,
       cancelled: stopReason === 'CANCELLED', stopReason, errorCode: errorCode ?? null, capturedBytes: Math.min(total, output.length),
       workerTermination: hasTransport ? workerExit && !workerExit.errorCode ? 'confirmed' : 'uncertain' : sawExit ? 'confirmed' : 'uncertain',
       workerReportedExit: workerExit ? { exitCode: workerExit.exitCode, signal: workerExit.signal, errorCode: workerExit.errorCode ?? null } : null,
@@ -1850,7 +1861,7 @@ async function captureOneWorkerBaseline(owner, ctx) {
   return done;
 }
 // ===========================================================================
-// END FROZEN TO a4085b86a
+// END BASED ON a4085b86a
 // ===========================================================================
 
 /**

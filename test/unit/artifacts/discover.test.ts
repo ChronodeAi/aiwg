@@ -25,7 +25,15 @@ import { GRAPH_CONFIGS, OPERATIONAL_DISCOVERY_TYPES } from '../../../src/artifac
 let tmpRoot: string;
 let cwd: string;
 
+function markRuntimeRoot(root: string): void {
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'aiwg' }));
+  for (const kind of ['frameworks', 'addons', 'extensions', 'agents', 'behaviors']) {
+    fs.mkdirSync(path.join(root, 'agentic/code', kind), { recursive: true });
+  }
+}
+
 function writeSkill(slug: string, framework: string, body: string): string {
+  markRuntimeRoot(cwd);
   const dir = path.join(cwd, 'agentic', 'code', 'frameworks', framework, 'skills', slug);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'SKILL.md');
@@ -877,6 +885,7 @@ describe('discoverCapability — Flow documents surface in default discover (#15
     // A declarative Flow doc under the framework tree — parseFlowDoc must
     // classify it `type: flow`, and `flow` must be in DEFAULT_DISCOVER_TYPES
     // so it surfaces without an explicit `--type flow` filter (#1540).
+    markRuntimeRoot(cwd);
     const flowDir = path.join(cwd, 'agentic', 'code', 'frameworks', 'fx', 'flows');
     fs.mkdirSync(flowDir, { recursive: true });
     fs.writeFileSync(
@@ -1035,6 +1044,7 @@ describe('discoverCapability — deployed commands are discoverable (#1541)', ()
   // so the cwd-only auto-build never fired.
 
   function writeFrameworkCommand(root: string, slug: string, desc: string): void {
+    markRuntimeRoot(root);
     const dir = path.join(root, 'agentic', 'code', 'frameworks', 'fx', 'commands');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `${slug}.md`), `---\ndescription: ${desc}\n---\n\n# ${slug}\n`, 'utf8');

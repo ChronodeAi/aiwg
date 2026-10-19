@@ -25,6 +25,7 @@ import { resolveUserConfigDir } from './user-config-dir.mjs';
  * Top-level user preferences schema
  */
 export interface UserConfigData {
+  decision?: { enabled?: boolean };
   apiVersion: string;
   kind: string;
   defaults: {

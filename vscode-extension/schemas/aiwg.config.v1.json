@@ -6,6 +6,19 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "decision": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false, "description": "Enable the decision runtime. AIWG_DECISION_ENABLED overrides project config, then user config." },
+        "ask": {
+          "type": "object",
+          "properties": {
+            "passes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "default": 5 },
+            "escalation_passes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "Total passes after a problematic first round; must be >= passes (validated by the loader). Defaults to twice passes (10 for the default of 5)." }
+          }
+        }
+      }
+    },
     "sessions": {
       "type": "object",
       "properties": {

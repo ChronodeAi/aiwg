@@ -5,6 +5,12 @@ implements OAuth isolation per MCP profile by giving each profile its own runtim
 home directory. Codex is launched with `HOME=<runtime-home>` so all config reads,
 auth token writes, and OAuth flows are scoped to that profile.
 
+AIWG preserves the parent configuration directory through `AIWG_CONFIG` before
+changing `HOME`. Commands inside the profile therefore retain the operator's
+installation identity and development channel. An explicit `AIWG_CONFIG` takes
+precedence; otherwise AIWG resolves the parent's existing `~/.aiwg` or
+`~/.config/aiwg` directory.
+
 This mirrors the sysops `codex-role.sh` pattern from `roctinam/sysops`.
 
 ## How It Works

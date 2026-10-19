@@ -219,6 +219,47 @@ describe('decisionHandler', () => {
     }
   });
 
+  it('validates pass flags before credentials and records requested policy for offline fallback', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'aiwg-decision-cli-passes-'));
+    cleanup.push(dir);
+    process.env.XDG_CONFIG_HOME = dir;
+    for (const flags of [['--passes', '0'], ['--passes', '2.1'], ['--passes', '3', '--escalation-passes', '2'], ['--passes']]) {
+      const args = ['ask', '--question', 'Proceed?', '--yes-no', '--json', ...flags];
+      const result = await decisionHandler.execute({ args, rawArgs: ['decision', ...args], cwd: dir, frameworkRoot: process.cwd() });
+      expect(result.exitCode).toBe(2);
+    }
+    const args = ['ask', '--question', 'Proceed?', '--yes-no', '--passes', '10', '--escalation-passes', '20', '--json'];
+    const result = await decisionHandler.execute({ args, rawArgs: ['decision', ...args], cwd: dir, frameworkRoot: process.cwd() });
+    expect(JSON.parse(result.message!)).toMatchObject({ status: 'fallback',
+      aggregate: { passesRequested: 10, escalationPasses: 20, passesRun: 0, escalated: false } });
+    for (const groupBy of ['passes', 'escalation']) {
+      const statsArgs = ['stats', '--group-by', groupBy, '--json'];
+      const stats = await decisionHandler.execute({ args: statsArgs, rawArgs: ['decision', ...statsArgs], cwd: dir, frameworkRoot: process.cwd() });
+      expect(stats.exitCode).toBe(0);
+      expect(JSON.parse(stats.message!).groups[0]).toMatchObject({ hitRate: 0, passesRun: 0 });
+    }
+  });
+
+  it('applies project defaults and CLI pass overrides through a fake Jev transport', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'aiwg-decision-cli-fake-'));
+    cleanup.push(dir);
+    process.env.XDG_CONFIG_HOME = dir;
+    process.env.AIWG_DECISION_ENABLED = '1';
+    process.env.JEV_API_KEY = 'fixture-token';
+    await mkdir(path.join(dir, '.aiwg'));
+    await writeFile(path.join(dir, '.aiwg/aiwg.config'), JSON.stringify({ decision: { ask: { passes: 3, escalation_passes: 6 } } }));
+    fetchSpy!.mockImplementation(async () => new Response(JSON.stringify({ model: 'jev-fixture', answers: { answer: { type: 'noul', noul: 0.95 } },
+      usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 }));
+    for (const [flags, count] of [[[], 3], [['--passes', '2', '--escalation-passes', '4'], 2]] as const) {
+      fetchSpy!.mockClear();
+      const args = ['ask', '--question', 'Proceed?', '--yes-no', '--json', ...flags];
+      const result = await decisionHandler.execute({ args, rawArgs: ['decision', ...args], cwd: dir, frameworkRoot: process.cwd() });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.message!)).toMatchObject({ status: 'answered', answer: true, aggregate: { passesRun: count, passesRequested: count } });
+      expect(fetchSpy).toHaveBeenCalledTimes(count);
+    }
+  });
+
   it('history and stats read the ledger offline, with --json, filters and --group-by', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'aiwg-decision-cli-'));
     cleanup.push(dir);

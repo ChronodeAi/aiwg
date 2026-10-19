@@ -1,3 +1,4 @@
+import { resolveDecisionEnablement } from '../config/decision-config.js';
 import { constants } from 'node:fs';
 import { access, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -21,6 +22,7 @@ export interface JevCredentialLookupResult {
 }
 
 export interface JevCredentialOptions {
+  cwd?: string;
   env?: NodeJS.ProcessEnv;
   configHome?: string;
   homeDir?: string;
@@ -84,7 +86,8 @@ export async function lookupJevCredential(options: JevCredentialOptions = {}): P
   const forced = environment.AIWG_DECISION_ENABLED;
   const envToken = environment.JEV_API_KEY?.trim() || environment.AIWG_DECISION_JEV_API_KEY?.trim();
   const fileRecord = envToken && (forced === '0' || forced === '1') ? null : await readCredentialFile(options);
-  const enabled = forced === '0' ? false : forced === '1' ? true : fileRecord?.enabled === true;
+  const enablement = resolveDecisionEnablement(options);
+  const enabled = enablement.source === 'default' ? fileRecord?.enabled === true : enablement.enabled;
   if (envToken) return {
     source: 'env',
     token: envToken,

@@ -32,7 +32,7 @@ function jsonResult(value: unknown, exitCode = 0): HandlerResult {
 function usage(): string {
   return [
     'Usage: aiwg decision <capabilities|status|patterns|validate|evaluate|setup|history|stats> [options]',
-    '       aiwg decision ask --question "<q>" (--yes-no | --choices a,b,c | --scale 1-5) [--context <text> | --context-file <path> | --context-stdin] [--threshold 0.8] [--timeout-ms 15000] [--provider <id>] [--session <id>] [--caller <tag>] [--record-text] [--json]',
+    '       aiwg decision ask --question "<q>" (--yes-no | --choices a,b,c | --scale 1-5) [--context <text> | --context-file <path> | --context-stdin] [--threshold 0.8] [--timeout-ms 15000] [--passes N] [--escalation-passes N] [--provider <id>] [--session <id>] [--caller <tag>] [--record-text] [--json]',
     '',
     'Commands:',
     '  capabilities|status                 Show offline readiness, primitives, config and feature availability',
@@ -46,7 +46,7 @@ function usage(): string {
     '  setup jev [--token-stdin] [--region <r>] [--endpoint <url>] [--verify] [--remove]',
     '  ask --question "<q>" (--yes-no | --choices a,b,c | --scale 1-5) [--provider <id>] [--session <id>] [--caller <tag>] [--record-text]',
     '  history [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--json]',
-    '  stats [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--group-by provider|session|kind|caller] [--json]',
+    '  stats [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--group-by provider|session|kind|caller|passes|escalation] [--json]',
     '',
     'Notes:',
     '  Every COMPLETED `ask` call (CLI and MCP) appends one record to the decision',
@@ -164,10 +164,12 @@ async function decisionAsk(ctx: HandlerContext): Promise<HandlerResult> {
       : choices !== undefined ? { kind: 'choices' as const, choices: choices.split(',').map(value => value.trim()).filter(Boolean) }
         : { kind: 'scale' as const, ...scale! },
     ...(context === undefined ? {} : { context }),
+    ...(args.includes('--passes') ? { passes: parseNumber(takeRequiredOption(args, '--passes'), '--passes') } : {}),
+    ...(args.includes('--escalation-passes') ? { escalationPasses: parseNumber(takeRequiredOption(args, '--escalation-passes'), '--escalation-passes') } : {}),
     ...(args.includes('--threshold') ? { threshold: parseNumber(takeOption(args, '--threshold'), '--threshold') } : {}),
     ...(args.includes('--timeout-ms') ? { timeoutMs: parseNumber(takeOption(args, '--timeout-ms'), '--timeout-ms') } : {}),
   };
-  const result = await askDecision(input, { env: process.env });
+  const result = await askDecision(input, { cwd: ctx.cwd, env: process.env });
   // Best-effort and bounded (recordDecisionAsk never throws and never hangs past its own
   // deadline): a ledger failure, timeout, or attribution-detection error can never change
   // `result` or the exit code decided below (review r1 findings 3 and 4).
@@ -197,7 +199,7 @@ function parseSince(value: string | undefined): Date | undefined {
 
 const DECISION_LEDGER_KINDS: readonly DecisionLedgerKind[] = ['yes-no', 'choices', 'scale'];
 const DECISION_LEDGER_STATUSES = ['answered', 'fallback'] as const;
-const DECISION_LEDGER_GROUP_BYS: readonly DecisionLedgerGroupBy[] = ['provider', 'session', 'kind', 'caller'];
+const DECISION_LEDGER_GROUP_BYS: readonly DecisionLedgerGroupBy[] = ['provider', 'session', 'kind', 'caller', 'passes', 'escalation'];
 
 function parseKindFilter(value: string | undefined): DecisionLedgerKind | undefined {
   if (value === undefined) return undefined;
@@ -321,8 +323,9 @@ async function decisionStats(ctx: HandlerContext): Promise<HandlerResult> {
   if (callerHeader) header.push(callerHeader);
   if (result.groups.length === 0) return { exitCode: 0, message: [...header, 'No decision ledger records match the filters.'].join('\n'), rawOutput: true };
   const lines = result.groups.flatMap(group => [
-    `${result.groupBy ?? 'all'}=${group.key ?? 'null'}: ${group.totalCalls} calls (${group.answered} answered, ${group.fallback} fallback, rate=${group.fallbackRate.toFixed(2)})`,
+    `${result.groupBy ?? 'all'}=${group.key ?? 'null'}: ${group.totalCalls} calls (${group.answered} answered, ${group.fallback} fallback, hit rate=${group.hitRate.toFixed(2)}, fallback rate=${group.fallbackRate.toFixed(2)})`,
     `  confidence: mean=${group.confidence.mean?.toFixed(2) ?? '-'} min=${group.confidence.min?.toFixed(2) ?? '-'} max=${group.confidence.max?.toFixed(2) ?? '-'} (n=${group.confidence.count})`,
+    `  agreement: mean=${group.agreement.mean?.toFixed(2) ?? '-'} escalated=${group.escalatedCalls} passes run=${group.passesRun}`,
     `  jev usage: input=${group.jevUsage.inputTokens} output=${group.jevUsage.outputTokens}`,
     `  estimated LLM tokens avoided=${group.estimatedLlmTokensAvoidedTotal} net savings=${group.netSavingsTokens}`,
   ]);

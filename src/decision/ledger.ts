@@ -104,6 +104,13 @@ export interface DecisionLedgerRecord {
   model: DecisionAskResult['model'];
   usage: DecisionAskResult['usage'];
   latencyMs: number;
+  passesRequested?: number;
+  escalationPasses?: number;
+  passesRun?: number;
+  escalated?: boolean;
+  earlyStop?: 'certain-failure' | 'timeout' | null;
+  agreementRatio?: number;
+  passConfidenceSummary?: NonNullable<DecisionAskResult['aggregate']>['confidenceSummary'];
   estimatedLlmTokensAvoided: number;
   estimationMethod: string;
   caller: string | null;
@@ -327,6 +334,12 @@ export function buildDecisionLedgerRecord(
     model: typeof result.model === 'string' ? sanitizeField(result.model) : result.model,
     usage: result.usage,
     latencyMs: result.latencyMs,
+    ...(result.aggregate ? {
+      passesRequested: result.aggregate.passesRequested, escalationPasses: result.aggregate.escalationPasses,
+      passesRun: result.aggregate.passesRun, escalated: result.aggregate.escalated,
+      earlyStop: result.aggregate.earlyStop, agreementRatio: result.aggregate.agreementRatio,
+      passConfidenceSummary: result.aggregate.confidenceSummary,
+    } : {}),
     estimatedLlmTokensAvoided,
     estimationMethod,
     caller: sanitizeField(caller, MAX_METADATA_FIELD_BYTES),
@@ -727,6 +740,18 @@ function isDecisionLedgerRecord(value: unknown): value is DecisionLedgerRecord {
   if (!isFiniteNumber(record.estimatedLlmTokensAvoided)) return false; // may be negative
   if (typeof record.estimationMethod !== 'string') return false;
   if (record.caller !== null && typeof record.caller !== 'string') return false;
+  for (const key of ['passesRequested', 'escalationPasses', 'passesRun'] as const) {
+    if (record[key] !== undefined && (!Number.isSafeInteger(record[key]) || (record[key] as number) < (key === 'passesRun' ? 0 : 1))) return false;
+  }
+  if (record.escalated !== undefined && typeof record.escalated !== 'boolean') return false;
+  if (record.agreementRatio !== undefined && (record.agreementRatio === null || !isUnitIntervalOrNull(record.agreementRatio))) return false;
+  if (record.earlyStop !== undefined && record.earlyStop !== null && record.earlyStop !== 'certain-failure' && record.earlyStop !== 'timeout') return false;
+  if (record.passConfidenceSummary !== undefined) {
+    const summary = record.passConfidenceSummary as Record<string, unknown> | null;
+    if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return false;
+    if (![summary.count, summary.missing].every(value => Number.isSafeInteger(value) && (value as number) >= 0)) return false;
+    if (![summary.mean, summary.min, summary.max].every(isUnitIntervalOrNull)) return false;
+  }
   return true;
 }
 
@@ -807,7 +832,7 @@ export async function decisionLedgerHistory(projectRoot: string, filters: Decisi
   return { schema: 'aiwg-decision-ledger-history/v1', count: records.length, skipped, records, filters: { ...filters } };
 }
 
-export type DecisionLedgerGroupBy = 'provider' | 'session' | 'kind' | 'caller';
+export type DecisionLedgerGroupBy = 'provider' | 'session' | 'kind' | 'caller' | 'passes' | 'escalation';
 
 export interface DecisionLedgerStatsFilters extends DecisionLedgerFilters {
   groupBy?: DecisionLedgerGroupBy;
@@ -821,6 +846,10 @@ export interface DecisionLedgerStatsGroup {
   fallback: number;
   /** Fraction of this group's calls that fell back; denominator is `totalCalls`. */
   fallbackRate: number;
+  hitRate: number;
+  agreement: { count: number; mean: number | null };
+  escalatedCalls: number;
+  passesRun: number;
   /** Raw per-reason fallback counts. */
   fallbackCountByReason: Record<string, number>;
   /** Per-reason fallback counts as a fraction of `totalCalls` (same denominator as `fallbackRate`). */
@@ -851,10 +880,16 @@ function groupKeyFor(record: DecisionLedgerRecord, groupBy: DecisionLedgerGroupB
   if (groupBy === 'provider') return record.provider;
   if (groupBy === 'session') return record.sessionId;
   if (groupBy === 'kind') return record.decisionKind;
+  if (groupBy === 'passes') return `${record.passesRequested ?? 1}/${record.escalationPasses ?? record.passesRequested ?? 1}`;
+  if (groupBy === 'escalation') return String(record.escalated ?? false);
   return record.caller; // may be null; kept distinct from the literal string "unattributed"
 }
 
 interface StatsAccumulator {
+  agreementCount: number;
+  agreementSum: number;
+  escalatedCalls: number;
+  passesRun: number;
   totalCalls: number;
   answered: number;
   fallback: number;
@@ -873,6 +908,7 @@ interface StatsAccumulator {
 function newAccumulator(): StatsAccumulator {
   return {
     totalCalls: 0, answered: 0, fallback: 0, fallbackCountByReason: {},
+    agreementCount: 0, agreementSum: 0, escalatedCalls: 0, passesRun: 0,
     confidenceCount: 0, confidenceSum: 0, confidenceMin: null, confidenceMax: null,
     jevInputTokens: 0, jevOutputTokens: 0, answeredJevInputTokens: 0, answeredJevOutputTokens: 0,
     estimatedLlmTokensAvoidedTotal: 0,
@@ -881,6 +917,9 @@ function newAccumulator(): StatsAccumulator {
 
 function accumulate(acc: StatsAccumulator, record: DecisionLedgerRecord): void {
   acc.totalCalls += 1;
+  if (record.agreementRatio !== undefined) { acc.agreementCount += 1; acc.agreementSum += record.agreementRatio; }
+  if (record.escalated) acc.escalatedCalls += 1;
+  acc.passesRun += record.passesRun ?? (record.fallbackReason === 'not-configured' ? 0 : 1);
   const inputTokens = record.usage?.inputTokens ?? 0;
   const outputTokens = record.usage?.outputTokens ?? 0;
   if (record.status === 'answered') {
@@ -914,6 +953,9 @@ function finalizeGroup(key: string | null, acc: StatsAccumulator): DecisionLedge
     answered: acc.answered,
     fallback: acc.fallback,
     fallbackRate: acc.totalCalls ? acc.fallback / acc.totalCalls : 0,
+    hitRate: acc.totalCalls ? acc.answered / acc.totalCalls : 0,
+    agreement: { count: acc.agreementCount, mean: acc.agreementCount ? acc.agreementSum / acc.agreementCount : null },
+    escalatedCalls: acc.escalatedCalls, passesRun: acc.passesRun,
     fallbackCountByReason: acc.fallbackCountByReason,
     fallbackRateByReason,
     confidence: {

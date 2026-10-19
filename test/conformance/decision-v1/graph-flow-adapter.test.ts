@@ -24,7 +24,8 @@ const usage = { tokens: 2, costUsd: 0.000002, timeMs: 1 };
 describe('DAG Flow host admission', () => {
   it('DAG-022 reserves before Flow dispatch and preserves Flow correlation', async () => {
     const calls: GraphFlowRequest[] = [];
-    const ledger = new GraphBudgetLedger(graph, plan);
+    // A fixed budget clock keeps admission and settlement independent of CI load.
+    const ledger = new GraphBudgetLedger(graph, plan, [], () => 0);
     const invokeNode = admittedDecisionFlowAdapter(ledger, () => ({ attempts: 1, tokens: 3, costMicros: 4 }),
       async req => { calls.push(req); return { outputs: { result: 'ok' }, attempts: 1, usage }; });
     const result = await executeFlowGraph(flow, { validation: { catalogIds: new Set([skill]) }, invokeNode });
@@ -35,7 +36,8 @@ describe('DAG Flow host admission', () => {
   });
   it('DAG-023 rejects unknown cost or budget exhaustion before any transport call', async () => {
     let calls = 0;
-    const ledger = new GraphBudgetLedger(graph, plan);
+    // A fixed budget clock keeps admission and settlement independent of CI load.
+    const ledger = new GraphBudgetLedger(graph, plan, [], () => 0);
     const adapter = admittedDecisionFlowAdapter(ledger, () => ({ attempts: 1, tokens: 1, costMicros: 0 }),
       async () => { calls++; return { outputs: {}, attempts: 1, usage }; });
     await expect(adapter(request)).rejects.toThrow(/estimate/);
@@ -46,7 +48,8 @@ describe('DAG Flow host admission', () => {
     expect(calls).toBe(0);
   });
   it('DAG-024 cancellation and oversized actual usage prevent further calls', async () => {
-    const ledger = new GraphBudgetLedger(graph, plan);
+    // A fixed budget clock keeps admission and settlement independent of CI load.
+    const ledger = new GraphBudgetLedger(graph, plan, [], () => 0);
     let calls = 0;
     const adapter = admittedDecisionFlowAdapter(ledger, () => ({ attempts: 1, tokens: 1, costMicros: 1 }),
       async () => { calls++; return { outputs: {}, attempts: 1, usage }; });
@@ -54,7 +57,8 @@ describe('DAG Flow host admission', () => {
     await expect(adapter(request)).rejects.toThrow(/cancelled/);
     expect(calls).toBe(1);
     const controller = new AbortController(); controller.abort();
-    const cancelled = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan),
+    // A fixed budget clock keeps admission and settlement independent of CI load.
+    const cancelled = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan, [], () => 0),
       () => ({ attempts: 1, tokens: 1, costMicros: 1 }), async () => { calls++; return { outputs: {}, attempts: 1, usage }; }, controller.signal);
     await expect(cancelled(request)).rejects.toThrow(/cancelled/);
     expect(calls).toBe(1);

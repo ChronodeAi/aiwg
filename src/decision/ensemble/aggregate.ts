@@ -3,8 +3,22 @@ import {
   compareEnsembleKeys, ensembleContractDigest, EnsembleContractError, validateEnsemblePolicy, type EnsemblePolicyValidationOptions,
 } from './contract.js';
 import type {
-  DecisionEnsembleAggregate, DecisionEnsemblePolicy, EnsembleMember, EnsembleMemberResult, EnsembleWarning,
+  DecisionEnsembleAggregate, DecisionEnsemblePolicy, EnsembleMember, EnsembleMemberResult, EnsembleWarning, ModalAnswerAggregate,
 } from './types.js';
+
+/** Modal buckets, with the existing locale-independent canonical tie break. */
+export function aggregateModalAnswers(labels: readonly string[], answers: readonly string[]): ModalAnswerAggregate {
+  const ordered = [...labels].sort(compareEnsembleKeys);
+  const votes = Object.fromEntries(ordered.map(label => [label, 0]));
+  for (const answer of answers) {
+    if (!Object.hasOwn(votes, answer)) throw new EnsembleContractError('unknown modal answer', 'semantic');
+    votes[answer]! += 1;
+  }
+  const top = Math.max(0, ...Object.values(votes));
+  const winners = ordered.filter(label => votes[label] === top);
+  return { value: answers.length ? winners[0]! : null, votes, tie: winners.length > 1,
+    agreementRatio: answers.length ? top / answers.length : 0 };
+}
 
 /** Deterministic reference aggregation over already-recorded member results. It never dispatches.
  * Member order does not matter: results are put in canonical (memberId, sampleIndex) order first,
@@ -28,11 +42,8 @@ export function aggregateEnsembleResults(
   let candidate: string | number | null = null;
   let tie = false;
 
-  const votes = () => {
-    const counts = Object.fromEntries(labels.map(label => [label, 0])) as Record<string, number>;
-    for (const result of succeeded) counts[vote(policy, result)]! += 1;
-    return counts;
-  };
+  const modal = policy.primitive === 'ordinal-score' ? null
+    : aggregateModalAnswers(labels, succeeded.map(result => vote(policy, result)));
   const distributions = () => succeeded.map(result => distributionOf(policy, labels, result));
   const meanOf = (items: Record<string, number>[]) => Object.fromEntries(labels.map(label =>
     [label, n ? round(items.reduce((sum, item) => sum + item[label]!, 0) / n) : 0])) as Record<string, number>;
@@ -43,7 +54,7 @@ export function aggregateEnsembleResults(
     tie = winners.length > 1; return n ? winners[0]! : null;
   };
 
-  if (algorithm === 'majority-v1' || metric === 'vote-share-v1' || metric === 'normalized-entropy-v1') statistics.votes = votes();
+  if (algorithm === 'majority-v1' || metric === 'vote-share-v1' || metric === 'normalized-entropy-v1') statistics.votes = modal!.votes;
   if (policy.primitive === 'truth-probability' && (algorithm === 'mean-probability-v1' || metric === 'jensen-shannon-v1')) {
     statistics.meanProbability = n ? round(succeeded.reduce((sum, result) => sum + (result.value as number), 0) / n) : null;
   }
@@ -56,7 +67,7 @@ export function aggregateEnsembleResults(
     statistics.medianScore = round(n % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2);
   }
 
-  if (algorithm === 'majority-v1') candidate = pick(statistics.votes!);
+  if (algorithm === 'majority-v1') { candidate = modal!.value; tie = modal!.tie; }
   else if (algorithm === 'mean-probability-v1') candidate = policy.primitive === 'choice' ? pick(statistics.meanDistribution!) : statistics.meanProbability;
   else if (algorithm === 'score-distribution-mean-v1') candidate = statistics.meanScore;
   else if (n) {
@@ -66,7 +77,8 @@ export function aggregateEnsembleResults(
     candidate = tie ? sorted[middle - 1]! : statistics.medianScore;
   }
 
-  const disagreementValue = n === 0 ? 1 : disagreement(policy, statistics, distributions, n);
+  const disagreementValue = n === 0 ? 1 : metric === 'vote-share-v1' ? 1 - modal!.agreementRatio
+    : disagreement(policy, statistics, distributions, n);
   const valueBps = Math.round(Math.min(1, Math.max(0, disagreementValue)) * 10_000);
   const exceeded = valueBps > policy.disagreement.thresholdBps;
   let disposition: DecisionEnsembleAggregate['outcome']['disposition'] = 'accept';

@@ -202,6 +202,7 @@ const ENUM_RULES: Record<string, readonly string[]> = {
 };
 
 const BOOLEAN_FIELDS = new Set([
+  'decision.enabled',
   'delivery.delete_branch_on_merge',
   'delivery.require_ci_green',
   'delivery.require_signed_commits',
@@ -222,6 +223,8 @@ const STRING_ARRAY_FIELDS = new Set([
 // Integer fields with valid range constraints. Validated at `aiwg config set`.
 // Bounds mirror the JSON schema (vscode-extension/schemas/aiwg.config.v1.json).
 const INTEGER_FIELDS: Record<string, { min: number; max: number }> = {
+  'decision.ask.passes': { min: 1, max: Number.MAX_SAFE_INTEGER },
+  'decision.ask.escalation_passes': { min: 1, max: Number.MAX_SAFE_INTEGER },
   'parallelism.max_parallel_subagents': { min: 1, max: 50 },
   'parallelism.max_parallel_ralph_loops': { min: 1, max: 20 },
   'parallelism.max_parallel_mc_missions': { min: 1, max: 20 },
