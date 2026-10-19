@@ -12,9 +12,18 @@
 export interface VerificationResult {
   claim: string;
   verified: boolean;
+  /** Strength of explicit support (0 or 1 for the literal checker), not retrieval relevance. */
   confidence: number;
   sources: string[];
   correction?: string;
+  evidence?: VerificationEvidence[];
+}
+
+export interface VerificationEvidence {
+  source: string;
+  entry_id?: string;
+  content: string;
+  relation: 'supports' | 'contradicts' | 'unknown';
 }
 
 export interface KnowledgeFragment {
