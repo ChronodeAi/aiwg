@@ -180,7 +180,8 @@ describe('Multi-Graph Index Architecture (integration)', () => {
 
     it('should resolve framework graph to XDG data directory', () => {
       const fwDir = getGraphIndexDir(REPO_ROOT, 'framework');
-      expect(fwDir).toContain('aiwg/index/framework');
+      // The framework index is keyed by AIWG root (#3308): <xdg>/aiwg/index/roots/<sha256>/framework.
+      expect(fwDir).toMatch(/aiwg\/index\/roots\/[0-9a-f]{64}\/framework$/);
     });
 
     it('should resolve project graph to the configured artifact-root index', () => {
@@ -568,7 +569,8 @@ describe('Multi-Graph Index Architecture (integration)', () => {
       // resolve there. But with outputDir override, data is in tmpDir.
       // Verify the getGraphIndexDir function resolves to XDG path
       const fwDir = getGraphIndexDir(tmpDir, 'framework');
-      expect(fwDir).toContain('aiwg/index/framework');
+      // The framework index is keyed by AIWG root (#3308): <xdg>/aiwg/index/roots/<sha256>/framework.
+      expect(fwDir).toMatch(/aiwg\/index\/roots\/[0-9a-f]{64}\/framework$/);
     });
 
     it('should return null for non-existent graph', () => {
