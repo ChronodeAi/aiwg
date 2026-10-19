@@ -21,10 +21,29 @@ const DEFAULT_PROBES = path.join(ROOT, 'test/uat/rule-binding/probes.yaml');
 const SCHEMA = path.join(ROOT, 'test/uat/rule-binding/probes.schema.json');
 
 export function loadProbes(file = DEFAULT_PROBES) {
-  const data = yaml.load(fs.readFileSync(file, 'utf8'));
   const ajv = new Ajv({ allErrors: true, strict: true });
   const validate = ajv.compile(JSON.parse(fs.readFileSync(SCHEMA, 'utf8')));
-  if (!validate(data)) throw new Error(`Probe schema: ${ajv.errorsText(validate.errors)}`);
+  const read = source => {
+    const data = yaml.load(fs.readFileSync(source, 'utf8'));
+    if (!validate(data)) throw new Error(`Probe schema: ${ajv.errorsText(validate.errors)}`);
+    const ids = new Set();
+    for (const rule of data.rules) {
+      if (ids.has(rule.id)) throw new Error(`Duplicate rule: ${rule.id}`);
+      ids.add(rule.id);
+    }
+    return data;
+  };
+  let data = read(file);
+  if (data.extends) {
+    // A lane overlays the canonical base by rule ID. Validate each input first
+    // so an override cannot conceal duplicate or malformed entries in either.
+    const base = read(DEFAULT_PROBES);
+    if (base.extends) throw new Error('Base probes must not extend another catalog');
+    const merged = new Map(base.rules.map(rule => [rule.id, rule]));
+    for (const rule of data.rules) merged.set(rule.id, rule);
+    data = { version: data.version, rules: [...merged.values()] };
+    if (!validate(data)) throw new Error(`Probe schema: ${ajv.errorsText(validate.errors)}`);
+  }
   const seen = new Set();
   for (const rule of data.rules) {
     if (seen.has(rule.id)) throw new Error(`Duplicate rule: ${rule.id}`);
@@ -267,7 +286,7 @@ function main() {
     'dry-run': { type: 'boolean', default: false }, help: { type: 'boolean' },
   } });
   if (values.help) {
-    console.log('Usage: node tools/rules/run-rule-probes.mjs --dry-run [--provider claude|codex] [--model MODEL] [--n 5] [--rule NAME ...] [--probes FILE]\nReal runs require --project DEPLOYED_FIXTURE --output FILE; --baseline FILE gates U5 against a prior run.');
+    console.log('Usage: node tools/rules/run-rule-probes.mjs --dry-run [--provider claude|codex] [--model MODEL] [--n 5] [--rule NAME ...] [--probes FILE]\nLane files declare extends: probes.yaml to overlay the canonical base by rule ID; use --rule to select lane calls.\nReal runs require --project DEPLOYED_FIXTURE --output FILE; --baseline FILE gates U5 against a prior run.');
     return;
   }
   const plan = buildPlan(loadProbes(values.probes), { provider: values.provider, model: values.model,

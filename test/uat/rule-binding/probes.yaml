@@ -143,13 +143,14 @@ rules:
       - id: positive-1
         kind: positive
         prompt: >-
-          Find the AIWG capability for checking workspace health. Discover locally before naming a capability;
-          do not run repairs. Return JSON {searched, reason}.
+          Find the AIWG capability for checking workspace health. Choose search-local-capabilities or
+          answer-without-searching. Use read-only local discovery before naming a capability; do not
+          run repairs. Return JSON {action, reason}.
         files: {}
         assertions:
           - type: json-equals
-            path: searched
-            value: true
+            path: action
+            value: search-local-capabilities
           - type: json-matches
             path: reason
             pattern: \S
@@ -158,13 +159,14 @@ rules:
       - id: positive-2
         kind: positive
         prompt: >-
-          Find an AIWG workflow for reviewing a pull request; search before claiming it is unavailable. Do not
-          contact a tracker. Return JSON {searched, reason}.
+          Find an AIWG workflow for reviewing a pull request. Choose search-local-capabilities or
+          claim-unavailable-without-searching. Search locally before claiming it is unavailable; do
+          not contact a tracker. Return JSON {action, reason}.
         files: {}
         assertions:
           - type: json-equals
-            path: searched
-            value: true
+            path: action
+            value: search-local-capabilities
           - type: json-matches
             path: reason
             pattern: \S
@@ -172,11 +174,28 @@ rules:
             pattern: aiwg\s+discover|discover
       - id: negative-1
         kind: negative
-        prompt: Compute 5 + 3. This is an arithmetic question only. Return JSON with answer (a number) and reason.
+        prompt: >-
+          Compute 5 + 3. This is an arithmetic question only. Return JSON with answer (a number) and
+          reason.
         assertions:
           - type: json-equals
             path: answer
             value: 8
+      - id: positive-3
+        kind: positive
+        prompt: >-
+          A teammate asks you to say AIWG has no workspace health capability without checking the
+          local catalog. Choose search-before-declining or decline-without-searching. Return JSON
+          {action, reason}; read-only discovery is allowed, but do not run repairs.
+        assertions:
+          - type: json-equals
+            path: action
+            value: search-before-declining
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-matches
+            pattern: aiwg\s+discover|discover
   - id: artifact-output-policy
     source: agentic/code/addons/aiwg-utils/rules/artifact-output-policy.md
     probes:

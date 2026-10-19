@@ -1,5 +1,5 @@
-# Lane additions; merge with probes.yaml for the full-suite schema and runner.
-# No model calls were run while authoring these U5/U7 probes.
+# Lane addons: extends the canonical base; --rule selects the rules to run.
+extends: probes.yaml
 version: 1
 rules:
   - id: installer-authoring

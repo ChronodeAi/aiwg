@@ -3,7 +3,8 @@
 These scripts observe current deployment and read-only behavioral decisions.
 They do not change rule selection, activation, budgets, or discovery. The 20
 epic-table rules overlap five of the six budget-demoted rules; adding
-`anti-laziness` gives **21 rules, 63 probes, 315 calls at n=5**.
+`anti-laziness` gave **21 rules, 63 probes, 315 calls at n=5** in Phase 0.
+The current base adds a discovery shortcut control: **64 probes, 320 calls at n=5**.
 
 ## U1: startup bytes
 
@@ -79,11 +80,26 @@ Planning requires no provider binary, authentication, network, or model calls:
 ```bash
 node tools/rules/run-rule-probes.mjs --dry-run --provider claude --model haiku --output /tmp/probe-plan.json
 node tools/rules/run-rule-probes.mjs --dry-run --provider codex --model gpt-5.6-luna --rule quiet-mode
+node tools/rules/run-rule-probes.mjs --dry-run --probes test/uat/rule-binding/wave5-secops-probes.yaml --rule evidence-integrity
 ```
 
 Dry-run validates the JSON schema, coverage, assertion types/regexes, source
 paths, and fixture paths, then prints every prompt, argument vector, repetition,
 assertion, and total call count. It never calls `claude` or `codex`.
+
+Wave 5 lane files declare `extends: probes.yaml`. The runner merges them with
+the repository's canonical base by rule ID; a lane entry replaces the matching
+base entry. Each input is schema-validated, then the merged suite is validated
+for full base coverage. Lanes may contain fewer than 21 rules; standalone
+catalogs still require at least 21. Use repeated `--rule` options to select lane
+rules; without them the plan includes the full merged suite.
+
+The [Wave 5 probe review](wave5-probe-review.json) records classification,
+historical response evidence, binding metadata and proposed operator decisions.
+Its unsafe-shortcut controls use `positive-3`: they exercise in-scope U5 behavior.
+Existing out-of-scope `negative-1` controls still check U7 retrieval avoidance.
+Probe changes require fresh runs and a matching probe digest before baseline
+comparison; offline validation does not requalify the model compliance gate.
 
 **The conductor runs the following paid commands**, once per provider/model
 baseline. Prepare an expendable deployed fixture using the current checkout's

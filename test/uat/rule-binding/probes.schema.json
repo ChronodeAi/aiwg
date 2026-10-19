@@ -12,14 +12,25 @@
     "version": {
       "const": 1
     },
+    "extends": {
+      "const": "probes.yaml",
+      "description": "Overlay the repository's canonical probes.yaml by rule ID."
+    },
     "rules": {
       "type": "array",
-      "minItems": 21,
+      "minItems": 1,
       "items": {
         "$ref": "#/definitions/rule"
       }
     }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "extends": {} }, "required": ["extends"] },
+      "then": {},
+      "else": { "properties": { "rules": { "type": "array", "minItems": 21 } } }
+    }
+  ],
   "definitions": {
     "assertion": {
       "oneOf": [

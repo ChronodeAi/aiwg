@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import yaml from 'js-yaml';
+import Ajv from 'ajv/dist/2020.js';
 import { boundedExecFileSync } from '../../../src/process/bounded-child-process.mjs';
 import { ROOT } from '../../../tools/rules/measure-startup-context.mjs';
 import { REQUIRED_RULES, loadProbes, buildPlan, parseTrace, ruleFetches, evaluateAssertions,
@@ -23,6 +24,91 @@ function claudeTrace(text = '{"action":"fix"}', tools = []) {
 }
 
 describe('rule probe schema and call planning', () => {
+  it.each(['sdlc-a', 'sdlc-b', 'utils', 'secops', 'addons'])('validates and merges the %s lane with the base', lane => {
+    const file = path.join(ROOT, `test/uat/rule-binding/wave5-${lane}-probes.yaml`);
+    const overlay = yaml.load(fs.readFileSync(file, 'utf8'));
+    const validate = new Ajv({ allErrors: true, strict: true }).compile(JSON.parse(
+      fs.readFileSync(path.join(ROOT, 'test/uat/rule-binding/probes.schema.json'), 'utf8')));
+    expect(validate(overlay), JSON.stringify(validate.errors)).toBe(true);
+    const merged = loadProbes(file);
+    expect(merged.rules.map(rule => rule.id)).toEqual([...loadProbes().rules, ...overlay.rules].map(rule => rule.id));
+    const selected = overlay.rules.map(rule => rule.id);
+    const plan = buildPlan(merged, { rules: selected });
+    expect(plan.call_count).toBe(overlay.rules.reduce((n, rule) => n + rule.probes.length * 5, 0));
+    expect(plan.calls.every(call => selected.includes(call.rule))).toBe(true);
+  });
+
+  it('overlays intentional rule replacements but rejects duplicate, empty, or malformed lanes', () => {
+    const original = loadProbes().rules[0];
+    const replacement = structuredClone(original);
+    replacement.probes[0].prompt += ' Use the lane-specific scenario.';
+    const file = path.join(tempDir(), 'lane.yaml');
+    const write = rules => fs.writeFileSync(file, yaml.dump({ version: 1, extends: 'probes.yaml', rules }));
+    write([replacement]);
+    expect(loadProbes(file).rules).toHaveLength(REQUIRED_RULES.length);
+    expect(loadProbes(file).rules[0]).toEqual(replacement);
+    write([replacement, replacement]);
+    expect(() => loadProbes(file)).toThrow('Duplicate rule');
+    write([]);
+    expect(() => loadProbes(file)).toThrow('Probe schema');
+    write([{ ...replacement, probes: [] }]);
+    expect(() => loadProbes(file)).toThrow('Probe schema');
+    write([{ ...replacement, source: 'agentic/code/missing.md' }]);
+    expect(() => loadProbes(file)).toThrow('Missing or unsafe');
+  });
+
+  it('keeps reviewed decisions specific, explains them, and rejects unsafe shortcuts', () => {
+    const review = JSON.parse(fs.readFileSync(path.join(ROOT,
+      'test/uat/rule-binding/wave5-probe-review.json'), 'utf8'));
+    for (const control of review.adversarial_controls) {
+      const rule = loadProbes(path.join(ROOT, control.lane)).rules.find(rule => rule.id === control.rule);
+      const probe = rule.probes.find(probe => probe.id === control.probe);
+      expect(probe.kind).toBe('positive'); // U5 in-scope; U7 stays out-of-scope.
+      expect(probe.prompt).toContain(control.expected_action);
+      expect(probe.prompt).toContain(control.unsafe_action);
+      const tools = control.rule === 'skill-discovery'
+        ? [{ name: 'Bash', input: { command: 'aiwg discover "workspace health"' }, success: true }] : [];
+      const trace = action => ({ text: JSON.stringify({ action, reason: 'Decision rationale.' }), tools });
+      expect(evaluateAssertions(probe.assertions, trace(control.expected_action)).every(a => a.pass)).toBe(true);
+      expect(evaluateAssertions(probe.assertions, trace(control.unsafe_action)).every(a => a.pass)).toBe(false);
+      expect(evaluateAssertions(probe.assertions, { text: JSON.stringify({ action: control.expected_action,
+        reason: ' ' }), tools }).every(a => a.pass)).toBe(false);
+      expect(rule.probes.some(p => p.kind === 'negative' && p.id === 'negative-1')).toBe(true);
+    }
+    for (const entry of review.reviews) {
+      const rule = loadProbes(path.join(ROOT, entry.lane)).rules.find(rule => rule.id === entry.rule);
+      const probe = rule.probes.find(probe => probe.id === entry.probe);
+      expect(probe.assertions.some(a => a.type === 'json-matches' && a.path === 'reason' && a.pattern === '\\S')).toBe(true);
+      if (entry.rule !== 'skill-discovery') expect(probe.assertions.some(a => a.type === 'tool-matches')).toBe(false);
+      for (const assertion of probe.assertions.filter(a => a.type === 'json-equals' && typeof a.value === 'string')) {
+        expect(probe.prompt).toContain(assertion.value);
+      }
+    }
+  });
+
+  it('still requires actual discovery when the decision says a capability was searched', () => {
+    const rule = loadProbes().rules.find(rule => rule.id === 'skill-discovery');
+    for (const probe of rule.probes.filter(probe => probe.kind === 'positive')) {
+      const action = probe.assertions.find(a => a.path === 'action').value;
+      const trace = { text: JSON.stringify({ action, reason: 'Local lookup.' }), tools: [] };
+      expect(evaluateAssertions(probe.assertions, trace).every(a => a.pass)).toBe(false);
+      trace.tools.push({ name: 'Bash', input: { command: 'aiwg discover "workspace health"' }, success: true });
+      expect(evaluateAssertions(probe.assertions, trace).every(a => a.pass)).toBe(true);
+    }
+  });
+
+  it.each(['addons', 'secops'])('dry-runs the formerly unloadable %s lane without vendor executables', lane => {
+    const file = path.join(ROOT, `test/uat/rule-binding/wave5-${lane}-probes.yaml`);
+    const rule = yaml.load(fs.readFileSync(file, 'utf8')).rules[0].id;
+    const stdout = boundedExecFileSync(process.execPath, [path.join(ROOT, 'tools/rules/run-rule-probes.mjs'),
+      '--dry-run', '--probes', file, '--rule', rule], 'quick', {
+      cwd: ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' }, maxBuffer: 4 * 1024 * 1024,
+    });
+    const plan = JSON.parse(stdout);
+    expect(plan.call_count).toBe(15);
+    expect(plan.calls.every(call => call.rule === rule)).toBe(true);
+  });
+
   it('covers all 20 table rules plus anti-laziness, each with two positives and a negative', () => {
     const data = loadProbes();
     expect(data.rules.map(rule => rule.id).sort()).toEqual([...REQUIRED_RULES].sort());
@@ -68,11 +154,11 @@ describe('rule probe schema and call planning', () => {
       cwd: ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' }, maxBuffer: 4 * 1024 * 1024,
     });
     const plan = JSON.parse(stdout);
-    expect(plan.call_count).toBe(315);
+    expect(plan.call_count).toBe(320);
     expect(plan.n).toBe(5);
     expect(plan.calls.every(call => call.command === provider && call.args.includes('fixture-cheap-model'))).toBe(true);
     expect(plan.calls[0].args[0]).toBe(provider === 'claude' ? '-p' : 'exec');
-    expect(new Set(plan.calls.map(call => `${call.rule}/${call.probe}`)).size).toBe(63);
+    expect(new Set(plan.calls.map(call => `${call.rule}/${call.probe}`)).size).toBe(64);
   });
 
   it('allows scoped repeat counts for exploration and rejects unknown rules/providers/counts', () => {

@@ -1,7 +1,7 @@
 ---
 enforcement: high
-activation: bound
-summary: Record complete intent/action/observation iterations, ground actions in observed results, vary strategy after flat cycles, and declare exploration quotas for long loops.
+activation: summary
+summary: "For long autonomous loops, declare an exploration quota before starting; record each action and observation, and change strategy or stop after flat cycles."
 bound_to:
   skills:
     - flow-guided-implementation

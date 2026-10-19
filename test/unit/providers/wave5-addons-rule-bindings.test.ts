@@ -90,8 +90,9 @@ describe('Wave 5 addon rule delivery (#2945)', () => {
     const lane = parse(read(path.join(repo, 'test/uat/rule-binding/wave5-addons-probes.yaml')));
     const base = parse(read(path.join(repo, 'test/uat/rule-binding/probes.yaml')));
     const validate = ajv.compile(schema);
-    // The shared top-level minItems:21 describes the original suite, not a lane.
-    // Validate each lane item using that exact schema, then validate the merged suite.
+    // Explicit inheritance allows a small lane while standalone suites keep
+    // their base coverage requirement.
+    expect(validate(lane), JSON.stringify(validate.errors)).toBe(true);
     const validateRule = ajv.compile({ $schema: schema.$schema, definitions: schema.definitions, $ref: '#/definitions/rule' });
     for (const rule of lane.rules) {
       expect(validateRule(rule), JSON.stringify(validateRule.errors)).toBe(true);

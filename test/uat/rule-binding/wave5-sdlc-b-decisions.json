@@ -86,8 +86,8 @@
   {
     "rule": "tao-loop",
     "enforcement": "high",
-    "activation": "bound",
-    "reason": "Iteration protocol and exploration quotas apply during tool-using agent tasks and loops, reached through explicit execution roles."
+    "activation": "summary",
+    "reason": "Operator decision 2026-10-19 after U5 review: bound delivery missed the exploration-quota obligation when agents used Ralph; summary activation keeps the bindings and puts the quota requirement in every startup index."
   },
   {
     "rule": "thought-protocol",

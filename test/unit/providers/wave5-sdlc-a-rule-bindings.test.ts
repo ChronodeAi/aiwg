@@ -152,9 +152,9 @@ describe('Wave 5 SDLC lane a canonical rule delivery (#2945)', () => {
       ['critical', 'high'].includes(rule.data.enforcement) || rule.name === 'disposable-processes')) {
       const row = probes.rules.find((item: any) => item.id === name);
       expect(row.source).toBe(`${owner}/${name}.md`);
-      expect(row.probes.map((probe: any) => [probe.id, probe.kind])).toEqual([
+      expect(row.probes.map((probe: any) => [probe.id, probe.kind])).toEqual(expect.arrayContaining([
         ['positive-1', 'positive'], ['positive-2', 'positive'], ['negative-1', 'negative'],
-      ]);
+      ]));
       expect(data.activation).not.toBe('kernel');
     }
   });

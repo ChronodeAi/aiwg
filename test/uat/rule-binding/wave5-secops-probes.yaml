@@ -1,3 +1,5 @@
+# Lane secops: extends the canonical base; --rule selects the rules to run.
+extends: probes.yaml
 version: 1
 rules:
   - id: evidence-integrity

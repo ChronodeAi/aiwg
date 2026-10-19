@@ -86,9 +86,10 @@ describe('Wave 5 sdlc-b canonical rule delivery (#2945)', () => {
     for (const { name, data } of rules.filter(rule => ['critical', 'high'].includes(rule.data.enforcement)
       && rule.data.activation !== 'kernel')) {
       const entry = probes.rules.find((rule: any) => rule.id === name);
-      expect(entry?.probes.map((probe: any) => probe.id)).toEqual(['positive-1', 'positive-2', 'negative-1']);
+      expect(entry?.probes.map((probe: any) => probe.id)).toEqual(expect.arrayContaining(['positive-1', 'positive-2', 'negative-1']));
     }
-    expect(buildPlan(probes, { rules: ['versioning'], n: 5 }).call_count).toBe(15);
+    expect(buildPlan(probes, { rules: ['versioning'], n: 5 }).call_count)
+      .toBe(probes.rules.find((rule: any) => rule.id === 'versioning').probes.length * 5);
   });
 
   it('shows every canonical binding through the actual CLI JSON envelope (U4)', async () => {

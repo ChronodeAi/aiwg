@@ -92,9 +92,12 @@ describe('Wave 5 utils canonical rule delivery (#2945)', () => {
 
   it('schema-validates lane probes and covers every moved HIGH rule (U5 planning only)', async () => {
     const { default: Ajv } = await import('ajv/dist/2020.js');
-    const probes = parse(read(path.join(repo, 'test/uat/rule-binding/wave5-utils-probes.yaml')));
+    const { loadProbes } = await import('../../../tools/rules/run-rule-probes.mjs');
+    const file = path.join(repo, 'test/uat/rule-binding/wave5-utils-probes.yaml');
+    const probes = loadProbes(file);
     const schema = JSON.parse(read(path.join(repo, 'test/uat/rule-binding/probes.schema.json')));
     const validate = new Ajv({ allErrors: true, strict: true }).compile(schema);
+    expect(validate(parse(read(file))), JSON.stringify(validate.errors)).toBe(true);
     expect(validate(probes), JSON.stringify(validate.errors)).toBe(true);
     for (const { name, data } of rules.filter(rule => ['critical', 'high'].includes(rule.data.enforcement)
       || rule.data.severity === 'HIGH')) {
