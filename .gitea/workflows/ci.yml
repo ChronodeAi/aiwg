@@ -22,7 +22,7 @@ jobs:
     # npm's registry-key rotation. Keep the signature hard gate on the same
     # digest-pinned npm 11 runtime used by the publication workflow.
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
-    timeout-minutes: 50  # temporary 2026-10-19: doubled with the test step; restore 25
+    timeout-minutes: 25
 
     steps:
       - name: Checkout code
@@ -263,7 +263,7 @@ jobs:
         # pass alone reached 9.1-9.5 min under runner load by 2026-10-14 (UAT
         # follows), so the former 10m bound tripped on healthy runs mid-UAT;
         # 20m keeps ~2x headroom while still catching a genuine hang.
-        run: node tools/ci/run-with-hang-report.mjs --timeout 40m -- npm run test:ci  # temporary 2026-10-19: doubled while the deploy-test slowdown is fixed; restore 20m
+        run: node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm run test:ci
 
       - name: Run tier-3 integration suite (#1174)
         # Spawns aiwg serve via bin/aiwg.mjs on an ephemeral port. The
