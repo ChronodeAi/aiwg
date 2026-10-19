@@ -1772,7 +1772,13 @@ export function resolveRuleBindingTarget(
       : basename.replace(/\.[^.]+$/, '');
     return entry.name === id || discoveryIdForEntry(entry) === id || slug === id;
   });
-  const matches = findShowMatches(exact, [type], id);
+  let matches = findShowMatches(exact, [type], id);
+  // Generated plugin copies (agentic/code/plugins/*) mirror canonical framework
+  // and addon artifacts. Prefer the canonical source when it is unambiguous.
+  if (matches.length > 1) {
+    const canonical = matches.filter(entry => !/(^|\/)agentic\/code\/plugins\//.test(normalizeIndexedPath(entry.path)));
+    if (canonical.length === 1) matches = canonical;
+  }
   if (matches.length === 0) throw new Error(`Missing ${type} binding target: ${id}`);
   if (matches.length > 1) throw new Error(`Ambiguous ${type} binding target: ${id}: ${matches.map(entry => entry.path).join(', ')}`);
   return matches[0];

@@ -56,10 +56,74 @@ describe('activation lint in the existing runner (#2938)', () => {
     const canonical = entry('debugger', 'agent');
     const mirror = entry('debugger', 'agent', 'agentic/code/plugins/example/agents/debugger.md');
     expect(resolveRuleBindingTarget([mirror, canonical], 'agent', 'debugger')).toBe(canonical);
+    // `aiwg use all` indexes several generated plugin copies with absolute paths.
+    // Plain entries use path-based precedence; packaged index provenance is
+    // covered separately below because it overrides that ranking.
+    const root = '/opt/aiwg/agentic/code';
+    const raw = (p: string) => ({ name: 'flow-architecture-evolution', type: 'flow', path: p }) as any;
+    const flow = raw(`${root}/frameworks/sdlc-complete/flows/flow-architecture-evolution.playbook.yaml`);
+    const copies = ['sdlc', 'codex-sdlc'].map(plugin => raw(`${root}/plugins/${plugin}/flows/flow-architecture-evolution.playbook.yaml`));
+    expect(resolveRuleBindingTarget([...copies, flow], 'flow', 'flow-architecture-evolution')).toBe(flow);
+    expect(() => resolveRuleBindingTarget(copies, 'flow', 'flow-architecture-evolution')).toThrow('Ambiguous flow');
     const stableId = stableRecordId(recordTypeForEntry(canonical, 'v2'), canonical.path);
     expect(resolveRuleBindingTarget([canonical], 'agent', stableId)).toBe(canonical);
     const result = await lint(`---\nactivation: paths\nsummary: Fix source.\npaths: [src/**]\nbound_to:\n  agents: [${stableId}]\n  skills: [fix-source]\n  flows: [flow-fix]\n---\nBody`, [canonical, entry('fix-source', 'skill'), entry('flow-fix', 'flow')]);
     expect(result.summary).toMatchObject({ passed: true, errors: 0, warnings: 0 });
+  });
+  it.each(['mixed', 'packaged'] as const)(
+    'resolves packaged flow bindings despite generated plugin copies (%s provenance, #2945)',
+    provenance => {
+      const name = 'flow-architecture-evolution';
+      // prepareRuleDelivery merges provenance-tagged framework index entries
+      // with raw rebuilt source entries and makes their paths absolute. Packaged
+      // scope and untagged plugin locality both rank 3, defeating show's normal
+      // rank-2 canonical-source preference. cwd and stable IDs are irrelevant.
+      const root = join(dir, 'aiwg/agentic/code');
+      const canonical = { ...entry(name, 'flow', `${root}/frameworks/sdlc-complete/flows/${name}.playbook.yaml`),
+        indexGraph: 'framework', indexScope: 'packaged' };
+      const copies = ['codex-sdlc', 'sdlc'].map(plugin => ({
+        ...entry(name, 'flow', `${root}/plugins/${plugin}/flows/${name}.playbook.yaml`),
+        ...(provenance === 'packaged' ? { indexGraph: 'framework', indexScope: 'packaged' } : {}),
+      }));
+      // Keep genuine ambiguity errors; generated copies alone and two authored
+      // sources must never silently select one of the tied candidates.
+      expect(() => resolveRuleBindingTarget(copies, 'flow', name)).toThrow('Ambiguous flow');
+      const other = { ...canonical, path: `${root}/addons/other/flows/${name}.playbook.yaml` };
+      expect(() => resolveRuleBindingTarget([...copies, canonical, other], 'flow', name)).toThrow('Ambiguous flow');
+      const copyId = stableRecordId(recordTypeForEntry(copies[0], 'v2'), copies[0].path);
+      expect(resolveRuleBindingTarget([...copies, canonical], 'flow', copyId)).toBe(copies[0]);
+      expect(resolveRuleBindingTarget([...copies, canonical], 'flow', name)).toBe(canonical);
+    },
+  );
+  it.each(['skill', 'agent'] as const)(
+    'resolves packaged %s rule bindings alongside generated plugin copies (#2945)',
+    type => {
+      const name = type === 'skill' ? 'flow-architecture-evolution' : 'architecture-designer';
+      const suffix = type === 'skill' ? `skills/${name}/SKILL.md` : `agents/${name}.md`;
+      const root = join(dir, 'aiwg/agentic/code');
+      const canonical = { ...entry(name, type, `${root}/frameworks/sdlc-complete/${suffix}`),
+        indexGraph: 'framework', indexScope: 'packaged' };
+      for (const provenance of ['mixed', 'packaged']) {
+        const copies = ['codex-sdlc', 'sdlc'].map(plugin => ({
+          ...entry(name, type, `${root}/plugins/${plugin}/${suffix}`),
+          ...(provenance === 'packaged' ? { indexGraph: 'framework', indexScope: 'packaged' } : {}),
+        }));
+        // These layouts already have type-specific canonical-source fallbacks.
+        expect(resolveRuleBindingTarget([...copies, canonical], type, name)).toBe(canonical);
+        expect(() => resolveRuleBindingTarget(copies, type, name)).toThrow(`Ambiguous ${type}`);
+        const other = { ...canonical, path: `${root}/frameworks/other/${suffix}` };
+        expect(() => resolveRuleBindingTarget([...copies, canonical, other], type, name)).toThrow(`Ambiguous ${type}`);
+      }
+    },
+  );
+  it('rejects command rule bindings even when command plugin copies exist (#2945)', async () => {
+    const commands = ['frameworks/sdlc-complete', 'plugins/codex-sdlc', 'plugins/sdlc'].map(bundle =>
+      entry('build', 'command', join(dir, `aiwg/agentic/code/${bundle}/commands/build.md`)));
+    const result = await lint('---\nactivation: bound\nsummary: Build the project.\nbound_to:\n  commands: [build]\n---\nBody', commands);
+    expect(result.summary.passed).toBe(false);
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ severity: 'error',
+      message: expect.stringContaining('additional properties') }));
+    expect(() => resolveRuleBindingTarget(commands, 'flow', 'build')).toThrow('Missing flow');
   });
   it('resolves canonical slugs with display-name frontmatter without accepting titles or paths', () => {
     const agent = { ...entry('Build Engineer', 'agent', 'agentic/code/frameworks/sdlc-complete/agents/build-engineer.md'), title: 'Build automation expert' };
