@@ -41,6 +41,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `aiwg show` and `aiwg discover` reconcile the shared framework index with the runtime's sources when a cheap fingerprint (runtime version, Git HEAD, bundle manifests) changes, so skills such as research-complete `induct-research` are found after a runtime update; only one process rebuilds at a time. Installed frameworks are no longer labelled corpus-only, and `induct-research` gains natural-language triggers (#3304).
 - The by-grade index view, stale-queue grade column and corpus snapshot fall back to a reference's frontmatter `grade` when it has no radar sidecar, instead of listing graded papers as Ungraded (#2571).
 - Codex MCP profile launches and logins keep the operator's AIWG configuration directory (`AIWG_CONFIG`) when they switch `HOME` to the profile runtime home, so development installs and channels stay visible inside the profile (#3289).
 - Decision graph runs that fail admission or settlement before a Flow observation (for example after a wall-clock deadline) now report that node failure instead of `missing Flow graph observation`; DAG-033/DAG-034 fixtures use fixed clocks so they no longer fail under CPU contention (#3293).

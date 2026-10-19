@@ -329,7 +329,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(readConsoleJson().content).toContain("# Kairos Probe");
   });
 
-  it("reports a stale shared framework cache even with a healthy project cache", async () => {
+  it("reports a stale shared framework cache when runtime sources are unavailable", async () => {
     writeProjectGraph(tmp, [entry({
       path: "agentic/code/frameworks/kairos/skills/kairos-probe/SKILL.md",
       name: "kairos-probe",
@@ -348,6 +348,8 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(loaded.reason).toContain("aiwg index sync --graph framework");
     writeProjectGraph(tmp, [entry({})]);
     syncFortemiCoreIndex(tmp, { graph: "project" });
+    // Without runtime sources, lookup must retain the actionable cache warning.
+    fs.renameSync(path.join(tmp, "agentic"), path.join(tmp, "offline-agentic"));
     consoleSpy.mockClear();
     await discoverCapability(tmp, { phrase: "intake", json: true });
     expect(readConsoleJson().results.length).toBeGreaterThan(0);
@@ -384,6 +386,8 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
       metadata.builtAt = '2026-01-04T00:00:00.000Z';
       fs.writeFileSync(metadataPath, JSON.stringify(metadata));
       expect(getFortemiCoreSyncStatus(tmp, graph).stale).toBe(true);
+      // Exercise metadata fallback where automatic source refresh is unavailable.
+      fs.renameSync(path.join(tmp, 'agentic'), path.join(tmp, 'offline-agentic'));
       consoleSpy.mockClear();
 
       await discoverCapability(tmp, { phrase: 'intake', graph: explicitGraph, resourceSource, json: true });
@@ -803,6 +807,8 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
       capability: "Create test plans for SDLC work.",
     });
     writeProjectGraph(tmp, [sourceSkill, pluginMirror, codexMirror, otherSkill], undefined, "framework");
+    // Keep the historical mirror records intact to exercise deduplication.
+    fs.renameSync(path.join(tmp, 'agentic'), path.join(tmp, 'offline-agentic'));
     syncFortemiCoreIndex(tmp, {
       graph: "framework",
       generatedAt: "2026-01-05T00:00:00.000Z",

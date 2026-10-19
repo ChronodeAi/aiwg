@@ -40,6 +40,8 @@ Process one or more research sources — an issue, a file, a directory of papers
 ## Triggers
 
 - "induct this paper" → single file induction
+- "induct a research paper" → single paper induction
+- "add a paper to the corpus" → corpus induction
 - "induct the research queue" → batch directory induction
 - "add these references to the research repo" → URI or file-path induction
 - "process the research from issue-planner" → induct `.aiwg/research/queue/`

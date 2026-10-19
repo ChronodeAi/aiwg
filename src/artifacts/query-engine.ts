@@ -9,6 +9,7 @@
  * @tests @test/unit/artifacts/query-engine.test.ts
  */
 
+import { refreshFrameworkCapabilities, resolveFrameworkCorpusRoot, isCorpusBundleInstalled } from './framework-capabilities.js';
 import { minimatch } from 'minimatch';
 import type { DiscoveryShadowRoute } from './discovery-shadow.js';
 import * as fs from 'node:fs';
@@ -1044,6 +1045,17 @@ export async function discoverCapability(
     | import('./fortemi-core-query-adapter.js').FortemiCoreVerifiedSourcePaths
     | undefined;
 
+  if (resourceSource !== 'web' && (!params.graph || params.graph === 'framework')) {
+    const root = resolveFrameworkCorpusRoot(cwd) ?? aiwgRoot;
+    if (root) {
+      try {
+        await refreshFrameworkCapabilities(root, backend === 'fortemi-core');
+      } catch (error) {
+        console.error(`Warning: capability index refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
   if (resourceSource === 'auto') {
     const { loadFortemiCoreMetadataEntries } = await import('./fortemi-core-query-adapter.js');
     const localGraphs = params.graph ? [params.graph] : defaultCapabilityGraphs(cwd);
@@ -1173,43 +1185,10 @@ export async function discoverCapability(
     // discover is EXCLUSIVELY the agentic-capability surface (#1545): source
     // the `framework` graph (deployed AIWG capabilities) + project-local
     // capability artifacts. NEVER `codebase` — source code is not a capability
-    // surface. discover leverages indexing transparently: if the framework
-    // index is missing but its source is present, build it once (incremental
-    // thereafter) so discover Just Works without the operator picking a graph.
-    let fwIdx = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', 'framework');
-    if (!fwIdx) {
-      // The framework graph is shared (XDG) and `defaultBuild: false`, so a bare
-      // `aiwg index build` never (re)builds it — only `aiwg use` or an explicit
-      // `--graph framework` does. When it's absent, build it from wherever the
-      // AIWG source lives: `cwd/agentic/code` when inside the AIWG repo, else
-      // `$AIWG_ROOT/agentic/code` for a USER project (#1541 — opencode users sit
-      // in their own project, not the AIWG repo, so a cwd-only check left
-      // discover unable to find deployed commands like address-issues). buildIndex
-      // scans <root>/agentic/code and writes to the cwd-independent XDG dir, so
-      // reading back via cwd still resolves the freshly-built shared index.
-      const buildRoot = fs.existsSync(path.join(cwd, 'agentic', 'code'))
-        ? cwd
-        : aiwgRoot && fs.existsSync(path.join(aiwgRoot, 'agentic', 'code'))
-          ? aiwgRoot
-          : null;
-      if (buildRoot) {
-        const { buildIndex } = await import('./index-builder.js');
-        if (!params.json) console.error('Building capability index (first run)…');
-        // buildIndex writes progress to stdout. In --json mode that would corrupt
-        // the JSON envelope the caller parses, so silence stdout for the duration
-        // of the auto-build (the build is incidental to the query).
-        const origLog = console.log;
-        if (params.json) console.log = () => {};
-        try {
-          await buildIndex(buildRoot, { graph: 'framework', explicit: false });
-        } catch {
-          /* non-fatal — fall through to whatever index is available */
-        } finally {
-          console.log = origLog;
-        }
-        fwIdx = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', 'framework');
-      }
-    }
+    // surface. The framework
+    // index is reconciled with its source above, including existing indexes
+    // left behind by an older runtime or a different checkout.
+    const fwIdx = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', 'framework');
     const includeUser = projectAllowsUserIndices(cwd);
     // Project-local operational artifacts authored in this project. The
     // DEFAULT_DISCOVER_TYPES filter keeps non-capability project artifacts
@@ -1581,6 +1560,17 @@ async function loadShowEntries(
   const backend = params.backend ?? DEFAULT_ARTIFACT_SEARCH_BACKEND;
   let resourceSource: ResourceSource = params.resourceSource ?? 'local';
   let entries: MetadataEntry[] = [];
+
+  if (resourceSource !== 'web' && (!params.graph || params.graph === 'framework')) {
+    const root = resolveFrameworkCorpusRoot(cwd) ?? aiwgRoot;
+    if (root) {
+      try {
+        await refreshFrameworkCapabilities(root, backend === 'fortemi-core' && params.backend !== undefined);
+      } catch (error) {
+        console.error(`Warning: capability index refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
 
   if (resourceSource === 'auto' && backend === 'fortemi-core') {
     const { loadFortemiCoreMetadataEntries } = await import('./fortemi-core-query-adapter.js');
@@ -2042,7 +2032,7 @@ export async function showArtifact(
   if (matches.length === 0) {
     // Corpus fallback (#1221): when the artifact isn't in any indexed graph,
     // scan the AIWG_ROOT corpus for a likely match and render it with an
-    // "(uninstalled)" banner. This keeps `aiwg show` useful in workspaces
+    // installation-aware banner. This keeps `aiwg show` useful in workspaces
     // where the operator hasn't run `aiwg use` yet, or where the framework
     // index is stale, rather than exiting with a misleading "not found".
     if (resourceSource === 'local' && aiwgRoot && params.backend !== 'fortemi-core') {
@@ -2056,7 +2046,12 @@ export async function showArtifact(
           console.error(`Error reading ${corpusMatch.path}: ${e.message ?? String(err)}`);
           process.exit(1);
         }
-        const installHint = corpusMatch.bundleKind && corpusMatch.bundleId
+        const installed = await isCorpusBundleInstalled(
+          cwd, aiwgRoot, corpusMatch.bundleKind, corpusMatch.bundleId,
+        );
+        const installHint = installed
+          ? 'The installed bundle is missing from this index. Run `aiwg index build --graph framework` to refresh it.'
+          : corpusMatch.bundleKind && corpusMatch.bundleId
           ? `Run \`aiwg use ${corpusMatch.bundleId}\` to install this ${corpusMatch.bundleKind} into the workspace.`
           : 'Run `aiwg index build --graph framework` to refresh the artifact index.';
         if (params.json) {
@@ -2065,16 +2060,18 @@ export async function showArtifact(
             type: corpusMatch.type,
             title: needle,
             kernel: false,
-            uninstalled: true,
+            uninstalled: !installed,
             hint: installHint,
             content,
           }, null, 2));
           return;
         }
-        // Plain text mode: prepend a banner so consumers see the artifact is
-        // corpus-only, then stream the body.
+        // Plain text mode: distinguish a missing index entry from an
+        // uninstalled bundle, then stream the body.
         const banner = [
-          '<!-- AIWG: corpus-only artifact — not in the indexed workspace.',
+          installed
+            ? '<!-- AIWG: installed bundle artifact — not in the selected index.'
+            : '<!-- AIWG: corpus-only artifact — not in the indexed workspace.',
           `     ${installHint}`,
           '     Origin: ' + corpusMatch.path,
           '-->',

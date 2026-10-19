@@ -214,6 +214,27 @@ describe('aiwg use addon requiring aiwg-utils across providers (#3035)', () => {
     });
   }
 
+  it('rebuilds a recent shared graph from another source before verifying an addon', async () => {
+    vi.resetModules();
+    const { buildIndex } = await import('../../../../src/artifacts/index-builder.js');
+    const { loadGraphIndexFile } = await import('../../../../src/artifacts/index-reader.js');
+    const { useHandler } = await import('../../../../src/cli/handlers/use.js');
+    const partialRoot = join(tempRoot, 'partial-runtime');
+    write(partialRoot, 'agentic/code/frameworks/other/skills/unrelated/SKILL.md',
+      '---\nname: unrelated\n---\n# Unrelated\n');
+    await buildIndex(partialRoot, { graph: 'framework', quiet: true });
+    const before = loadGraphIndexFile<any>(project, 'metadata.json', 'framework');
+    expect(Object.keys(before.entries)).toHaveLength(1);
+    afterDeploy.mockImplementation(() => buildIndex(partialRoot, { graph: 'framework', quiet: true }));
+    // A fresh timestamp (or a reconcile receipt) cannot prove bundle coverage.
+    const args = ['decision-engine', '--provider', 'claude', '--target', project];
+    const result = await useHandler.execute({ cwd: project, frameworkRoot, rawArgs: ['use', ...args], args });
+    expect(result.exitCode, result.message).toBe(0);
+    const after = loadGraphIndexFile<any>(project, 'metadata.json', 'framework');
+    expect(after.entries['agentic/code/addons/decision-engine/skills/de-check/SKILL.md']).toBeDefined();
+    expect(after.entries['agentic/code/frameworks/other/skills/unrelated/SKILL.md']).toBeUndefined();
+  });
+
   it('cleans removed standard skills and bundle-root support files on addon redeploy', { timeout: 60000 }, async () => {
     const sourceRoot = join(tempRoot, 'sources');
     writeSources(sourceRoot);

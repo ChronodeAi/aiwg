@@ -98,8 +98,6 @@ import {
 } from '../../smiths/context-pipeline/index.js';
 import type { Platform } from '../../agents/types.js';
 import { verifyModelWrapperDeployment } from '../../models/wrapper-deployment.js';
-import { loadGraphIndexFile } from '../../artifacts/index-reader.js';
-import type { ArtifactIndex } from '../../artifacts/types.js';
 import {
   aggregateUseDeploymentResult,
   buildDryRunUseResult,
@@ -2331,18 +2329,15 @@ async function ensurePostDeployPhases(opts: {
   projectPath: string;
   provider: string;
   args: string[];
-  invocationStartedAt: string;
 }): Promise<void> {
-  const currentIndex = loadGraphIndexFile<ArtifactIndex>(opts.frameworkRoot, 'metadata.json', 'framework');
-  const builtAt = currentIndex ? Date.parse(currentIndex.builtAt) : Number.NaN;
-  const startedAt = Date.parse(opts.invocationStartedAt);
-  if (!Number.isFinite(builtAt) || builtAt + 2_000 < startedAt) {
-    try {
-      const { buildIndex } = await import('../../artifacts/index-builder.js');
-      await buildIndex(opts.frameworkRoot, { graph: 'framework', explicit: false });
-    } catch {
-      // The shared verifier reports the index failure with stable remediation.
-    }
+  // This shared graph may have just been built from another runtime or a
+  // scoped source. Its timestamp (and a query receipt) cannot prove coverage
+  // for this deploy. Always run the incremental build from the selected root.
+  try {
+    const { buildIndex } = await import('../../artifacts/index-builder.js');
+    await buildIndex(opts.frameworkRoot, { graph: 'framework', explicit: false });
+  } catch {
+    // The shared verifier reports the index failure with stable remediation.
   }
 
   // The Fortemi export is the default discovery backend. Rebuilding only the
@@ -2781,7 +2776,6 @@ export class UseHandler implements CommandHandler {
             projectPath: projectDir,
             provider,
             args: remainingArgs,
-            invocationStartedAt: startedAt,
           });
         }
       }
