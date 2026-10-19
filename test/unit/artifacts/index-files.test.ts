@@ -52,7 +52,7 @@ it('preserves ignored-root exemptions, negations and external roots when batchin
   roots.push(root);
   const project = path.join(root, 'project');
   fs.mkdirSync(project);
-  execFileSync('git', ['init', '--quiet'], { cwd: project });
+  execFileSync('git', ['init', '--quiet'], { cwd: project, timeout: 10_000 });
   const relative = ['src/keep.ts', 'src/drop.ts', 'test/cold.ts', 'tools/keep.ts', 'tools/drop.ts'];
   for (const file of [...relative.map(file => path.join(project, file)), path.join(root, 'external/outside.ts')]) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
