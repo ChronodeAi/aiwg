@@ -147,10 +147,12 @@ describe('decision ledger', () => {
       agreementRatio: 1, votes: { true: 10, false: 0 }, answer: true,
       confidenceSummary: { count: 10, missing: 0, mean: 0.93, min: 0.93, max: 0.93 }, passes: [],
     };
-    const answered = buildDecisionLedgerRecord(yesNoInput, { ...answeredResult, aggregate }, buildContext({ projectRoot }));
+    const answered = buildDecisionLedgerRecord(yesNoInput, { ...answeredResult, answeredBy: 'agreement',
+      aggregate: { ...aggregate, minAgreement: 0.9, agreementConfidenceFloor: 0.55 } }, buildContext({ projectRoot }));
     const fallback = buildDecisionLedgerRecord(yesNoInput, { ...fallbackResult, reason: 'low-agreement',
       aggregate: { ...aggregate, passesRun: 14, escalated: true, earlyStop: 'certain-failure', agreementRatio: 0.5 } }, buildContext({ projectRoot }));
     expect(answered).toMatchObject({ passesRequested: 10, escalationPasses: 20, passesRun: 10, escalated: false,
+      answeredBy: 'agreement', minAgreement: 0.9, agreementConfidenceFloor: 0.55,
       agreementRatio: 1, passConfidenceSummary: { mean: 0.93 } });
     await appendDecisionLedgerRecord(answered, { projectRoot });
     await appendDecisionLedgerRecord(fallback, { projectRoot });
@@ -158,10 +160,10 @@ describe('decision ledger', () => {
     const policies = await decisionLedgerStats(projectRoot, { groupBy: 'passes' });
     expect(policies.skipped).toBe(0);
     expect(policies.groups.find(group => group.key === '10/20')).toMatchObject({ totalCalls: 2, answered: 1, fallback: 1,
-      hitRate: 0.5, escalatedCalls: 1, passesRun: 24, agreement: { count: 2, mean: 0.75 } });
-    expect(policies.groups.find(group => group.key === '1/1')).toMatchObject({ hitRate: 1 });
+      hitRate: 0.5, tokensPerAnsweredDecision: 40, escalatedCalls: 1, passesRun: 24, agreement: { count: 2, mean: 0.75 } });
+    expect(policies.groups.find(group => group.key === '1/1')).toMatchObject({ hitRate: 1, tokensPerAnsweredDecision: 15 });
     const escalation = await decisionLedgerStats(projectRoot, { groupBy: 'escalation' });
-    expect(escalation.groups.find(group => group.key === 'true')).toMatchObject({ totalCalls: 1, hitRate: 0 });
+    expect(escalation.groups.find(group => group.key === 'true')).toMatchObject({ totalCalls: 1, hitRate: 0, tokensPerAnsweredDecision: null });
     expect((await decisionLedgerHistory(projectRoot)).records).toHaveLength(3);
   });
 

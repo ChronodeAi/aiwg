@@ -9,6 +9,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Opt-in decision ask agreement acceptance (`min_agreement`, confidence floor
+  default 0.55), answer-rule telemetry, early stopping when neither rule can
+  succeed, accurate escalation reporting, and tokens per answered decision in
+  stats grouped by pass policy (#3297).
 - Add configurable multi-pass Jev decision validation with escalation, bounded
   concurrency and a shared timeout; CLI/MCP sampling overrides, aggregate JSON,
   ledger agreement telemetry and hit rates grouped by pass policy/escalation.

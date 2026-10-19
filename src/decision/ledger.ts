@@ -99,6 +99,7 @@ export interface DecisionLedgerRecord {
   status: DecisionAskResult['status'];
   answer: DecisionAskResult['answer'];
   confidence: DecisionAskResult['confidence'];
+  answeredBy?: DecisionAskResult['answeredBy'];
   threshold: number;
   fallbackReason: string | null;
   model: DecisionAskResult['model'];
@@ -110,6 +111,8 @@ export interface DecisionLedgerRecord {
   escalated?: boolean;
   earlyStop?: 'certain-failure' | 'timeout' | null;
   agreementRatio?: number;
+  minAgreement?: number | null;
+  agreementConfidenceFloor?: number;
   passConfidenceSummary?: NonNullable<DecisionAskResult['aggregate']>['confidenceSummary'];
   estimatedLlmTokensAvoided: number;
   estimationMethod: string;
@@ -329,6 +332,7 @@ export function buildDecisionLedgerRecord(
     status: result.status,
     answer,
     confidence: result.confidence,
+    ...(result.answeredBy === undefined ? {} : { answeredBy: result.answeredBy }),
     threshold: input.threshold ?? 0.8,
     fallbackReason: result.status === 'fallback' ? result.reason : null,
     model: typeof result.model === 'string' ? sanitizeField(result.model) : result.model,
@@ -338,6 +342,7 @@ export function buildDecisionLedgerRecord(
       passesRequested: result.aggregate.passesRequested, escalationPasses: result.aggregate.escalationPasses,
       passesRun: result.aggregate.passesRun, escalated: result.aggregate.escalated,
       earlyStop: result.aggregate.earlyStop, agreementRatio: result.aggregate.agreementRatio,
+      minAgreement: result.aggregate.minAgreement, agreementConfidenceFloor: result.aggregate.agreementConfidenceFloor,
       passConfidenceSummary: result.aggregate.confidenceSummary,
     } : {}),
     estimatedLlmTokensAvoided,
@@ -732,6 +737,7 @@ function isDecisionLedgerRecord(value: unknown): value is DecisionLedgerRecord {
   if (!(DECISION_LEDGER_STATUSES as readonly string[]).includes(record.status as string)) return false;
   if (!['string', 'boolean', 'number'].includes(typeof record.answer) && record.answer !== null) return false;
   if (!isUnitIntervalOrNull(record.confidence)) return false;
+  if (record.answeredBy !== undefined && record.answeredBy !== null && record.answeredBy !== 'confidence' && record.answeredBy !== 'agreement') return false;
   if (!isUnitIntervalOrNull(record.threshold) || record.threshold === null) return false;
   if (record.fallbackReason !== null && typeof record.fallbackReason !== 'string') return false;
   if (record.model !== null && typeof record.model !== 'string') return false;
@@ -745,6 +751,8 @@ function isDecisionLedgerRecord(value: unknown): value is DecisionLedgerRecord {
   }
   if (record.escalated !== undefined && typeof record.escalated !== 'boolean') return false;
   if (record.agreementRatio !== undefined && (record.agreementRatio === null || !isUnitIntervalOrNull(record.agreementRatio))) return false;
+  if (record.minAgreement !== undefined && !isUnitIntervalOrNull(record.minAgreement)) return false;
+  if (record.agreementConfidenceFloor !== undefined && (record.agreementConfidenceFloor === null || !isUnitIntervalOrNull(record.agreementConfidenceFloor))) return false;
   if (record.earlyStop !== undefined && record.earlyStop !== null && record.earlyStop !== 'certain-failure' && record.earlyStop !== 'timeout') return false;
   if (record.passConfidenceSummary !== undefined) {
     const summary = record.passConfidenceSummary as Record<string, unknown> | null;
@@ -856,6 +864,8 @@ export interface DecisionLedgerStatsGroup {
   fallbackRateByReason: Record<string, number>;
   confidence: { count: number; mean: number | null; min: number | null; max: number | null };
   jevUsage: { inputTokens: number; outputTokens: number };
+  /** All recorded Jev tokens, including fallbacks, divided by answered calls; null with no answers. */
+  tokensPerAnsweredDecision: number | null;
   estimatedLlmTokensAvoidedTotal: number;
   /**
    * `estimatedLlmTokensAvoidedTotal` minus the Jev usage actually spent on
@@ -965,6 +975,7 @@ function finalizeGroup(key: string | null, acc: StatsAccumulator): DecisionLedge
       max: acc.confidenceMax,
     },
     jevUsage: { inputTokens: acc.jevInputTokens, outputTokens: acc.jevOutputTokens },
+    tokensPerAnsweredDecision: acc.answered ? (acc.jevInputTokens + acc.jevOutputTokens) / acc.answered : null,
     estimatedLlmTokensAvoidedTotal: acc.estimatedLlmTokensAvoidedTotal,
     netSavingsTokens: acc.estimatedLlmTokensAvoidedTotal - (acc.answeredJevInputTokens + acc.answeredJevOutputTokens),
   };
