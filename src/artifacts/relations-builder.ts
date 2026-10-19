@@ -61,8 +61,8 @@ export function buildRelations(entries: MetadataEntry[]): RelationsIndex {
   };
   for (const entry of [...entries].sort((a, b) => a.path.localeCompare(b.path))) {
     if (!TARGET_TYPES.has(entry.type) && !['rule', 'behavior'].includes(entry.type)) continue;
-    const { path: sourcePath, type, name, title, kernel, script } = entry;
-    index.artifacts![relationId(entry)] = { path: sourcePath, type, title, ...(name ? { name } : {}), ...(kernel ? { kernel } : {}), ...(script ? { script } : {}) };
+    const { path: sourcePath, type, name, title, kernel, script, governedPaths } = entry;
+    index.artifacts![relationId(entry)] = { path: sourcePath, type, title, ...(name ? { name } : {}), ...(kernel ? { kernel } : {}), ...(script ? { script } : {}), ...(governedPaths ? { governedPaths } : {}) };
   }
   const rules = entries.filter(entry => entry.type === 'rule' || entry.type === 'behavior')
     .sort((a, b) => (a.name ?? a.path).localeCompare(b.name ?? b.path) || a.path.localeCompare(b.path));
@@ -75,6 +75,7 @@ export function buildRelations(entries: MetadataEntry[]): RelationsIndex {
       activation: rule.activation ?? null, enforcement: rule.ruleEnforcement ?? null,
       summary: rule.ruleSummary ?? '', capability: capability?.id ?? null,
       ...(rule.rulePaths ? { paths: rule.rulePaths } : {}),
+      ...(rule.triggers?.length ? { triggers: rule.triggers } : {}),
       ...(rule.bound_to ? { bound_to: rule.bound_to } : {}), targets: [],
     };
     for (const alias of new Set([rule.name, slug(rule), rule.path].filter((value): value is string => !!value))) {

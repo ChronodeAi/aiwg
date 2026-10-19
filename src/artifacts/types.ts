@@ -70,6 +70,8 @@ export interface MetadataEntry {
   ruleSummary?: string;
   ruleEnforcement?: string;
   rulePaths?: string[];
+  /** Project paths governed by an action artifact, used for compound discovery. */
+  governedPaths?: string[];
 
   /** Tags from frontmatter */
   tags: string[];
@@ -441,7 +443,7 @@ export const INDEX_VERSION = '1.0.0';
  * making the serialized index schema incompatible; a mismatch simply forces a
  * one-time content re-extraction during the next incremental build.
  */
-export const INDEX_EXTRACTOR_VERSION = '2026.10.18.2';
+export const INDEX_EXTRACTOR_VERSION = '2026.10.19.1';
 
 /**
  * Built-in graph type identifiers

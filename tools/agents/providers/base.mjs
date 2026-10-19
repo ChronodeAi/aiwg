@@ -3337,7 +3337,7 @@ export function replaceBoundRulesBlock(content, rules = []) {
   if (!rules.length) return clean;
   const unique = [...new Map(rules.map(rule => [rule.name, rule])).values()]
     .sort((a, b) => a.name.localeCompare(b.name));
-  return `${clean}${clean.endsWith('\n') ? '' : '\n'}\n<!-- AIWG:bound-rules:start -->\n## Bound rules\n\n${unique.map(rule =>
+  return `${clean}${clean.endsWith('\n') ? '' : '\n'}\n<!-- AIWG:bound-rules:start -->\n## Bound rules\n\nRequired reading on every invocation: fetch and follow every bound rule below before starting governed work. A summary or discovery pointer does not discharge this obligation.\n\n${unique.map(rule =>
     `- ${rule.name} — ${rule.summary}\n  Fetch and follow before governed work: \`aiwg show rule ${rule.name}\`.`
   ).join('\n')}\n<!-- AIWG:bound-rules:end -->\n`;
 }

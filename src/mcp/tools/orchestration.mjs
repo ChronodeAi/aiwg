@@ -175,7 +175,10 @@ export function registerFlowToolset(server) {
       ]);
       if (code !== 0) return mcpError(`flow-show binding lookup failed: ${stderr}`);
       const shown = JSON.parse(stdout);
-      return mcpJson({ ...flow, ...(shown.bound_rules ? { bound_rules: shown.bound_rules } : {}) });
+      return mcpJson({ ...flow, ...(shown.bound_rules ? { bound_rules: shown.bound_rules,
+        ...(shown.required_rule_checks ? { required_rule_checks: shown.required_rule_checks } : {}),
+        ...(shown.rule_stats ? { rule_stats: shown.rule_stats } : {}),
+        ...(shown.rule_check_obligation ? { rule_check_obligation: shown.rule_check_obligation } : {}) } : {}) });
     } catch (err) {
       return mcpError(`flow-show: ${err.message}`);
     }

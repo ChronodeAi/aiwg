@@ -38,7 +38,7 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
   // ============================================================
   server.registerTool('discover', {
     title: 'Discover AIWG Capabilities',
-    description: 'Semantic search across AIWG operational assets: skills, agents, commands, rules, flows, runbooks, templates, and behaviors. Returns ranked candidates with capability summaries. Mirrors `aiwg discover --json`.',
+    description: 'Semantic search across AIWG operational assets: skills, agents, commands, rules, flows, runbooks, templates, and behaviors. Returns ranked candidates with capability summaries, governing rules, rule stats, and required fetch-and-follow checks before governed work. Mirrors `aiwg discover --json`.',
     inputSchema: {
       phrase: z.string().describe('Natural-language capability description (e.g. "create intake form")'),
       type: z.enum(['skill', 'agent', 'command', 'rule', 'flow', 'runbook', 'template', 'behavior']).optional().describe('Restrict to one artifact type'),

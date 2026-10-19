@@ -13,6 +13,7 @@ import { refreshFrameworkCapabilities, resolveFrameworkCorpusRoot, isCorpusBundl
 import { resolveFrameworkIndexRoot } from './framework-index-paths.js';
 import { ensureRelations, selectPrebuiltRelations, emptyRuleStats, type RelationsReader, type RelationTargetType, type RuleStats } from './relations.js';
 import { minimatch } from 'minimatch';
+import { inferRuleActivation } from '../rules/activation.mjs';
 import type { DiscoveryShadowRoute } from './discovery-shadow.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -1160,6 +1161,7 @@ export async function discoverCapability(
               : {}),
           },
           results: [],
+          rule_stats: emptyRuleStats(),
           total: 0,
           hint: unavailableReason,
         }, null, 2));
@@ -1206,6 +1208,7 @@ export async function discoverCapability(
       console.log(JSON.stringify({
         query: { phrase: params.phrase, types },
         results: [],
+        rule_stats: emptyRuleStats(),
         total: 0,
         hint,
       }, null, 2));
@@ -1327,6 +1330,14 @@ export async function discoverCapability(
 
   const relations = resourceSource === 'local' && (!params.graph || params.graph === 'framework')
     ? prebuiltRelations ?? await ensureRelations(cwd) : undefined;
+  const governing = scored.map(result => compoundGoverningRules(entries, result.entry, relations ?? undefined, params.phrase));
+  const responseRules = new Map<string, GoverningRule>();
+  for (const item of governing.flat()) {
+    const key = `${item.rule.type}:${item.rule.path}`, prior = responseRules.get(key);
+    responseRules.set(key, { rule: item.rule, applicability: [...new Set([...(prior?.applicability ?? []), ...item.applicability])] });
+  }
+  const responseFields = governingRuleFields([...responseRules.values()]);
+  const responseRuleStats = governingRuleStats([...responseRules.values()]);
   const includePaths = params.includePaths ?? true;
   const facetActivations = diagnoseFacetActivations(params.phrase);
   const roundDiagnostic = (value: number): number => Math.round(value * 1_000_000) / 1_000_000;
@@ -1393,7 +1404,7 @@ export async function discoverCapability(
             }
           : {}),
       },
-      results: scored.map(r => ({
+      results: scored.map((r, resultIndex) => ({
         id: discoveryIdForEntry(r.entry),
         ...(includePaths ? { path: resolvePath(r.entry) } : {}),
         type: r.entry.type,
@@ -1401,13 +1412,7 @@ export async function discoverCapability(
         title: r.entry.title,
         score: Math.round(r.score * 100) / 100,
         ranking: rankingDiagnostic(r.entry, r.score, r.facetDiagnostics),
-        ...(relations && ['skill', 'agent', 'flow', 'command'].includes(r.entry.type) ? {
-          bound_rules: relationshipRules(entries, r.entry, relations).map(rule => ({
-            name: rule.name ?? path.basename(rule.path, '.md'), activation: rule.activation ?? null,
-            summary: rule.ruleSummary ?? '', show_command: `aiwg show ${rule.type} ${rule.name ?? path.basename(rule.path, '.md')}`,
-          })),
-          rule_stats: relationshipRuleStats(entries, r.entry, relations),
-        } : {}),
+        ...governingRuleFields(governing[resultIndex]),
         triggers: r.entry.triggers ?? [],
         capability: r.entry.capability ?? r.entry.summary,
         kernel: r.entry.kernel ?? false,
@@ -1428,6 +1433,8 @@ export async function discoverCapability(
             }
           : {}),
       })),
+      rule_stats: responseRuleStats,
+      ...(responseFields.required_rule_checks ? { required_rule_checks: responseFields.required_rule_checks, rule_check_obligation: RULE_CHECK_OBLIGATION } : {}),
       total: scored.length,
       query_time_ms: queryTimeMs,
       diagnostics: {
@@ -1451,6 +1458,7 @@ export async function discoverCapability(
 
   const relaxedNote = relaxed ? ' — relaxed match (verbose query)' : '';
   console.log(`Discovery results for "${params.phrase}" (${scored.length} matches, ${queryTimeMs}ms)${relaxedNote}:`);
+  console.log(statsText(responseRuleStats));
   console.log('');
   for (const diagnostic of facetActivations) {
     if (diagnostic.status === 'suppressed' && diagnostic.reason) {
@@ -1497,6 +1505,11 @@ export async function discoverCapability(
       `scope ${ranking.tie_breakers.scope}`,
     ].filter((part): part is string => Boolean(part));
     console.log(`   ranking: ${rankingParts.join('; ')}`);
+    if (governing[i].length) {
+      console.log(`   ${statsText(governingRuleStats(governing[i]))}`);
+      console.log(`   ${RULE_CHECK_OBLIGATION}`);
+      for (const { rule, applicability } of governing[i]) console.log(`   - ${rule.name ?? rule.path}: ${rule.ruleSummary ?? ''} (${applicability.join('; ')}) — \`${boundRuleDescriptor(rule).show_command}\``);
+    }
     if (r.entry.script) {
       console.log(`   run: ${buildRunHint(r.entry)}`);
     } else if (!includePaths) {
@@ -2071,7 +2084,7 @@ export function relationshipRules(entries: MetadataEntry[], target: MetadataEntr
   const asMetadata = (id: string): MetadataEntry => {
     const rule = relations.index.rules[id];
     return { path: rule.path, type: rule.type, name: rule.name, activation: rule.activation ?? undefined,
-      bound_to: rule.bound_to, ruleSummary: rule.summary, ruleEnforcement: rule.enforcement ?? undefined } as MetadataEntry;
+      bound_to: rule.bound_to, ruleSummary: rule.summary, ruleEnforcement: rule.enforcement ?? undefined, rulePaths: rule.paths, triggers: rule.triggers } as MetadataEntry;
   };
   const key = `${target.type}:${discoveryIdForEntry(target)}`;
   const shipped = Object.hasOwn(relations.index.targets, key)
@@ -2080,6 +2093,83 @@ export function relationshipRules(entries: MetadataEntry[], target: MetadataEntr
     : rulesBoundTo(Object.keys(relations.index.rules).map(asMetadata), target);
   const merged = new Map([...local, ...shipped].map(rule => [`${rule.type}:${rule.path}`, rule]));
   return [...merged.values()].sort((a, b) => (a.name ?? a.path).localeCompare(b.name ?? b.path) || a.path.localeCompare(b.path));
+}
+
+export interface GoverningRule { rule: MetadataEntry; applicability: string[] }
+export const RULE_CHECK_OBLIGATION = 'Before governed work, fetch and follow every required rule below; a discovery summary is not the full rule.';
+function relationMetadata(relations: RelationsReader): MetadataEntry[] {
+  return Object.values(relations.index.rules).map(rule => ({ path: rule.path, type: rule.type, name: rule.name,
+    activation: rule.activation ?? undefined, ruleSummary: rule.summary, ruleEnforcement: rule.enforcement ?? undefined,
+    bound_to: rule.bound_to, rulePaths: rule.paths, triggers: rule.triggers } as MetadataEntry));
+}
+/** Post-ranking enrichment: relationship lookup never loads the full metadata index. */
+export function compoundGoverningRules(entries: MetadataEntry[], target: MetadataEntry, relations?: RelationsReader,
+  phrase = '', includeMatches = true, excludeKernel = true): GoverningRule[] {
+  if (!['skill', 'agent', 'flow', 'command'].includes(target.type)) return [];
+  const found = new Map<string, GoverningRule>();
+  const add = (rule: MetadataEntry, why: string) => {
+    const activation = rule.activation ?? (rule.type === 'behavior' ? 'kernel' : inferRuleActivation(rule.ruleEnforcement));
+    if (excludeKernel && (activation === 'kernel' || rule.kernel || relations?.pinnedRuleIds.has(discoveryIdForEntry(rule)))) return;
+    const key = `${rule.type}:${rule.path}`, item = found.get(key) ?? { rule, applicability: [] };
+    if (!item.applicability.includes(why)) item.applicability.push(why);
+    found.set(key, item);
+  };
+  for (const rule of relationshipRules(entries, target, relations)) add(rule, `bound:${target.type}:${discoveryIdForEntry(target)}`);
+  if (relations && target.type === 'skill' && target.name?.startsWith('projected:')) {
+    for (const id of relations.rulesForTarget('skill', target.name)) {
+      const rule = relationMetadata(relations).find(rule => discoveryIdForEntry(rule) === id);
+      if (rule) add(rule, `projected-flow:${target.name.slice('projected:'.length)}`);
+    }
+  }
+  if (includeMatches) {
+    const query = phrase.toLowerCase();
+    const queryPaths = (phrase.replace(/\\/g, '/').match(/[\w@./*?-]+/g) ?? []).map(value => value.replace(/[.,;:!?]+$/, ''));
+    const corpus = relations ? relationMetadata(relations) : [];
+    const rules = new Map([...corpus, ...entries.filter(entry => ['rule', 'behavior'].includes(entry.type))]
+      .map(rule => [`${rule.type}:${rule.path}`, rule]));
+    for (const rule of rules.values()) {
+      for (const glob of rule.rulePaths ?? []) for (const candidate of [...queryPaths.filter(value => /[./*?]/.test(value) || value === glob), ...(target.governedPaths ?? [])]) {
+        if (minimatch(candidate, glob, { dot: true, nonegate: true, nocomment: true })
+          || ((target.governedPaths ?? []).includes(candidate) && minimatch(glob, candidate, { dot: true, nonegate: true, nocomment: true }))) add(rule, `path:${candidate}`);
+      }
+      for (const trigger of rule.triggers ?? []) {
+        const normalized = trigger.trim().toLowerCase();
+        let offset = normalized ? query.indexOf(normalized) : -1;
+        while (offset >= 0) {
+          if ((offset === 0 || !/\w/.test(query[offset - 1]))
+            && (offset + normalized.length === query.length || !/\w/.test(query[offset + normalized.length]))) {
+            add(rule, `trigger:${trigger}`); break;
+          }
+          offset = query.indexOf(normalized, offset + 1);
+        }
+      }
+    }
+  }
+  return [...found.values()].sort((a, b) => (a.rule.name ?? a.rule.path).localeCompare(b.rule.name ?? b.rule.path) || a.rule.path.localeCompare(b.rule.path));
+}
+function boundRuleDescriptor(rule: MetadataEntry) {
+  return { name: rule.name ?? path.basename(rule.path, '.md'), activation: rule.activation ?? null,
+    summary: rule.ruleSummary ?? '', show_command: `aiwg show ${rule.type} ${rule.name ?? path.basename(rule.path, '.md')}` };
+}
+/** Counts unique attached contracts; every emitted check is required irrespective of severity. */
+export function governingRuleStats(governing: GoverningRule[]): RuleStats {
+  const stats = emptyRuleStats();
+  for (const { rule } of new Map(governing.map(item => [`${item.rule.type}:${item.rule.path}`, item])).values()) {
+    const enforcement = rule.ruleEnforcement?.toLowerCase() ?? 'unknown', activation = rule.activation ?? 'unknown';
+    stats.by_enforcement[enforcement] = (stats.by_enforcement[enforcement] ?? 0) + 1;
+    stats.by_activation[activation] = (stats.by_activation[activation] ?? 0) + 1;
+    stats.required_checks++;
+  }
+  return stats;
+}
+export function governingRuleFields(governing: GoverningRule[]) {
+  if (!governing.length) return {};
+  return { bound_rules: governing.map(({ rule }) => boundRuleDescriptor(rule)), rule_stats: governingRuleStats(governing),
+    required_rule_checks: governing.map(({ rule, applicability }) => ({ rule_id: discoveryIdForEntry(rule),
+      applicability, fetch_command: `aiwg show ${rule.type} ${discoveryIdForEntry(rule)}` })), rule_check_obligation: RULE_CHECK_OBLIGATION };
+}
+function statsText(stats: RuleStats): string {
+  return `rules: ${Object.entries(stats.by_enforcement).map(([level, count]) => `${count} ${level}`).join(', ') || '0'} · activation: ${Object.entries(stats.by_activation).map(([mode, count]) => `${count} ${mode}`).join(', ') || 'none'} · ${stats.required_checks} required checks`;
 }
 
 export function relationshipRuleStats(entries: MetadataEntry[], target: MetadataEntry, relations: RelationsReader): RuleStats {
@@ -2103,12 +2193,10 @@ async function showBindings(
   read: (entry: MetadataEntry) => Promise<string>,
   relations?: RelationsReader,
 ): Promise<{ fields: Record<string, unknown>; text: string }> {
-  const rules = relationshipRules(entries, target, relations);
+  const governing = compoundGoverningRules(entries, target, relations, '', false, false);
+  const rules = governing.map(item => item.rule);
   const boundRules = await Promise.all(rules.map(async rule => ({
-    name: rule.name ?? path.basename(rule.path, '.md'),
-    activation: rule.activation ?? null,
-    summary: rule.ruleSummary ?? '',
-    show_command: `aiwg show ${rule.type} ${rule.name ?? path.basename(rule.path, '.md')}`,
+    ...boundRuleDescriptor(rule),
     ...(params.boundRuleBodies ? { content: await read(rule) } : {}),
   })));
   // Parse the selected rule for reverse lookup, including corpus-only rules.
@@ -2122,7 +2210,7 @@ async function showBindings(
       })) : {};
   let text = '';
   if (boundRules.length) {
-    text += '\n## Bound rules\n\n' + boundRules.map(rule =>
+    text += `\n## Bound rules\n\n${RULE_CHECK_OBLIGATION}\n\n${statsText(governingRuleStats(governing))}\n\n` + boundRules.map(rule =>
       `- **${rule.name}**: ${rule.summary} (\`${rule.show_command}\`)`
       + ('content' in rule ? `\n\n${rule.content}` : '')).join('\n') + '\n';
   }
@@ -2131,6 +2219,7 @@ async function showBindings(
       .map(([key, names]) => `- ${key}: ${(names as string[]).map(name => `\`${name}\``).join(', ')}`).join('\n') + '\n';
   }
   return { fields: {
+    ...governingRuleFields(governing),
     ...(boundRules.length ? { bound_rules: boundRules } : {}),
     ...(Object.keys(boundTo).length ? { bound_to: boundTo } : {}),
   }, text };

@@ -329,6 +329,34 @@ A proposed kernel rule must pass **all** of these review/fixture checks:
    exceed baseline with no probe below 80%. Failed admission retains the prior
    placement and blocks the move; word count or severity cannot waive it.
 
+#### Compound discovery admission addendum (#3292)
+
+Discovery now delivers the selected action's governing bound rules, matching
+project paths and declared triggers, with `required_rule_checks` and explicit
+fetch-and-follow-before-work obligations. These are delivery contracts, not
+claims of mechanical enforcement. The routing kernel requires agents to
+complete every such check before invoking a discovered or already loaded
+skill, agent, command, or flow, including subagent work. Kernel rules are not
+repeated in compound discovery results.
+
+This strengthens admission check 2: when discovery or the selected component's
+binding can reliably deliver a task-specific rule first, that route is the
+candidate placement. It does not prove the move safe. The universal safety
+core and routing rule remain admitted under all five checks above; severity
+and a byte target cannot demote a rule. This change moves or removes no safety
+rule. U5 positive/negative model evidence at n=5 and the real release comparison
+remain required before approving any new migration; offline fetch-order probes
+only verify the delivery/assertion mechanism.
+
+Response `rule_stats` counts unique attached rules and every emitted required
+check, including medium/low rules. Whole-response totals deduplicate rules
+shared by several ranked artifacts, merging their applicability reasons.
+This differs intentionally from the small relationship reader's existing
+`required_checks` severity inventory (CRITICAL/HIGH), which remains unchanged.
+A response checklist is an obligation for every governing rule, not a severity
+filter. Unbound result rows retain their previous fields; no empty
+`bound_rules` or check list is added.
+
 The five core candidates below satisfy the universal-guard rationale:
 authorization limits any action; comprehension constrains every directive;
 research-before-decision prevents unsupported decisions in any role;
@@ -444,6 +472,22 @@ injected blocks on six providers; U4 CLI/MCP JSON parity; U5 n=5 compliance at
 least baseline and ≥80%; U6 top-three natural-language rule discovery; U7 no
 irrelevant fetch in at least 4/5 negatives; U8 full-deploy steward/mission
 subagent dispatch headroom; U9 provider fixtures and Codex <32 KB.
+Re-derive U1 from retained contracts rather than inventing a smaller root set:
+let K be the complete retained kernel bodies (with the documented Hermes
+projection), I the required rule indexes/routing wrappers, P the native
+path-conditioned bodies counted by the measurement fixture, and B its behavior
+bytes. The emitted rule-byte total is K + I + P, and total policy footprint
+also reports B. The historical five-core Wave 4 fixture measured 9,706 B of
+kernel bodies, leaving 35,294 B within the 45,000 B target for the other retained
+contracts and delivery overhead. That fixture actually emitted 142,962 B
+(including legacy fallback/index/path content), a 97,962 B gap; it did not pass
+U1. Those numbers are historical evidence, not a current full-profile claim.
+Compound summaries move no rule bytes by themselves. Keep the 45,000 B target
+and provider hard caps as explicit unmet checks until the complete retained
+set is measured; do not raise the target or drop safety contracts to manufacture
+a pass. Future target changes require a reviewed component-level derivation
+and U5 evidence, not this offline implementation alone.
+
 The full-profile ~40–55 KB outcome remains a projection pending Wave 5 and
 behavior validation, not an achieved result of this documentation change.
 

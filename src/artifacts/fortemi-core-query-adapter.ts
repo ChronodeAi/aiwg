@@ -426,6 +426,7 @@ function entryFromRecord(record: AiwgFortemiRecord): MetadataEntry {
         ? indexedScript as MetadataEntry["script"]
         : undefined,
     ...extractRuleBindings(indexedFrontmatter),
+    ...(Array.isArray(indexedFrontmatter.aiwg_governed_paths) ? { governedPaths: indexedFrontmatter.aiwg_governed_paths.filter((value): value is string => typeof value === "string") } : {}),
     operationalState: record.operational_state,
   };
 }

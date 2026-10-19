@@ -115,8 +115,13 @@ describe('MCP flow tools with a controlled corpus', () => {
 
   it('flow-show returns CLI bound rules and forwards the full-body option', async () => {
     const bound_rules = [{ name: 'flow-policy', activation: 'bound', summary: 'Check gates.', show_command: 'aiwg show rule flow-policy', content: '# Policy' }];
-    fixture.cli.mockResolvedValueOnce({ code: 0, stdout: JSON.stringify({ bound_rules }), stderr: '' });
-    expect(decode(await invoke('flow-show', { name: 'alpha', bound_rule_bodies: true })).bound_rules).toEqual(bound_rules);
+    const required_rule_checks = [{ rule_id: 'flow-policy', applicability: ['bound:flow:alpha'], fetch_command: 'aiwg show rule flow-policy' }];
+    const rule_stats = { by_enforcement: { high: 1 }, by_activation: { bound: 1 }, required_checks: 1 };
+    fixture.cli.mockResolvedValueOnce({ code: 0, stdout: JSON.stringify({ bound_rules, required_rule_checks, rule_stats, rule_check_obligation: 'Fetch before work.' }), stderr: '' });
+    const body = decode(await invoke('flow-show', { name: 'alpha', bound_rule_bodies: true }));
+    expect(body.bound_rules).toEqual(bound_rules);
+    expect(body.required_rule_checks).toEqual(required_rule_checks); expect(body.rule_stats).toEqual(rule_stats);
+    expect(body.rule_check_obligation).toBe('Fetch before work.');
     expect(fixture.cli).toHaveBeenCalledWith(['show', 'flow', alphaPath, '--json', '--bound-rule-bodies']);
   });
 
