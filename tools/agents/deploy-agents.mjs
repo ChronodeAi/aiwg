@@ -939,8 +939,8 @@ async function promptCommandsMigration(cfg, provider, targetDir) {
 // Main Entry Point
 // ============================================================================
 
-export async function main() {
-  const cfg = parseArgs();
+export async function main(args = process.argv.slice(2), internal = {}) {
+  const cfg = parseArgs(args);
 
   // Resolve source directory (default to repo root relative to this script)
   const __filename = fileURLToPath(import.meta.url);
@@ -1066,31 +1066,41 @@ export async function main() {
     deployVersion: cfg.deployVersion || getDeployVersion(srcRoot),
     deploySource: cfg.deploySource || 'bundled',
   };
+  const { isRuleDeploymentPreparationActive } = await import('./providers/rule-delivery.mjs');
+  const preparationActive = isRuleDeploymentPreparationActive();
 
   // Commands → Skills migration: prompt then delete the commands directory
   // so stale command files don't create duplicates in the provider TUI.
-  if (!cfg.dryRun && !cfg.skipCommandsMigration) {
-    const doMigrate = await promptCommandsMigration(cfg, provider, cfg.target);
-    if (doMigrate) {
+  if (!preparationActive && !internal.finalizeOnly) {
+    if (!cfg.dryRun && !cfg.skipCommandsMigration) {
+      const doMigrate = await promptCommandsMigration(cfg, provider, cfg.target);
+      if (doMigrate) {
+        const commandsRelPath = provider.paths?.commands;
+        if (commandsRelPath) {
+          migrateCommandsDirectory(path.join(cfg.target, commandsRelPath), opts);
+        }
+      } else {
+        // User said no — flip the flag so the provider knows to emit the duplicate warning
+        opts.skipCommandsMigration = true;
+      }
+    } else if (cfg.skipCommandsMigration) {
+      // Flag was passed explicitly — emit the duplicate warning now via a dry migration call
       const commandsRelPath = provider.paths?.commands;
-      if (commandsRelPath) {
+      if (commandsRelPath && !provider.capabilities?.homeDirectoryDeploy) {
         migrateCommandsDirectory(path.join(cfg.target, commandsRelPath), opts);
       }
-    } else {
-      // User said no — flip the flag so the provider knows to emit the duplicate warning
-      opts.skipCommandsMigration = true;
-    }
-  } else if (cfg.skipCommandsMigration) {
-    // Flag was passed explicitly — emit the duplicate warning now via a dry migration call
-    const commandsRelPath = provider.paths?.commands;
-    if (commandsRelPath && !provider.capabilities?.homeDirectoryDeploy) {
-      migrateCommandsDirectory(path.join(cfg.target, commandsRelPath), opts);
     }
   }
 
+  // Concurrent deployment runs this parent-owned preflight before any child
+  // snapshots its inputs. Migration can remove a provider command tree, so it
+  // must remain on the same side of the transaction boundary as serial deploy.
+  if (internal.preflightOnly) return;
+
   // Delegate to provider
   try {
-    await provider.deploy(opts);
+    if (!internal.finalizeOnly) await provider.deploy(opts);
+    if (preparationActive) return;
 
     const mirroredCommandCount = mirrorSkillsAsCommands(provider, cfg.target, srcRoot, opts);
     if (mirroredCommandCount > 0 && !cfg.quiet) {
@@ -1116,6 +1126,7 @@ export async function main() {
 
     if (!cfg.quiet) console.log(`\n=== Deployment complete ===\n`);
   } catch (err) {
+    if (preparationActive || internal.finalizeOnly) throw err;
     console.error(`\nDeployment failed:`, err.message);
     if (cfg.dryRun) {
       console.error('(dry-run mode - no files were modified)');

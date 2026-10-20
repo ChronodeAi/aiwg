@@ -2,7 +2,19 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { prepareRuleDeployment, commitRuleDeploymentPlan, disposeRuleDeploymentPlan, createRuleDeploymentInputPool, disposeRuleDeploymentInputPool, deployWithRuleDelivery } from '../../../tools/agents/providers/rule-delivery.mjs';
+import {
+  prepareRuleDeployment,
+  commitRuleDeploymentPlan,
+  disposeRuleDeploymentPlan,
+  createRuleDeploymentInputPool,
+  describeRuleDeploymentInputPool,
+  importRuleDeploymentInputPool,
+  disposeRuleDeploymentInputPool,
+  detachRuleDeploymentPlan,
+  adoptRuleDeploymentPlan,
+  RuleDeploymentStaleError,
+  deployWithRuleDelivery,
+} from '../../../tools/agents/providers/rule-delivery.mjs';
 
 const roots = [];
 afterEach(() => roots.splice(0).forEach(root => fs.rmSync(root, { recursive: true, force: true })));
@@ -24,6 +36,93 @@ function fixture() {
 }
 
 describe('staged rule deployment plans', () => {
+  it('hands a child-prepared stage to its coordinator without child promotion', async () => {
+    const f = fixture();
+    const coordinatorPool = createRuleDeploymentInputPool(f.source);
+    const workerPool = importRuleDeploymentInputPool(describeRuleDeploymentInputPool(coordinatorPool));
+    const scratch = path.join(f.root, 'coordinator-stage');
+    fs.mkdirSync(scratch, { mode: 0o700 });
+    const childPlan = await prepareRuleDeployment({
+      ...f.opts,
+      inputPool: workerPool,
+      ruleDeploymentScratch: scratch,
+    }, f.provider, f.deploy);
+    const detached = detachRuleDeploymentPlan(childPlan);
+    expect(fs.readFileSync(path.join(f.target, 'AGENTS.md'), 'utf8')).toBe('original');
+
+    const adopted = adoptRuleDeploymentPlan(JSON.parse(JSON.stringify(detached)), {
+      scratch,
+      target: f.target,
+      inputPool: coordinatorPool,
+      cleanup: () => fs.rmSync(scratch, { recursive: true, force: true }),
+    });
+    expect(commitRuleDeploymentPlan(adopted)).toEqual(childPlan.report);
+    expect(fs.readFileSync(path.join(f.target, 'AGENTS.md'), 'utf8')).toBe('updated');
+    expect(fs.existsSync(scratch)).toBe(false);
+    disposeRuleDeploymentInputPool(workerPool);
+    disposeRuleDeploymentInputPool(coordinatorPool);
+  });
+
+  it('rejects a transferred plan outside its coordinator-owned scratch', async () => {
+    const f = fixture();
+    const scratch = path.join(f.root, 'coordinator-stage');
+    fs.mkdirSync(scratch, { mode: 0o700 });
+    const plan = await prepareRuleDeployment({ ...f.opts, ruleDeploymentScratch: scratch }, f.provider, f.deploy);
+    const detached = detachRuleDeploymentPlan(plan);
+    detached.stage = f.source;
+    expect(() => adoptRuleDeploymentPlan(detached, {
+      scratch,
+      target: f.target,
+      cleanup: () => fs.rmSync(scratch, { recursive: true, force: true }),
+    })).toThrow(/transferred rule deployment plan/i);
+    expect(fs.readFileSync(path.join(f.source, 'asset.md'), 'utf8')).toBe('source');
+  });
+
+  it.each([
+    ['workspace directory traversal', plan => { plan.workspaceDirs.push('../escape'); }],
+    ['missing anchor coverage', plan => { plan.anchors.pop(); }],
+    ['source mapping outside frozen inputs', plan => { plan.sourceMappings[0].to = os.tmpdir(); }],
+    ['mapping membership traversal', plan => { plan.mappings[0].before.push(['../escape', '0'.repeat(64)]); }],
+    ['unsealed staged output', plan => { plan.staged.pop(); }],
+  ])('rejects transferred plan %s', async (_label, mutate) => {
+    const f = fixture();
+    const scratch = path.join(f.root, 'coordinator-stage');
+    fs.mkdirSync(scratch, { mode: 0o700 });
+    const detached = detachRuleDeploymentPlan(await prepareRuleDeployment({ ...f.opts, ruleDeploymentScratch: scratch }, f.provider, f.deploy));
+    mutate(detached);
+    expect(() => adoptRuleDeploymentPlan(detached, {
+      scratch,
+      target: f.target,
+      cleanup: () => fs.rmSync(scratch, { recursive: true, force: true }),
+    })).toThrow(/transferred rule deployment plan/i);
+  });
+
+  it('accepts a valid transferred plan with a symlink-shaped preimage', async () => {
+    const f = fixture();
+    const backing = path.join(f.root, 'operator-owned');
+    fs.writeFileSync(backing, 'original');
+    fs.unlinkSync(path.join(f.target, '.cursor', 'existing'));
+    fs.symlinkSync(backing, path.join(f.target, '.cursor', 'existing'));
+    const scratch = path.join(f.root, 'coordinator-stage');
+    fs.mkdirSync(scratch, { mode: 0o700 });
+    const detached = detachRuleDeploymentPlan(await prepareRuleDeployment({ ...f.opts, ruleDeploymentScratch: scratch }, f.provider, f.deploy));
+    const adopted = adoptRuleDeploymentPlan(JSON.parse(JSON.stringify(detached)), {
+      scratch,
+      target: f.target,
+      cleanup: () => fs.rmSync(scratch, { recursive: true, force: true }),
+    });
+    disposeRuleDeploymentPlan(adopted);
+    expect(fs.existsSync(scratch)).toBe(false);
+  });
+
+  it('classifies target and ancestor drift as retryable stale deployment input', async () => {
+    const f = fixture();
+    const plan = await prepareRuleDeployment(f.opts, f.provider, f.deploy);
+    fs.writeFileSync(path.join(f.target, 'AGENTS.md'), 'operator edit');
+    expect(() => commitRuleDeploymentPlan(plan)).toThrowError(RuleDeploymentStaleError);
+    expect(fs.readFileSync(path.join(f.target, 'AGENTS.md'), 'utf8')).toBe('operator edit');
+  });
+
   it('shares a leased immutable source snapshot across provider plans', async () => {
     const f = fixture(); const pool = createRuleDeploymentInputPool(f.source);
     const first = await prepareRuleDeployment({ ...f.opts, inputPool: pool }, f.provider, f.deploy);
@@ -242,11 +341,20 @@ describe('staged rule deployment plans', () => {
     const rule = path.join(f.source, 'bound.md');
     fs.writeFileSync(rule, '---\nname: bound\nactivation: bound\nsummary: test\nbound_to:\n  agents: [project-agent]\n---\nRULE\n');
     f.opts.ruleSources = [rule]; delete f.opts.bindingEntries;
-    const plan = await prepareRuleDeployment(f.opts, f.provider, async ({ target, ruleDelivery }) => {
+    const coordinatorPool = createRuleDeploymentInputPool(f.source);
+    const workerPool = importRuleDeploymentInputPool(describeRuleDeploymentInputPool(coordinatorPool));
+    const scratch = path.join(f.root, 'coordinator-stage'); fs.mkdirSync(scratch, { mode: 0o700 });
+    const childPlan = await prepareRuleDeployment({ ...f.opts, inputPool: workerPool, ruleDeploymentScratch: scratch }, f.provider, async ({ target, ruleDelivery }) => {
       const selected = ruleDelivery.targets.find(item => item.name === 'project-agent');
       fs.writeFileSync(path.join(target, 'AGENTS.md'), fs.readFileSync(selected.source));
     });
+    const plan = adoptRuleDeploymentPlan(JSON.parse(JSON.stringify(detachRuleDeploymentPlan(childPlan))), {
+      scratch, target: f.target, inputPool: coordinatorPool,
+      cleanup: () => fs.rmSync(scratch, { recursive: true, force: true }),
+    });
     commitRuleDeploymentPlan(plan);
+    disposeRuleDeploymentInputPool(workerPool);
+    disposeRuleDeploymentInputPool(coordinatorPool);
     expect(fs.readFileSync(path.join(f.target, 'AGENTS.md'), 'utf8')).toBe('project content');
     expect(fs.lstatSync(path.join(artifacts, 'unrelated')).isSymbolicLink()).toBe(true);
     expect(fs.lstatSync(path.join(f.target, '.aiwg', 'unrelated')).isSymbolicLink()).toBe(true);

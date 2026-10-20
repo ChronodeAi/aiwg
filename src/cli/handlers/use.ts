@@ -15,12 +15,13 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { pathToFileURL } from 'node:url';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { canDeploySkill, sameSkillOwner, extractFrameworkSlug } from '../../providers/skill-ownership.mjs';
 import { resolveOmpPaths } from '../../providers/omp-paths.mjs';
 import YAML from 'yaml';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { createScriptRunner } from './script-runner.js';
+import { finalizePreparedProvider, prepareProviderDeployments } from '../services/provider-prepare-coordinator.js';
 import { getFrameworkRoot, getVersionInfo } from '../../channel/manager.mjs';
 import { getRegistry } from '../../extensions/registry.js';
 import { registerDeployedExtensions } from '../../extensions/deployment-registration.js';
@@ -90,6 +91,9 @@ let projectIsolationChecked = false;
 // collecting child-process output. The CLI is single-command-per-process;
 // recursive provider expansion shares this guard intentionally.
 let machineReadableUseDepth = 0;
+// Providers whose complete project projection is covered by the transferable
+// rule-delivery transaction. Other built-ins retain their serial deploy path.
+const PREPARABLE_BUILTIN_PROVIDERS = new Set(['claude', 'codex', 'cursor', 'hermes', 'pi', 'warp']);
 // Context-pipeline: emits WORKSPACE.md + AIWG.md + provider adapters last.
 // for non-Claude providers per ADR-1 (.aiwg/architecture/adr-agents-md-aggregation.md).
 // Distinct from agentsmith (which creates subagent personas).
@@ -2694,6 +2698,7 @@ export class UseHandler implements CommandHandler {
   category = 'framework' as const;
   aliases: string[] = [];
   private orchestrationDepth = 0;
+  private preparedProviderContinuations = new Set<string>();
 
   async help(): Promise<HandlerResult> {
     return { exitCode: 0, message: USE_HELP, rawOutput: true };
@@ -3719,6 +3724,16 @@ export class UseHandler implements CommandHandler {
     const force = remainingArgs.includes('--force');
     const skipConflicts = remainingArgs.includes('--skip-conflicts');
     const explicitHarnessAgentSelectors = parseOpenHumanHarnessAgentSelector(remainingArgs);
+    const preparedFlag = '--aiwg-provider-main-prepared';
+    const preparedFlagIndex = remainingArgs.indexOf(preparedFlag);
+    const preparedCapability = preparedFlagIndex >= 0 ? remainingArgs[preparedFlagIndex + 1] : undefined;
+    let mainProviderPrepared = false;
+    if (preparedFlagIndex >= 0) {
+      if (!preparedCapability || !this.preparedProviderContinuations.delete(preparedCapability)) {
+        return { exitCode: 1, message: 'Invalid prepared-provider continuation capability.' };
+      }
+      mainProviderPrepared = true;
+    }
 
     // PUW-027 (#1128): --scope user|project per ADR-4. Default project.
     // #1156 Phase 1: --user is a shorthand for --scope user.
@@ -3744,7 +3759,7 @@ export class UseHandler implements CommandHandler {
       }
     }
     if (scope === 'user' && !deployArgs.includes('--scope')) deployArgs.push('--scope', 'user');
-    const filteredArgs = deployArgs.filter(
+    const filteredArgs = removeFlagWithOptionalValue(deployArgs, preparedFlag).filter(
       a => a !== '--no-utils' && a !== '--no-project-local' && a !== '--ci-hooks-enabled' && a !== '--skip-conflicts' && a !== '--no-harness-agents'
     );
     const deployFilteredArgs = removeFlagWithOptionalValue(filteredArgs, '--harness-agents');
@@ -3772,8 +3787,58 @@ export class UseHandler implements CommandHandler {
       }
     }
 
-    // Multi-provider: loop over providers, deploying to each in sequence
+    const targetIdx = remainingArgs.findIndex(a => a === '--target');
+    const target = targetIdx >= 0 && remainingArgs[targetIdx + 1] ? remainingArgs[targetIdx + 1] : process.cwd();
+
+    // Multi-provider: prepare built-in project-scope projections in at most two
+    // subprocesses, then preserve the existing provider/addon commit order.
+    // User-scope, dry-run, harness-special and project-local adapters retain the
+    // established serial path because their lifecycle is not stage-only.
     if (providers.length > 1) {
+      const preparedJobs: Array<{ order: number; provider: string; target: string; args: string[] }> = [];
+      let canPrepareConcurrently = !dryRun && scope === 'project' && explicitHarnessAgentSelectors.length === 0;
+      for (const [order, requested] of providers.entries()) {
+        const local = await resolveProjectLocalProviderAdapter(projectDir, requested);
+        if (local.requestedProvider) { canPrepareConcurrently = false; break; }
+        const unsupported = unsupportedProviderMessage(requested);
+        if (unsupported) return { exitCode: 1, message: unsupported };
+        const resolved = resolveBuiltInProviderForUse(local.provider);
+        if (!PREPARABLE_BUILTIN_PROVIDERS.has(resolved.provider)) { canPrepareConcurrently = false; break; }
+        const args = withProviderOverride([...deployFilteredArgs], resolved.provider);
+        if (framework === 'all' && !['pi', 'omp'].includes(resolved.provider)
+          && !remainingArgs.includes('--copy-all') && !remainingArgs.includes('--copy-standard-skills')) args.push('--kernel-only');
+        preparedJobs.push({ order, provider: resolved.provider, target: path.resolve(target), args });
+      }
+      if (canPrepareConcurrently && preparedJobs.length === providers.length) {
+        if (!skipConflicts) {
+          for (const job of preparedJobs) {
+            const canDeploy = await runPreDeployCollisionCheck({
+              frameworkRoot, framework, target, provider: job.provider, force, skipConflicts, verbose,
+            });
+            if (!canDeploy) return { exitCode: 1, message: 'Deployment blocked due to name collisions. See above for details.' };
+          }
+        }
+        let session: Awaited<ReturnType<typeof prepareProviderDeployments>> | undefined;
+        try {
+          session = await prepareProviderDeployments(frameworkRoot, preparedJobs);
+          for (const [order, requested] of providers.entries()) {
+            await session.commit(order);
+            const capability = randomUUID();
+            this.preparedProviderContinuations.add(capability);
+            try {
+              const result = await this.execute({ ...ctx, args: [framework, '--provider', requested, preparedFlag, capability, ...remainingArgs] });
+              if (result.exitCode !== 0) return result;
+            } finally {
+              this.preparedProviderContinuations.delete(capability);
+            }
+          }
+          return { exitCode: 0 };
+        } catch (error) {
+          return { exitCode: 1, message: `Concurrent provider preparation failed: ${error instanceof Error ? error.message : String(error)}` };
+        } finally {
+          await session?.dispose();
+        }
+      }
       for (const p of providers) {
         const result = await this.execute({ ...ctx, args: [framework, '--provider', p, ...remainingArgs] });
         if (result.exitCode !== 0) return result;
@@ -3804,9 +3869,6 @@ export class UseHandler implements CommandHandler {
       && !remainingArgs.includes('--copy-all')
       && !remainingArgs.includes('--copy-standard-skills');
     if (bulkKernelOnly) providerDeployArgs.push('--kernel-only');
-    const targetIdx = remainingArgs.findIndex(a => a === '--target');
-    const target = targetIdx >= 0 && remainingArgs[targetIdx + 1] ? remainingArgs[targetIdx + 1] : process.cwd();
-
     if ((verbose || dryRun) && projectLocalProviderResolution.requestedProvider) {
       ui.dim(`  project-local provider '${projectLocalProviderResolution.requestedProvider}' extends '${provider}'`);
     } else if ((verbose || dryRun) && builtInProviderResolution.requestedProvider) {
@@ -3899,7 +3961,17 @@ export class UseHandler implements CommandHandler {
       ui.blank();
     }
     const runner = createScriptRunner(ctx.frameworkRoot);
-    const mainResult = await runner.run('tools/agents/deploy-agents.mjs', providerDeployArgs, captureOpts);
+    let mainResult: HandlerResult;
+    if (mainProviderPrepared) {
+      try {
+        await finalizePreparedProvider(frameworkRoot, providerDeployArgs);
+        mainResult = { exitCode: 0 };
+      } catch (error) {
+        mainResult = { exitCode: 1, message: `Prepared provider finalization failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    } else {
+      mainResult = await runner.run('tools/agents/deploy-agents.mjs', providerDeployArgs, captureOpts);
+    }
 
     if (mainResult.exitCode !== 0) {
       return mainResult;
