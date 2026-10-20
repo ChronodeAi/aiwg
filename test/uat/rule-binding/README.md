@@ -215,6 +215,11 @@ JSON response binds the same canonical ID, type, name, and nonempty content.
 Plaintext names do not provide that identity binding. Earlier raw results remain
 unchanged; this support applies to prospective evaluations.
 
+The v2 governed preview accepts either a no-legacy result or a completed,
+validated legacy dry run. The command must succeed and fixture integrity must
+remain unchanged. Earlier raw diagnostics are retained as recorded; this
+prospective validation change does not regrade them.
+
 ### Codex semantic qualification lane
 
 `codex-semantic-qualification-probes.yaml` combines the two capabilities shared

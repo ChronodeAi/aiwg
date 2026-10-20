@@ -11,8 +11,25 @@ const show = cmd('show', 'aiwg show skill migrate-workspace', 'skill body');
 const fetch = cmd('fetch', 'aiwg show rule aiwg:rule:abc', 'rule body');
 const action = cmd('action', '/bin/bash -lc \'aiwg migrate-workspace --dry-run\'', 'No legacy workspace detected. No migration needed.');
 const evaluate = events => evaluateCompoundTrace(parseTrace([...events, { type: 'turn.completed' }].map(JSON.stringify).join('\n'), 'codex'), 'aiwg\\s+show\\s+skill', { type: 'skill', names: ['migrate-workspace'], rule: 'cli-secondary' }, identities, true);
+const evaluateV2 = events => evaluateCompoundTrace(parseTrace([...events, { type: 'turn.completed' }].map(JSON.stringify).join('\n'), 'codex'), 'aiwg\\s+show\\s+skill', { type: 'skill', names: ['migrate-workspace'], rule: 'cli-secondary' }, identities, 'migration-preview-v2');
 
 describe('governed migration preview', () => {
+  it('accepts a complete successful legacy dry run only for the v2 contract', () => {
+    const output = 'Found legacy workspace at /project/.aiwg\n✓ Migration validation passed\nMode: Dry-run (no changes)\n✓ Dry-run complete (no changes made)\n✓ Migration complete (0.0s)\nNo errors encountered.';
+    const run = (body, exit = 0) => [...discovery, ...show, ...fetch, ...cmd('preview', 'aiwg migrate-workspace --dry-run', body, exit)];
+    expect(evaluateV2(run(output))).toMatchObject({ status: 'checked', pass: true });
+    expect(evaluateV2([...discovery, ...show, ...fetch, ...action])).toMatchObject({ status: 'checked', pass: true });
+    expect(evaluate(run(output))).toMatchObject({ status: 'invalid', pass: false });
+    expect(evaluateV2(run(output, 1))).toMatchObject({ status: 'invalid', pass: false });
+    for (const broken of [output.replace('Migration validation passed', 'validation failed'),
+      output.replace('Dry-run complete (no changes made)', 'starting dry run'),
+      output.replace('Mode: Dry-run (no changes)', 'Mode: Live migration'),
+      output.replace('No errors encountered.', 'errors encountered'),
+      `${output}\nProceed with migration?`, `${output}\nMigration cancelled by user.`,
+      `${output}\nMigration completed with errors`]) {
+      expect(evaluateV2(run(broken))).toMatchObject({ status: 'invalid', pass: false });
+    }
+  });
   it('uses a validated separate catalog with a neutral prompt', () => {
     const rule = loadProbes(path.join(ROOT, 'test/uat/rule-binding/governed-migration-probes.yaml')).rules.find(r => r.id === 'cli-secondary');
     const probe = rule.probes.find(p => p.id === 'governed-migration-preview-v2');
