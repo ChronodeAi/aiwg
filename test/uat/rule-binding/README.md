@@ -109,8 +109,8 @@ The output must be outside that project so previous answers cannot enter a
 later sample's context.
 
 ```bash
-node tools/rules/run-rule-probes.mjs --project /tmp/deployed-fixture --provider claude --model haiku --n 5 --output /tmp/compliance-baseline.json
-node tools/rules/run-rule-probes.mjs --project /tmp/deployed-wave-fixture --provider claude --model haiku --n 5 --baseline /tmp/compliance-baseline.json --output /tmp/wave-compliance.json
+node tools/rules/run-rule-probes.mjs --project /tmp/deployed-fixture --aiwg-root /tmp/baseline/installation/node_modules/aiwg --provider codex --model gpt-5.6-luna --effort medium --codex-auth-target /private/codex/auth.json --codex-skills-reference /private/codex-system-skills --print-identity > /tmp/baseline-identity.json
+node tools/rules/run-rule-probes.mjs --project /tmp/deployed-wave-fixture --aiwg-root /tmp/rc/installation/node_modules/aiwg --provider codex --model gpt-5.6-luna --effort medium --codex-auth-target /private/codex/auth.json --codex-skills-reference /private/codex-system-skills --require-compound-checks --print-identity > /tmp/rc-identity.json
 ```
 
 The runner uses `claude -p` JSONL or `codex exec --json`, starts a new session
@@ -118,7 +118,21 @@ and fresh project copy for every sample, and checkpoints raw stdout/stderr,
 exit codes, assertion results, and fetch evidence after every call. Existing
 provider authentication remains available through the conductor's environment;
 project copies omit `.git`, dependencies, build output, and symlinks. Discovery
-uses this checkout's `AIWG_ROOT`. CLI calls are bounded. No automatic retries
+uses an identity-verified copy of the selected locked npm installation inside each sample root and a
+per-sample PATH shim. The installation identity binds the AIWG package, its hoisted dependency
+graph, and `package-lock.json`; `--aiwg-root` must name `installation/node_modules/aiwg`. HOME, XDG
+and temporary locations are isolated. The shared Codex transport uses a separately supplied existing
+account directory, restricts the model's filesystem access to that account and excludes credentials
+from its shell environment. No credentials are copied. Live calls require `--identity-file`,
+`--account-home` and `--codex-executable` with absolute paths. Pass `--codex-auth-target` when the
+private account uses an `auth.json` symlink and `--codex-skills-reference` when it contains
+qualified intrinsic skills; these explicit runtime-only paths are not added to the model shell
+environment. A candidate comparison also requires `--baseline` and `--baseline-identity-file`.
+Review the generated identities before supplying them. The runner validates them against the actual
+installation, fixture and configuration; it recomputes baseline rates from raw traces. The baseline
+and candidate must use the same `--require-compound-checks` setting. Each raw run records its
+controlled shim, package CLI and Node paths so replay accepts only that sample’s commands; foreign
+absolute commands are not evidence. CLI calls are bounded. No automatic retries
 hide failures. Defaults are Haiku for Claude and `gpt-5.6-luna` for Codex;
 `--model` overrides either. `--n` below five is exploratory and cannot pass gates.
 
@@ -141,11 +155,22 @@ remain failed samples in the denominator.
 U5 requires every positive probe at least 80% compliant and each rule's pooled
 positive compliance at least its baseline. U7 requires each negative probe to
 avoid rule retrieval in at least 4/5 runs (and answer correctly). Baselines must
-match the provider, model, and probe digest, with at least five prior samples
+match the provider, model, effort, and probe digest, with at least five prior samples
 for every selected probe. `--rule NAME` can select moved rules for a wave.
 Incomplete runs cannot pass. The exit code is nonzero on a failed gate. No
 compliance baseline is fabricated or committed by Phase 0; the conductor saves
 and reviews the resulting report.
+
+The `compound-discovery-probes.yaml` overlay adds read-only capability inspection
+cases for three previously bound rules. Each observes the JSON discovery result,
+the selected skill or agent show operation, and every successful rule fetch before
+that operation. For a legacy or unbound result without a checklist, the report
+records `legacy-or-unbound` rather than inventing a fetch requirement. Use
+`--require-compound-checks` for the RC to make such a result fail the sample;
+the baseline may lack that feature. A malformed trace, missing action, unmatched
+discovery row, failed fetch, or uncertain ordering fails. These observations do
+not establish that an actual workflow was executed or that all bound rules were
+covered. Compare reports only with identical provider, model, effort, and probe digest.
 
 ## Offline tests
 

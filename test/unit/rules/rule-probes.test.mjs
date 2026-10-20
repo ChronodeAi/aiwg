@@ -4,14 +4,40 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import yaml from 'js-yaml';
 import Ajv from 'ajv/dist/2020.js';
+import { spawnSync } from 'node:child_process';
 import { boundedExecFileSync } from '../../../src/process/bounded-child-process.mjs';
 import { ROOT } from '../../../tools/rules/measure-startup-context.mjs';
 import { REQUIRED_RULES, loadProbes, buildPlan, parseTrace, ruleFetches, evaluateAssertions,
-  summarizeRuns, executePlan, validateBaseline } from '../../../tools/rules/run-rule-probes.mjs';
+  summarizeRuns, executePlan as executePlanImpl, armIdentity, treeIdentity, validateBaseline, evaluateCompoundTrace, parseAIWGCommand } from '../../../tools/rules/run-rule-probes.mjs';
 
 const temps = [];
 afterEach(() => { for (const temp of temps.splice(0)) fs.rmSync(temp, { recursive: true, force: true }); });
 function tempDir() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-probe-unit-')); temps.push(dir); return dir; }
+function installedPackage(cli = '', { dependency } = {}) {
+  const installation = tempDir(), root = path.join(installation, 'node_modules/aiwg');
+  fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+  const packageManifest = { name: 'aiwg', version: '1.0.0', ...(dependency ? { dependencies: { 'probe-dep': '1.0.0' } } : {}) };
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify(packageManifest));
+  fs.writeFileSync(path.join(root, 'bin/aiwg.mjs'), cli);
+  fs.writeFileSync(path.join(installation, 'package.json'), JSON.stringify({ private: true, dependencies: { aiwg: '1.0.0' } }));
+  const packages = { '': { dependencies: { aiwg: '1.0.0' } }, 'node_modules/aiwg': { version: '1.0.0' } };
+  if (dependency) {
+    const dep = path.join(installation, 'node_modules/probe-dep'); fs.mkdirSync(dep);
+    fs.writeFileSync(path.join(dep, 'package.json'), JSON.stringify({ name: 'probe-dep', version: '1.0.0', type: 'module', exports: './index.js' }));
+    fs.writeFileSync(path.join(dep, 'index.js'), `export default ${JSON.stringify(dependency)};\n`);
+    packages['node_modules/probe-dep'] = { version: '1.0.0' };
+    packages['node_modules/aiwg'].dependencies = { 'probe-dep': '1.0.0' };
+  }
+  fs.writeFileSync(path.join(installation, 'package-lock.json'), JSON.stringify({ name: 'probe-installation', lockfileVersion: 3, packages }));
+  return root;
+}
+function executePlan(plan, options) {
+  if (options.packageRoot === ROOT) {
+    options = { ...options, packageRoot: installedPackage() };
+  }
+  return executePlanImpl(plan, { ...options, expectedIdentity: armIdentity(plan, plan.project, options.packageRoot,
+    { requireCompoundChecks: options.requireCompoundChecks, authTarget: options.authTarget, skillsReference: options.skillsReference }) });
+}
 function mutatedProbes(mutate) {
   const data = loadProbes(); mutate(data);
   const file = path.join(tempDir(), 'probes.yaml'); fs.writeFileSync(file, yaml.dump(data)); return file;
@@ -170,6 +196,231 @@ describe('rule probe schema and call planning', () => {
 });
 
 describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
+  it('checks observed discovery obligations against completed fetches before the read-only action', () => {
+    const checks = [{ rule_id: 'aiwg:rule:abc', fetch_command: 'aiwg show rule aiwg:rule:abc' }];
+    const tool = (input, output, start, end, success = true) => ({ name: 'shell', input, output, start_event: start, completed_event: end, success });
+    const discovery = tool('aiwg discover fleet --json', JSON.stringify({ results: [{ id: 'aiwg:agent:xyz', type: 'agent', name: 'fleet-quiet-bot', required_rule_checks: checks, bound_rules: [{ name: 'quiet-mode' }] }] }), 0, 1);
+    const fetch = tool('aiwg show rule aiwg:rule:abc', 'full rule body', 2, 3);
+    const action = tool('aiwg show agent aiwg:agent:xyz', 'agent body', 4, 5);
+    const evaluate = tools => evaluateCompoundTrace({ tools, events: [{ type: 'turn.completed' }] }, 'aiwg\\s+show\\s+agent');
+    expect(evaluate([discovery, fetch, action])).toMatchObject({ status: 'checked', pass: true });
+    expect(evaluate([discovery, { ...fetch, success: false }, action]).pass).toBe(false);
+    expect(evaluate([discovery, { ...fetch, completed_event: 6 }, action]).pass).toBe(false);
+    expect(evaluate([discovery, fetch, { ...action, start_event: undefined }]).pass).toBe(false);
+    expect(evaluate([{ ...discovery, success: false }, fetch, action]).pass).toBe(false);
+    expect(evaluate([{ ...discovery, output: JSON.stringify({ results: [{ id: 'aiwg:agent:xyz', type: 'agent', name: 'fleet-quiet-bot' }] }) }, action])).toMatchObject({ status: 'legacy-or-unbound', pass: true });
+    expect(evaluate([{ ...discovery, output: JSON.stringify({ results: [{ id: 'aiwg:agent:xyz', type: 'agent', name: 'fleet-quiet-bot', required_rule_checks: [] }] }) }, action]).pass).toBe(false);
+    const wrongType = { ...discovery, output: JSON.stringify({ results: [{ id: 'aiwg:skill:xyz', type: 'skill', name: 'fleet-quiet-bot', required_rule_checks: checks }] }) };
+    expect(evaluate([wrongType, fetch, { ...action, input: 'aiwg show agent fleet-quiet-bot' }]).pass).toBe(false);
+    const decoy = { ...discovery, start_event: 2, completed_event: 3, output: JSON.stringify({ results: [{ id: 'aiwg:agent:xyz', type: 'agent', name: 'fleet-quiet-bot', required_rule_checks: [{ rule_id: 'aiwg:rule:other', fetch_command: 'aiwg show rule aiwg:rule:other' }] }] }) };
+    expect(evaluate([discovery, decoy, fetch, action]).pass).toBe(false);
+    expect(evaluate([discovery, fetch, { ...action, input: 'aiwg show agent aiwg:agent:xyz >/dev/null', output: '' }]).pass).toBe(false);
+    expect(evaluate([{ ...discovery, input: 'aiwg discover fleet --json & true' }, fetch, action]).pass).toBe(false);
+    expect(evaluate([discovery, { ...fetch, input: 'aiwg show rule aiwg:rule:abc & true' }, action]).pass).toBe(false);
+    const foreignDiscovery = { ...discovery, input: 'node /baseline/node_modules/aiwg/bin/aiwg.mjs discover fleet --json' };
+    const foreignFetch = { ...fetch, input: '/baseline/node_modules/.bin/aiwg show rule aiwg:rule:abc' };
+    const foreignAction = { ...action, input: '/baseline/node_modules/.bin/aiwg show agent aiwg:agent:xyz' };
+    expect(evaluate([foreignDiscovery, fetch, action]).pass).toBe(false);
+    expect(evaluate([discovery, foreignFetch, action]).pass).toBe(false);
+    expect(evaluate([discovery, fetch, foreignAction]).pass).toBe(false);
+    const sample = path.join(os.tmpdir(), 'aiwg-rule-probe-Ab1234');
+    const ids = { shim: path.join(sample, 'bin/aiwg'), cli: path.join(sample, 'installation/node_modules/aiwg/bin/aiwg.mjs'), node: process.execPath };
+    const trusted = [
+      { ...discovery, input: `${ids.node} ${ids.cli} discover fleet --json` },
+      { ...fetch, input: `${ids.shim} show rule aiwg:rule:abc` },
+      { ...action, input: `${ids.cli} show agent aiwg:agent:xyz` },
+    ];
+    const trace = { tools: trusted, events: [{ type: 'turn.completed' }] };
+    expect(evaluateCompoundTrace(trace, 'aiwg\\s+show\\s+agent', {}, ids)).toMatchObject({ status: 'checked', pass: true });
+    expect(evaluateCompoundTrace(trace, 'aiwg\\s+show\\s+agent').pass).toBe(false);
+    expect(evaluateCompoundTrace({ ...trace, tools: [trusted[0], { ...trusted[1], input: '/foreign/aiwg show rule aiwg:rule:abc' }, trusted[2]] }, 'aiwg\\s+show\\s+agent', {}, ids).pass).toBe(false);
+    expect(evaluateCompoundTrace({ ...trace, tools: [trusted[0], { ...trusted[1], completed_event: 6 }, trusted[2]] }, 'aiwg\\s+show\\s+agent', {}, ids).pass).toBe(false);
+
+  });
+
+  it('decodes only single-command Codex POSIX wrappers and retains selected CLI binding', () => {
+    const root = path.join(os.tmpdir(), 'aiwg-rule-probe-Ab1234');
+    const identities = { shim: path.join(root, 'bin/aiwg'), cli: path.join(root, 'installation/node_modules/aiwg/bin/aiwg.mjs'), node: process.execPath };
+    expect(parseAIWGCommand(`/bin/bash -lc 'aiwg discover "prepare an intake" --json'`, identities)).toEqual({ kind: 'discover' });
+    expect(parseAIWGCommand(`/bin/bash -lc 'aiwg discover "prepare an intake" --format json --type skill,agent --limit 5'`, identities)).toEqual({ kind: 'discover' });
+    expect(parseAIWGCommand(`/bin/sh -c 'aiwg discover --type agent --format json --limit 100 "fleet bot"'`, identities)).toEqual({ kind: 'discover' });
+    expect(parseAIWGCommand(`/bin/sh -c '${identities.node} ${identities.cli} show rule aiwg:rule:abc'`, identities)).toEqual({ kind: 'show', type: 'rule', id: 'aiwg:rule:abc' });
+    expect(parseAIWGCommand(`/bin/bash -c '${identities.shim} show agent aiwg:agent:xyz'`, identities)).toEqual({ kind: 'show', type: 'agent', id: 'aiwg:agent:xyz' });
+    const rejected = [
+      `/bin/bash -lc 'command -v aiwg; aiwg discover "prepare an intake"'`,
+      `/bin/bash -lc 'aiwg discover "prepare an intake" --format json && aiwg show skill aiwg:skill:48ef18e71a7a20a4'`,
+      `/bin/bash -lc 'aiwg show rule skill-discovery && aiwg show skill aiwg-utils-quickref'`,
+      `/bin/bash -lc 'aiwg discover fleet --format text'`,
+      `/bin/bash -lc 'aiwg discover fleet --format=json'`,
+      `/bin/bash -lc 'aiwg discover fleet --json --type unknown'`,
+      `/bin/bash -lc 'aiwg discover fleet --json --limit 0'`,
+      `/bin/bash -lc 'aiwg discover fleet --json --limit 101'`,
+      `/bin/bash -lc 'aiwg discover fleet --json --backend local'`,
+      `/bin/bash -lc 'aiwg discover fleet --json --limit 5 --limit 3'`,
+      `/bin/bash -lc 'aiwg show rule quiet-mode; touch /tmp/side-effect'`,
+      `/bin/bash -lc 'aiwg show rule quiet-mode > /tmp/output'`,
+      `/bin/bash -lc 'aiwg show rule $(touch /tmp/side-effect)'`,
+      `/bin/bash -lc 'AIWG_ROOT=/foreign aiwg show rule quiet-mode'`,
+      `/bin/bash -lc '/foreign/aiwg show rule quiet-mode'`,
+      `/bin/bash -lc 'node /foreign/aiwg.mjs show rule quiet-mode'`,
+      `/usr/bin/bash -lc 'aiwg show rule quiet-mode'`,
+      `/bin/bash -lc 'aiwg show rule quiet-mode' extra`,
+    ];
+    for (const command of rejected) expect(parseAIWGCommand(command, identities), command).toBeNull();
+    expect(parseAIWGCommand(`/bin/bash -lc '${identities.cli} show rule quiet-mode'`)).toBeNull();
+  });
+
+  it('runs the fake provider against each installed fixture CLI and isolated environment', async () => {
+    const project = tempDir(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    const roots = [0, 1].map(index => installedPackage(
+      `import dependency from 'probe-dep'; console.log(JSON.stringify({arm:${index}, dependency, root:process.env.AIWG_ROOT, home:process.env.HOME}))`,
+      { dependency: `dep-${index}` }));
+    for (const [index, root] of roots.entries()) {
+      const plan = buildPlan(loadProbes(), { provider: 'codex', project, rules: ['quiet-mode'], n: 1 });
+      await executePlan(plan, { packageRoot: root, output: path.join(tempDir(), 'out.json'), spawn: (_cmd, _args, _tier, options) => {
+        const result = spawnSync('aiwg', [], { cwd: options.cwd, env: options.env, encoding: 'utf8' });
+        expect(result.status).toBe(0);
+        const seen = JSON.parse(result.stdout);
+        expect(seen.arm).toBe(index); expect(seen.dependency).toBe(`dep-${index}`); expect(seen.root).not.toBe(root);
+        expect(treeIdentity(seen.root)).toBe(treeIdentity(root));
+        expect(seen.home).not.toBe(process.env.HOME);
+        expect(options.env.XDG_DATA_HOME.startsWith(seen.home)).toBe(true);
+        return { status: 1, stdout: '', stderr: 'fake only' };
+      } });
+    }
+  });
+
+  it('passes only a sample-contained package and declared auth context to the shared runtime', async () => {
+    const project = tempDir(), root = installedPackage(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    fs.writeFileSync(path.join(root, 'arm-marker'), 'selected');
+    const plan = buildPlan(loadProbes(), { provider: 'codex', project, rules: ['quiet-mode'], n: 1 });
+    plan.calls = [plan.calls[0]]; plan.call_count = 1;
+    const authTarget = path.join(tempDir(), 'canonical-auth.json'), skillsReference = tempDir();
+    const accountHome = tempDir(), executable = path.join(tempDir(), 'codex');
+    const expectedIdentity = armIdentity(plan, project, root, { authTarget, skillsReference });
+    const report = await executePlanImpl(plan, { packageRoot: root, output: path.join(tempDir(), 'out.json'), expectedIdentity,
+      accountHome, executable, authTarget, skillsReference, runEvaluation: async input => {
+        const env = input.envOverrideAllowed, isolationRoot = path.dirname(env.HOME);
+        expect(input).toMatchObject({ accountHome, executable, model: plan.model, effort: plan.effort });
+        expect(env.AIWG_ROOT).not.toBe(root); expect(treeIdentity(env.AIWG_ROOT)).toBe(expectedIdentity.package_sha256);
+        for (const value of [input.cwd, env.AIWG_ROOT, env.AIWG_HOME, env.HOME, env.TMPDIR]) {
+          expect(path.relative(isolationRoot, value)).not.toMatch(/^\.\.(?:\/|$)/);
+        }
+        expect(env.AIWG_RELEASE_CODEX_AUTH_TARGET).toBe(authTarget);
+        expect(env.AIWG_RELEASE_CODEX_SKILLS_REFERENCE).toBe(skillsReference);
+        const stdout = [{ type: 'item.completed', item: { type: 'agent_message', text: '{"action":"remain-silent","reason":"not addressed"}' } },
+          { type: 'turn.completed' }].map(JSON.stringify).join('\n');
+        return { status: 0, stdout, stderr: '' };
+      } });
+    expect(report.runs[0].compliant).toBe(true);
+  });
+
+  it('checkpoints bounded shared-runtime diagnostics when a completed call fails postchecks', async () => {
+    const project = tempDir(), root = installedPackage(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    const plan = buildPlan(loadProbes(), { provider: 'codex', project, rules: ['quiet-mode'], n: 1 });
+    plan.calls = [plan.calls[0]]; plan.call_count = 1;
+    const expectedIdentity = armIdentity(plan, project, root);
+    const stdout = [{ type: 'item.completed', item: { type: 'agent_message', text: '{"action":"remain-silent","reason":"not addressed"}' } },
+      { type: 'turn.completed' }].map(JSON.stringify).join('\n');
+    const diagnostic = { schema: 'aiwg-codex-evaluation-failure/v1', phase: 'account-postcheck', status: 0,
+      stdout: { text: stdout, truncated: false, original_bytes: Buffer.byteLength(stdout) },
+      stderr: { text: 'bounded host diagnostic', truncated: false, original_bytes: 23 },
+      trace: { completed: true, failed: false } };
+    const failure = Object.assign(new Error('account postcheck failed'), { diagnostic });
+    const report = await executePlanImpl(plan, { packageRoot: root, output: path.join(tempDir(), 'out.json'), expectedIdentity,
+      runEvaluation: async () => { throw failure; } });
+    expect(report.runs[0]).toMatchObject({ exit_code: 0, stdout, stderr: 'bounded host diagnostic',
+      error: 'account postcheck failed', compliant: false, transport_diagnostic: diagnostic });
+  });
+
+  it('rejects missing and incorrectly declared package and fixture identities', async () => {
+    const project = tempDir(), root = installedPackage(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    const plan = buildPlan(loadProbes(), { provider: 'codex', project, rules: ['quiet-mode'], n: 1 });
+    const output = path.join(tempDir(), 'out.json');
+    await expect(executePlanImpl(plan, { output })).rejects.toThrow('Explicit installed package root');
+    const identity = armIdentity(plan, project, root);
+    await expect(executePlanImpl(plan, { output, packageRoot: root, expectedIdentity: { ...identity, fixture_sha256: 'wrong' } })).rejects.toThrow('identity mismatch');
+    const strictIdentity = armIdentity(plan, project, root, { requireCompoundChecks: true });
+    const moreSamples = buildPlan(loadProbes(), { provider: 'codex', project, rules: ['quiet-mode'], n: 5 });
+    const otherRule = buildPlan(loadProbes(), { provider: 'codex', project, rules: ['tool-quota'], n: 1 });
+    expect(strictIdentity.config_sha256).not.toBe(identity.config_sha256);
+    expect(armIdentity(moreSamples, project, root).config_sha256).not.toBe(identity.config_sha256);
+    expect(armIdentity(otherRule, project, root).config_sha256).not.toBe(identity.config_sha256);
+    expect(armIdentity(plan, project, root, { authTarget: '/private/auth.json' }).config_sha256).not.toBe(identity.config_sha256);
+    expect(armIdentity(plan, project, root, { skillsReference: '/private/system-skills' }).config_sha256).not.toBe(identity.config_sha256);
+    const lockFile = path.join(path.dirname(path.dirname(root)), 'package-lock.json');
+    fs.appendFileSync(lockFile, '\n');
+    expect(armIdentity(plan, project, root).lock_sha256).not.toBe(identity.lock_sha256);
+    const dependency = path.join(path.dirname(root), 'probe-extra'); fs.mkdirSync(dependency);
+    fs.writeFileSync(path.join(dependency, 'package.json'), '{"name":"probe-extra","version":"1.0.0"}');
+    expect(armIdentity(plan, project, root).installation_sha256).not.toBe(identity.installation_sha256);
+    expect(() => armIdentity(plan, project, root, { authTarget: 'relative/auth.json' })).toThrow('absolute');
+    const bare = tempDir(); fs.mkdirSync(path.join(bare, 'bin')); fs.writeFileSync(path.join(bare, 'package.json'), '{"name":"aiwg"}');
+    expect(() => armIdentity(plan, project, bare)).toThrow('installation/node_modules/aiwg');
+    const escapingLink = path.join(path.dirname(root), 'escaping-dependency');
+    fs.symlinkSync(tempDir(), escapingLink);
+    expect(() => armIdentity(plan, project, root)).toThrow('symlink escapes installation root');
+    fs.unlinkSync(escapingLink);
+    await expect(executePlanImpl(plan, { output, packageRoot: root, expectedIdentity: identity,
+      requireCompoundChecks: true })).rejects.toThrow('identity mismatch');
+    fs.writeFileSync(path.join(project, 'added'), 'changed');
+    await expect(executePlanImpl(plan, { output, packageRoot: root, expectedIdentity: identity })).rejects.toThrow('identity mismatch');
+  });
+
+  it('applies discovery checks inside the live runner and rejects missing RC checks', async () => {
+    const project = tempDir(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    const data = loadProbes(path.join(ROOT, 'test/uat/rule-binding/compound-discovery-probes.yaml'));
+    const plan = buildPlan(data, { provider: 'codex', project, rules: ['quiet-mode'], n: 1 });
+    plan.calls = plan.calls.filter(call => call.probe === 'compound-discovery'); plan.call_count = 1;
+    expect(plan.calls[0].prompt).toContain('Run each CLI command separately so their completion order is observable; use JSON discovery output.');
+    const check = { rule_id: 'aiwg:rule:abc', fetch_command: 'aiwg show rule aiwg:rule:abc' };
+    const fake = (checks, late = false) => () => {
+      const cmd = (id, command, output) => [
+        { type: 'item.started', item: { id, type: 'command_execution' } },
+        { type: 'item.completed', item: { id, type: 'command_execution', command, aggregated_output: output, status: 'completed', exit_code: 0 } },
+      ];
+      const discover = cmd('d', 'aiwg discover fleet --json', JSON.stringify({ results: [{ id: 'aiwg:agent:xyz', type: 'agent', name: 'fleet-quiet-bot', ...(checks ? { required_rule_checks: [check], bound_rules: [{ name: 'quiet-mode' }] } : {}) }] }));
+      const fetch = cmd('f', 'aiwg show rule aiwg:rule:abc', 'body');
+      const action = cmd('a', 'aiwg show agent aiwg:agent:xyz', 'agent');
+      const events = [...discover, ...(late ? action : fetch), ...(late ? fetch : action),
+        { type: 'item.completed', item: { type: 'agent_message', text: '{"reason":"selection"}' } }, { type: 'turn.completed' }];
+      return { status: 0, stdout: events.map(JSON.stringify).join('\n'), stderr: '' };
+    };
+    const run = async (checks, late, requireCompoundChecks) => (await executePlan(plan, { packageRoot: ROOT, output: path.join(tempDir(), 'report.json'), requireCompoundChecks, spawn: fake(checks, late) })).runs[0];
+    expect(await run(true, false, true)).toMatchObject({ compliant: true, compound: { status: 'checked' } });
+    expect(await run(true, true, true)).toMatchObject({ compliant: false, compound: { status: 'checked' } });
+    expect(await run(false, false, false)).toMatchObject({ compliant: true, compound: { status: 'legacy-or-unbound' } });
+    expect(await run(false, false, true)).toMatchObject({ compliant: false, compound: { status: 'legacy-or-unbound' } });
+  });
+  it('records and replays selected absolute CLI provenance and rejects forged identity or mismatched strict mode', async () => {
+    const project = tempDir(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    const data = loadProbes(path.join(ROOT, 'test/uat/rule-binding/compound-discovery-probes.yaml'));
+    const plan = buildPlan(data, { provider: 'codex', project, rules: ['quiet-mode'], n: 5 });
+    plan.calls = plan.calls.filter(call => call.probe === 'compound-discovery'); plan.call_count = plan.calls.length;
+    const spawn = (_cmd, _args, _tier, options) => {
+      const sample = path.dirname(options.cwd), cli = path.join(sample, 'installation/node_modules/aiwg/bin/aiwg.mjs');
+      const shim = path.join(sample, 'bin/aiwg');
+      const cmd = (id, command, output) => [
+        { type: 'item.started', item: { id, type: 'command_execution' } },
+        { type: 'item.completed', item: { id, type: 'command_execution', command, aggregated_output: output, status: 'completed', exit_code: 0 } },
+      ];
+      const row = { id: 'aiwg:agent:xyz', type: 'agent', name: 'fleet-quiet-bot', bound_rules: [{ name: 'quiet-mode' }], required_rule_checks: [{ rule_id: 'aiwg:rule:abc', fetch_command: 'aiwg show rule aiwg:rule:abc' }] };
+      const events = [...cmd('d', `/bin/bash -lc '${process.execPath} ${cli} discover fleet --json'`, JSON.stringify({ results: [row] })),
+        ...cmd('f', `/bin/sh -c '${shim} show rule aiwg:rule:abc'`, 'body'), ...cmd('a', `/bin/bash -lc '${cli} show agent aiwg:agent:xyz'`, 'agent'),
+        { type: 'item.completed', item: { type: 'agent_message', text: '{"reason":"selection"}' } }, { type: 'turn.completed' }];
+      return { status: 0, stdout: events.map(JSON.stringify).join('\n'), stderr: '' };
+    };
+    const baseline = await executePlan(plan, { packageRoot: ROOT, output: path.join(tempDir(), 'report.json'), requireCompoundChecks: true, spawn });
+    expect(baseline.runs.every(run => run.compliant && run.command_identities?.cli)).toBe(true);
+    expect(validateBaseline(plan, baseline, { requireCompoundChecks: true }).rules).toEqual(baseline.rules);
+    expect(() => validateBaseline(plan, baseline)).toThrow('strict compound-check mode mismatch');
+    const forged = structuredClone(baseline); forged.runs[0].command_identities.cli = '/foreign/aiwg';
+    expect(() => validateBaseline(plan, forged, { requireCompoundChecks: true })).toThrow('Invalid recorded command identities');
+    let invoked = false;
+    await expect(executePlanImpl(plan, { packageRoot: ROOT, output: path.join(tempDir(), 'out.json'), baseline,
+      requireCompoundChecks: false, spawn: () => { invoked = true; } })).rejects.toThrow('strict compound-check mode mismatch');
+    expect(invoked).toBe(false);
+  });
   it('detects successful Claude body reads and show calls, not final mentions, discovery, indexes, or failed calls', () => {
     const trace = parseTrace(claudeTrace('aiwg show rule quiet-mode', [
       { name: 'Bash', input: { command: 'aiwg discover quiet-mode' } },
@@ -234,7 +485,7 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
     const baseline = summarizeRuns(plan, runs);
     expect(baseline.pass).toBe(true);
     expect(summarizeRuns(plan, runs.slice(0, -1)).pass).toBe(false);
-    validateBaseline(plan, baseline);
+    expect(() => validateBaseline(plan, baseline)).toThrow('Incomplete baseline');
     expect(() => validateBaseline(plan, { ...baseline, model: 'wrong' })).toThrow();
     expect(() => validateBaseline(plan, { ...baseline, rules: {} })).toThrow();
     runs[0].compliant = false;
@@ -253,12 +504,37 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
     expect(summarizeRuns(small, small.calls.map(call => ({ ...call, compliant: true, fetch: { attempted: false } }))).pass).toBe(false);
   });
 
-  it('executes only an injected fake transport, checkpoints traces, and cleans each workspace', () => {
+  it('recomputes a baseline from complete trace samples and rejects summary tampering', () => {
+    const plan = buildPlan(loadProbes(), { provider: 'claude', rules: ['quiet-mode'] });
+    const runs = plan.calls.map(call => {
+      const text = JSON.stringify(call.kind === 'negative' ? { answer: 21 } : { action: call.probe === 'positive-1' ? 'remain-silent' : 'yield', reason: 'not addressed' });
+      return { rule: call.rule, probe: call.probe, repetition: call.repetition, kind: call.kind, stdout: claudeTrace(text), exit_code: 0,
+        error: null, compliant: true, fetch: { attempted: false } };
+    });
+    const baseline = summarizeRuns(plan, runs);
+    expect(validateBaseline(plan, baseline).rules).toEqual(baseline.rules);
+    expect(() => validateBaseline(plan, baseline, { requireCompoundChecks: true })).toThrow('strict compound-check mode mismatch');
+    const tampered = structuredClone(baseline); tampered.rules['quiet-mode'].positive_compliance_rate = 0;
+    expect(() => validateBaseline(plan, tampered)).toThrow('summary');
+    expect(() => validateBaseline(plan, { ...baseline, runs: baseline.runs.slice(1) })).toThrow('Incomplete');
+  });
+
+  it('rejects a baseline whose declared arm identity differs from its evidence', async () => {
+    const project = tempDir(), root = installedPackage(); fs.writeFileSync(path.join(project, 'CLAUDE.md'), '# Context');
+    const plan = buildPlan(loadProbes(), { project, rules: ['quiet-mode'] });
+    const identity = armIdentity(plan, project, root); let index = 0;
+    const spawn = () => { const call = plan.calls[index++]; const text = JSON.stringify(call.kind === 'negative' ? { answer: 21 } : { action: call.probe === 'positive-1' ? 'remain-silent' : 'yield', reason: 'not addressed' }); return { status: 0, stdout: claudeTrace(text), stderr: '' }; };
+    const baseline = await executePlanImpl(plan, { output: path.join(tempDir(), 'out.json'), packageRoot: root, expectedIdentity: identity, spawn });
+    await expect(executePlanImpl(plan, { output: path.join(tempDir(), 'out.json'), packageRoot: root, expectedIdentity: identity, baseline,
+      expectedBaselineIdentity: { ...identity, package_sha256: 'wrong' }, spawn })).rejects.toThrow('baseline identity mismatch');
+  });
+
+  it('executes only an injected fake transport, checkpoints traces, and cleans each workspace', async () => {
     const project = tempDir(), output = path.join(tempDir(), 'report.json');
     fs.writeFileSync(path.join(project, 'CLAUDE.md'), '# Deployed fixture');
     const plan = buildPlan(loadProbes(), { project, rules: ['quiet-mode'] });
     const workspaces = [];
-    const report = executePlan(plan, { output, spawn: (command, args, tier, options) => {
+    const report = await executePlan(plan, { packageRoot: ROOT, output, spawn: (command, args, tier, options) => {
       expect(command).toBe('claude'); expect(tier).toBe('long'); expect(args[0]).toBe('-p');
       workspaces.push(options.cwd);
       expect(fs.existsSync(path.join(options.cwd, 'CLAUDE.md'))).toBe(true);
@@ -273,21 +549,21 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
     expect(fs.readdirSync(project)).toEqual(['CLAUDE.md']);
   });
 
-  it('rejects undeployed projects and outputs that would expose previous answers before any call', () => {
+  it('rejects undeployed projects and outputs that would expose previous answers before any call', async () => {
     const project = tempDir();
     const plan = buildPlan(loadProbes(), { project, rules: ['quiet-mode'] });
     const spawn = () => { throw new Error('must never call a provider'); };
-    expect(() => executePlan(plan, { output: path.join(tempDir(), 'report.json'), spawn })).toThrow('Missing deployed provider context');
+    await expect(executePlan(plan, { packageRoot: ROOT, output: path.join(tempDir(), 'report.json'), spawn })).rejects.toThrow('Missing deployed provider context');
     fs.writeFileSync(path.join(project, 'CLAUDE.md'), '# Context');
-    expect(() => executePlan(plan, { output: path.join(project, 'report.json'), spawn })).toThrow('--output must be outside');
+    await expect(executePlan(plan, { packageRoot: ROOT, output: path.join(project, 'report.json'), spawn })).rejects.toThrow('--output must be outside');
   });
 
-  it.each(['claude', 'codex'])('produces a passing %s report through the injected fake transport', provider => {
+  it.each(['claude', 'codex'])('produces a passing %s report through the injected fake transport', async provider => {
     const project = tempDir(), output = path.join(tempDir(), 'report.json');
     fs.writeFileSync(path.join(project, provider === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'), '# Deployed fixture');
     const plan = buildPlan(loadProbes(), { provider, project, rules: ['quiet-mode'] });
     let index = 0;
-    const report = executePlan(plan, { output, spawn: () => {
+    const report = await executePlan(plan, { packageRoot: ROOT, output, spawn: () => {
       const call = plan.calls[index++];
       const text = JSON.stringify(call.kind === 'negative' ? { answer: 21 }
         : { action: call.probe === 'positive-1' ? 'remain-silent' : 'yield', reason: 'Not addressed to this bot.' });
@@ -306,10 +582,10 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
     ['malformed', { status: 0, stdout: 'not JSON', stderr: '' }],
     ['unterminated', { status: 0, stdout: '{"type":"assistant","message":{"content":[]}}', stderr: '' }],
     ['timeout', { status: null, stdout: '', stderr: '', error: new Error('ETIMEDOUT') }],
-  ])('retains %s traces as failed samples', (_name, result) => {
+  ])('retains %s traces as failed samples', async (_name, result) => {
     const project = tempDir(); fs.writeFileSync(path.join(project, 'CLAUDE.md'), '# Context');
     const plan = buildPlan(loadProbes(), { project, rules: ['quiet-mode'], n: 1 });
-    const report = executePlan(plan, { output: path.join(tempDir(), 'report.json'), spawn: () => result });
+    const report = await executePlan(plan, { packageRoot: ROOT, output: path.join(tempDir(), 'report.json'), spawn: () => result });
     expect(report.call_count).toBe(3);
     expect(report.runs.every(run => run.error && !run.compliant)).toBe(true);
     expect(report.pass).toBe(false);
