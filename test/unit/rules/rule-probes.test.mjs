@@ -303,6 +303,8 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
         expect(node).toBe(process.execPath); expect(args.slice(1)).toEqual(['discover', 'bootstrap', '--json']);
         expect(timeout).toBe(30_000); expect(killSignal).toBe('SIGKILL');
         expect(env).toMatchObject({ NO_UPDATE_NOTIFIER: '1', AIWG_NO_UPDATE_CHECK: '1', AIWG_DECISION_ENABLED: '0' });
+        expect(env).not.toHaveProperty('AIWG_RELEASE_CODEX_AUTH_TARGET');
+        expect(env).not.toHaveProperty('AIWG_RELEASE_CODEX_SKILLS_REFERENCE');
         fs.mkdirSync(env.AIWG_CONFIG, { recursive: true }); fs.writeFileSync(path.join(env.AIWG_CONFIG, 'installation.json'), '{}');
         return { status: 0, stdout: '', stderr: '' };
       }, runEvaluation: async input => {
@@ -328,15 +330,21 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
     const plan = buildPlan(loadProbes(), { provider: 'codex', project, rules: ['quiet-mode'], n: 1 });
     plan.calls = [plan.calls[0]]; plan.call_count = 1;
     let called = false;
-    const report = await executePlanImpl(plan, { packageRoot: root, output: path.join(tempDir(), 'out.json'),
+    const output = path.join(tempDir(), 'out.json');
+    const report = await executePlanImpl(plan, { packageRoot: root, output,
       expectedIdentity: armIdentity(plan, project, root), bootstrap: async () => ({ status: 1, stdout: '', stderr: 'error' }),
       runEvaluation: async () => { called = true; } });
     expect(called).toBe(false);
-    expect(report.runs[0]).toMatchObject({ compliant: false, bootstrap: { status: 1 }, error: 'CLI bootstrap failed: exit 1' });
+    expect(report.runs[0]).toMatchObject({ evaluation_invoked: false, model_attempted: false, bootstrap: { status: 1 }, error: 'CLI bootstrap failed: exit 1' });
+    expect(report).toMatchObject({ call_count: 0, record_count: 1, planned_call_count: 1, pass: false });
+    expect(report.rules['quiet-mode'].probes[plan.calls[0].probe]).toMatchObject({ n: 0, compliance_rate: null, no_fetch_rate: null });
+    expect(report.gates.find(g => g.gate === 'incomplete-plan')).toMatchObject({ pass: false, missing: [`quiet-mode/${plan.calls[0].probe}/1`] });
+    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ call_count: 0, record_count: 1, pass: false });
   });
 
   it('rejects a bootstrap that changes the sample project before evaluation', async () => {
     const project = tempDir(), root = installedPackage(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    const originalProject = treeIdentity(project), originalPackage = treeIdentity(root);
     const plan = buildPlan(loadProbes(), { provider: 'codex', project, rules: ['quiet-mode'], n: 1 });
     plan.calls = [plan.calls[0]]; plan.call_count = 1;
     let called = false;
@@ -347,6 +355,7 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
       }, runEvaluation: async () => { called = true; } });
     expect(called).toBe(false);
     expect(report.runs[0].error).toBe('CLI bootstrap modified fixture or installation');
+    expect(treeIdentity(project)).toBe(originalProject); expect(treeIdentity(root)).toBe(originalPackage);
   });
 
   it('checkpoints bounded shared-runtime diagnostics when a completed call fails postchecks', async () => {

@@ -186,4 +186,5 @@ model executable.
 For live Codex probes, the controller initializes each isolated sample CLI with a bounded
 `discover bootstrap --json` call before evaluation. It verifies that registration exists
 and that the project and installed package are unchanged; bootstrap results are recorded
-separately from scored model tool calls. A bootstrap failure prevents the model call.
+separately from scored model tool calls. A bootstrap failure prevents evaluation, remains
+in the raw records, and leaves the plan incomplete without entering scoring denominators.

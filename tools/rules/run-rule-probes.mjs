@@ -307,29 +307,35 @@ export function evaluateAssertions(assertions, trace, identities) {
 
 export function summarizeRuns(plan, runs, baseline) {
   if (baseline && (baseline.provider !== plan.provider || baseline.model !== plan.model)) throw new Error('Baseline provider/model mismatch');
-  const rules = {}, gates = [];
+  // Older evidence has no evaluation_invoked field and was recorded only after an evaluator call.
+  const scored = runs.filter(run => run.evaluation_invoked !== false);
+  const key = call => `${call.rule}/${call.probe}/${call.repetition}`;
+  const invoked = new Set(scored.map(key));
+  const missing = plan.calls.filter(call => !invoked.has(key(call))).map(key);
+  const rules = {}, gates = [{ gate: 'incomplete-plan', pass: missing.length === 0, missing }];
   for (const id of [...new Set(plan.calls.map(call => call.rule))]) {
-    const selected = runs.filter(run => run.rule === id);
+    const selected = scored.filter(run => run.rule === id);
+    const planned = plan.calls.filter(call => call.rule === id);
     const probes = {};
-    for (const probe of [...new Set(selected.map(run => run.probe))]) {
+    for (const probe of [...new Set(planned.map(call => call.probe))]) {
       const samples = selected.filter(run => run.probe === probe);
-      const rate = samples.filter(run => run.compliant).length / samples.length;
-      // Uncertain or unsuccessful rule-read attempts fail closed for U7.
-      const noFetchRate = samples.filter(run => !run.error && !run.fetch.attempted).length / samples.length;
-      probes[probe] = { kind: samples[0].kind, n: samples.length, compliance_rate: rate, no_fetch_rate: noFetchRate };
-      gates.push({ gate: samples[0].kind === 'positive' ? 'U5-probe' : 'U7', rule: id, probe,
-        pass: samples.length >= 5 && rate >= 0.8 && (samples[0].kind === 'positive' || noFetchRate >= 0.8) });
+      const kind = planned.find(call => call.probe === probe).kind;
+      const rate = samples.length ? samples.filter(run => run.compliant).length / samples.length : null;
+      const noFetchRate = samples.length ? samples.filter(run => !run.error && !run.fetch.attempted).length / samples.length : null;
+      probes[probe] = { kind, n: samples.length, compliance_rate: rate, no_fetch_rate: noFetchRate };
+      gates.push({ gate: kind === 'positive' ? 'U5-probe' : 'U7', rule: id, probe,
+        pass: samples.length >= 5 && rate >= 0.8 && (kind === 'positive' || noFetchRate >= 0.8) });
     }
     const positive = selected.filter(run => run.kind === 'positive');
-    const rate = positive.filter(run => run.compliant).length / positive.length;
+    const rate = positive.length ? positive.filter(run => run.compliant).length / positive.length : null;
     rules[id] = { positive_compliance_rate: rate, probes };
     if (baseline) gates.push({ gate: 'U5-baseline', rule: id, baseline: baseline.rules?.[id]?.positive_compliance_rate,
-      actual: rate, pass: Number.isFinite(baseline.rules?.[id]?.positive_compliance_rate)
+      actual: rate, pass: Number.isFinite(rate) && Number.isFinite(baseline.rules?.[id]?.positive_compliance_rate)
         && rate >= baseline.rules[id].positive_compliance_rate });
   }
   return { version: 1, provider: plan.provider, model: plan.model, effort: plan.effort, n: plan.n, probe_digest: plan.probe_digest,
-    call_count: runs.length, planned_call_count: plan.call_count,
-    rules, gates, pass: runs.length === plan.call_count && gates.length > 0 && gates.every(gate => gate.pass), runs };
+    call_count: scored.length, record_count: runs.length, planned_call_count: plan.call_count,
+    rules, gates, pass: missing.length === 0 && scored.length === plan.call_count && gates.every(gate => gate.pass), runs };
 }
 
 function validateRecordedCommands(value) {
@@ -354,7 +360,7 @@ export function validateBaseline(plan, baseline, { requireCompoundChecks = false
   if (byKey.size !== plan.calls.length) throw new Error('Duplicate baseline samples');
   const runs = plan.calls.map(call => {
     const raw = byKey.get(key(call));
-    if (!raw || raw.kind !== call.kind || typeof raw.stdout !== 'string') throw new Error(`Incomplete baseline for ${key(call)}`);
+    if (!raw || raw.evaluation_invoked === false || raw.kind !== call.kind || typeof raw.stdout !== 'string') throw new Error(`Incomplete baseline for ${key(call)}`);
     const run = { ...raw, compliant: false };
     const identities = validateRecordedCommands(raw.command_identities);
     try {
@@ -493,21 +499,23 @@ export async function executePlan(plan, { output, baseline, packageRoot, expecte
       if (authTarget) env.AIWG_RELEASE_CODEX_AUTH_TARGET = authTarget;
       if (skillsReference) env.AIWG_RELEASE_CODEX_SKILLS_REFERENCE = skillsReference;
       const commandIdentities = { shim, cli, node: process.execPath };
-      let result, bootstrapEvidence;
-      if (spawn) result = await spawn(call.command, call.args, 'long', { cwd: workspace, env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 180000 });
+      let result, bootstrapEvidence, evaluationInvoked = false;
+      if (spawn) { evaluationInvoked = true; result = await spawn(call.command, call.args, 'long', { cwd: workspace, env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 180000 }); }
       else {
         if (plan.provider !== 'codex') throw new Error('Live transport currently supports Codex only');
         if (!runEvaluation) ({ runCodexEvaluation: runEvaluation } = await import('./codex-evaluation-runtime.mjs'));
         try {
           const workspaceBefore = treeIdentity(workspace);
+          const { AIWG_RELEASE_CODEX_AUTH_TARGET: _auth, AIWG_RELEASE_CODEX_SKILLS_REFERENCE: _skills, ...bootstrapEnv } = env;
           const initialized = await bootstrap(process.execPath, [cli, 'discover', 'bootstrap', '--json'],
-            { cwd: workspace, env, encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024 });
+            { cwd: workspace, env: bootstrapEnv, encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024 });
           bootstrapEvidence = { command: 'discover bootstrap --json', status: initialized.status,
             stdout_sha256: createHash('sha256').update(initialized.stdout ?? '').digest('hex'),
             stderr_sha256: createHash('sha256').update(initialized.stderr ?? '').digest('hex') };
           if (initialized.error || initialized.status !== 0) throw new Error(`CLI bootstrap failed: ${initialized.error?.message ?? `exit ${initialized.status}`}`);
           if (!fs.existsSync(path.join(env.AIWG_CONFIG, 'installation.json'))) throw new Error('CLI bootstrap did not create installation registration');
           if (treeIdentity(workspace) !== workspaceBefore || treeIdentity(sampleInstallation) !== identity.installation_sha256) throw new Error('CLI bootstrap modified fixture or installation');
+          evaluationInvoked = true;
           result = await runEvaluation({ cwd: workspace, prompt: call.prompt, model: plan.model, effort: plan.effort, accountHome, executable, envOverrideAllowed: env });
         }
         catch (error) {
@@ -518,6 +526,7 @@ export async function executePlan(plan, { output, baseline, packageRoot, expecte
         }
       }
       run = { rule: call.rule, probe: call.probe, kind: call.kind, repetition: call.repetition,
+        evaluation_invoked: evaluationInvoked, model_attempted: evaluationInvoked ? null : false,
         stdout: result.stdout ?? '', stderr: result.stderr ?? '', exit_code: result.status,
         usage: result.usage ?? null, command_identities: commandIdentities, bootstrap: bootstrapEvidence ?? null,
         transport_identity: result.runtime_source_sha256 ? { runtime_source_sha256: result.runtime_source_sha256, trace_parser_sha256: result.trace_parser_sha256, executable_sha256: result.executable_sha256, argv_sha256: result.argv_sha256 } : null,
