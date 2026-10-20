@@ -290,6 +290,29 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
     }
   });
 
+  it('runs a selected CLI that spawns node under the exact isolated PATH', async () => {
+    const project = tempDir(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    const root = installedPackage(`import { spawnSync } from 'node:child_process';
+      const child = spawnSync('node', ['-p', 'process.execPath'], { encoding: 'utf8' });
+      if (child.error || child.status !== 0) { console.error(child.error); process.exit(1); }
+      console.log(child.stdout.trim());`);
+    const beforeProject = treeIdentity(project), beforeInstallation = treeIdentity(path.dirname(path.dirname(root)));
+    const plan = buildPlan(loadProbes(), { provider: 'codex', project, rules: ['quiet-mode'], n: 1 });
+    plan.calls = [plan.calls[0]]; plan.call_count = 1;
+    await executePlan(plan, { packageRoot: root, output: path.join(tempDir(), 'out.json'), spawn: (_cmd, _args, _tier, { cwd, env }) => {
+      const bin = env.PATH.split(path.delimiter)[0];
+      expect(fs.realpathSync(path.join(bin, 'node'))).toBe(fs.realpathSync(process.execPath));
+      // The Codex transport retains only the sample bin and trusted system paths.
+      const runtimeEnv = { ...env, PATH: [bin, '/usr/bin', '/bin'].join(path.delimiter) };
+      const result = spawnSync('aiwg', ['migrate-workspace', '--dry-run'], { cwd, env: runtimeEnv, encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL' });
+      expect(result.error).toBeUndefined(); expect(result.status).toBe(0);
+      expect(fs.realpathSync(result.stdout.trim())).toBe(fs.realpathSync(process.execPath));
+      return { status: 0, stdout: JSON.stringify({ type: 'turn.completed' }), stderr: '' };
+    } });
+    expect(treeIdentity(project)).toBe(beforeProject);
+    expect(treeIdentity(path.dirname(path.dirname(root)))).toBe(beforeInstallation);
+  });
+
   it('passes only a sample-contained package and declared auth context to the shared runtime', async () => {
     const project = tempDir(), root = installedPackage(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
     fs.writeFileSync(path.join(root, 'arm-marker'), 'selected');
