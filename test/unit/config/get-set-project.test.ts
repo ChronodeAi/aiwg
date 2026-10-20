@@ -44,6 +44,52 @@ describe('aiwg config get|set --project (#1006)', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
+  it('warns after semantic parallelism changes with all provider refresh targets', async () => {
+    const { emptyConfig, writeAiwgConfig } = await import('../../../src/config/aiwg-config.js');
+    const cfg = emptyConfig(['claude', 'codex']);
+    cfg.installed = { example: { version: '1', source: 'bundled', installedAt: '2026-01-01', deployedTo: {
+      hermes: { agents: 0, commands: 0, skills: 0, rules: 0 },
+      codex: { agents: 0, commands: 0, skills: 0, rules: 0 },
+    } } };
+    await writeAiwgConfig(tmp, cfg);
+    const warning = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await main(['set', '--project', 'parallelism.max_parallel_subagents', '10', '--target', tmp]);
+      expect(logs.at(-1)).toBe('Set --project parallelism.max_parallel_subagents = 10');
+      expect(readConfig(tmp)).toMatchObject({ parallelism: { max_parallel_subagents: 10 } });
+      const text = String(warning.mock.calls[0][0]);
+      expect(text).toContain(`project root ${tmp}`);
+      expect(text).toContain("primary provider 'claude' (providers[0])");
+      expect(text.match(/aiwg regenerate --workspace --provider \w+ --dry-run/g)).toEqual([
+        'aiwg regenerate --workspace --provider claude --dry-run',
+        'aiwg regenerate --workspace --provider codex --dry-run',
+        'aiwg regenerate --workspace --provider hermes --dry-run',
+      ]);
+      expect(text).toContain('aiwg workspace-context doctor');
+      warning.mockClear();
+      await main(['set', '--project', 'parallelism.max_parallel_subagents', '10', '--target', tmp]);
+      await main(['set', '--project', 'setup.worker_dispatch_offer', 'declined', '--target', tmp]);
+      await main(['set', '--project', 'parallelism.max_parallel_subagents', 'invalid', '--target', tmp]).catch(() => {});
+      await main(['set', '--project', 'parallelism.worker_dispatch', 'true', '--target', tmp]);
+      expect(warning).toHaveBeenCalledTimes(1);
+      warning.mockClear();
+      await main(['reset', '--project', 'parallelism.max_parallel_subagents', '--target', tmp]);
+      expect(warning).toHaveBeenCalledTimes(1);
+      warning.mockClear();
+      await main(['reset', '--project', 'parallelism', '--target', tmp]);
+      expect(warning).toHaveBeenCalledTimes(1);
+      warning.mockClear();
+      await main(['set', '--project', 'parallelism', JSON.stringify({ max_parallel_subagents: 7 }), '--target', tmp]);
+      expect(warning).toHaveBeenCalledTimes(1);
+      warning.mockClear();
+      await main(['set', '--project', 'parallelism', JSON.stringify({ max_parallel_subagents: 7 }), '--target', tmp]);
+      await main(['set', '--project', 'parallelism.max_parallel_subagents', 'not-an-integer', '--target', tmp]).catch(() => {});
+      expect(warning).not.toHaveBeenCalled();
+      await expect(main(['reset', '--project', 'parallelism.invalid', '--target', tmp])).rejects.toThrow();
+      expect(warning).not.toHaveBeenCalled();
+    } finally { warning.mockRestore(); }
+  });
+
   it('validates savings weights through config set, the loader, and the JSON schema', async () => {
     const { readAiwgConfig } = await import('../../../src/config/aiwg-config.js');
     const schema = JSON.parse(readFileSync(join(process.cwd(), 'vscode-extension/schemas/aiwg.config.v1.json'), 'utf8'));

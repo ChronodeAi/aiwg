@@ -174,7 +174,10 @@ effective_parallel = min(
 | `codex` / `copilot` / `cursor` / `factory` / `opencode` / `warp` / `windsurf` / `openclaw` / `hermes` | 10 | 3 | 6 |
 | unknown | 4 | 2 | 4 |
 
-Override for higher-tier plans: `aiwg config set --project parallelism.max_parallel_subagents 10` (reset with `aiwg config reset --project parallelism`). Composes with `context-budget.md` and `rlm-context-management.md` Rule 8 — the smallest cap wins.
+Override for higher-tier plans: `aiwg config set --project parallelism.max_parallel_subagents 10`
+(reset with `aiwg config reset --project parallelism`). After changing project parallelism, follow the emitted
+provider-specific regeneration commands and run `aiwg workspace-context doctor`. Composes with `context-budget.md`
+and `rlm-context-management.md` Rule 8 — the smallest cap wins.
 
 ### Rule 9: Tier 0 — Direct CLI/MCP Handoff Procedure (UC-OG-11)
 

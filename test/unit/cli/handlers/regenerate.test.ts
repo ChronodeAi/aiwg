@@ -76,6 +76,39 @@ describe('regenerateHandler', () => {
     vi.unstubAllEnvs();
   });
 
+  it('refreshes changed parallelism for each provider while preserving operator context', async () => {
+    const { regenerateHandler } = await import('../../../../src/cli/handlers/regenerate.js');
+    const { workspaceContextHandler } = await import('../../../../src/cli/handlers/workspace-context.js');
+    const { main } = await import('../../../../src/config/cli.js');
+    writeConfig(tmpDir, ['claude', 'codex']);
+    writeFileSync(join(tmpDir, 'WORKSPACE.md'), '# Operator workspace\n\nKeep project guidance.\n');
+    writeFileSync(join(tmpDir, 'AGENTS.md'), '# Operator agent notes\n\nKeep agent guidance.\n');
+    writeFileSync(join(tmpDir, 'CLAUDE.md'), '# Operator Claude notes\n\nKeep Claude guidance.\n');
+    for (const provider of ['claude', 'codex']) {
+      expect((await regenerateHandler.execute(makeCtx(tmpDir, ['--workspace', '--provider', provider]))).exitCode).toBe(0);
+    }
+    const aiwg = join(tmpDir, 'AIWG.md');
+    expect(readFileSync(aiwg, 'utf8')).toMatch(/max_parallel_subagents\*\*: 4/);
+    const warnings = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await main(['set', '--project', 'parallelism.max_parallel_subagents', '10', '--target', tmpDir]);
+      expect(warnings).toHaveBeenCalledOnce();
+      expect(readFileSync(aiwg, 'utf8')).toMatch(/max_parallel_subagents\*\*: 4/);
+      for (const provider of ['claude', 'codex']) {
+        const before = readFileSync(aiwg, 'utf8');
+        expect((await regenerateHandler.execute(makeCtx(tmpDir, ['--workspace', '--provider', provider, '--dry-run']))).exitCode).toBe(0);
+        expect(readFileSync(aiwg, 'utf8')).toBe(before);
+        expect((await regenerateHandler.execute(makeCtx(tmpDir, ['--workspace', '--provider', provider]))).exitCode).toBe(0);
+      }
+      expect(readFileSync(aiwg, 'utf8')).toMatch(/max_parallel_subagents\*\*: 10/);
+      expect(readFileSync(join(tmpDir, 'WORKSPACE.md'), 'utf8')).toContain('Keep project guidance.');
+      expect(readFileSync(join(tmpDir, 'AGENTS.md'), 'utf8')).toContain('Keep agent guidance.');
+      expect(readFileSync(join(tmpDir, 'CLAUDE.md'), 'utf8')).toContain('Keep Claude guidance.');
+      expect(JSON.parse(readFileSync(join(tmpDir, '.aiwg/aiwg.config'), 'utf8')).providers).toEqual(['claude', 'codex']);
+      expect((await workspaceContextHandler.execute(makeCtx(tmpDir, ['doctor']))).exitCode).toBe(0);
+    } finally { warnings.mockRestore(); }
+  });
+
   it('regenerates root and normalized context hooks for codex', async () => {
     const { regenerateHandler } = await import('../../../../src/cli/handlers/regenerate.js');
     writeConfig(tmpDir, ['codex']);
