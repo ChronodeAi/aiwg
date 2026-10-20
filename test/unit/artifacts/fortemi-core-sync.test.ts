@@ -514,6 +514,7 @@ describe("Fortemi Core static index sync (#1687)", () => {
     syncFortemiCoreIndex(tmp, { generatedAt: "2026-01-05T00:00:00.000Z" });
 
     const statusBefore = getFortemiCoreSyncStatus(tmp);
+    const unchangedExportStat = fs.statSync(statusBefore.exportPath, { bigint: true });
     const exported = JSON.parse(fs.readFileSync(statusBefore.exportPath, "utf-8"));
     exported.schema_version = "aiwg.fortemi.index.export.v1";
     const exportText = JSON.stringify(exported, null, 2) + "\n";
@@ -522,6 +523,14 @@ describe("Fortemi Core static index sync (#1687)", () => {
     const manifest = JSON.parse(fs.readFileSync(statusBefore.manifestPath, "utf-8"));
     manifest.export_checksum = createHash("sha256").update(exportText).digest("hex");
     fs.writeFileSync(statusBefore.manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+
+    const statSync = fs.statSync;
+    vi.spyOn(fs, "statSync").mockImplementation(((file, options) => {
+      if (file === statusBefore.exportPath && options?.bigint) {
+        return unchangedExportStat;
+      }
+      return statSync(file, options);
+    }) as typeof fs.statSync);
 
     const status = collectIndexStatus(tmp).fortemiCore;
     expect(status.optedIn).toBe(true);
