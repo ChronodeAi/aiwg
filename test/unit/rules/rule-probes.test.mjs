@@ -278,7 +278,7 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
     for (const [index, root] of roots.entries()) {
       const plan = buildPlan(loadProbes(), { provider: 'codex', project, rules: ['quiet-mode'], n: 1 });
       await executePlan(plan, { packageRoot: root, output: path.join(tempDir(), 'out.json'), spawn: (_cmd, _args, _tier, options) => {
-        const result = spawnSync('aiwg', [], { cwd: options.cwd, env: options.env, encoding: 'utf8' });
+        const result = spawnSync('aiwg', [], { cwd: options.cwd, env: options.env, encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL' });
         expect(result.status).toBe(0);
         const seen = JSON.parse(result.stdout);
         expect(seen.arm).toBe(index); expect(seen.dependency).toBe(`dep-${index}`); expect(seen.root).not.toBe(root);
