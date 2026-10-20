@@ -299,8 +299,19 @@ export function evaluateCompoundTrace(trace, actionPattern, expected = {}, ident
     if (governed.exactOne && previews.length !== 1) return { status: 'invalid', pass: false, reason: 'Expected exactly one governed migration preview' };
     if (previews.some(tool => !Number.isInteger(tool.start_event))) return { status: 'invalid', pass: false, reason: 'Unknown governed action ordering' };
     const preview = previews.sort((left, right) => left.start_event - right.start_event)[0];
+    const output = outputText(preview?.output);
+    const noLegacy = /No legacy workspace detected\./.test(output) && /No migration needed\./.test(output);
+    const legacyDryRun = governedKey === 'migration-preview-v2'
+      && /Found legacy workspace at /.test(output)
+      && /Migration validation passed/.test(output)
+      && /Mode: Dry-run \(no changes\)/.test(output)
+      && /Dry-run complete \(no changes made\)/.test(output)
+      && /Migration complete/.test(output)
+      && /No errors encountered\./.test(output)
+      && !/Proceed with migration\?|Migration cancelled|completed with errors/i.test(output);
     if (!preview || !Number.isInteger(preview.start_event) || !Number.isInteger(preview.completed_event) || preview.success !== true
-      || preview.completed_event <= preview.start_event || !/No legacy workspace detected\./.test(outputText(preview.output)) || !/No migration needed\./.test(outputText(preview.output))
+      || preview.completed_event <= preview.start_event || !(noLegacy || legacyDryRun)
+      || (governedKey === 'migration-preview-v2' && /Proceed with migration\?|Migration cancelled|completed with errors/i.test(output))
       || !Number.isInteger(action.completed_event) || action.completed_event >= preview.start_event)
       return { status: 'invalid', pass: false, reason: 'Missing or invalid governed migration preview' };
     boundary = preview.start_event;
