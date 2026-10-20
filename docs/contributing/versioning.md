@@ -592,21 +592,28 @@ is intentional; don't try to "unify" them.
 
 ### Two-stage release candidates (#3201)
 
-**Staged implementation:** signed RC validation and exact-artifact verification are
-available. Stable promotion is deliberately **not wired** into
-`.github/workflows/npm-publish.yml` yet. That workflow still performs its existing
-build, tests, signed-tag verification, three npm publishes, signing, provenance,
-SBOM generation, release asset upload, Socket audit, and same-tag recovery. Do not
-close #3201 or claim a completed release gate from the offline tests below.
+**Staged implementation:** signed RC validation, exact-artifact verification, and
+fail-closed stable workflow integration are available. Both stable workflows use
+`tools/release/release-promotion.mjs` as their sole package publisher and no longer
+rebuild, retest, or repack in the shipping stage. The checked-in production policy
+remains disabled and its workflow, actor, model, and approval trust values remain
+unconfigured. This source change does not authorize a release or close #3201.
 
-The intended sequence is RC build → full validation → real release comparison
-(#3298) → fix or explicitly accept each regression → promote exact RC artifacts.
+The intended sequence is a routine RC build and bounded release validation,
+followed by promotion against the current UTC calendar quarter's full validation
+and real release-comparison record (#3298). The quarterly record may test an
+earlier commit only when that commit is an authenticated ancestor of the exact RC
+commit. The candidate-specific approval must name both commits and explicitly say
+that the candidate was not directly behavior-compared. Fix or explicitly accept
+each measured regression before that quarterly record is approved.
 The merged [release-comparison harness](release-comparison.md) records package,
 fixture, corpus, and deployed-tree identities, but no comparison has been run for
 this candidate. Production promotion must verify those reports and bind their
-candidate tarball or fixture digests plus every regression disposition to the RC
-manifest before stable publication can switch to promotion. A successful RC build
-alone is insufficient authorization to ship.
+tested tarball or fixture digests plus every regression disposition to the
+quarterly attestation, and separately bind the exact RC manifest and validation
+profile before stable publication can switch to promotion. A successful RC build
+alone is insufficient authorization to ship. No current-quarter record is
+checked in or implied by this implementation.
 
 RC tags label validation attempts rather than package prerelease versions. For
 example, commit C contains version `2026.10.4` consistently in package manifests,
@@ -626,16 +633,20 @@ tools/release/cut-tag.sh 2026.10.4-rc.1
 ```
 
 `.github/workflows/release-candidate.yml` verifies the signed annotated tag and
-main ancestry, checks stable-version identity, installs locked dependencies and
-the mandatory SQLite backend, runs the full build (including apps/web), and
-executes the 43 required lanes enumerated in
-`tools/release/release-candidate.mjs`. These include default/leak/UAT via
-`test:ci`, the separately required `test:deployment` provider lane, contracts, conformance, coverage gates, SQLite/performance, serve and
-artifact-index integration, D29/D17 studies, package budgets/lifecycle, installed
-discovery, dependency signatures, license boundaries, and tarball audits. The
-configured affected-package feed and available provider sandbox use the same
-capability policy as main CI. Failed or skipped required lanes do not produce a
-successful candidate artifact.
+main ancestry, checks stable-version identity, and installs locked dependencies
+and the mandatory SQLite backend. RC tag pushes select the versioned
+`routine-release-v1` profile; a manual dispatch may explicitly select the same
+routine profile or the quarterly profile. Routine validation covers type/build, release/security contracts, schema and
+supply-chain checks, package/install verification, SQLite and installed-feature
+checks, and a small real provider-write/self-verification lane. A dispatch
+selecting `quarterly-full-v1` executes the exact 43
+lanes enumerated in `tools/release/release-candidate.mjs`, including default/leak/
+UAT, full provider deployment, conformance/coverage, SQLite/performance, serve,
+artifact-index, D29/D17, package, and tarball gates. The profile and exact lane
+inventory are retained in version-2 validation evidence. Legacy version-1
+full-lane artifacts remain replayable but cannot be relabeled as either profile.
+Failed, skipped, extra, or missing required lanes do not produce valid evidence
+for the named profile.
 
 After validation, RC packs **all three** surfaces (`aiwg`, `@aiwg/cli`,
 `@aiwg/cockpit`) once into the retained bundle and smoke-installs those exact
@@ -662,20 +673,22 @@ is an operator responsibility.
 run/job/artifact/workflow metadata: same repository and head repository, workflow
 API ID matching the run, push event, successful completed run and the complete
 critical step inventory, matching runner, commit and signed RC tag object,
-artifact run/attempt, complete lane inventory, exact smoke identity, and all
+artifact run/attempt, exact versioned profile/lane inventory, exact smoke identity, and all
 retained digests. The verifier also requires a separate `workflow-source/v1`
 receipt with `repository`, `path`, candidate `commit`, and SHA256 of the decoded
 workflow source fetched for that commit. It compares that digest to the
-authoritative workflow file in the checked-out verifier source. The receipt must
-be constructed by the future production caller from an authenticated source API;
-it never comes from the candidate bundle or manifest.
+authoritative workflow file in the checked-out verifier source. The production
+transport constructs that receipt from the authenticated source API; it never
+comes from the candidate bundle or manifest.
 
 Production wiring must independently fetch and verify the signed RC tag with
 `tools/ci/verify-signed-tag.sh`, validate its peeled commit against the stable
 signed tag, fetch the workflow metadata and exact-commit source, and
 obtain/download the artifact through trusted APIs before invoking the verifier.
-Candidate-provided JSON is not a substitute for trusted API metadata. No
-production metadata fetcher or promotion caller exists in this staged change.
+Candidate-provided JSON is not a substitute for trusted API metadata.
+`tools/release/release-promotion.mjs` is the production orchestration entry point,
+but its checked-in policy is disabled until the external identities below are
+reviewed and populated.
 
 The helper's `verify` command is an **offline diagnostic** accepting captured
 metadata files, including `--workflow` API metadata and the separate
@@ -683,15 +696,20 @@ metadata files, including `--workflow` API metadata and the separate
 therefore does not qualify them for publication. Its promotion plan lists the
 original tarball paths/digests and proposed
 `npm publish <tarball> --ignore-scripts --provenance` arguments; it never publishes
-and exits nonzero with `ready_for_publication: false`. The unresolved gate is real
-comparison evidence and explicit regression disposition bound to those candidate
-identities. Final stable wiring must retain the current
+and exits nonzero with `ready_for_publication: false`. The production orchestrator
+adds the real comparison/approval gate and an opaque in-process publication
+decision. Its publisher accepts only that decision, copies exactly the three
+retained tarballs into a private read-only staging directory, and rechecks the
+complete inventory before and after every registry action. It treats a registry
+conflict as idempotent only after the registry's SHA-1 and SHA-512 SRI metadata
+match the retained bytes; a mismatch aborts partial recovery. Final stable workflow
+wiring must retain the current
 signed-tag, OIDC/provenance, tarball/manifest/SBOM signing, installer/checksum,
 GitHub release assets, all three npm surfaces, and same-tag partial-publish
-recovery while removing rebuild/retest/repack from the shipping stage. That
-wiring remains outstanding. The #3298 harness supplies the comparison evidence
-format; it does not supply candidate evidence, regression approval, or permission
-to publish.
+recovery while removing rebuild/retest/repack from the shipping stage. Both
+stable workflows now invoke that gate and fail closed on plain tag pushes. The
+The #3298 harness supplies the comparison evidence format; it does not supply
+candidate evidence, regression approval, or permission to publish.
 
 Offline stub tests prove validation and identity logic only. No real signed RC
 run, package installation from a release candidate, model comparison, publication,
@@ -737,39 +755,100 @@ tarball, corpus, package tree, deployed context, installation lock, report, and
 adapter digests. `fixture:`/`tree:` candidates and the shipped offline adapters —
 including copied adapters with the same digest — are rejected.
 
-Approval content uses `aiwg-release-comparison-approval/v1`. Candidate and report
+Per-release compatibility approval content uses
+`aiwg-release-comparison-approval/v1`. Quarterly policy uses
+`aiwg-release-comparison-approval/v2`, which binds the exact candidate (including
+its RC validation profile), the current-quarter attestation and full-validation
+digest, tested/candidate ancestry, and report identities. Its basis is
+`quarterly-cross-provider-comparison` and
+`candidate_behavior_directly_compared` must be false. Candidate and report
 digests plus workflow/run/artifact and signed-tag identities must match exactly.
 Every measured regression needs one disposition for its provider, scenario,
 repetition, report digest, and precise regression signals. Issuer identity comes
 only from the authenticated GitHub API envelope and must match a trusted policy
 ID; an `issuer` claim inside approval content is rejected.
 
-Even complete structural evidence returns `ready_for_publication: false`.
-Run-time authentication of comparison adapters and remote model execution identity,
-live qualification of the GitHub transport, and separate stable-publisher wiring
-remain unmet. No evidence helper invokes a model, creates a tag, or publishes a package.
+The quarterly comparison artifact contains exactly
+`quarterly-attestation.json`, `validation.json`, and one JSON report for each of
+Claude, Codex, and Hermes. The validation record must use profile
+`quarterly-full-v1`, bind the tested commit, and prove all 43 lanes exactly once.
+The attestation binds every file digest, tested package identity, workflow/run/
+attempt, canonical repository-relative subject/judge source paths and digests
+(plus Codex runtime/parser), and the exact UTC-quarter interval. Producer runner
+absolute paths remain unchanged inside the report JSON but grant no trust: the
+publisher resolves only the attested canonical paths in its own checkout, rejects
+escapes and symlinks, and requires those current source bytes to match. Source or
+corpus drift therefore requires a new quarterly run. Its validation start/completion must
+fall within the authenticated successful run; GitHub's authenticated HTTP `Date`
+must be after run completion and still in that quarter. The run's `updated_at` is
+a conservative authenticated upper bound rather than a timestamp copied into the
+artifact, because artifact creation precedes final workflow completion. The
+authenticated compare API must prove that the tested commit is the candidate or
+its ancestor and that the documented final comparison commit is the exact
+candidate. Artifact retention expiry is independent of quarter validity; missing
+or expired evidence fails closed. Retain the quarterly artifact for at least 120
+days so a record produced near the quarter boundary remains available throughout
+the longest calendar quarter. A trusted producer must assemble this exact
+five-file artifact from the authenticated quarterly-full validation and the three
+authorized comparisons. This source increment neither schedules model work nor
+claims that such an artifact currently exists.
+
+The canonical Hermes comparison adapter path is reserved as
+`tools/rules/release-compare-hermes.mjs`, but that adapter does not exist in this
+increment. Quarterly activation reports this as an unmet requirement before any
+credential, network acquisition, or publication step. Claude/Codex source
+bindings and offline fixtures cannot substitute for the missing Hermes production
+adapter or three-provider qualification.
+
+`config/release-promotion-policy.json` is the sole versioned authorization source.
+It is currently `enabled: false` and intentionally omits the workflow IDs, GitHub
+API actor IDs, frozen baseline/seed/models, and runtime identity trust
+decision. Candidate files and CLI flags cannot select another policy. Enabling it
+requires review of all those values and a specific transport level
+(`github-authenticated-user-api`) and a reviewed credential kind. The dedicated
+`AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN` must support GitHub's authenticated-user API;
+the built-in Actions `GITHUB_TOKEN` remains limited to release assets and OIDC.
+Because the provider backends do not expose a
+cryptographic model attestation, the only currently implementable runtime level is
+`requested-cli-model`; policy must explicitly set
+`allow_unattested_backend: true` for all three providers to accept that limitation.
+The resulting decision records `backend_attestation_available: false` and never
+describes requested model identity as backend-authenticated.
+
+The evidence and comparison helpers continue to report
+`production_identity_authenticated: false`. The promotion orchestrator may produce
+a ready opaque decision only when the enabled versioned policy explicitly accepts
+the documented lower trust level, the GitHub API actor is on the policy allowlist,
+and every signed-tag, run/attempt/job, extraction, comparison and approval check
+passes in the same process. The checked-in policy selects
+`utc-calendar-quarter` cadence but remains disabled; the legacy `per-release`
+mode is retained only as an explicit compatibility mode. Today the policy and
+missing current-quarter three-provider production
+evidence keep `ready_for_publication: false`. No verifier invokes a model or creates
+a tag. Real policy activation and full production evidence remain required.
 
 ### Publication surfaces
 
 - **npmjs.org (public) — GitHub Actions only.** `.github/workflows/npm-publish.yml`
-  publishes all three packages via **OIDC trusted publishing + provenance** on tag push.
+  publishes all three retained RC tarballs via **OIDC trusted publishing + provenance**
+  on an evidence-bearing, tag-bound dispatch. Stable tag pushes fail closed.
   No npm token is involved (OIDC). GitHub Actions is the authority for npmjs.org
   supply-chain distribution and verification.
 - **Gitea npm registry (mirror) — Gitea Actions only.** `.gitea/workflows/npm-publish.yml`
-  publishes all three packages to Gitea's bundled registry for local package management.
+  publishes the same retained files after exact npmjs identities are visible.
   Uses the `NPM_TOKEN` secret — a **Gitea API token (`gta_…`)** with `package:write`
   (despite the name, it is NOT an npmjs.org token).
 - **Releases:** Gitea release = `.gitea/workflows/gitea-release.yml`; GitHub release
   = `.github/workflows/npm-publish.yml` (the mirror workflow can also create it).
 
-The GitHub publish job creates or updates a normal GitHub release immediately
-after the tag-identity and signed-tag gates, before build/test/publish. It uses
+The GitHub publish job creates or updates a normal GitHub release after the exact
+retained-RC gate and npmjs publication. It uses
 `docs/releases/v<version>-announcement.md`, falling back to the version's
 CHANGELOG section and then minimal notes. Only stable versions are marked latest.
-Tests, dependency-signature verification, and package-content audits remain
-blocking gates before all three npm publishes. The job then signs the locally
-packed tarball used for publication, generates and signs a CycloneDX SBOM of the
-built tree, and uploads the tarball, signatures, release manifest, `SHA256SUMS`, and `install.sh`.
+The authenticated RC manifest proves the required tests, dependency-signature
+checks, package audits, installed smokes, and deployment lane passed in the retained
+run. The stable job signs the retained root tarball and retained CycloneDX SBOM and
+uploads all three tarballs, signatures, release manifest, `SHA256SUMS`, and installer.
 None of that asset work depends on npm registry visibility.
 
 npm visibility/provenance and stable dist-tag verification run **last and are
@@ -780,10 +859,14 @@ failures still fail the job; already-published versions count as success on reru
 
 For a partial publish or advisory verification failure, re-check the packages'
 `dist.attestations`, `latest` version, and absence of the retired `next` alias,
-then rerun the GitHub job on the same tag:
+then rerun the GitHub job on the same tag with the same evidence:
 
 ```bash
-gh workflow run npm-publish.yml --repo jmagly/aiwg --ref <tag> -f tag_to_publish=<tag>
+gh workflow run npm-publish.yml --repo jmagly/aiwg --ref <stable-tag> \
+  -f tag_to_publish=<stable-tag> -f rc_tag=<rc-tag> \
+  -f rc_run_id=<run> -f rc_artifact_id=<artifact> \
+  -f comparison_run_id=<run> -f comparison_artifact_id=<artifact> \
+  -f approval_issue=<issue> -f approval_sha256=<sha256>
 ```
 
 Gitea's bundled npm registry stores AIWG packages but does not proxy packages

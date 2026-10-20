@@ -9,11 +9,6 @@ const root = resolve(import.meta.dirname, '../../..');
 const workflow = parse(readFileSync(join(root, '.github/workflows/npm-publish.yml'), 'utf8'));
 const steps = workflow.jobs['publish-to-npmjs-org'].steps;
 const temporaryRoots: string[] = [];
-const publishNames = [
-  'Publish to npmjs.org (OIDC + provenance)',
-  'Publish Cockpit to npmjs.org (OIDC + provenance)',
-  'Publish lightweight CLI to npmjs.org (OIDC + provenance)',
-];
 const step = (name: string) => steps.find((entry: { name: string }) => entry.name === name);
 const index = (name: string) => steps.indexOf(step(name));
 
@@ -28,7 +23,8 @@ function fixture() {
 function runStep(name: string, directory: string, mocks = '', env: Record<string, string> = {}) {
   const script = step(name).run
     .replaceAll('${{ steps.version.outputs.version }}', '2026.10.3')
-    .replaceAll('${{ steps.version.outputs.npm_tag }}', 'latest');
+    .replaceAll('${{ steps.version.outputs.npm_tag }}', 'latest')
+    .replaceAll(/\$\{\{ github\.event\.inputs\.[^}]+\}\}/g, 'evidence');
   return spawnSync('bash', ['-e', '-o', 'pipefail', '-c', `${mocks}\n${script}`], {
     cwd: directory,
     encoding: 'utf8',
@@ -69,45 +65,55 @@ afterEach(() => {
   for (const directory of temporaryRoots.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-describe('GitHub release before publish, advisory registry checks last', () => {
-  it('preserves blocking security gates and orders publication, local assets, then registry checks', () => {
+describe('exact retained-RC publication and advisory registry checks', () => {
+  it('requires authenticated dispatch evidence and orders exact publication before release assets', () => {
     const release = index('Create or update GitHub release');
-    expect(index('Verify workflow identity is tag-bound')).toBeLessThan(release);
-    expect(index('Verify signed tag (#1299 / A9 gate)')).toBe(release - 2);
-    expect(step('Install GitHub CLI (node:24 image does not ship it)')).toBe(steps[release - 1]);
-    expect(release).toBeLessThan(index('Install dependencies'));
-    expect(release).toBeLessThan(index('Build TypeScript'));
-    const gates = [
-      'Verify workflow identity is tag-bound', 'Verify signed tag (#1299 / A9 gate)',
-      'Run tests', 'Run provider deployment integration lane', 'Verify packaged SQLite feature installation (#182)',
-      'Verify .aiwg/ excluded from package', 'Audit dep-graph signatures (#1288 / A12)',
-      'Audit tarball top-level entries (#1288 / A11)', 'Check package contents',
-      'Check Cockpit package contents', 'Check lightweight CLI package contents',
-    ];
-    for (const name of gates) {
-      expect(index(name)).toBeGreaterThan(-1);
-      expect(index(name)).toBeLessThan(index(publishNames[0]));
-      expect(step(name)['continue-on-error']).toBeUndefined();
+    const promotion = index('Authorize and publish exact retained RC to npmjs.org');
+    const preserve = index('Preserve promotion decision and partial receipt');
+    for (const input of ['tag_to_publish', 'rc_tag', 'rc_run_id', 'rc_artifact_id', 'comparison_run_id',
+      'comparison_artifact_id', 'approval_issue', 'approval_sha256']) {
+      expect(workflow.on.workflow_dispatch.inputs[input].required).toBe(true);
     }
-    expect(index('Run provider deployment integration lane')).toBeGreaterThan(index('Run tests'));
-    expect(step('Run provider deployment integration lane').run).toBe('node tools/ci/run-with-hang-report.mjs --timeout 18m -- npm run test:deployment');
-    expect(step('Run provider deployment integration lane').if).toBeUndefined();
-    expect(workflow.jobs['publish-to-npmjs-org']['timeout-minutes']).toBeGreaterThanOrEqual(45 + 18);
+    expect(index('Verify signed tag (#1299 / A9 gate)')).toBeLessThan(promotion);
+    expect(promotion).toBeLessThan(preserve);
+    expect(preserve).toBeLessThan(release);
+    expect(step('Authorize and publish exact retained RC to npmjs.org').run).toContain('release-promotion.mjs publish');
+    expect(step('Authorize and publish exact retained RC to npmjs.org').run).toContain('--registry npmjs');
+    expect(step('Authorize and publish exact retained RC to npmjs.org').env).toMatchObject({
+      AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN: '${{ secrets.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN }}',
+      RC_TAG: '${{ github.event.inputs.rc_tag }}',
+      APPROVAL_SHA256: '${{ github.event.inputs.approval_sha256 }}',
+    });
+    expect(Object.keys(step('Authorize and publish exact retained RC to npmjs.org').env).sort()).toEqual([
+      'AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN', 'APPROVAL_ISSUE', 'APPROVAL_SHA256',
+      'COMPARISON_ARTIFACT_ID', 'COMPARISON_RUN_ID', 'RC_ARTIFACT_ID', 'RC_RUN_ID', 'RC_TAG',
+    ].sort());
+    expect(step('Authorize and publish exact retained RC to npmjs.org').env).not.toHaveProperty('GITHUB_TOKEN');
+    expect(step('Authorize and publish exact retained RC to npmjs.org').run).toContain('--rc-tag "$RC_TAG"');
+    const retained = step('Preserve promotion decision and partial receipt');
+    expect(retained.if).toBe('${{ always() }}');
+    expect(retained.uses).toBe('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
+    expect(retained.with.path).toContain('${{ runner.temp }}/promotion-decision.json');
+    expect(retained.with.path).toContain('${{ runner.temp }}/npmjs-publication.json');
+    expect(retained.with['if-no-files-found']).toBe('warn');
+    for (const removed of ['Run tests', 'Build TypeScript', 'Pack local release tarball',
+      'Publish Cockpit to npmjs.org (OIDC + provenance)']) expect(index(removed)).toBe(-1);
     const ordered = [
-      'Pack local release tarball', ...publishNames,
-      'Generate tarball + cosign sign + manifest', 'Generate CycloneDX SBOM',
+      'Authorize and publish exact retained RC to npmjs.org', 'Preserve promotion decision and partial receipt',
+      'Create or update GitHub release',
+      'Generate tarball + cosign sign + manifest', 'Use retained CycloneDX SBOM',
       'Sign SBOM with cosign (keyless)', 'Prepare installer and checksum manifest',
       'Upload signed release assets to GitHub release', 'Verification summary',
       'Verify provenance attestation landed', 'Verify stable dist-tag policy',
       'Report advisory npm registry checks',
     ];
     for (let i = 1; i < ordered.length; i++) expect(index(ordered[i - 1])).toBeLessThan(index(ordered[i]));
-    expect(step(publishNames[0]).run).toContain('npm publish "aiwg-${VERSION}.tgz"');
     expect(step('Generate tarball + cosign sign + manifest').run).not.toMatch(/^\s*npm (view|pack)/m);
-    // The SBOM covers the built tree and its installed dependency graph, not the slim tarball.
-    expect(step('Generate CycloneDX SBOM').run).toContain('syft scan dir:. --output cyclonedx-json="$SBOM"');
+    expect(step('Use retained CycloneDX SBOM').run).not.toContain('syft');
     expect(step('Upload signed release assets to GitHub release').run).not.toContain('gh release create');
     expect(step('Upload signed release assets to GitHub release').run).toContain('--clobber');
+    expect(step('Upload signed release assets to GitHub release').run).toContain('aiwg-cli-${VERSION}.tgz');
+    expect(step('Upload signed release assets to GitHub release').run).toContain('aiwg-cockpit-${VERSION}.tgz');
     expect(workflow.jobs['socket-post-publish'].needs).toBe('publish-to-npmjs-org');
   });
 
@@ -165,20 +171,24 @@ describe('GitHub release before publish, advisory registry checks last', () => {
     const report = step('Report advisory npm registry checks');
     expect(report.if).toContain("steps.npm_provenance.outcome == 'failure'");
     expect(report.if).toContain("steps.npm_dist_tags.outcome == 'failure'");
-    const result = runStep(report.name, directory, '', { PROVENANCE_OUTCOME: 'failure', DIST_TAGS_OUTCOME: 'failure' });
+    const result = runStep(report.name, directory, '', {
+      PROVENANCE_OUTCOME: 'failure', DIST_TAGS_OUTCOME: 'failure', RC_TAG: 'v2026.10.3-rc.1',
+      RC_RUN_ID: '1', RC_ARTIFACT_ID: '2', COMPARISON_RUN_ID: '3', COMPARISON_ARTIFACT_ID: '4',
+      APPROVAL_ISSUE: '3201', APPROVAL_SHA256: 'a'.repeat(64),
+    });
     expect(result.status).toBe(0);
     expect(result.stdout.match(/::warning::/g)).toHaveLength(2);
     const summary = readFileSync(join(directory, 'summary'), 'utf8');
     expect(summary).toContain('dist.attestations');
     expect(summary).toContain('latest = 2026.10.3 and absence of next');
-    expect(summary.match(/gh workflow run npm-publish.yml --repo jmagly\/aiwg --ref v2026.10.3 -f tag_to_publish=v2026.10.3/g)).toHaveLength(2);
+    expect(summary.match(/gh workflow run npm-publish.yml --repo jmagly\/aiwg --ref v2026.10.3/g)).toHaveLength(2);
   });
 
-  it.each(publishNames)('keeps real errors blocking and already-published reruns successful: %s', (name) => {
-    const directory = fixture();
-    const mocks = 'npm() { if [ "$1" = --version ]; then echo 11; return; fi; echo "$PUBLISH_ERROR"; return 1; }';
-    expect(step(name)['continue-on-error']).toBeUndefined();
-    expect(runStep(name, directory, mocks, { PUBLISH_ERROR: 'E403 forbidden' }).status).toBe(1);
-    expect(runStep(name, directory, mocks, { PUBLISH_ERROR: 'EPUBLISHCONFLICT cannot publish over' }).status).toBe(0);
+  it('keeps the exact promotion gate blocking and sole publication entry point', () => {
+    const promotion = step('Authorize and publish exact retained RC to npmjs.org');
+    expect(promotion['continue-on-error']).toBeUndefined();
+    expect(promotion.if).toBeUndefined();
+    expect(promotion.run.match(/release-promotion\.mjs publish/g)).toHaveLength(1);
+    expect(JSON.stringify(workflow)).not.toMatch(/npm publish (?:\.\/|"aiwg)/);
   });
 });

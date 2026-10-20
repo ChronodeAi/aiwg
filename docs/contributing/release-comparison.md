@@ -1,6 +1,14 @@
 # Comparing release responses
 
-Run release comparison after the RC build and full validation, before shipping. The gate is **no unexplained regression**. Fix each regression or record an explicit acceptance reason in the release issue, linked to the scenario, repetition, corpus digest, and report evidence. Invalid subject or judge results require a rerun; they cannot establish a passing gate.
+Run the complete release comparison and the full 43-lane validation once per UTC
+calendar quarter. Routine releases reuse the current-quarter record only when its
+tested commit is the exact candidate or an authenticated ancestor. Each release
+still runs its versioned routine RC validation and receives a candidate-specific
+approval that names the quarterly record and states that the candidate itself was
+not directly behavior-compared. The quarterly gate is **no unexplained
+regression**. Fix each regression or record an explicit acceptance reason linked
+to the scenario, repetition, corpus digest, and report evidence. Invalid subject
+or judge results require a rerun; they cannot establish a passing gate.
 
 This extends the #2936 rule-probe harness in `tools/rules/`: it imports the same probe loader, vendor trace parser, and deterministic assertion evaluator. `test/uat/release-compare/scenarios.yaml` includes the canonical base and every Wave 5 lane, deduplicates identical probes, and adds 30 workflow scenarios across SDLC, security, ops, delivery, and discovery. Every scenario supports Claude, Codex, and Hermes. Existing rule probes retain their positive/negative cases and fixture files. Workflow regression seeds include tracker authority, post-merge CI, unavailable artifact storage, missing non-kernel skills, compound discovery, and Hermes summary fetch obligations.
 
@@ -100,7 +108,7 @@ The four fixed dimensions assess correctness, completeness, rule/workflow alignm
 
 ## Execute and preserve evidence
 
-Resolve the configured artifact destination with `aiwg artifacts path --json --check-write` and create an output directory beneath its `artifact_root`. Then, after RC full validation and approval for the model work:
+Resolve the configured artifact destination with `aiwg artifacts path --json --check-write` and create an output directory beneath its `artifact_root`. Then, for the quarterly-full tested commit and after approval for the model work:
 
 ```bash
 node tools/rules/release-compare.mjs \
@@ -112,7 +120,7 @@ node tools/rules/release-compare.mjs \
   --output /resolved/artifact-root/release-comparison/claude.json
 ```
 
-Repeat for Codex and Hermes. Keep model, adapter version, inference settings, deployment bundle set, fixture versions/hashes, and seed in the release record. Do not run the complete A/B model corpus until the RC is complete.
+Repeat for Codex and Hermes. Keep model, adapter version, inference settings, deployment bundle set, fixture versions/hashes, and seed in the quarterly record. Do not run the complete A/B model corpus until the tested commit's `quarterly-full-v1` validation is complete.
 
 The default corpus currently plans 286 scenarios × 5 repetitions = 1,430 pairs per provider. Across three providers that is 4,290 pairs, 8,580 subject calls, and 4,290 judge calls (12,870 calls total), before spot checks. Dry-run records exact call counts and the known subject-prompt byte/4 estimate. That is only one input to a spend review: loaded startup context, fetched rule/tool bodies, subject outputs, judge inputs/outputs, cache behavior, retries, and the chosen model's billing terms remain unmeasured until pilot evidence is available. Do not infer total tokens or cost from prompt bytes alone. Review a small authorized pilot before approving the full corpus; no model-price assumptions are embedded here.
 
@@ -120,4 +128,24 @@ The harness checkpoints JSON and Markdown after each pair. Every checkpoint and 
 
 The JSON retains full normalized transcripts, optional native stdout, assertion outcomes, tool calls, optional token counters, presentation mappings, and judge scores. Markdown shows regressions first, excerpts from both responses, tool/assertion evidence, and suspected causes clearly marked as hypotheses. Per-scenario pass rates use every attempted repetition, including failures. A regression includes a lost deterministic pass, a lower dimension score, or a judge preference for A. Improvements cannot cancel a regression in another repetition or dimension. Invalid results hold the gate separately.
 
-Exit 0 means all planned pairs completed with no measured regression or invalid result; exit 1 holds the gate. A small selected smoke run can exit 0 without constituting full release validation. The first full comparison against 2026.10.3 and regression triage remains a release activity after RC readiness; offline tests do not satisfy it.
+Exit 0 means all planned pairs completed with no measured regression or invalid
+result; exit 1 holds the gate. A small selected smoke run can exit 0 without
+constituting quarterly validation. The trusted producer combines the three final
+reports with the exact `quarterly-full-v1` `validation.json` and a
+`quarterly-attestation.json` that binds the tested commit, workflow/run/attempt,
+UTC-quarter interval, package identity, all four payload digests, and canonical
+repository-relative adapter/runtime/parser source identities. Consumer checkouts
+resolve those exact paths locally and require unchanged bytes; producer absolute
+paths inside report JSON are retained only as historical data. The
+attestation completion time is the producer's validation completion within the
+successful run; it is not the run's later final `updated_at`. Stable promotion
+authenticates the run, artifact, current quarter, digests, full profile, and
+tested-commit ancestry. Artifact expiry still fails closed even inside the
+quarter. Retain the quarterly artifact for at least 120 days. The first such full comparison against 2026.10.3 and regression triage
+remains an authorized release activity; offline tests do not satisfy it and no
+current record is asserted here.
+
+The canonical Hermes adapter required by the quarterly source map is not yet
+implemented. Promotion remains disabled until that adapter and a three-provider
+production record are independently qualified; Claude/Codex evidence cannot fill
+the Hermes slot.

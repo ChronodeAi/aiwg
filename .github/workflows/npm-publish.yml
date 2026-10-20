@@ -33,10 +33,15 @@
 #      Confirm "Read and write permissions" OR explicit per-workflow
 #      `permissions: id-token: write` (we do the latter below, so this
 #      requirement is informational).
-# 3. Tags must be pushed to the GitHub mirror to trigger this workflow:
+# 3. Tags must be pushed to the GitHub mirror, then the stable workflow must be
+#    dispatched against the signed stable tag with the complete retained-RC,
+#    comparison, and approval evidence inputs. A tag push alone fails closed:
 #      git push origin main --tags && git push github main --tags
 #    `.aiwg/aiwg.config` `remotes.secondary[github].push_on_release: true`
 #    documents this as the release expectation.
+# 4. Repository secret AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN must be a dedicated,
+#    read-scoped credential that supports GitHub's authenticated-user API. The
+#    built-in installation GITHUB_TOKEN is not accepted for evidence identity.
 #
 # Companion controls:
 # - tools/ci/verify-signed-tag.sh (#1299 / A9) — same hard gate used on
@@ -67,12 +72,12 @@
 #   reduced.
 #
 # To publish:
-# 1. Bump version in package.json
-# 2. Sign with the dedicated release key: tools/release/cut-tag.sh YYYY.M.PATCH
-#    Then push the verified tag: git push github main --tags
-# 3. Watch this workflow on the GitHub mirror. It creates the release after
-#    tag verification, then builds, tests, publishes, signs, and uploads local
-#    release assets. Advisory npm registry checks run last.
+# 1. Complete the signed RC validation and trusted comparison workflow.
+# 2. Sign the stable tag with the dedicated release key and push both tags.
+# 3. Dispatch this workflow with --ref set to the stable tag and every required
+#    evidence input. It publishes the exact retained RC tarballs, then creates
+#    the release, signs retained assets, and uploads them. Advisory npm registry
+#    checks run last.
 # 4. Mirror the signed assets to the Gitea release with the manual operator
 #    step in the runbook (`gh workflow run upload-release-sigs.yml -F tag=…`
 #    against the Gitea Actions API, or the Gitea Actions UI).
@@ -86,8 +91,36 @@ on:
   workflow_dispatch:
     inputs:
       tag_to_publish:
-        description: 'Existing tag to re-attempt publish for (dispatch with --ref set to the same tag)'
-        required: false
+        description: 'Existing signed stable tag (dispatch with --ref set to the same tag)'
+        required: true
+        type: string
+      rc_tag:
+        description: 'Signed RC tag resolving to the same commit'
+        required: true
+        type: string
+      rc_run_id:
+        description: 'Successful retained-RC workflow run ID'
+        required: true
+        type: string
+      rc_artifact_id:
+        description: 'Retained-RC artifact ID from that run'
+        required: true
+        type: string
+      comparison_run_id:
+        description: 'Successful trusted current-quarter comparison/validation workflow run ID'
+        required: true
+        type: string
+      comparison_artifact_id:
+        description: 'Current-quarter full-validation and three-provider comparison artifact ID'
+        required: true
+        type: string
+      approval_issue:
+        description: 'GitHub issue containing the authenticated approval receipt'
+        required: true
+        type: string
+      approval_sha256:
+        description: 'SHA-256 of the exact authenticated approval comment body'
+        required: true
         type: string
 
 concurrency:
@@ -125,22 +158,20 @@ jobs:
           INPUT_TAG_TO_PUBLISH: ${{ github.event.inputs.tag_to_publish }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${INPUT_TAG_TO_PUBLISH:-}" ]; then
-            RELEASE_TAG="${INPUT_TAG_TO_PUBLISH}"
-          else
-            RELEASE_TAG="${GITHUB_REF#refs/tags/}"
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "Stable tag pushes cannot supply authenticated retained-RC evidence." >&2
+            echo "Recovery: dispatch this workflow with --ref <stable-tag> and every required evidence input." >&2
+            exit 1
           fi
+          RELEASE_TAG="${INPUT_TAG_TO_PUBLISH:-}"
           if [ -z "$RELEASE_TAG" ] || [ "$RELEASE_TAG" = "$GITHUB_REF" ]; then
             echo "Could not resolve a release tag from this workflow context"
             exit 1
           fi
-          case "$RELEASE_TAG" in
-            v*) ;;
-            *)
-              echo "Resolved release tag must start with 'v': $RELEASE_TAG"
-              exit 1
-              ;;
-          esac
+          if ! echo "$RELEASE_TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Stable release tag must match vYYYY.M.PATCH: $RELEASE_TAG" >&2
+            exit 1
+          fi
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "Resolved release tag: $RELEASE_TAG"
 
@@ -153,7 +184,7 @@ jobs:
             echo "Release signing requires a tag-bound workflow identity." >&2
             echo "Observed GITHUB_REF: $GITHUB_REF" >&2
             echo "Expected GITHUB_REF: $EXPECTED_REF" >&2
-            echo "Recovery: gh workflow run npm-publish.yml --ref '$TAG' -f tag_to_publish='$TAG'" >&2
+            echo "Recovery: dispatch npm-publish.yml with --ref '$TAG' and the same complete retained-RC evidence inputs." >&2
             exit 1
           fi
           echo "Workflow identity is bound to $EXPECTED_REF"
@@ -171,11 +202,14 @@ jobs:
         # this internally but our custom git fetch step inherits a
         # fresh shell. Gitea's runner doesn't need this line but
         # tolerates it as a no-op.
+        env:
+          RC_TAG: ${{ github.event.inputs.rc_tag }}
         run: |
-          set -o pipefail
+          set -euo pipefail
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           TAG='${{ steps.release_tag.outputs.release_tag }}'
-          git fetch origin "+refs/tags/${TAG}:refs/tags/${TAG}" --depth=1
+          git check-ref-format "refs/tags/${RC_TAG}" >/dev/null
+          git fetch origin "+refs/tags/${TAG}:refs/tags/${TAG}" "+refs/tags/${RC_TAG}:refs/tags/${RC_TAG}" --depth=1
 
       - name: Verify signed tag (#1299 / A9 gate)
         # Hard cryptographic gate — the same script that gates the Gitea
@@ -205,6 +239,110 @@ jobs:
           mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
           chmod +x /usr/local/bin/gh
           gh --version
+      - name: Checkout release tag
+        id: release_source
+        run: |
+          set -o pipefail
+          TAG='${{ steps.release_tag.outputs.release_tag }}'
+          git checkout --detach "refs/tags/${TAG}"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify source-bound storage benchmark claims (#2191)
+        run: npm run verify:storage-claims
+
+      - name: Setup Node.js with npmjs.org registry
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0 (ci/digests.txt) — Node 24
+        with:
+          node-version: '24.x'
+          # Wires `npm publish` against npmjs.org. Combined with
+          # `permissions: id-token: write` above, this enables OIDC
+          # trusted publishing — no NODE_AUTH_TOKEN required.
+          registry-url: 'https://registry.npmjs.org'
+
+      # node:24 ships npm 11.12.1 natively — clears the npm 11.5.1+
+      # requirement that npm trusted publishing needs WITHOUT a token.
+      # The earlier node:22 (npm 10.9.x) attempt produced provenance
+      # attestations (logIndex'd in Sigstore correctly), but the
+      # subsequent publish PUT lacked OIDC auth headers because npm
+      # 10.x doesn't emit them — npmjs.org returned 404 PUT every
+      # time. node:24 fixes this at the source. The full post-mortem
+      # (8 failed runs across rc.0 + rc.1 retags 1-5) lives in the
+      # commit history; the canonical 'why node 24' is right here.
+
+      - name: Install dependencies
+        run: npm ci
+      - name: Extract and verify version against tag
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION='${{ steps.release_tag.outputs.release_tag }}'
+          TAG_VERSION="${TAG_VERSION#v}"
+          if [ "$TAG_VERSION" != "$VERSION" ]; then
+            echo "Error: Tag ($TAG_VERSION) does not match package.json ($VERSION)"
+            exit 1
+          fi
+          BASE="${VERSION%%-*}"
+          if [ "$VERSION" != "$BASE" ]; then
+            echo "npm publication accepts stable versions only: $VERSION"
+            exit 1
+          fi
+          NPM_TAG=latest
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION (dist-tag: $NPM_TAG)"
+
+      - name: Authorize and publish exact retained RC to npmjs.org
+        id: promotion
+        env:
+          AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN: ${{ secrets.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN }}
+          RC_TAG: ${{ github.event.inputs.rc_tag }}
+          RC_RUN_ID: ${{ github.event.inputs.rc_run_id }}
+          RC_ARTIFACT_ID: ${{ github.event.inputs.rc_artifact_id }}
+          COMPARISON_RUN_ID: ${{ github.event.inputs.comparison_run_id }}
+          COMPARISON_ARTIFACT_ID: ${{ github.event.inputs.comparison_artifact_id }}
+          APPROVAL_ISSUE: ${{ github.event.inputs.approval_issue }}
+          APPROVAL_SHA256: ${{ github.event.inputs.approval_sha256 }}
+        run: |
+          set -euo pipefail
+          test -n "${AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN:-}" || { echo "Dedicated GitHub user evidence token is required" >&2; exit 1; }
+          RC_DIR=$(mktemp -d "$RUNNER_TEMP/aiwg-rc.XXXXXX")
+          CMP_DIR=$(mktemp -d "$RUNNER_TEMP/aiwg-comparison.XXXXXX")
+          node tools/release/release-promotion.mjs publish \
+            --rc-tag "$RC_TAG" \
+            --stable-tag '${{ steps.release_tag.outputs.release_tag }}' \
+            --run-id "$RC_RUN_ID" \
+            --artifact-id "$RC_ARTIFACT_ID" \
+            --comparison-run-id "$COMPARISON_RUN_ID" \
+            --comparison-artifact-id "$COMPARISON_ARTIFACT_ID" \
+            --approval-issue "$APPROVAL_ISSUE" \
+            --approval-sha256 "$APPROVAL_SHA256" \
+            --destination "$RC_DIR" --comparison-destination "$CMP_DIR" \
+            --registry npmjs --receipt "$RUNNER_TEMP/npmjs-publication.json" \
+            --output "$RUNNER_TEMP/promotion-decision.json"
+          node <<'NODE'
+          const fs = require('fs');
+          const decision = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/promotion-decision.json'));
+          if (!decision.ready_for_publication || decision.packages.length !== 3) throw new Error('promotion decision is not ready');
+          for (const item of decision.packages) fs.copyFileSync(item.source, item.filename, fs.constants.COPYFILE_EXCL);
+          const retained = require('path').dirname(decision.packages[0].source);
+          for (const name of [`aiwg-${decision.packages[0].version}.cdx.json`, 'install.sh']) {
+            fs.copyFileSync(require('path').join(retained, name), name, fs.constants.COPYFILE_EXCL);
+          }
+          NODE
+          chmod 0444 aiwg-*.tgz "aiwg-${{ steps.version.outputs.version }}.cdx.json"
+          chmod 0555 install.sh
+
+      - name: Preserve promotion decision and partial receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2 (ci/digests.txt)
+        with:
+          name: npmjs-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/promotion-decision.json
+            ${{ runner.temp }}/npmjs-publication.json
+          if-no-files-found: warn
+          retention-days: 90
 
       - name: Create or update GitHub release
         env:
@@ -243,288 +381,6 @@ jobs:
             gh release create "$TAG" --title "$TAG" --notes-file "$BODY_FILE" \
               --verify-tag --latest="$LATEST" --prerelease="$PRERELEASE"
           fi
-
-      - name: Checkout release tag
-        id: release_source
-        run: |
-          set -o pipefail
-          TAG='${{ steps.release_tag.outputs.release_tag }}'
-          git checkout --detach "refs/tags/${TAG}"
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Verify source-bound storage benchmark claims (#2191)
-        run: npm run verify:storage-claims
-
-      - name: Setup Node.js with npmjs.org registry
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0 (ci/digests.txt) — Node 24
-        with:
-          node-version: '24.x'
-          # Wires `npm publish` against npmjs.org. Combined with
-          # `permissions: id-token: write` above, this enables OIDC
-          # trusted publishing — no NODE_AUTH_TOKEN required.
-          registry-url: 'https://registry.npmjs.org'
-
-      # node:24 ships npm 11.12.1 natively — clears the npm 11.5.1+
-      # requirement that npm trusted publishing needs WITHOUT a token.
-      # The earlier node:22 (npm 10.9.x) attempt produced provenance
-      # attestations (logIndex'd in Sigstore correctly), but the
-      # subsequent publish PUT lacked OIDC auth headers because npm
-      # 10.x doesn't emit them — npmjs.org returned 404 PUT every
-      # time. node:24 fixes this at the source. The full post-mortem
-      # (8 failed runs across rc.0 + rc.1 retags 1-5) lives in the
-      # commit history; the canonical 'why node 24' is right here.
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install mandatory SQLite session test backend
-        # better-sqlite3 is an optional peer for end users, but the full test
-        # suite exercises the SQLite repository and must not run without it.
-        # This exact-version, no-save install runs after the age-gated locked
-        # install. Disable re-resolution's age filter here so npm does not
-        # reject already-locked young packages such as @fortemi/core.
-        # --save-dev is required here because npm otherwise treats an explicitly
-        # requested optional peer already declared by the root package as satisfied
-        # without placing it in node_modules.
-        run: |
-          npm install --no-save --save-dev --package-lock=false --min-release-age=0 better-sqlite3@12.8.0
-          node -e "require('better-sqlite3')"
-
-      - name: Run type check
-        run: npm run typecheck
-
-      - name: Build TypeScript
-        run: npm run build
-
-      - name: Assemble lightweight CLI package
-        run: npm run package:cli
-
-      - name: Run tests
-        # Test failures must block stable publish. `continue-on-error: true`
-        # was removed from the Gitea workflow per #1280 (A2); the same
-        # discipline applies here.
-        env:
-          # Shared-runner policy: paired Node baselines, median of 7 samples.
-          AIWG_PERF_BUDGET_VERSION_MS: "300"
-          AIWG_PERF_BUDGET_HELP_MS: "750"
-          AIWG_PERF_SAMPLE_COUNT: "7"
-          # Deployment tests replace HOME to prove clean-user behavior. Pass
-          # the container workspace trust as command-level Git config so their
-          # nested Git probes retain it without polluting those isolated homes.
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: safe.directory
-          GIT_CONFIG_VALUE_0: ${{ github.workspace }}
-        run: npm test -- --run --testTimeout=120000
-
-      - name: Run provider deployment integration lane
-        env:
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: safe.directory
-          GIT_CONFIG_VALUE_0: ${{ github.workspace }}
-        run: node tools/ci/run-with-hang-report.mjs --timeout 18m -- npm run test:deployment
-
-      - name: Verify packaged SQLite feature installation (#182)
-        # Hard release gate: install the packed CLI without optional peers,
-        # use the documented scoped feature installer, verify the native
-        # module loads, and open an empty session catalog.
-        run: npm run test:sessions:feature-install
-
-      - name: Extract and verify version against tag
-        id: version
-        run: |
-          set -euo pipefail
-          VERSION=$(node -p "require('./package.json').version")
-          TAG_VERSION='${{ steps.release_tag.outputs.release_tag }}'
-          TAG_VERSION="${TAG_VERSION#v}"
-          if [ "$TAG_VERSION" != "$VERSION" ]; then
-            echo "Error: Tag ($TAG_VERSION) does not match package.json ($VERSION)"
-            exit 1
-          fi
-          BASE="${VERSION%%-*}"
-          if [ "$VERSION" != "$BASE" ]; then
-            echo "npm publication accepts stable versions only: $VERSION"
-            exit 1
-          fi
-          NPM_TAG=latest
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION (dist-tag: $NPM_TAG)"
-
-      - name: Check package contents
-        run: |
-          set -o pipefail
-          echo "=== Package contents ==="
-          npm pack --dry-run 2>&1 | tee pack-output.txt
-
-      - name: Verify Fortemi Core prebuilt index package (#1697)
-        # Runs npm pack through prepack, then verifies the Fortemi Core v2
-        # framework export + manifest are present in the tarball and match
-        # their checksum/schema contract.
-        run: npm run lint:fortemi-prebuilt-package
-
-      - name: Check Cockpit package contents
-        run: |
-          set -o pipefail
-          echo "=== Cockpit package contents ==="
-          npm pack ./apps/cockpit --dry-run 2>&1 | tee cockpit-pack-output.txt
-
-      - name: Check lightweight CLI package contents
-        run: |
-          set -o pipefail
-          echo "=== @aiwg/cli package contents ==="
-          npm pack ./dist/packages/cli --dry-run 2>&1 | tee cli-pack-output.txt
-
-      - name: Verify .aiwg/ excluded from package
-        run: |
-          npm pack --dry-run --json > pack-files.json
-          node <<'NODE'
-          const fs = require('fs');
-          const stdout = fs.readFileSync('pack-files.json', 'utf8');
-          function parseNpmPackJson(text) {
-            try {
-              return JSON.parse(text);
-            } catch {
-              const start = text.lastIndexOf('\n[');
-              if (start >= 0) return JSON.parse(text.slice(start + 1));
-              const first = text.indexOf('[');
-              if (first >= 0) return JSON.parse(text.slice(first));
-              throw new Error('no JSON array found in npm pack output');
-            }
-          }
-          const pack = parseNpmPackJson(stdout);
-          const files = pack?.[0]?.files ?? [];
-          const aiwgFiles = files
-            .map((file) => file.path)
-            .filter((path) => path === '.aiwg' || path.startsWith('.aiwg/'));
-          if (aiwgFiles.length > 0) {
-            console.error('FATAL: .aiwg/ found in npm package contents!');
-            console.error('.aiwg/ is project-local SDLC artifacts — must never be published.');
-            for (const file of aiwgFiles) console.error(file);
-            process.exit(1);
-          }
-          NODE
-          echo "✓ .aiwg/ correctly excluded from npm package"
-
-      - name: Audit dep-graph signatures (#1288 / A12)
-        # Hard gate: `npm audit signatures` verifies every package in the
-        # dep graph against npmjs.org's signing keys. Time-bounded waivers
-        # live in ci/npm-audit-signatures-waivers.yaml; expired waivers
-        # fail. See .aiwg/architecture/adr-publish-time-evidence.md.
-        run: npm run lint:audit-signatures
-
-      - name: Scan known affected package feed (#1353)
-        # Hard gate when a feed source is configured. Prefer a raw gist URL
-        # in AIWG_AFFECTED_PACKAGES_CSV for CI portability; the canonical
-        # mounted path still works on operator-managed runners.
-        run: |
-          if [ -n "${AIWG_AFFECTED_PACKAGES_CSV:-}" ] || [ -f /mnt/ops/users/roctinam/Downloads/22-packages.csv ]; then
-            npm run lint:affected-packages
-          else
-            echo "Skipping affected-package scan: no CSV source configured on this runner"
-          fi
-
-      - name: Audit tarball top-level entries (#1288 / A11)
-        # Hard gate: catches Mini Shai-Hulud-style new-file-at-tarball-root
-        # injection by diffing `npm pack --dry-run --json` top-level
-        # entries against ci/expected-tarball-top-level.txt.
-        run: npm run lint:tarball
-
-      - name: Pack local release tarball
-        run: npm pack
-
-      - name: Publish to npmjs.org (OIDC + provenance)
-        # Trusted-publishing mode: no NODE_AUTH_TOKEN env, no .npmrc auth
-        # block. npm 11.5.1+ on Node 22.14.0+ negotiates OIDC against
-        # npmjs.org using the workflow's id-token claims. The provenance
-        # flag attaches a cryptographic attestation linking the tarball
-        # to this workflow run and the source commit SHA — anyone can
-        # verify with `npm view aiwg@<version> --json | jq .dist.attestations`.
-        run: |
-          set -o pipefail
-          # Print OIDC-relevant context so a publish failure can be
-          # diagnosed against the npmjs.org trusted-publisher config.
-          # Trusted publishers match on: repository_owner ('jmagly'),
-          # repository name ('aiwg'), workflow filename ('npm-publish.yml'
-          # — the basename, NOT the full .github/workflows/ path), and
-          # optionally environment. If npm returns 404 PUT, one of these
-          # doesn't match the config.
-          echo "── OIDC publish context ──"
-          echo "  repository:       ${GITHUB_REPOSITORY}"
-          echo "  repository_owner: ${GITHUB_REPOSITORY_OWNER}"
-          echo "  workflow:         ${GITHUB_WORKFLOW}"
-          echo "  workflow_ref:     ${GITHUB_WORKFLOW_REF}"
-          echo "  workflow_sha:     ${GITHUB_WORKFLOW_SHA}"
-          echo "  ref:              ${GITHUB_REF}"
-          echo "  actor:            ${GITHUB_ACTOR}"
-          echo "  npm version:      $(npm --version)"
-          echo "  node version:     $(node --version)"
-          echo
-          NPM_TAG='${{ steps.version.outputs.npm_tag }}'
-          VERSION='${{ steps.version.outputs.version }}'
-          npm publish "aiwg-${VERSION}.tgz" --provenance --access public --tag "$NPM_TAG" 2>&1 | tee publish-output.txt || {
-            if grep -qE "cannot publish over|EPUBLISHCONFLICT|409" publish-output.txt; then
-              echo "✓ Version already published to npmjs.org — treating as success"
-              echo "already_published=true" >> "$GITHUB_OUTPUT"
-            elif grep -qE "404.*PUT|is not in this registry" publish-output.txt; then
-              echo "✗ npmjs.org publish failed with 404 — trusted-publisher config mismatch"
-              echo
-              echo "The OIDC handshake worked (provenance attestation was generated,"
-              echo "look for 'Provenance statement published to transparency log'"
-              echo "above), but npmjs.org rejected the publish. The trusted-publisher"
-              echo "config on npmjs.org does not match this workflow's OIDC claims."
-              echo
-              echo "Operator action: visit https://www.npmjs.com/package/aiwg/access"
-              echo "→ Publishing access → Trusted publishers → verify config matches:"
-              echo "  Publisher:         GitHub Actions"
-              echo "  Organization:      ${GITHUB_REPOSITORY_OWNER}"
-              echo "  Repository:        $(echo "${GITHUB_REPOSITORY}" | cut -d/ -f2)"
-              echo "  Workflow filename: npm-publish.yml  (basename only, NOT a path)"
-              echo "  Environment:       (blank, or matches this workflow's environment:)"
-              echo
-              cat publish-output.txt
-              exit 1
-            else
-              echo "✗ npmjs.org publish failed (HTTP/npm error above)"
-              echo "  If this is the first OIDC release, common causes:"
-              echo "  - npmjs.org trusted-publisher not configured for jmagly/aiwg npm-publish.yml"
-              echo "  - permissions: id-token: write not set on workflow"
-              echo "  - Node version below 22.14.0 (setup-node installs 24.x above; should not happen)"
-              cat publish-output.txt
-              exit 1
-            fi
-          }
-
-      - name: Publish Cockpit to npmjs.org (OIDC + provenance)
-        run: |
-          set -o pipefail
-          NPM_TAG='${{ steps.version.outputs.npm_tag }}'
-          npm publish ./apps/cockpit --provenance --access public --tag "$NPM_TAG" 2>&1 | tee cockpit-publish-output.txt || {
-            if grep -qE "cannot publish over|EPUBLISHCONFLICT|409" cockpit-publish-output.txt; then
-              echo "✓ @aiwg/cockpit version already published to npmjs.org — treating as success"
-            else
-              echo "✗ @aiwg/cockpit npmjs.org publish failed"
-              cat cockpit-publish-output.txt
-              exit 1
-            fi
-          }
-
-      - name: Publish lightweight CLI to npmjs.org (OIDC + provenance)
-        run: |
-          set -o pipefail
-          NPM_TAG='${{ steps.version.outputs.npm_tag }}'
-          npm publish ./dist/packages/cli --provenance --access public --tag "$NPM_TAG" 2>&1 | tee cli-publish-output.txt || {
-            if grep -qE "cannot publish over|EPUBLISHCONFLICT|409" cli-publish-output.txt; then
-              echo "✓ @aiwg/cli version already published to npmjs.org — treating as success"
-            elif grep -qE "404.*PUT|is not in this registry" cli-publish-output.txt; then
-              echo "✗ @aiwg/cli publish failed: configure its npm trusted publisher for jmagly/aiwg and npm-publish.yml"
-              cat cli-publish-output.txt
-              exit 1
-            else
-              echo "✗ @aiwg/cli npmjs.org publish failed"
-              cat cli-publish-output.txt
-              exit 1
-            fi
-          }
 
       - name: Install jq (node:24 image does not ship it by default)
         # The verify-provenance step and the asset-upload steps below shell
@@ -570,7 +426,7 @@ jobs:
       - name: Generate tarball + cosign sign + manifest
         id: sign
         # Step does four things in order:
-        #   1. Locate the locally packed tarball used for publication.
+        #   1. Locate the retained tarball used for publication.
         #   2. cosign-sign the tarball → produces aiwg-X.Y.Z.tgz.sigstore.
         #   3. Build a signed release manifest with SHA-256 + tag + commit
         #      + workflow run URL for the audit trail.
@@ -583,9 +439,9 @@ jobs:
           TAG="v${VERSION}"
           TARBALL="aiwg-${VERSION}.tgz"
 
-          # Sign the same local artifact passed to npm publish; no registry lookup.
+          # Sign the same retained artifact passed to npm publish; no registry lookup.
           if [ ! -f "$TARBALL" ]; then
-            echo "✗ Expected tarball $TARBALL not present after npm pack"
+            echo "✗ Expected retained tarball $TARBALL is missing"
             ls -la
             exit 1
           fi
@@ -690,7 +546,7 @@ jobs:
           echo "tarball_sha256=$TARBALL_SHA256" >> "$GITHUB_OUTPUT"
 
       # ============================================================
-      # CycloneDX SBOM via syft — #1288 / A13 (Wave 6 of #1278)
+      # Retained CycloneDX SBOM — #1288 / A13 (Wave 6 of #1278)
       # ============================================================
       #
       # The cosign signature (A8) attests "this tarball was produced by
@@ -700,51 +556,14 @@ jobs:
       # composition question ("what's in it?") — the latter is the
       # missing piece A8 alone doesn't cover.
       #
-      # Tool choice: syft over @cyclonedx/cyclonedx-npm.
-      #   syft is a single Go binary with zero npm dep-graph impact. The
-      #   alternative @cyclonedx/cyclonedx-npm would add a multi-dep build
-      #   tool to a workflow whose entire point is reducing dep surface.
-      #   See .aiwg/architecture/adr-publish-time-evidence.md.
-      #
-      # Pin strategy: download Syft's official release archive at a pinned
-      # version and verify its immutable SHA-256 from ci/digests.txt before
-      # installing the binary. This avoids executing a remotely fetched
-      # installer and tolerates transient release-download failures.
-
-      - name: Install syft (SBOM generator)
-        # syft v1.18.0 — see ci/digests.txt "Standalone tools" section.
-        run: |
-          set -euo pipefail
-          SYFT_VERSION='v1.18.0'
-          SYFT_ARCHIVE='syft_1.18.0_linux_amd64.tar.gz'
-          SYFT_SHA256='0b6fd1e0dd5b00b19585e5cde8e1c1f4ef60dc8fba8b41fab55f00852a2fbb8d'
-          SYFT_TMP_DIR="$(mktemp -d)"
-          trap 'find "$SYFT_TMP_DIR" -type f -delete; rmdir "$SYFT_TMP_DIR"' EXIT
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
-            "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/${SYFT_ARCHIVE}" \
-            -o "$SYFT_TMP_DIR/$SYFT_ARCHIVE"
-          printf '%s  %s\n' "$SYFT_SHA256" "$SYFT_TMP_DIR/$SYFT_ARCHIVE" | sha256sum -c -
-          tar -xzf "$SYFT_TMP_DIR/$SYFT_ARCHIVE" -C "$SYFT_TMP_DIR" syft
-          install -m 0755 "$SYFT_TMP_DIR/syft" /usr/local/bin/syft
-          syft version
-
-      - name: Generate CycloneDX SBOM
+      # The RC workflow created and validated this SBOM. Stable promotion
+      # copies the exact retained bytes and signs them without regeneration.
+      - name: Use retained CycloneDX SBOM
         id: sbom
-        # `syft scan dir:.` walks the working tree including the built
-        # dist/ output and node_modules, independently of npm visibility.
-        # Output format is CycloneDX JSON — the industry-standard SBOM
-        # format that npm, gh advisory tooling, and most SCA scanners
-        # consume natively.
         run: |
           set -euo pipefail
-          VERSION='${{ steps.version.outputs.version }}'
-          SBOM="aiwg-${VERSION}.cdx.json"
-          syft scan dir:. --output cyclonedx-json="$SBOM"
-          if [ ! -s "$SBOM" ]; then
-            echo "✗ syft produced an empty SBOM"
-            exit 1
-          fi
-          echo "✓ SBOM written: $SBOM ($(stat -c%s "$SBOM") bytes)"
+          SBOM="aiwg-${{ steps.version.outputs.version }}.cdx.json"
+          test -s "$SBOM"
           echo "sbom=$SBOM" >> "$GITHUB_OUTPUT"
 
       - name: Sign SBOM with cosign (keyless)
@@ -774,11 +593,13 @@ jobs:
           SBOM='${{ steps.sbom.outputs.sbom }}'
           SBOM_SIG="${SBOM}.sigstore"
 
-          cp tools/install/install.sh "$INSTALLER"
+          test -f "$INSTALLER"
           chmod +x "$INSTALLER"
           bash "$INSTALLER" --dry-run
           sha256sum \
             "$TARBALL" \
+            "aiwg-cli-${{ steps.version.outputs.version }}.tgz" \
+            "aiwg-cockpit-${{ steps.version.outputs.version }}.tgz" \
             "$TARBALL_SIG" \
             "$MANIFEST" \
             "$MANIFEST_SIG" \
@@ -792,8 +613,8 @@ jobs:
       - name: Upload signed release assets to GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # `gh release upload --clobber` is idempotent: if the release was
-        # created before build/test/publish, the assets get attached/replaced.
+        # `gh release upload --clobber` is idempotent: reruns replace assets on
+        # the release created after exact-RC publication.
         #
         # Core signed assets, post-A13 (#1288):
         #   1. aiwg-X.Y.Z.tgz              (the tarball itself; A8 baseline)
@@ -817,6 +638,8 @@ jobs:
 
           gh release upload "$TAG" \
             "$TARBALL" \
+            "aiwg-cli-${VERSION}.tgz" \
+            "aiwg-cockpit-${VERSION}.tgz" \
             "$TARBALL_SIG" \
             "$MANIFEST" \
             "$MANIFEST_SIG" \
@@ -934,9 +757,16 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           PROVENANCE_OUTCOME: ${{ steps.npm_provenance.outcome }}
           DIST_TAGS_OUTCOME: ${{ steps.npm_dist_tags.outcome }}
+          RC_TAG: ${{ github.event.inputs.rc_tag }}
+          RC_RUN_ID: ${{ github.event.inputs.rc_run_id }}
+          RC_ARTIFACT_ID: ${{ github.event.inputs.rc_artifact_id }}
+          COMPARISON_RUN_ID: ${{ github.event.inputs.comparison_run_id }}
+          COMPARISON_ARTIFACT_ID: ${{ github.event.inputs.comparison_artifact_id }}
+          APPROVAL_ISSUE: ${{ github.event.inputs.approval_issue }}
+          APPROVAL_SHA256: ${{ github.event.inputs.approval_sha256 }}
         run: |
           set -euo pipefail
-          RECOVERY="gh workflow run npm-publish.yml --repo jmagly/aiwg --ref ${TAG} -f tag_to_publish=${TAG}"
+          RECOVERY="gh workflow run npm-publish.yml --repo jmagly/aiwg --ref ${TAG} -f tag_to_publish=${TAG} -f rc_tag=${RC_TAG} -f rc_run_id=${RC_RUN_ID} -f rc_artifact_id=${RC_ARTIFACT_ID} -f comparison_run_id=${COMPARISON_RUN_ID} -f comparison_artifact_id=${COMPARISON_ARTIFACT_ID} -f approval_issue=${APPROVAL_ISSUE} -f approval_sha256=${APPROVAL_SHA256}"
           if [ "$PROVENANCE_OUTCOME" = failure ]; then
             MESSAGE="Re-check npm visibility and dist.attestations for aiwg@${VERSION}, @aiwg/cli@${VERSION}, and @aiwg/cockpit@${VERSION}: npm view <package>@${VERSION} dist.attestations --json --prefer-online. Recovery: ${RECOVERY}"
             echo "::warning::${MESSAGE}"
