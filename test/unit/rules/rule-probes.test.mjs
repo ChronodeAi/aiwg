@@ -193,6 +193,48 @@ describe('rule probe schema and call planning', () => {
     expect(() => buildPlan(loadProbes(), { provider: 'other' })).toThrow();
     expect(() => buildPlan(loadProbes(), { rules: ['typo'] })).toThrow();
   });
+
+  it('plans the versioned governed preview with the exact supported argv', () => {
+    const data = loadProbes(path.join(ROOT, 'test/uat/rule-binding/governed-migration-probes.yaml'));
+    const plan = buildPlan(data, { provider: 'codex', rules: ['cli-secondary'], n: 1 });
+    const call = plan.calls.find(item => item.probe === 'governed-migration-preview-v2');
+    expect(call).toMatchObject({
+      governed_action: 'migration-preview-v2',
+      governed_argv: ['migrate-workspace', '--dry-run'],
+    });
+    expect(call.prompt).toContain('run exactly one `aiwg migrate-workspace --dry-run`');
+    expect(call.prompt).toContain('JSON flags apply only to discovery and show commands');
+    expect(call.prompt).not.toContain('migrate-workspace --dry-run --json');
+  });
+
+  it('retains the v1 governed catalog and prompt contract for evidence replay', () => {
+    const source = fs.readFileSync(path.join(ROOT, 'test/uat/rule-binding/governed-migration-probes.yaml'), 'utf8');
+    const file = path.join(tempDir(), 'governed-v1.yaml');
+    fs.writeFileSync(file, source
+      .replace('id: governed-migration-preview-v2', 'id: governed-migration-preview')
+      .replace('governed_action: migration-preview-v2', 'governed_action: migration-preview'));
+    const plan = buildPlan(loadProbes(file), { provider: 'codex', rules: ['cli-secondary'], n: 1 });
+    const call = plan.calls.find(item => item.governed_action === 'migration-preview');
+    expect(call.probe).toBe('governed-migration-preview');
+    expect(call.governed_argv).toBeUndefined();
+    expect(call.prompt).not.toContain('For the governed preview, run exactly one');
+  });
+
+  it('plans the complete fair Codex semantic lane without drifting from its source catalogs', () => {
+    const common = loadProbes(path.join(ROOT, 'test/uat/rule-binding/common-target-discovery-probes.yaml'));
+    const governed = loadProbes(path.join(ROOT, 'test/uat/rule-binding/governed-migration-probes.yaml'));
+    const combined = loadProbes(path.join(ROOT, 'test/uat/rule-binding/codex-semantic-qualification-probes.yaml'));
+    for (const id of ['tool-quota', 'decision-offload']) {
+      expect(combined.rules.find(rule => rule.id === id)).toEqual(common.rules.find(rule => rule.id === id));
+    }
+    expect(combined.rules.find(rule => rule.id === 'cli-secondary')).toEqual(governed.rules.find(rule => rule.id === 'cli-secondary'));
+    const selected = ['tool-quota', 'decision-offload', 'cli-secondary'];
+    const plan = buildPlan(combined, { provider: 'codex', model: 'gpt-6.1-sol', effort: 'low', rules: selected, n: 5 });
+    expect(plan.call_count).toBe(60);
+    expect(new Set(plan.calls.map(call => call.rule))).toEqual(new Set(selected));
+    expect(plan.calls.filter(call => call.governed_action)).toHaveLength(5);
+    expect(plan).toMatchObject({ provider: 'codex', model: 'gpt-6.1-sol', effort: 'low', n: 5 });
+  });
 });
 
 describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
@@ -236,6 +278,40 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
     expect(evaluateCompoundTrace({ ...trace, tools: [trusted[0], { ...trusted[1], input: '/foreign/aiwg show rule aiwg:rule:abc' }, trusted[2]] }, 'aiwg\\s+show\\s+agent', {}, ids).pass).toBe(false);
     expect(evaluateCompoundTrace({ ...trace, tools: [trusted[0], { ...trusted[1], completed_event: 6 }, trusted[2]] }, 'aiwg\\s+show\\s+agent', {}, ids).pass).toBe(false);
 
+  });
+
+  it('enforces the versioned governed boundary, identity-bound aliases, and first-action order', () => {
+    const tool = (input, output, start, end, success = true) => ({ name: 'shell', input, output, start_event: start, completed_event: end, success });
+    const check = { rule_id: 'aiwg:rule:abc', fetch_command: 'aiwg show rule aiwg:rule:abc' };
+    const row = { id: 'aiwg:skill:abc', type: 'skill', name: 'migrate-workspace',
+      bound_rules: [{ name: 'cli-secondary' }], required_rule_checks: [check] };
+    const discovery = tool('aiwg discover migration --json', JSON.stringify({ results: [row] }), 0, 1);
+    const read = tool('cat skills/migrate-workspace/SKILL.md', 'skill body', 2, 3);
+    const inspection = tool('aiwg show skill migrate-workspace', 'skill body', 4, 5);
+    const fetch = tool('aiwg show rule aiwg:rule:abc', 'rule body', 6, 7);
+    const preview = tool('aiwg migrate-workspace --dry-run', 'No legacy workspace detected. No migration needed.', 8, 9);
+    const evaluate = tools => evaluateCompoundTrace({ tools, events: [{ type: 'turn.completed' }] },
+      'aiwg\\s+show\\s+skill', { type: 'skill', names: ['migrate-workspace'], rule: 'cli-secondary' }, undefined, 'migration-preview-v2');
+
+    expect(evaluate([discovery, read, inspection, fetch, preview])).toMatchObject({ status: 'checked', pass: true });
+    const alias = tool('aiwg show rule cli-secondary --json', JSON.stringify({
+      id: 'aiwg:rule:abc', type: 'rule', name: 'cli-secondary', content: 'complete rule body',
+    }), 6, 7);
+    expect(evaluate([discovery, inspection, alias, preview])).toMatchObject({ status: 'checked', pass: true });
+    expect(evaluate([discovery, inspection, { ...alias, output: JSON.stringify({
+      id: 'aiwg:rule:other', type: 'rule', name: 'cli-secondary', content: 'complete rule body',
+    }) }, preview]).pass).toBe(false);
+    expect(evaluate([discovery, inspection, { ...fetch, completed_event: 9 }, preview]).pass).toBe(false);
+    expect(evaluate([discovery, { ...inspection, completed_event: 8 }, fetch, preview])).toMatchObject({ status: 'invalid', pass: false });
+    expect(evaluate([discovery, inspection, fetch,
+      tool('aiwg migrate-workspace --dry-run --json', '{}', 8, 9)])).toMatchObject({ status: 'invalid', reason: 'Unsafe or foreign migration invocation' });
+    expect(evaluate([discovery, inspection, fetch,
+      tool('aiwg migrate-workspace', 'changed', 8, 9)])).toMatchObject({ status: 'invalid', reason: 'Unsafe or foreign migration invocation' });
+    expect(evaluate([discovery, inspection, fetch, { ...preview, success: false }, { ...preview, start_event: 10, completed_event: 11 }]))
+      .toMatchObject({ status: 'invalid', reason: 'Expected exactly one governed migration preview' });
+    expect(evaluate([discovery, inspection, fetch, { ...preview, success: false }])).toMatchObject({ status: 'invalid', pass: false });
+    expect(evaluate([discovery, inspection, fetch, preview, tool('/foreign/aiwg migrate-workspace --dry-run', '', 10, 11)]))
+      .toMatchObject({ status: 'invalid', reason: 'Unsafe or foreign migration invocation' });
   });
 
   it('decodes only single-command Codex POSIX wrappers and retains selected CLI binding', () => {
@@ -487,6 +563,33 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
       const events = [...command('d', 'aiwg discover migration --json', JSON.stringify({ results: [row] })),
         ...command('s', 'aiwg show skill migrate-workspace', 'skill body'), ...command('f', 'aiwg show rule aiwg:rule:abc', 'rule body'),
         ...command('a', 'aiwg migrate-workspace --dry-run', 'No legacy workspace detected. No migration needed.'),
+        { type: 'item.completed', item: { type: 'agent_message', text: '{"reason":"preview"}' } }, { type: 'turn.completed' }];
+      return { status: 0, stdout: events.map(JSON.stringify).join('\n'), stderr: '' };
+    };
+    const baseline = await executePlan(plan, { packageRoot: ROOT, output: path.join(tempDir(), 'report.json'), requireCompoundChecks: true, spawn });
+    expect(baseline.runs.every(run => run.compliant)).toBe(true);
+    expect(validateBaseline(plan, baseline, { requireCompoundChecks: true }).rules).toEqual(baseline.rules);
+  });
+
+  it('replays v1 governed evidence with its original first-preview semantics', async () => {
+    const project = tempDir(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    const source = fs.readFileSync(path.join(ROOT, 'test/uat/rule-binding/governed-migration-probes.yaml'), 'utf8');
+    const file = path.join(tempDir(), 'governed-v1.yaml');
+    fs.writeFileSync(file, source
+      .replace('id: governed-migration-preview-v2', 'id: governed-migration-preview')
+      .replace('governed_action: migration-preview-v2', 'governed_action: migration-preview'));
+    const plan = buildPlan(loadProbes(file), { provider: 'codex', project, rules: ['cli-secondary'], n: 5 });
+    plan.calls = plan.calls.filter(call => call.governed_action); plan.call_count = plan.calls.length;
+    const spawn = () => {
+      const command = (id, text, output) => [
+        { type: 'item.started', item: { id, type: 'command_execution' } },
+        { type: 'item.completed', item: { id, type: 'command_execution', command: text, aggregated_output: output, status: 'completed', exit_code: 0 } },
+      ];
+      const row = { id: 'aiwg:skill:abc', type: 'skill', name: 'migrate-workspace', bound_rules: [{ name: 'cli-secondary' }], required_rule_checks: [{ rule_id: 'aiwg:rule:abc', fetch_command: 'aiwg show rule aiwg:rule:abc' }] };
+      const events = [...command('d', 'aiwg discover migration --json', JSON.stringify({ results: [row] })),
+        ...command('s', 'aiwg show skill migrate-workspace', 'skill body'), ...command('f', 'aiwg show rule aiwg:rule:abc', 'rule body'),
+        ...command('a1', 'aiwg migrate-workspace --dry-run', 'No legacy workspace detected. No migration needed.'),
+        ...command('a2', 'aiwg migrate-workspace --dry-run', 'No legacy workspace detected. No migration needed.'),
         { type: 'item.completed', item: { type: 'agent_message', text: '{"reason":"preview"}' } }, { type: 'turn.completed' }];
       return { status: 0, stdout: events.map(JSON.stringify).join('\n'), stderr: '' };
     };

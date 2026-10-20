@@ -121,7 +121,10 @@
           "type": "string",
           "minLength": 30
         },
-        "governed_action": { "const": "migration-preview" },
+        "governed_action": {
+          "enum": ["migration-preview", "migration-preview-v2"],
+          "description": "Versioned governed-action contract; v1 is retained for evidence replay and v2 governs prospective exact-argv runs."
+        },
         "compound_action": {
           "type": "string",
           "minLength": 1,

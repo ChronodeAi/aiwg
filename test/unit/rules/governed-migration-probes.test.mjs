@@ -15,8 +15,8 @@ const evaluate = events => evaluateCompoundTrace(parseTrace([...events, { type: 
 describe('governed migration preview', () => {
   it('uses a validated separate catalog with a neutral prompt', () => {
     const rule = loadProbes(path.join(ROOT, 'test/uat/rule-binding/governed-migration-probes.yaml')).rules.find(r => r.id === 'cli-secondary');
-    const probe = rule.probes.find(p => p.id === 'governed-migration-preview');
-    expect(probe.governed_action).toBe('migration-preview');
+    const probe = rule.probes.find(p => p.id === 'governed-migration-preview-v2');
+    expect(probe.governed_action).toBe('migration-preview-v2');
     expect(probe.prompt).not.toMatch(/cli-secondary|required.rule|checklist/i);
   });
   it('allows inspection before the required fetch but requires it before the actual action', () => {
