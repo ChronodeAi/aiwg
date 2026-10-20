@@ -4,6 +4,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { createGithubEvidenceTransport } from './github-evidence-transport.mjs';
 import { importImpl } from '../_resolve-impl.mjs';
 import { RC_WORKFLOW, releaseIdentity, sha256, verifyRcBundle } from './release-candidate.mjs';
 import { evaluateAssertions } from '../rules/run-rule-probes.mjs';
@@ -19,6 +21,12 @@ export const RELEASE_APPROVAL_SCHEMA = 'aiwg-release-comparison-approval/v1';
 const githubClients = new WeakSet();
 const tagReceipts = new WeakSet();
 const evidenceReceipts = new WeakSet();
+const REMAINING_REQUIREMENTS = Object.freeze([
+  'Qualify the authenticated GitHub transport in the production environment; this library cannot attest the caller token, TLS stack, or local adapter implementation.',
+  'Record and authenticate comparison adapter/remote execution identity at run time; v1 reports retain paths and results but no transport attestation.',
+  'Wire and review stable publication of the exact retained tarballs while preserving all existing release safeguards.',
+]);
+const unmetRequirements = extractionVerified => [...(extractionVerified ? [] : [EXTRACTION_REQUIREMENT]), ...REMAINING_REQUIREMENTS];
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
@@ -93,8 +101,11 @@ export function verifySignedTagPair({ root = ROOT, rcTag, stableTag, spawn = bou
  * Acquire all forge metadata through the read-only API client, download the
  * artifact through that same client, and bind it to locally verified tags.
  */
-export async function acquireGithubReleaseEvidence({ client, repository, workflowId, runId, artifactId,
-  destination, tags } = {}) {
+export async function acquireGithubReleaseEvidence(input = {}) {
+  return acquireGithubReleaseEvidenceInternal(input);
+}
+async function acquireGithubReleaseEvidenceInternal({ client, repository, workflowId, runId, artifactId,
+  destination, tags } = {}, consumeExtractionProof = () => false) {
   if (!githubClients.has(client)) throw new Error('Use a GitHub API evidence client; candidate JSON is not accepted');
   if (!tagReceipts.has(tags)) throw new Error('A locally verified signed tag-pair receipt is required');
   if (!/^[\w.-]+\/[\w.-]+$/.test(repository ?? '') || !Number.isSafeInteger(workflowId) || workflowId < 1
@@ -142,16 +153,64 @@ export async function acquireGithubReleaseEvidence({ client, repository, workflo
     rcTagObjectSha: tags.rc.object });
   const manifestPath = path.join(verified.directory, 'rc-manifest.json');
   const rootTarball = `aiwg-${verified.manifest.package_version}.tgz`;
+  const extractionVerified = consumeExtractionProof(download, archiveSha256);
   const receipt = deepFreeze({ schema: 'github-release-evidence/v1', repository,
     production_identity_authenticated: false, ready_for_publication: false,
-    unmet_requirements: [EXTRACTION_REQUIREMENT],
+    unmet_requirements: unmetRequirements(extractionVerified),
     apiCaller: { id: identity.id, login: identity.login, type: identity.type ?? null },
     workflow, run: runMetadata, jobs, artifact, workflowSource, approvals,
-    tags, archive: { sha256: archiveSha256, path: path.resolve(download.archivePath), extraction_verified: false },
+    tags, archive: { sha256: archiveSha256, path: path.resolve(download.archivePath), extraction_verified: extractionVerified },
     candidate: { ...verified, manifest_sha256: sha256(manifestPath), package_tarball: rootTarball,
       package_tarball_sha256: verified.manifest.files[rootTarball] } });
   evidenceReceipts.add(receipt);
   return receipt;
+}
+
+/** Production acquisition owns extraction of the same digest-checked archive bytes. */
+export async function acquireGithubProductionReleaseEvidence({ token, approvalIssue, fetchImpl, ...input } = {}) {
+  const transport = createGithubEvidenceTransport({ token, approvalIssue, fetchImpl });
+  let proof = null;
+  const download = transport.downloadArtifact;
+  transport.downloadArtifact = async options => {
+    const { archivePath } = await download(options);
+    const stat = fs.lstatSync(archivePath);
+    if (!stat.isFile() || stat.size > 256 * 1024 * 1024) throw new Error('Invalid release archive');
+    const bytes = fs.readFileSync(archivePath);
+    const digest = hash(bytes);
+    // Validate the authenticated API digest *before* parsing attacker-controlled ZIP bytes.
+    const artifact = await transport.getArtifact(options);
+    if (artifact?.digest !== `sha256:${digest}`) throw new Error('Downloaded artifact digest does not match authenticated GitHub metadata');
+    const directory = fs.mkdtempSync(path.join(options.destination, 'candidate-extract-'));
+    // The parser sees neither provider credentials nor Python startup hooks. The
+    // interpreter and all parent directories must be root-owned and non-writable
+    // by unprivileged users; PATH never selects executable code.
+    const interpreter = fs.realpathSync('/usr/bin/python3');
+    for (let current = interpreter; ; current = path.dirname(current)) {
+      const info = fs.statSync(current);
+      if (info.uid !== 0 || (info.mode & 0o022) !== 0) throw new Error('Untrusted Python interpreter or parent directory');
+      if (current === path.parse(current).root) break;
+    }
+    const result = spawnSync(interpreter, ['-I', '-S', path.join(ROOT, 'tools/release/extract-release-archive.py'), directory],
+      { input: bytes, encoding: 'utf8', timeout: 120000, maxBuffer: 1024 * 1024, env: { LANG: 'C.UTF-8' } });
+    if (result.error || result.status !== 0) {
+      fs.rmSync(directory, { recursive: true, force: true });
+      throw new Error(`Release archive extraction failed: ${result.error?.message ?? result.stderr}`);
+    }
+    const files = Object.fromEntries(fs.readdirSync(directory).sort().map(name => [name, sha256(path.join(directory, name))]));
+    proof = { digest, archivePath: path.resolve(archivePath), directory: path.resolve(directory), files };
+    return { archivePath, bundleDirectory: directory };
+  };
+  try {
+    return await acquireGithubReleaseEvidenceInternal({ ...input, client: createGithubApiEvidenceClient(transport) }, (downloaded, digest) => {
+      const current = proof;
+      proof = null;
+      if (!current || current.digest !== digest || current.archivePath !== path.resolve(downloaded.archivePath)
+        || current.directory !== path.resolve(downloaded.bundleDirectory)) return false;
+      const entries = fs.readdirSync(current.directory, { withFileTypes: true });
+      return entries.length === Object.keys(current.files).length && entries.every(entry => entry.isFile()
+        && Object.hasOwn(current.files, entry.name) && sha256(path.join(current.directory, entry.name)) === current.files[entry.name]);
+    });
+  } finally { proof = null; }
 }
 
 function validateFixture(identity, side, { baselineVersion, candidate }) {
@@ -356,10 +415,5 @@ export function verifyComparisonApprovalGate({ evidence, reportFiles, policy } =
   const approval = verifyComparisonApprovalReceipt({ evidence, reportBindings: bindings, policy });
   return deepFreeze({ structural_evidence_complete: true, production_identity_authenticated: false,
     comparison_reports: bindings, approval, ready_for_publication: false,
-    unmet_requirements: [
-      EXTRACTION_REQUIREMENT,
-      'Implement and review the production authenticated GitHub API transport; this library cannot attest the caller token, TLS stack, or local adapter implementation.',
-      'Record and authenticate comparison adapter/remote execution identity at run time; v1 reports retain paths and results but no transport attestation.',
-      'Wire and review stable publication of the exact retained tarballs while preserving all existing release safeguards.',
-    ] });
+    unmet_requirements: unmetRequirements(evidence.archive.extraction_verified) });
 }

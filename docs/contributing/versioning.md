@@ -699,20 +699,27 @@ or end-to-end promotion was performed by this change.
 
 #### Production evidence and comparison approval contract
 
-`tools/release/release-evidence.mjs` provides a library-only trust boundary; it
-has no command that accepts run metadata or approvals from JSON files. A caller
-must construct a read-only GitHub API client implementing authenticated identity,
-workflow, run, exact-attempt jobs, artifact metadata/download, exact-commit
-workflow source, and paginated approval acquisition. The helper requires the API
-artifact's `sha256:` digest to match the downloaded archive, validates the exact
-extracted bundle with `verifyRcBundle`, and rejects incomplete pagination. The API
-client is still a caller trust boundary: this repository does not yet provide or
-attest the production token, TLS transport, or adapter implementation. The client
-currently supplies the archive and bundle directory separately. Matching the
-archive digest does not prove that the directory was extracted from those bytes;
-verified extraction-to-directory binding remains required production-transport
-work. Acquisition explicitly reports `extraction_verified: false` and
-`ready_for_publication: false`.
+`tools/release/release-evidence.mjs` provides a library-only trust boundary.
+`acquireGithubProductionReleaseEvidence` constructs the read-only GitHub API
+transport from an explicitly supplied token and approval issue. It fetches the
+exact-attempt jobs, paginated issue comments, candidate metadata, and workflow
+source at the signed commit. Artifact redirects are restricted to trusted HTTPS
+hosts and never receive the API token. The helper checks the GitHub artifact
+SHA256 against the downloaded bytes before extracting them into a fresh private
+directory with the standard ZIP library of the root-owned `/usr/bin/python3`.
+The interpreter and its parent directories must not be group- or world-writable;
+it runs with isolated startup and a minimal environment without credentials.
+Extraction rejects traversal,
+duplicates, links, non-regular entries, oversized archives and excessive expansion;
+the verifier then checks the exact bundle inventory and retained file digests.
+The existing diagnostic seam remains deliberately untrusted when an independent
+bundle directory is supplied.
+
+This is a reviewed implementation boundary, not a remote authentication
+attestation. Production configuration must select the trusted repository, issue,
+workflow and run identities, provide suitably scoped credentials, and retain the
+existing model-execution and publisher holds. The GitHub Actions token identity and
+artifact redirect host policy need live qualification before production use.
 
 Both the RC and stable tags are independently checked with the repository's
 maintainer keyring through `tools/ci/verify-signed-tag.sh`. They must be annotated,
@@ -737,11 +744,10 @@ repetition, report digest, and precise regression signals. Issuer identity comes
 only from the authenticated GitHub API envelope and must match a trusted policy
 ID; an `issuer` claim inside approval content is rejected.
 
-Even complete structural evidence returns `ready_for_publication: false`. A
-reviewed production GitHub client with verified archive extraction-to-directory
-binding, run-time authentication of comparison adapter
-and remote model execution identity, and separate stable-publisher wiring remain
-unmet. No evidence helper invokes a model, creates a tag, or publishes a package.
+Even complete structural evidence returns `ready_for_publication: false`.
+Run-time authentication of comparison adapters and remote model execution identity,
+live qualification of the GitHub transport, and separate stable-publisher wiring
+remain unmet. No evidence helper invokes a model, creates a tag, or publishes a package.
 
 ### Publication surfaces
 
