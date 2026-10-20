@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { open, readFile } from 'node:fs/promises';
 import { assertSessionResourceLimit, schemaIssueDetail, SessionContractError, type ConsistencyStateSchema } from './contracts.js';
 import { assertImportByteLimit, DEFAULT_IMPORT_BYTE_LIMITS, type ImportByteLimits } from './import-limits.js';
@@ -50,17 +49,27 @@ export async function* streamJsonLines(
     limits?: ImportByteLimits;
   } = {},
 ): AsyncGenerator<{ line: string; byteLength: number }> {
-  const input = createReadStream(path, {
-    start: options.start,
-    end: options.end,
-    highWaterMark: JSONL_READ_CHUNK_BYTES,
-  });
+  const startOffset = options.start ?? 0;
+  if (!Number.isSafeInteger(startOffset) || startOffset < 0) throw new RangeError('start must be a nonnegative safe integer');
+  if (options.end !== undefined && options.end !== Infinity
+    && (!Number.isSafeInteger(options.end) || options.end < 0)) throw new RangeError('end must be a nonnegative safe integer or Infinity');
+  if (options.end !== undefined && options.end < startOffset) throw new RangeError('end must not precede start');
+  // Reuse raw storage across the full source instead of allocating a new MiB
+  // buffer per read. Only incomplete line fragments outlive the current read.
+  const storage = Buffer.allocUnsafe(JSONL_READ_CHUNK_BYTES);
+  const input = await open(path, 'r');
+  let position = startOffset;
   let parts: Buffer[] = [];
   let length = 0;
   let total = 0;
   try {
-    for await (const chunk of input) {
-      const buffer = chunk as Buffer;
+    while (options.end === undefined || position <= options.end) {
+      const wanted = options.end === undefined ? storage.length
+        : Math.min(storage.length, options.end - position + 1);
+      const { bytesRead } = await input.read(storage, 0, wanted, position);
+      if (bytesRead === 0) break;
+      position += bytesRead;
+      const buffer = storage.subarray(0, bytesRead);
       let start = 0;
       while (start < buffer.length) {
         const newline = buffer.indexOf(10, start);
@@ -92,12 +101,15 @@ export async function* streamJsonLines(
           yield { line, byteLength };
         }
       }
+      // Earlier fragments already own their bytes. The last fragment is the
+      // only view into storage, which the next read will overwrite.
+      if (parts.length > 0) parts[parts.length - 1] = Buffer.from(parts[parts.length - 1]);
     }
     if (length > 0) {
       yield { line: (parts.length === 1 ? parts[0] : Buffer.concat(parts, length)).toString('utf8'), byteLength: length };
     }
   } finally {
-    input.destroy();
+    await input.close();
   }
 }
 
