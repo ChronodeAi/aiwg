@@ -8,6 +8,7 @@
  * @tests @test/unit/artifacts/stats.test.ts
  */
 
+import { loadPrebuiltDeploymentIndex } from './prebuilt-deployment.js';
 import type { ArtifactIndex, GraphType, IndexStats } from './types.js';
 import { GRAPH_CONFIGS, loadGlobalGraphConfigs, loadUserGraphConfigs, resolveGraphBackendType } from './types.js';
 import { loadIndexStats, loadGraphIndexFile } from './index-reader.js';
@@ -59,7 +60,8 @@ export async function showStats(
 
   if (graph) {
     // Single graph mode
-    const stats = loadGraphIndexFile<IndexStats>(cwd, 'stats.json', graph);
+    const stats = (graph === 'framework' ? loadPrebuiltDeploymentIndex(cwd)?.stats : undefined)
+      ?? loadGraphIndexFile<IndexStats>(cwd, 'stats.json', graph);
     if (!stats) {
       console.error(`Error: No artifact index found for graph '${graph}'.`);
       console.log("Run 'aiwg index build' first to create the index.");
@@ -75,7 +77,8 @@ export async function showStats(
     .map(([name]) => name);
   const availableGraphs: { type: GraphType; stats: IndexStats }[] = [];
   for (const g of graphTypes) {
-    const s = loadGraphIndexFile<IndexStats>(cwd, 'stats.json', g);
+    const s = (g === 'framework' ? loadPrebuiltDeploymentIndex(cwd)?.stats : undefined)
+      ?? loadGraphIndexFile<IndexStats>(cwd, 'stats.json', g);
     if (s) availableGraphs.push({ type: g, stats: s });
   }
 

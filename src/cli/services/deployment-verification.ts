@@ -1,6 +1,7 @@
 import { access, readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { loadPrebuiltDeploymentIndex } from '../../artifacts/prebuilt-deployment.js';
 import { loadGraphIndexFile } from '../../artifacts/index-reader.js';
 import type { ArtifactIndex, IndexStats } from '../../artifacts/types.js';
 import { readAiwgConfig, type DeployedArtifactCounts } from '../../config/aiwg-config.js';
@@ -220,7 +221,7 @@ export function normalizeFrameworkDiscoveryInventory(stats: IndexStats): Discove
 }
 
 function frameworkDiscoveryInventory(frameworkRoot: string): DiscoveryInventory | null {
-  const stats = loadGraphIndexFile<IndexStats>(frameworkRoot, 'stats.json', 'framework');
+  const stats = loadPrebuiltDeploymentIndex(frameworkRoot, { strictRoot: true })?.stats ?? loadGraphIndexFile<IndexStats>(frameworkRoot, 'stats.json', 'framework');
   return stats ? normalizeFrameworkDiscoveryInventory(stats) : null;
 }
 
@@ -779,11 +780,14 @@ export async function verifyProviderDeployment(
     stats?: IndexStats | null;
     graph: 'framework' | 'project' | 'user';
     bundles: string[];
+    prebuiltValidated?: boolean;
   }> = [];
   if (frameworkBundles.length > 0) {
+    const prebuilt = loadPrebuiltDeploymentIndex(options.frameworkRoot, { strictRoot: true });
     indexesToVerify.push({
-      index: loadGraphIndexFile<ArtifactIndex>(options.frameworkRoot, 'metadata.json', 'framework'),
-      stats: loadGraphIndexFile<IndexStats>(options.frameworkRoot, 'stats.json', 'framework'),
+      index: prebuilt?.index ?? loadGraphIndexFile<ArtifactIndex>(options.frameworkRoot, 'metadata.json', 'framework'),
+      stats: prebuilt?.stats ?? loadGraphIndexFile<IndexStats>(options.frameworkRoot, 'stats.json', 'framework'),
+      prebuiltValidated: Boolean(prebuilt),
       graph: 'framework',
       bundles: frameworkBundles,
     });
@@ -798,7 +802,7 @@ export async function verifyProviderDeployment(
     });
   }
 
-  for (const { index, stats, graph, bundles } of indexesToVerify) {
+  for (const { index, stats, graph, bundles, prebuiltValidated } of indexesToVerify) {
     if (!index || !index.entries || Object.keys(index.entries).length === 0) {
       findings.push(finding(
         normalized,
@@ -850,7 +854,7 @@ export async function verifyProviderDeployment(
         { requestedBundles: bundles, entryCount: entryPaths.length },
       ));
     }
-    if (options.invocationStartedAt) {
+    if (options.invocationStartedAt && !prebuiltValidated) {
       // No-op builds preserve metadata bytes and record the refresh in stats.
       const refreshedAt = Math.max(...[index.builtAt, stats?.builtAt]
         .map((timestamp) => Date.parse(timestamp ?? ''))
