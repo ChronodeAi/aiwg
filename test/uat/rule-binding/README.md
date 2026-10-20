@@ -195,3 +195,12 @@ Jev decision skills. The quiet-mode compound case is held because the published 
 exposes quiet-chat behavior rather than the candidate's fleet agents. Existing compound
 results remain separate. Legacy discovery without required-rule metadata remains an
 incomplete strict check; it must not be treated as a strict pass.
+
+The prospective governed-migration lane distinguishes inspecting a skill from its
+actual documented dry-run action. It evaluates required checks against the start of
+the first migration preview, verifies the bounded result, and records fixture and
+installation integrity. Earlier inspection-proxy results remain separate.
+The earlier compound and common-target lanes require fetches before inspection, a
+stronger surrogate than checking before governed work. Governed migration instead
+uses the actual preview invocation as its boundary. An n=1 smoke is exploratory and
+does not establish full U5 qualification.

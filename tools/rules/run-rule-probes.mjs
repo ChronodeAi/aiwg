@@ -57,6 +57,8 @@ export function loadProbes(file = DEFAULT_PROBES) {
       ids.add(probe.id);
       for (const assertion of probe.assertions) if (assertion.pattern) new RegExp(assertion.pattern, 'i');
       if (probe.compound_action) new RegExp(probe.compound_action, 'i');
+      if (probe.governed_action && (!probe.compound_action || probe.governed_action !== 'migration-preview')) throw new Error('Invalid governed action');
+      if (probe.governed_action && Object.keys(probe.files ?? {}).length) throw new Error('Governed action does not accept fixture files');
       if (Boolean(probe.compound_action) !== Boolean(probe.compound_expected)) throw new Error('Compound probe requires action and expected capability');
       for (const name of Object.keys(probe.files ?? {})) {
         if (path.isAbsolute(name) || name.split(/[\\/]/).some(part => part === '..' || part === '.git')) {
@@ -98,7 +100,7 @@ export function buildPlan(data, { provider = 'claude', model, effort = 'medium',
       const { command, args } = probeInvocation(provider, model, prompt, effort);
       calls.push({ rule: rule.id, probe: probe.id, kind: probe.kind, repetition,
         command, args, cwd: '<fresh-temp-copy-of-project>', prompt, assertions: probe.assertions,
-        body_fingerprint: bodyFingerprint, files: probe.files ?? {}, compound_action: probe.compound_action, compound_expected: probe.compound_expected });
+        body_fingerprint: bodyFingerprint, files: probe.files ?? {}, compound_action: probe.compound_action, compound_expected: probe.compound_expected, governed_action: probe.governed_action });
     }
   }
   const probeDigest = createHash('sha256').update(JSON.stringify(data)).digest('hex');
@@ -181,6 +183,7 @@ export function parseAIWGCommand(input, identities) {
   if (args[0] !== 'aiwg') return null;
   if (args[1] === 'show' && args.length >= 4 && args.length <= 5 && /^(rule|behavior|skill|agent|command|flow)$/.test(args[2])
       && /^[\w:.-]+$/.test(args[3]) && (args.length === 4 || args[4] === '--json')) return { kind: 'show', type: args[2], id: args[3] };
+  if (args[1] === 'migrate-workspace' && args.length === 3 && args[2] === '--dry-run') return { kind: 'migration-preview' };
   if (args[1] === 'discover') {
     const types = new Set(['skill', 'agent', 'command', 'rule', 'schema', 'decision-definition', 'decision-ruleset', 'decision-binding', 'gate-pack', 'flow', 'runbook', 'template', 'behavior']);
     const seen = new Set(); let json = false, phrase = false;
@@ -243,7 +246,7 @@ export function evaluateRequiredRuleChecks(checks, trace, actionPattern, identit
 
 // Select the row the provider actually inspected, never fabricate obligations for
 // legacy discovery. Only successful JSON discovery results are evidence.
-export function evaluateCompoundTrace(trace, actionPattern, expected = {}, identities) {
+export function evaluateCompoundTrace(trace, actionPattern, expected = {}, identities, governed = false) {
   const actionRegex = new RegExp(actionPattern, 'i');
   const action = trace.tools.find(tool => {
     const command = typeof tool.input === 'string' ? tool.input : tool.input?.command ?? '';
@@ -252,6 +255,25 @@ export function evaluateCompoundTrace(trace, actionPattern, expected = {}, ident
   });
   if (!action || action.success !== true || !outputText(action.output).trim() || !Number.isInteger(action.start_event))
     return { status: 'invalid', pass: false, reason: 'Missing successful observable action' };
+  let boundary = action.start_event;
+  if (governed) {
+    const unsafe = trace.tools.some(tool => {
+      if (!/^(?:shell|Bash)$/i.test(tool.name)) return false;
+      const input = typeof tool.input === 'string' ? tool.input : tool.input?.command ?? '';
+      if (!/(?:^|[\s'"])(?:[^\s'"]*\/)?(?:aiwg|aiwg\.mjs)['"]?\s+migrate-workspace\b/.test(input)) return false;
+      const parsed = parseAIWGCommand(tool.input, identities);
+      return !parsed || !['discover', 'show', 'migration-preview'].includes(parsed.kind);
+    });
+    if (unsafe) return { status: 'invalid', pass: false, reason: 'Unsafe or foreign migration invocation' };
+    const previews = trace.tools.filter(tool => /^(?:shell|Bash)$/i.test(tool.name) && parseAIWGCommand(tool.input, identities)?.kind === 'migration-preview');
+    if (previews.some(tool => !Number.isInteger(tool.start_event))) return { status: 'invalid', pass: false, reason: 'Unknown governed action ordering' };
+    const preview = previews.sort((left, right) => left.start_event - right.start_event)[0];
+    if (!preview || !Number.isInteger(preview.start_event) || !Number.isInteger(preview.completed_event) || preview.success !== true
+      || preview.completed_event <= preview.start_event || !/No legacy workspace detected\./.test(outputText(preview.output)) || !/No migration needed\./.test(outputText(preview.output))
+      || !Number.isInteger(action.completed_event) || action.completed_event >= preview.start_event)
+      return { status: 'invalid', pass: false, reason: 'Missing or invalid governed migration preview' };
+    boundary = preview.start_event;
+  }
   const command = typeof action.input === 'string' ? action.input : action.input?.command ?? '';
   const selected = parseAIWGCommand(command, identities);
   if (!selected || (expected.type && selected.type !== expected.type)) return { status: 'invalid', pass: false, reason: 'Unexpected action type' };
@@ -279,7 +301,7 @@ export function evaluateCompoundTrace(trace, actionPattern, expected = {}, ident
     || !row.bound_rules.some((rule, index) => rule.name === expected.rule && row.required_rule_checks[index]?.rule_id
       && row.required_rule_checks[index]?.fetch_command?.endsWith(` ${row.required_rule_checks[index].rule_id}`))))
     return { status: 'invalid', pass: false, reason: 'Expected scenario rule missing from selected checklist' };
-  const checks = evaluateRequiredRuleChecks(row.required_rule_checks, trace, actionPattern, identities, action.start_event);
+  const checks = evaluateRequiredRuleChecks(row.required_rule_checks, trace, actionPattern, identities, boundary);
   return { status: 'checked', pass: checks.every(check => check.pass), checks };
 }
 
@@ -349,6 +371,16 @@ function validateRecordedCommands(value) {
   return value;
 }
 
+function validGovernedIntegrity(integrity, identity) {
+  const valid = value => value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).sort().join(',') === 'fixture,installation'
+    && /^[a-f0-9]{64}$/.test(value.fixture ?? '') && /^[a-f0-9]{64}$/.test(value.installation ?? '');
+  return valid(integrity?.before) && valid(integrity?.after)
+    && JSON.stringify(integrity.before) === JSON.stringify(integrity.after)
+    && integrity.before.fixture === identity?.fixture_sha256
+    && integrity.before.installation === identity?.installation_sha256;
+}
+
 export function validateBaseline(plan, baseline, { requireCompoundChecks = false } = {}) {
   if (!baseline) return;
   if (Boolean(baseline.require_compound_checks) !== requireCompoundChecks) throw new Error('Baseline strict compound-check mode mismatch');
@@ -363,12 +395,13 @@ export function validateBaseline(plan, baseline, { requireCompoundChecks = false
     const raw = byKey.get(key(call));
     if (!raw || raw.evaluation_invoked === false || raw.kind !== call.kind || typeof raw.stdout !== 'string') throw new Error(`Incomplete baseline for ${key(call)}`);
     const run = { ...raw, compliant: false };
+    if (call.governed_action && (Object.keys(call.files ?? {}).length || !validGovernedIntegrity(raw.governed_integrity, baseline.identity))) throw new Error('Incomplete governed integrity evidence');
     const identities = validateRecordedCommands(raw.command_identities);
     try {
       const trace = parseTrace(raw.stdout, plan.provider);
       run.assertions = evaluateAssertions(call.assertions, trace, identities);
       run.fetch = ruleFetches(trace.tools, call.rule, call.body_fingerprint, 'rule', identities);
-      if (call.compound_action) run.compound = evaluateCompoundTrace(trace, call.compound_action, { ...call.compound_expected, rule: call.rule }, identities);
+      if (call.compound_action) run.compound = evaluateCompoundTrace(trace, call.compound_action, { ...call.compound_expected, rule: call.rule }, identities, call.governed_action === 'migration-preview');
       run.compliant = raw.exit_code === 0 && !raw.error && trace.completed && !trace.failed && run.assertions.every(a => a.pass)
         && (!call.compound_action || (run.compound?.pass === true && (!baseline.require_compound_checks || run.compound.status === 'checked')));
     } catch { run.error = 'Invalid baseline trace'; run.fetch = { attempted: true }; }
@@ -500,6 +533,7 @@ export async function executePlan(plan, { output, baseline, packageRoot, expecte
       if (authTarget) env.AIWG_RELEASE_CODEX_AUTH_TARGET = authTarget;
       if (skillsReference) env.AIWG_RELEASE_CODEX_SKILLS_REFERENCE = skillsReference;
       const commandIdentities = { shim, cli, node: process.execPath };
+      const governedBefore = call.governed_action ? { fixture: treeIdentity(workspace), installation: treeIdentity(sampleInstallation) } : null;
       let result, bootstrapEvidence, evaluationInvoked = false;
       if (spawn) { evaluationInvoked = true; result = await spawn(call.command, call.args, 'long', { cwd: workspace, env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 180000 }); }
       else {
@@ -526,9 +560,12 @@ export async function executePlan(plan, { output, baseline, packageRoot, expecte
             diagnostic: diagnostic ?? null };
         }
       }
+      const governedAfter = call.governed_action ? { fixture: treeIdentity(workspace), installation: treeIdentity(sampleInstallation) } : null;
+      if (governedBefore && !validGovernedIntegrity({ before: governedBefore, after: governedAfter }, identity)) result.error ??= new Error('Governed action modified fixture or installation');
       run = { rule: call.rule, probe: call.probe, kind: call.kind, repetition: call.repetition,
         evaluation_invoked: evaluationInvoked, model_attempted: evaluationInvoked ? null : false,
         stdout: result.stdout ?? '', stderr: result.stderr ?? '', exit_code: result.status,
+        governed_integrity: governedBefore ? { before: governedBefore, after: governedAfter } : null,
         usage: result.usage ?? null, command_identities: commandIdentities, bootstrap: bootstrapEvidence ?? null,
         transport_identity: result.runtime_source_sha256 ? { runtime_source_sha256: result.runtime_source_sha256, trace_parser_sha256: result.trace_parser_sha256, executable_sha256: result.executable_sha256, argv_sha256: result.argv_sha256 } : null,
         transport_diagnostic: result.diagnostic ?? null,
@@ -537,10 +574,11 @@ export async function executePlan(plan, { output, baseline, packageRoot, expecte
         const trace = parseTrace(run.stdout, plan.provider);
         if (!trace.completed || trace.failed) run.error ??= 'Missing successful terminal event';
         run.assertions = evaluateAssertions(call.assertions, trace, commandIdentities);
-        if (call.compound_action) run.compound = evaluateCompoundTrace(trace, call.compound_action, { ...call.compound_expected, rule: call.rule }, commandIdentities);
+        if (call.compound_action) run.compound = evaluateCompoundTrace(trace, call.compound_action, { ...call.compound_expected, rule: call.rule }, commandIdentities, call.governed_action === 'migration-preview');
         run.fetch = ruleFetches(trace.tools, call.rule, call.body_fingerprint, 'rule', commandIdentities);
       } catch (error) { run.error ??= `Invalid trace: ${error.message}`; }
       run.fetch ??= { attempted: false, fetched: false, unknown: true, calls: [] };
+      if (governedBefore && JSON.stringify(governedBefore) !== JSON.stringify(governedAfter)) run.error ??= 'Governed action modified fixture or installation';
       run.compliant = !run.error && run.assertions?.every(assertion => assertion.pass) === true && (!call.compound_action || (run.compound?.pass === true && (!requireCompoundChecks || run.compound.status === 'checked')));
     } finally { fs.rmSync(temp, { recursive: true, force: true }); }
     runs.push(run);

@@ -121,6 +121,7 @@
           "type": "string",
           "minLength": 30
         },
+        "governed_action": { "const": "migration-preview" },
         "compound_action": {
           "type": "string",
           "minLength": 1,
