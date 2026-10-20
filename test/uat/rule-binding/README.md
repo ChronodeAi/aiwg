@@ -188,3 +188,10 @@ For live Codex probes, the controller initializes each isolated sample CLI with 
 and that the project and installed package are unchanged; bootstrap results are recorded
 separately from scored model tool calls. A bootstrap failure prevents evaluation, remains
 in the raw records, and leaves the plan incomplete without entering scoring denominators.
+
+The prospective `common-target-discovery-probes.yaml` overlay focuses on capabilities
+available in both the published baseline and candidate: Ralph for bounded loops and the
+Jev decision skills. The quiet-mode compound case is held because the published baseline
+exposes quiet-chat behavior rather than the candidate's fleet agents. Existing compound
+results remain separate. Legacy discovery without required-rule metadata remains an
+incomplete strict check; it must not be treated as a strict pass.

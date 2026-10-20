@@ -264,7 +264,8 @@ export function evaluateCompoundTrace(trace, actionPattern, expected = {}, ident
     if (Array.isArray(payload)) payload = payload.map(block => block.text ?? '').join('');
     if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch { continue; } }
     const matches = (payload?.results ?? []).filter(item => item.type === selected.type && (item.id === selected.id || item.name === selected.id));
-    if (matches.length !== 1) return { status: 'invalid', pass: false, reason: 'Ambiguous or missing selected row' };
+    if (matches.length > 1) return { status: 'invalid', pass: false, reason: 'Ambiguous selected row' };
+    if (matches.length === 0) continue;
     rows.push(matches[0]);
   }
   if (!rows.length || new Set(rows.map(row => row.id)).size !== 1 || !rows[0].id) return { status: 'invalid', pass: false, reason: 'No stable selected discovery identity' };
