@@ -671,8 +671,10 @@ is an operator responsibility.
 
 `verifyRcBundle` validates a downloaded bundle against **authenticated GitHub API**
 run/job/artifact/workflow metadata: same repository and head repository, workflow
-API ID matching the run, push event, successful completed run and the complete
-critical step inventory, matching runner, commit and signed RC tag object,
+API ID matching the run, successful completed run and the complete critical step
+inventory, matching runner, commit and signed RC tag object. Routine validation
+accepts a push or a signed-tag dispatch; quarterly validation requires a
+signed-tag dispatch, and legacy validation requires a push. It also verifies the
 artifact run/attempt, exact versioned profile/lane inventory, exact smoke identity, and all
 retained digests. The verifier also requires a separate `workflow-source/v1`
 receipt with `repository`, `path`, candidate `commit`, and SHA256 of the decoded
