@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
 import Ajv from 'ajv/dist/2020.js';
 import { ROOT } from './measure-startup-context.mjs';
@@ -437,7 +438,7 @@ export function armIdentity(plan, project, packageRoot, { requireCompoundChecks 
 }
 
 export async function executePlan(plan, { output, baseline, packageRoot, expectedIdentity, expectedBaselineIdentity, requireCompoundChecks = false,
-  spawn, runEvaluation, accountHome, executable, authTarget, skillsReference } = {}) {
+  spawn, runEvaluation, bootstrap = spawnSync, accountHome, executable, authTarget, skillsReference } = {}) {
   if (!output) throw new Error('--output is required for real runs (preserves traces)');
   const project = path.resolve(plan.project);
   if (!fs.statSync(project).isDirectory()) throw new Error('--project must be a deployed fixture directory');
@@ -488,16 +489,27 @@ export async function executePlan(plan, { output, baseline, packageRoot, expecte
       const quote = value => `'${value.replace(/'/g, "'\\''")}'`;
       fs.writeFileSync(shim, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(cli)} "$@"\n`, { mode: 0o700 });
       const home = path.join(temp, 'home'), tmp = path.join(temp, 'tmp'); fs.mkdirSync(home); fs.mkdirSync(tmp);
-      const env = { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'), XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'), TMPDIR: tmp, PATH: `${bin}${path.delimiter}/usr/local/bin:/usr/bin:/bin`, AIWG_ROOT: samplePackage, AIWG_HOME: samplePackage, AIWG_CONFIG: path.join(home, '.config/aiwg'), AIWG_ARTIFACTS_PATH: path.join(temp, 'artifacts'), AIWG_PROJECT_ARTIFACTS_PATH: path.join(temp, 'artifacts') };
+      const env = { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'), XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'), TMPDIR: tmp, PATH: `${bin}${path.delimiter}/usr/local/bin:/usr/bin:/bin`, AIWG_ROOT: samplePackage, AIWG_HOME: samplePackage, AIWG_CONFIG: path.join(home, '.config/aiwg'), AIWG_ARTIFACTS_PATH: path.join(temp, 'artifacts'), AIWG_PROJECT_ARTIFACTS_PATH: path.join(temp, 'artifacts'), NO_UPDATE_NOTIFIER: '1', AIWG_NO_UPDATE_CHECK: '1', AIWG_DECISION_ENABLED: '0' };
       if (authTarget) env.AIWG_RELEASE_CODEX_AUTH_TARGET = authTarget;
       if (skillsReference) env.AIWG_RELEASE_CODEX_SKILLS_REFERENCE = skillsReference;
       const commandIdentities = { shim, cli, node: process.execPath };
-      let result;
+      let result, bootstrapEvidence;
       if (spawn) result = await spawn(call.command, call.args, 'long', { cwd: workspace, env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 180000 });
       else {
         if (plan.provider !== 'codex') throw new Error('Live transport currently supports Codex only');
         if (!runEvaluation) ({ runCodexEvaluation: runEvaluation } = await import('./codex-evaluation-runtime.mjs'));
-        try { result = await runEvaluation({ cwd: workspace, prompt: call.prompt, model: plan.model, effort: plan.effort, accountHome, executable, envOverrideAllowed: env }); }
+        try {
+          const workspaceBefore = treeIdentity(workspace);
+          const initialized = await bootstrap(process.execPath, [cli, 'discover', 'bootstrap', '--json'],
+            { cwd: workspace, env, encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024 });
+          bootstrapEvidence = { command: 'discover bootstrap --json', status: initialized.status,
+            stdout_sha256: createHash('sha256').update(initialized.stdout ?? '').digest('hex'),
+            stderr_sha256: createHash('sha256').update(initialized.stderr ?? '').digest('hex') };
+          if (initialized.error || initialized.status !== 0) throw new Error(`CLI bootstrap failed: ${initialized.error?.message ?? `exit ${initialized.status}`}`);
+          if (!fs.existsSync(path.join(env.AIWG_CONFIG, 'installation.json'))) throw new Error('CLI bootstrap did not create installation registration');
+          if (treeIdentity(workspace) !== workspaceBefore || treeIdentity(sampleInstallation) !== identity.installation_sha256) throw new Error('CLI bootstrap modified fixture or installation');
+          result = await runEvaluation({ cwd: workspace, prompt: call.prompt, model: plan.model, effort: plan.effort, accountHome, executable, envOverrideAllowed: env });
+        }
         catch (error) {
           const diagnostic = error?.diagnostic;
           result = { status: Number.isInteger(diagnostic?.status) ? diagnostic.status : null,
@@ -507,7 +519,7 @@ export async function executePlan(plan, { output, baseline, packageRoot, expecte
       }
       run = { rule: call.rule, probe: call.probe, kind: call.kind, repetition: call.repetition,
         stdout: result.stdout ?? '', stderr: result.stderr ?? '', exit_code: result.status,
-        usage: result.usage ?? null, command_identities: commandIdentities,
+        usage: result.usage ?? null, command_identities: commandIdentities, bootstrap: bootstrapEvidence ?? null,
         transport_identity: result.runtime_source_sha256 ? { runtime_source_sha256: result.runtime_source_sha256, trace_parser_sha256: result.trace_parser_sha256, executable_sha256: result.executable_sha256, argv_sha256: result.argv_sha256 } : null,
         transport_diagnostic: result.diagnostic ?? null,
         error: result.error?.message ?? (result.status !== 0 ? `CLI exit ${result.status}` : null) };

@@ -299,7 +299,14 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
     const accountHome = tempDir(), executable = path.join(tempDir(), 'codex');
     const expectedIdentity = armIdentity(plan, project, root, { authTarget, skillsReference });
     const report = await executePlanImpl(plan, { packageRoot: root, output: path.join(tempDir(), 'out.json'), expectedIdentity,
-      accountHome, executable, authTarget, skillsReference, runEvaluation: async input => {
+      accountHome, executable, authTarget, skillsReference, bootstrap: async (node, args, { env, timeout, killSignal }) => {
+        expect(node).toBe(process.execPath); expect(args.slice(1)).toEqual(['discover', 'bootstrap', '--json']);
+        expect(timeout).toBe(30_000); expect(killSignal).toBe('SIGKILL');
+        expect(env).toMatchObject({ NO_UPDATE_NOTIFIER: '1', AIWG_NO_UPDATE_CHECK: '1', AIWG_DECISION_ENABLED: '0' });
+        fs.mkdirSync(env.AIWG_CONFIG, { recursive: true }); fs.writeFileSync(path.join(env.AIWG_CONFIG, 'installation.json'), '{}');
+        return { status: 0, stdout: '', stderr: '' };
+      }, runEvaluation: async input => {
+        expect(fs.existsSync(path.join(input.envOverrideAllowed.AIWG_CONFIG, 'installation.json'))).toBe(true);
         const env = input.envOverrideAllowed, isolationRoot = path.dirname(env.HOME);
         expect(input).toMatchObject({ accountHome, executable, model: plan.model, effort: plan.effort });
         expect(env.AIWG_ROOT).not.toBe(root); expect(treeIdentity(env.AIWG_ROOT)).toBe(expectedIdentity.package_sha256);
@@ -313,6 +320,33 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
         return { status: 0, stdout, stderr: '' };
       } });
     expect(report.runs[0].compliant).toBe(true);
+    expect(report.runs[0].bootstrap).toMatchObject({ command: 'discover bootstrap --json', status: 0 });
+  });
+
+  it('does not call the evaluator when CLI bootstrap fails', async () => {
+    const project = tempDir(), root = installedPackage(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    const plan = buildPlan(loadProbes(), { provider: 'codex', project, rules: ['quiet-mode'], n: 1 });
+    plan.calls = [plan.calls[0]]; plan.call_count = 1;
+    let called = false;
+    const report = await executePlanImpl(plan, { packageRoot: root, output: path.join(tempDir(), 'out.json'),
+      expectedIdentity: armIdentity(plan, project, root), bootstrap: async () => ({ status: 1, stdout: '', stderr: 'error' }),
+      runEvaluation: async () => { called = true; } });
+    expect(called).toBe(false);
+    expect(report.runs[0]).toMatchObject({ compliant: false, bootstrap: { status: 1 }, error: 'CLI bootstrap failed: exit 1' });
+  });
+
+  it('rejects a bootstrap that changes the sample project before evaluation', async () => {
+    const project = tempDir(), root = installedPackage(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    const plan = buildPlan(loadProbes(), { provider: 'codex', project, rules: ['quiet-mode'], n: 1 });
+    plan.calls = [plan.calls[0]]; plan.call_count = 1;
+    let called = false;
+    const report = await executePlanImpl(plan, { packageRoot: root, output: path.join(tempDir(), 'out.json'),
+      expectedIdentity: armIdentity(plan, project, root), bootstrap: async (_node, _args, { cwd, env }) => {
+        fs.mkdirSync(env.AIWG_CONFIG, { recursive: true }); fs.writeFileSync(path.join(env.AIWG_CONFIG, 'installation.json'), '{}');
+        fs.writeFileSync(path.join(cwd, 'unexpected'), 'changed'); return { status: 0, stdout: '', stderr: '' };
+      }, runEvaluation: async () => { called = true; } });
+    expect(called).toBe(false);
+    expect(report.runs[0].error).toBe('CLI bootstrap modified fixture or installation');
   });
 
   it('checkpoints bounded shared-runtime diagnostics when a completed call fails postchecks', async () => {
@@ -328,6 +362,7 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
       trace: { completed: true, failed: false } };
     const failure = Object.assign(new Error('account postcheck failed'), { diagnostic });
     const report = await executePlanImpl(plan, { packageRoot: root, output: path.join(tempDir(), 'out.json'), expectedIdentity,
+      bootstrap: async (_node, _args, { env }) => { fs.mkdirSync(env.AIWG_CONFIG, { recursive: true }); fs.writeFileSync(path.join(env.AIWG_CONFIG, 'installation.json'), '{}'); return { status: 0, stdout: '', stderr: '' }; },
       runEvaluation: async () => { throw failure; } });
     expect(report.runs[0]).toMatchObject({ exit_code: 0, stdout, stderr: 'bounded host diagnostic',
       error: 'account postcheck failed', compliant: false, transport_diagnostic: diagnostic });
