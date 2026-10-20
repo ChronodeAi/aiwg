@@ -167,7 +167,7 @@ describe('release evidence acquisition and approval gates (#3201)', () => {
     const zipped = spawnSync('python3', ['-c', `import os,sys,zipfile
 z=zipfile.ZipFile(sys.argv[2],'w',zipfile.ZIP_DEFLATED)
 for name in os.listdir(sys.argv[1]): z.write(os.path.join(sys.argv[1],name),name)
-z.close()`, fixture.directory, fixture.archivePath]);
+z.close()`, fixture.directory, fixture.archivePath], { timeout: 30000, killSignal: 'SIGKILL' });
     expect(zipped.status).toBe(0);
     const data = apiData(fixture), tags = signedTags(), target = temp();
     const fetchImpl = async url => {
