@@ -590,6 +590,113 @@ is intentional; don't try to "unify" them.
 | `@aiwg/cli`     | **scoped**, under the `@aiwg` org                  | `npm install -g @aiwg/cli`     | Lightweight CLI/API runtime without the corpus; its version is exactly lockstep with `aiwg`. |
 | `@aiwg/cockpit` | **scoped**, under the `@aiwg` org                  | `npm install -g @aiwg/cockpit` | Opt-in Cockpit package.                                                                      |
 
+### Two-stage release candidates (#3201)
+
+**Staged implementation:** signed RC validation and exact-artifact verification are
+available. Stable promotion is deliberately **not wired** into
+`.github/workflows/npm-publish.yml` yet. That workflow still performs its existing
+build, tests, signed-tag verification, three npm publishes, signing, provenance,
+SBOM generation, release asset upload, Socket audit, and same-tag recovery. Do not
+close #3201 or claim a completed release gate from the offline tests below.
+
+The intended sequence is RC build → full validation → real release comparison
+(#3298) → fix or explicitly accept each regression → promote exact RC artifacts.
+The merged [release-comparison harness](release-comparison.md) records package,
+fixture, corpus, and deployed-tree identities, but no comparison has been run for
+this candidate. Production promotion must verify those reports and bind their
+candidate tarball or fixture digests plus every regression disposition to the RC
+manifest before stable publication can switch to promotion. A successful RC build
+alone is insufficient authorization to ship.
+
+RC tags label validation attempts rather than package prerelease versions. For
+example, commit C contains version `2026.10.4` consistently in package manifests,
+lockfiles, marketplace, and bundled plugins. Signed `v2026.10.4-rc.1` validates
+that commit without changing any package version. A subsequent stable
+`v2026.10.4` must point to the **same commit C** and use the **same packed bytes**.
+Do not bump from `2026.10.4-rc.1` to `2026.10.4` between stages. Fixes require a
+new main commit and a new signed RC attempt.
+
+After normal version, changelog, announcement, and signing prerequisites, the
+existing tag helper accepts the RC suffix:
+
+```bash
+# These are release-operator actions; do not run during offline implementation review.
+tools/release/cut-tag.sh 2026.10.4-rc.1
+# Push the verified RC tag to the GitHub mirror only when RC execution is authorized.
+```
+
+`.github/workflows/release-candidate.yml` verifies the signed annotated tag and
+main ancestry, checks stable-version identity, installs locked dependencies and
+the mandatory SQLite backend, runs the full build (including apps/web), and
+executes the 42 required lanes enumerated in
+`tools/release/release-candidate.mjs`. These include default/leak/UAT via
+`test:ci`, contracts, conformance, coverage gates, SQLite/performance, serve and
+artifact-index integration, D29/D17 studies, package budgets/lifecycle, installed
+discovery, dependency signatures, license boundaries, and tarball audits. The
+configured affected-package feed and available provider sandbox use the same
+capability policy as main CI. Failed or skipped required lanes do not produce a
+successful candidate artifact.
+
+After validation, RC packs **all three** surfaces (`aiwg`, `@aiwg/cli`,
+`@aiwg/cockpit`) once into the retained bundle and smoke-installs those exact
+tarballs in temporary prefixes with isolated homes. It checks installed package
+identities, CLI version/help, and the Cockpit bridge's installed import. It audits
+the actual pack file lists for `.aiwg` exclusion and the root top-level allowlist.
+It generates the built-tree CycloneDX SBOM using the existing pinned Syft binary
+and retains the exact installer. This is an install/import smoke, not a claim of
+live Cockpit service or provider behavior validation.
+
+The immutable GitHub Actions artifact is named
+`release-candidate-<commit>-<run-id>-<attempt>`, retained for 90 days. It contains
+three tarballs, the built-tree SBOM, installer, per-lane validation evidence,
+installed-smoke evidence, and `rc-manifest.json`. The manifest binds stable
+package version, RC tag object, peeled commit, repository/workflow/run/attempt,
+runner, and SHA256 of every retained payload. Verification rejects extra files,
+directories, and symlinks: the retained bundle must contain exactly the manifest
+and its expected regular-file payloads. Failed-run diagnostics have a separate
+artifact name and cannot satisfy promotion verification. Expired or missing
+candidate artifacts fail closed; retaining the evidence needed for later recovery
+is an operator responsibility.
+
+`verifyRcBundle` validates a downloaded bundle against **authenticated GitHub API**
+run/job/artifact/workflow metadata: same repository and head repository, workflow
+API ID matching the run, push event, successful completed run and the complete
+critical step inventory, matching runner, commit and signed RC tag object,
+artifact run/attempt, complete lane inventory, exact smoke identity, and all
+retained digests. The verifier also requires a separate `workflow-source/v1`
+receipt with `repository`, `path`, candidate `commit`, and SHA256 of the decoded
+workflow source fetched for that commit. It compares that digest to the
+authoritative workflow file in the checked-out verifier source. The receipt must
+be constructed by the future production caller from an authenticated source API;
+it never comes from the candidate bundle or manifest.
+
+Production wiring must independently fetch and verify the signed RC tag with
+`tools/ci/verify-signed-tag.sh`, validate its peeled commit against the stable
+signed tag, fetch the workflow metadata and exact-commit source, and
+obtain/download the artifact through trusted APIs before invoking the verifier.
+Candidate-provided JSON is not a substitute for trusted API metadata. No
+production metadata fetcher or promotion caller exists in this staged change.
+
+The helper's `verify` command is an **offline diagnostic** accepting captured
+metadata files, including `--workflow` API metadata and the separate
+`--workflow-source` receipt. The command cannot authenticate those files and
+therefore does not qualify them for publication. Its promotion plan lists the
+original tarball paths/digests and proposed
+`npm publish <tarball> --ignore-scripts --provenance` arguments; it never publishes
+and exits nonzero with `ready_for_publication: false`. The unresolved gate is real
+comparison evidence and explicit regression disposition bound to those candidate
+identities. Final stable wiring must retain the current
+signed-tag, OIDC/provenance, tarball/manifest/SBOM signing, installer/checksum,
+GitHub release assets, all three npm surfaces, and same-tag partial-publish
+recovery while removing rebuild/retest/repack from the shipping stage. That
+wiring remains outstanding. The #3298 harness supplies the comparison evidence
+format; it does not supply candidate evidence, regression approval, or permission
+to publish.
+
+Offline stub tests prove validation and identity logic only. No real signed RC
+run, package installation from a release candidate, model comparison, publication,
+or end-to-end promotion was performed by this change.
+
 ### Publication surfaces
 
 - **npmjs.org (public) — GitHub Actions only.** `.github/workflows/npm-publish.yml`
