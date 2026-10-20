@@ -17,6 +17,19 @@ const { loadRulePinConfigs, installedRuleCapabilities, resolveRulePins } = await
 const { guardRulesInlineBudget } = await importImpl(import.meta.url, 'rules/inline-budget.mjs');
 const { userConfigFile } = await importImpl(import.meta.url, 'config/user-config-dir.mjs');
 const { resolveProjectAiwgDir } = await importImpl(import.meta.url, 'config/project-artifacts-runtime.mjs');
+const PREPARATION_HOOK = Symbol.for('aiwg.provider-preparation-hook.v1');
+
+export function installRuleDeploymentPreparationHook(hook) {
+  if (!hook || typeof hook.scratch !== 'string' || !hook.inputPool || typeof hook.accept !== 'function' || globalThis[PREPARATION_HOOK]) {
+    throw new Error('Invalid or already active rule deployment preparation hook');
+  }
+  globalThis[PREPARATION_HOOK] = hook;
+  return () => { if (globalThis[PREPARATION_HOOK] === hook) delete globalThis[PREPARATION_HOOK]; };
+}
+
+export function isRuleDeploymentPreparationActive() {
+  return Boolean(globalThis[PREPARATION_HOOK]);
+}
 
 function walk(dir) {
   if (!fs.existsSync(dir)) return [];
@@ -498,7 +511,7 @@ export function warpRuleContent(content) {
 }
 
 function startupFiles(opts, provider) {
-  const bridgeNames = { claude: ['CLAUDE.md'], cursor: ['AGENTS.md'], codex: ['AGENTS.md'], hermes: ['AGENTS.md', '.hermes.md'], warp: ['WARP.md'], openclaw: [] };
+  const bridgeNames = { claude: ['CLAUDE.md'], cursor: ['AGENTS.md'], codex: ['AGENTS.md'], hermes: ['AGENTS.md', '.hermes.md'], pi: ['AGENTS.md'], warp: ['WARP.md'], openclaw: [] };
   const paths = ['AIWG.md', 'WORKSPACE.md', '.aiwg/AIWG.md', ...bridgeNames[provider.name]].map(name => path.join(opts.target, name));
   if (opts.activeWorkspace) paths.push(path.join(opts.activeWorkspace, 'AGENTS.md'));
   if (['claude', 'cursor', 'openclaw'].includes(provider.name)) {
@@ -522,6 +535,14 @@ function startupFiles(opts, provider) {
 // Plans contain only JSON values and a scratch directory. The preparing process
 // owns that directory until disposal; cross-process transfer needs a separate lease.
 const stagedCleanups = new Map();
+export class RuleDeploymentStaleError extends Error {
+  constructor(message, paths = []) {
+    super(message);
+    this.name = 'RuleDeploymentStaleError';
+    this.code = 'AIWG_RULE_DEPLOYMENT_STALE';
+    this.paths = paths;
+  }
+}
 function capturePreimage(file, ancestors = new Set()) {
   let stat;
   try { stat = fs.lstatSync(file); } catch (error) {
@@ -571,6 +592,15 @@ function planOwner(plan) {
 export function disposeRuleDeploymentPlan(plan) {
   const owner = planOwner(plan);
   if (owner) { stagedCleanups.delete(plan.lease); owner.cleanup(); }
+}
+
+/** Release process-local ownership while retaining a coordinator-owned stage. */
+export function detachRuleDeploymentPlan(plan) {
+  const owner = planOwner(plan);
+  if (!owner || !owner.transferable) throw new Error('Rule deployment plan is not transferable');
+  stagedCleanups.delete(plan.lease);
+  owner.detach();
+  return plan;
 }
 function captureAnchors(paths) {
   const names = new Set();
@@ -659,7 +689,7 @@ export function createRuleDeploymentInputPool(srcRoot) {
     const execAnchors = captureAnchors(trustedExec);
     const safeCleanup = () => { setPoolWritable(snapshotRoot, true); cleanup(); };
     const token = Object.freeze({});
-    inputPools.set(token, { corpusRoot: path.resolve(corpusRoot), sourceTree: path.resolve(sourceTree), snapshotRoot, snapshotTree, isCorpusTree, preimages, inventorySeal, execAnchors, refs: 1, closed: false, cleanup: safeCleanup });
+    inputPools.set(token, { corpusRoot: path.resolve(corpusRoot), sourceTree: path.resolve(sourceTree), snapshotRoot, snapshotTree, isCorpusTree, preimages, inventorySeal, execAnchors, refs: 1, closed: false, cleanup: safeCleanup, transferable: true });
     return token;
   } catch (error) { setPoolWritable(path.join(temp, 'input'), true); cleanup(); throw error; }
 }
@@ -667,6 +697,126 @@ function releaseInputPool(pool) { if (--pool.refs === 0) pool.cleanup(); }
 export function disposeRuleDeploymentInputPool(token) {
   const pool = inputPools.get(token);
   if (pool && !pool.closed) { pool.closed = true; releaseInputPool(pool); }
+}
+
+/** A descriptor contains immutable snapshot identity, never its cleanup lease. */
+export function describeRuleDeploymentInputPool(token) {
+  const pool = inputPools.get(token);
+  if (!pool || pool.closed || !pool.transferable) throw new Error('Invalid or closed rule deployment input pool');
+  verifyInputPool(pool);
+  return {
+    version: 1,
+    corpusRoot: pool.corpusRoot,
+    sourceTree: pool.sourceTree,
+    snapshotRoot: pool.snapshotRoot,
+    snapshotTree: pool.snapshotTree,
+    isCorpusTree: pool.isCorpusTree,
+    inventorySeal: pool.inventorySeal,
+    execAnchors: pool.execAnchors,
+  };
+}
+
+/** Import a read-only pool view in a preparation worker. The coordinator keeps
+ * the only cleanup lease and later restores the live-source preimages. */
+export function importRuleDeploymentInputPool(descriptor) {
+  if (!descriptor || descriptor.version !== 1 || typeof descriptor.inventorySeal !== 'string' ||
+      !Array.isArray(descriptor.execAnchors)) throw new Error('Invalid rule deployment input pool descriptor');
+  for (const key of ['corpusRoot', 'sourceTree', 'snapshotRoot', 'snapshotTree']) {
+    if (typeof descriptor[key] !== 'string' || !path.isAbsolute(descriptor[key])) throw new Error('Invalid rule deployment input pool descriptor');
+  }
+  const token = Object.freeze({});
+  const pool = { ...descriptor, corpusRoot: path.resolve(descriptor.corpusRoot), sourceTree: path.resolve(descriptor.sourceTree),
+    snapshotRoot: path.resolve(descriptor.snapshotRoot), snapshotTree: path.resolve(descriptor.snapshotTree), preimages: [],
+    refs: 1, closed: false, cleanup: () => {}, transferable: false };
+  verifyInputPool(pool);
+  inputPools.set(token, pool);
+  return token;
+}
+
+function within(root, file) {
+  const relative = path.relative(path.resolve(root), path.resolve(file));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function safeRelative(root, name) {
+  return typeof name === 'string' && name !== '' && name !== '.' && path.normalize(name) === name && !path.isAbsolute(name) && within(root, path.join(root, name));
+}
+
+function exactObjectKeys(value, keys) {
+  return value && typeof value === 'object' && !Array.isArray(value) &&
+    JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+}
+
+function validPreimageState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state) || typeof state.kind !== 'string') return false;
+  if (state.kind === 'missing') return Object.keys(state).length === 1;
+  if (!Number.isSafeInteger(state.mode) || state.mode < 0) return false;
+  if (state.kind === 'file') return Object.keys(state).length === 3 && /^[a-f0-9]{64}$/.test(state.digest);
+  if (state.kind === 'symlink') return Object.keys(state).length === 4 && typeof state.target === 'string' && validPreimageState(state.resolved);
+  return state.kind === 'directory' && Object.keys(state).length === 3 && Array.isArray(state.entries) && state.entries.every(entry =>
+    Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && entry[0] !== '' && !entry[0].includes(path.sep) && validPreimageState(entry[1]));
+}
+
+function expectedAnchorPaths(paths) {
+  const names = new Set();
+  for (const name of paths) {
+    let current = path.resolve(name);
+    for (;;) {
+      names.add(current);
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  return [...names].sort();
+}
+
+/** Adopt a detached worker plan into the coordinator's process-local lease. */
+export function adoptRuleDeploymentPlan(detached, { scratch, target, inputPool, cleanup }) {
+  const invalid = () => { throw new Error('Invalid transferred rule deployment plan'); };
+  if (!exactObjectKeys(detached, ['version', 'lease', 'temp', 'target', 'stage', 'rootNames', 'workspaceDirs', 'preimages', 'poolSeal', 'anchors', 'snapshotRoot', 'corpusRoot', 'sourceMappings', 'staged', 'report', 'mappings']) ||
+      detached.version !== 1 || typeof detached.lease !== 'string' || !(detached.poolSeal === null || typeof detached.poolSeal === 'string') ||
+      !detached.report || typeof detached.report !== 'object' || Array.isArray(detached.report) || typeof scratch !== 'string' || typeof target !== 'string' || typeof cleanup !== 'function') invalid();
+  const root = path.resolve(scratch), expectedTarget = path.resolve(target);
+  if (path.resolve(detached.temp || '') !== root || path.resolve(detached.stage || '') !== path.join(root, 'project') || path.resolve(detached.target || '') !== expectedTarget) invalid();
+  if (!Array.isArray(detached.staged) || !Array.isArray(detached.mappings) || !Array.isArray(detached.rootNames) || !Array.isArray(detached.preimages) ||
+      !Array.isArray(detached.workspaceDirs) || !Array.isArray(detached.anchors) || !Array.isArray(detached.sourceMappings) ||
+      typeof detached.snapshotRoot !== 'string' || !path.isAbsolute(detached.snapshotRoot) || typeof detached.corpusRoot !== 'string' || !path.isAbsolute(detached.corpusRoot)) invalid();
+  if (detached.rootNames.some(name => !safeRelative(expectedTarget, name))) invalid();
+  const pool = inputPool && inputPools.get(inputPool);
+  if (inputPool && (!pool || pool.closed || !pool.transferable)) invalid();
+  if (pool) {
+    verifyInputPool(pool);
+    if (detached.poolSeal !== pool.inventorySeal || path.resolve(detached.snapshotRoot || '') !== pool.snapshotRoot) invalid();
+  } else if (detached.poolSeal) invalid();
+  const expectedArtifactRoot = path.resolve(resolveProjectAiwgDir(expectedTarget));
+  const validSourceMapping = item => within(root, item.to) || (pool && within(pool.snapshotRoot, item.to)) ||
+    (path.resolve(item.from) === path.join(expectedTarget, '.aiwg') && path.resolve(item.to) === expectedArtifactRoot);
+  if (detached.workspaceDirs.some(name => !safeRelative(expectedTarget, name)) ||
+      detached.preimages.some(item => !item || Object.keys(item).length !== 2 || typeof item.path !== 'string' || !path.isAbsolute(item.path) || !validPreimageState(item.state)) ||
+      detached.staged.some(item => !item || Object.keys(item).length !== 2 || typeof item.path !== 'string' || !within(root, item.path) || !validPreimageState(item.state)) ||
+      detached.sourceMappings.some(item => !item || Object.keys(item).length !== 2 || typeof item.from !== 'string' || !path.isAbsolute(item.from) ||
+        typeof item.to !== 'string' || !path.isAbsolute(item.to) || !validSourceMapping(item)) ||
+      detached.mappings.some(item => !item || Object.keys(item).length !== 3 || typeof item.from !== 'string' || !path.isAbsolute(item.from) ||
+        typeof item.to !== 'string' || !within(root, item.to) || within(root, item.from) || !Array.isArray(item.before) || item.before.some(entry =>
+          !Array.isArray(entry) || entry.length !== 2 || !safeRelative(item.to, entry[0]) || !/^[a-f0-9]{64}$/.test(entry[1])))) invalid();
+  const expectedStaged = [path.join(root, 'project'), ...detached.mappings.map(item => path.resolve(item.to))].sort();
+  if (JSON.stringify(detached.staged.map(item => path.resolve(item.path)).sort()) !== JSON.stringify([...new Set(expectedStaged)])) invalid();
+  const anchorPaths = expectedAnchorPaths([expectedTarget, ...detached.mappings.map(item => item.from), ...detached.workspaceDirs.map(name => path.join(expectedTarget, name))]);
+  if (detached.anchors.some(item => !item || typeof item.path !== 'string' || !path.isAbsolute(item.path) ||
+      (item.missing === true ? Object.keys(item).length !== 2 : Object.keys(item).sort().join(',') !== 'dev,ino,link,mode,path,real' ||
+        !['dev', 'ino', 'mode', 'real'].every(key => typeof item[key] === 'string') || !(item.link === null || typeof item.link === 'string'))) ||
+      JSON.stringify(detached.anchors.map(item => path.resolve(item.path)).sort()) !== JSON.stringify(anchorPaths)) invalid();
+  const plan = structuredClone(detached);
+  plan.lease = randomUUID();
+  if (pool) {
+    const existing = new Set(plan.preimages.map(item => path.resolve(item.path)));
+    plan.preimages.unshift(...pool.preimages.filter(item => !existing.has(path.resolve(item.path))));
+    pool.refs++;
+  }
+  const ownerCleanup = () => { try { cleanup(); } finally { if (pool) releaseInputPool(pool); } };
+  stagedCleanups.set(plan.lease, { temp: root, cleanup: ownerCleanup, pool, seal: planSeal(plan), transferable: false, detach: () => {} });
+  return plan;
 }
 
 /** Stage only provider/context output, never the user's source tree. On failure
@@ -703,12 +853,19 @@ export async function prepareRuleDeployment(original, provider, deploy) {
   if (manifestState.kind === 'symlink') manifestState = manifestState.resolved;
   const manifestDigest = previousText ? createHash('sha256').update(previousText).digest('hex') : null;
   if ((manifestState.kind === 'missing' ? null : manifestState.digest) !== manifestDigest) throw new Error('Rule manifest changed while preparing snapshot');
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rule-deploy-'));
-  const removeStage = trackTemporaryDirectory(temp);
+  const transferable = Boolean(original.ruleDeploymentScratch);
+  const temp = transferable ? path.resolve(original.ruleDeploymentScratch) : fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rule-deploy-'));
+  if (transferable) {
+    const stat = fs.lstatSync(temp);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.readdirSync(temp).length) throw new Error('Invalid rule deployment scratch directory');
+  }
+  const removeStage = transferable
+    ? () => fs.rmSync(temp, { recursive: true, force: true })
+    : trackTemporaryDirectory(temp);
   if (pool) pool.refs++;
   const removeTemp = () => { removeStage(); if (pool) releaseInputPool(pool); };
   const lease = randomUUID();
-  stagedCleanups.set(lease, { temp, cleanup: removeTemp, pool, seal: null });
+  stagedCleanups.set(lease, { temp, cleanup: removeTemp, detach: () => { if (pool) releaseInputPool(pool); }, pool, seal: null, transferable });
   const mappings = [];
   const preimages = [...initialPreimages];
   let retained = false;
@@ -1049,9 +1206,11 @@ export function commitRuleDeploymentPlan(plan) {
     if (!owner) throw new Error('Unowned or modified rule deployment plan');
     if (owner.pool) { if (plan.poolSeal !== owner.pool.inventorySeal) throw new Error('Shared input pool lease changed'); verifyInputPool(owner.pool); }
     if (JSON.stringify(snapshotPreimages(plan.staged.map(item => item.path))) !== JSON.stringify(plan.staged)) throw new Error('Staged provider output changed');
-    if (JSON.stringify(captureAnchors(plan.anchors.map(item => item.path))) !== JSON.stringify(plan.anchors)) throw new Error('Provider deployment root or ancestor changed');
+    if (JSON.stringify(captureAnchors(plan.anchors.map(item => item.path))) !== JSON.stringify(plan.anchors)) {
+      throw new RuleDeploymentStaleError('Provider deployment root or ancestor changed', plan.anchors.map(item => item.path));
+    }
     const stale = plan.preimages.filter(item => JSON.stringify(capturePreimage(item.path)) !== JSON.stringify(item.state)).map(item => item.path);
-    if (stale.length) throw new Error(`Provider deployment preimage changed: ${stale.join(', ')}`);
+    if (stale.length) throw new RuleDeploymentStaleError(`Provider deployment preimage changed: ${stale.join(', ')}`, stale);
     const { target, stage, rootNames } = plan;
     for (const dir of plan.workspaceDirs || []) fs.mkdirSync(path.join(target, dir), { recursive: true });
     const mappings = plan.mappings.map(({ from, to, before }) => ({ from, to, before: new Map(before) }));
@@ -1100,5 +1259,12 @@ export function commitRuleDeploymentPlan(plan) {
 /** Stage and commit serially for existing provider callers. */
 export async function deployWithRuleDelivery(original, provider, deploy) {
   if (original.ruleDelivery) return deploy(original);
+  const hook = globalThis[PREPARATION_HOOK];
+  if (hook) {
+    const plan = await prepareRuleDeployment({ ...original, inputPool: hook.inputPool, ruleDeploymentScratch: hook.scratch }, provider, deploy);
+    const report = plan.report;
+    hook.accept(detachRuleDeploymentPlan(plan));
+    return report;
+  }
   return commitRuleDeploymentPlan(await prepareRuleDeployment(original, provider, deploy));
 }

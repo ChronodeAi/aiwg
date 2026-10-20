@@ -11,6 +11,7 @@ import path from 'path';
 import fs from 'fs';
 import {
   collectFrameworkArtifacts,
+  withRuleDeployment,
   createAgentsMdFromTemplate,
   deployFiles,
   deploySkillsWithKernelRouting,
@@ -139,6 +140,10 @@ export function getFileExtension() {
 }
 
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const normalizedMode = normalizeDeploymentMode(opts.mode);
   const agentFiles = [];
   const commandFiles = [];
