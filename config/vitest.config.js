@@ -9,7 +9,7 @@ process.env.CHOKIDAR_USEPOLLING ??= '1';
 export default defineConfig({
   root: path.resolve(import.meta.dirname, '..'),
   test: {
-    globalSetup: ['./test/helpers/deployment-cache-setup.mjs'],
+    globalSetup: ['./test/helpers/prebuilt-relations-setup.mjs', './test/helpers/deployment-cache-setup.mjs'],
     setupFiles: ['./test/helpers/deployment-cache-isolation.mjs'],
     // Test file patterns
     include: [
@@ -22,7 +22,6 @@ export default defineConfig({
     ],
 
     // Build shipped tables once; fresh worker HOMEs use the same immutable corpus.
-    globalSetup: ['./test/helpers/prebuilt-relations-setup.mjs'],
 
     // Runner ownership follows imported APIs, not the .mjs extension.
     // Node unit tests and all UAT tests have their own required lanes.
