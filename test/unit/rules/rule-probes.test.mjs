@@ -436,6 +436,42 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
     expect(await run(false, false, false)).toMatchObject({ compliant: true, compound: { status: 'legacy-or-unbound' } });
     expect(await run(false, false, true)).toMatchObject({ compliant: false, compound: { status: 'legacy-or-unbound' } });
   });
+  it('fails a governed preview when the copied fixture changes', async () => {
+    const project = tempDir(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    const data = loadProbes(path.join(ROOT, 'test/uat/rule-binding/governed-migration-probes.yaml'));
+    const plan = buildPlan(data, { provider: 'codex', project, rules: ['cli-secondary'], n: 1 });
+    plan.calls = plan.calls.filter(call => call.governed_action); plan.call_count = 1;
+    const report = await executePlan(plan, { packageRoot: ROOT, output: path.join(tempDir(), 'report.json'), spawn: (_cmd, _args, _tier, options) => {
+      fs.writeFileSync(path.join(options.cwd, 'changed'), 'changed');
+      return { status: 0, stdout: JSON.stringify({ type: 'turn.completed' }), stderr: '' };
+    } });
+    expect(report.runs[0]).toMatchObject({ compliant: false, error: 'Governed action modified fixture or installation' });
+    expect(report.runs[0].governed_integrity.before.fixture).not.toBe(report.runs[0].governed_integrity.after.fixture);
+    expect(fs.existsSync(path.join(project, 'changed'))).toBe(false);
+  });
+
+  it('replays a complete governed baseline with identity-bound integrity', async () => {
+    const project = tempDir(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
+    const data = loadProbes(path.join(ROOT, 'test/uat/rule-binding/governed-migration-probes.yaml'));
+    const plan = buildPlan(data, { provider: 'codex', project, rules: ['cli-secondary'], n: 5 });
+    plan.calls = plan.calls.filter(call => call.governed_action); plan.call_count = plan.calls.length;
+    const spawn = () => {
+      const command = (id, text, output) => [
+        { type: 'item.started', item: { id, type: 'command_execution' } },
+        { type: 'item.completed', item: { id, type: 'command_execution', command: text, aggregated_output: output, status: 'completed', exit_code: 0 } },
+      ];
+      const row = { id: 'aiwg:skill:abc', type: 'skill', name: 'migrate-workspace', bound_rules: [{ name: 'cli-secondary' }], required_rule_checks: [{ rule_id: 'aiwg:rule:abc', fetch_command: 'aiwg show rule aiwg:rule:abc' }] };
+      const events = [...command('d', 'aiwg discover migration --json', JSON.stringify({ results: [row] })),
+        ...command('s', 'aiwg show skill migrate-workspace', 'skill body'), ...command('f', 'aiwg show rule aiwg:rule:abc', 'rule body'),
+        ...command('a', 'aiwg migrate-workspace --dry-run', 'No legacy workspace detected. No migration needed.'),
+        { type: 'item.completed', item: { type: 'agent_message', text: '{"reason":"preview"}' } }, { type: 'turn.completed' }];
+      return { status: 0, stdout: events.map(JSON.stringify).join('\n'), stderr: '' };
+    };
+    const baseline = await executePlan(plan, { packageRoot: ROOT, output: path.join(tempDir(), 'report.json'), requireCompoundChecks: true, spawn });
+    expect(baseline.runs.every(run => run.compliant)).toBe(true);
+    expect(validateBaseline(plan, baseline, { requireCompoundChecks: true }).rules).toEqual(baseline.rules);
+  });
+
   it('records and replays selected absolute CLI provenance and rejects forged identity or mismatched strict mode', async () => {
     const project = tempDir(); fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Context');
     const data = loadProbes(path.join(ROOT, 'test/uat/rule-binding/compound-discovery-probes.yaml'));

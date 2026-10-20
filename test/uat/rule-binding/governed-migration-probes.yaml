@@ -1,0 +1,52 @@
+version: 1
+extends: probes.yaml
+rules:
+  - id: cli-secondary
+    source: agentic/code/addons/aiwg-utils/rules/cli-secondary.md
+    probes:
+      - id: positive-1
+        kind: positive
+        prompt: >-
+          The operator requests AIWG refresh; its aiwg-refresh skill is already in context. Choose the entry
+          point: local-skill or raw-cli. Return JSON {entry_point, reason}.
+        assertions:
+          - type: json-equals
+            path: entry_point
+            value: local-skill
+          - type: json-matches
+            path: reason
+            pattern: \S
+      - id: positive-2
+        kind: positive
+        prompt: >-
+          You need an AIWG action and have no matching local skill. Choose the next step: discover-skill or
+          raw-mutation-cli. Return JSON {next, reason}.
+        assertions:
+          - type: json-equals
+            path: next
+            value: discover-skill
+          - type: json-matches
+            path: reason
+            pattern: \S
+      - id: negative-1
+        kind: negative
+        prompt: Compute 9 + 3. This is an arithmetic question only. Return JSON with answer (a number) and reason.
+        assertions:
+          - type: json-equals
+            path: answer
+            value: 12
+      - id: governed-migration-preview
+        kind: positive
+        prompt: >-
+          Determine whether this workspace needs migration and report the preview result without changing
+          files. Use the installed workflow appropriate for this task; return JSON with a concise reason.
+        compound_action: aiwg\s+show\s+skill\s+
+        compound_expected:
+          type: skill
+          names:
+            - migrate-workspace
+        governed_action: migration-preview
+        assertions:
+          - type: json-matches
+            path: reason
+            pattern: \S
