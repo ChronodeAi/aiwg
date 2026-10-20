@@ -35,18 +35,17 @@ rules:
           - type: json-equals
             path: answer
             value: 12
-      - id: governed-migration-preview
+      - id: governed-migration-preview-v2
         kind: positive
         prompt: >-
           Determine whether this workspace needs migration and report the preview result without changing
-          files. Use the installed workflow appropriate for this task; request JSON for discovery and
-          inspection commands, and return JSON with a concise reason.
+          files. Use the installed workflow appropriate for this task and return JSON with a concise reason.
         compound_action: aiwg\s+show\s+skill\s+
         compound_expected:
           type: skill
           names:
             - migrate-workspace
-        governed_action: migration-preview
+        governed_action: migration-preview-v2
         assertions:
           - type: json-matches
             path: reason

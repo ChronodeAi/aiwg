@@ -197,9 +197,13 @@ results remain separate. Legacy discovery without required-rule metadata remains
 incomplete strict check; it must not be treated as a strict pass.
 
 The prospective governed-migration lane distinguishes inspecting a skill from its
-actual documented dry-run action. It evaluates required checks against the start of
-the first migration preview, verifies the bounded result, and records fixture and
-installation integrity. Earlier inspection-proxy results remain separate.
+actual documented dry-run action. Its versioned `governed-migration-preview-v2`
+scenario supplies the exact supported `aiwg migrate-workspace --dry-run` argv in
+the controller-owned prompt. JSON is requested only for discovery and show; an
+extra preview flag remains invalid instead of being accepted retrospectively. The
+lane evaluates required checks against the start of the one migration preview,
+verifies the bounded result, and records fixture and installation integrity.
+Earlier inspection-proxy and v8 results remain separate and unchanged.
 The earlier compound and common-target lanes require fetches before inspection, a
 stronger surrogate than checking before governed work. Governed migration instead
 uses the actual preview invocation as its boundary. An n=1 smoke is exploratory and
@@ -210,3 +214,28 @@ only when the name aligns with that discovered checklist entry and the complete
 JSON response binds the same canonical ID, type, name, and nonempty content.
 Plaintext names do not provide that identity binding. Earlier raw results remain
 unchanged; this support applies to prospective evaluations.
+
+### Codex semantic qualification lane
+
+`codex-semantic-qualification-probes.yaml` combines the two capabilities shared
+by the published baseline and candidate (`tool-quota` and `decision-offload`)
+with the versioned `cli-secondary` governed preview. Its duplicated rule entries
+are checked for parsed-object equality against the two source
+catalogs so either source change requires an intentional qualification update.
+The asymmetric `quiet-mode` fleet-agent inspection remains outside this fair A/B
+lane; its earlier raw observations are retained separately.
+
+At `n=5`, selecting these three rules plans 60 calls for one arm: twelve probes
+times five repetitions. Running the same frozen plan once against published A
+and once against candidate B therefore budgets 120 Codex subject calls. There is
+no judge in the U5/U7 rule-probe harness. Both arms must use the same Codex model,
+effort, strict-check setting, catalog digest, and fixture contract. This lane is
+a bounded #3292 qualification; it does not satisfy #3298's release-comparison
+corpus or the issue's remaining non-Codex provider evidence.
+
+```bash
+node tools/rules/run-rule-probes.mjs --dry-run \
+  --probes test/uat/rule-binding/codex-semantic-qualification-probes.yaml \
+  --provider codex --model gpt-6.1-sol --effort low --n 5 \
+  --rule tool-quota --rule decision-offload --rule cli-secondary
+```
