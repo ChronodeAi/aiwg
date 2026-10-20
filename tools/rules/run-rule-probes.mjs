@@ -543,7 +543,7 @@ export async function executePlan(plan, { output, baseline, packageRoot, expecte
       run.compliant = !run.error && run.assertions?.every(assertion => assertion.pass) === true && (!call.compound_action || (run.compound?.pass === true && (!requireCompoundChecks || run.compound.status === 'checked')));
     } finally { fs.rmSync(temp, { recursive: true, force: true }); }
     runs.push(run);
-    // Checkpoint after every paid call; failures never disappear from denominators.
+    // Checkpoint every record; only invoked evaluations enter scoring denominators.
     fs.writeFileSync(output, JSON.stringify(summarize(runs), null, 2) + '\n');
     console.error(`${runs.length}/${plan.call_count} ${call.rule}/${call.probe}: ${run.compliant ? 'pass' : 'fail'}`);
     if (!spawn && run.error) break;

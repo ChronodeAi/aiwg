@@ -557,6 +557,8 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
     });
     const baseline = summarizeRuns(plan, runs);
     expect(validateBaseline(plan, baseline).rules).toEqual(baseline.rules);
+    const uninvoked = structuredClone(baseline); uninvoked.runs[0].evaluation_invoked = false;
+    expect(() => validateBaseline(plan, uninvoked)).toThrow('Incomplete baseline');
     expect(() => validateBaseline(plan, baseline, { requireCompoundChecks: true })).toThrow('strict compound-check mode mismatch');
     const tampered = structuredClone(baseline); tampered.rules['quiet-mode'].positive_compliance_rate = 0;
     expect(() => validateBaseline(plan, tampered)).toThrow('summary');
