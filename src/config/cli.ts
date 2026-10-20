@@ -20,6 +20,9 @@
 
 import { fileURLToPath } from 'url';
 import path from 'path';
+import { isDeepStrictEqual } from 'node:util';
+import { normalizeProviderDefinitionId } from '../providers/provider-definitions.js';
+import type { AiwgConfig } from './aiwg-config.js';
 import { UserConfig } from './user-config.js';
 import { AiwgError, EXIT_CODES } from '../cli/errors.js';
 import { isInteractive } from '../cli/env.js';
@@ -27,6 +30,27 @@ import { exitCodeForSpawnResult } from '../cli/child-process-result.js';
 import { projectControlPath, resolveProjectAiwgDir } from './project-artifacts.js';
 
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
+
+function warnStaleParallelism(cfg: AiwgConfig, projectDir: string, key: string, before: unknown): void {
+  if (key !== 'parallelism' && !key.startsWith('parallelism.')) return;
+  if (isDeepStrictEqual(before, getDottedPath(cfg as unknown as Record<string, unknown>, key))) return;
+  const configured = (cfg.providers ?? []).map(normalizeProviderDefinitionId).filter((id): id is NonNullable<typeof id> => !!id);
+  const recorded = Object.values(cfg.installed ?? {}).flatMap(entry => Object.keys(entry.deployedTo ?? {}))
+    .map(normalizeProviderDefinitionId).filter((id): id is NonNullable<typeof id> => !!id).sort();
+  const providers = [...new Set([...configured, ...recorded])];
+  const targets = providers.length ? providers : ['<provider>'];
+  const lines = [
+    `WARNING: ${key} changed project configuration; generated workspace/provider guidance may now be stale.`,
+    `From project root ${path.resolve(projectDir)}, preview and refresh every configured or recorded provider context:`,
+    ...targets.flatMap(provider => [
+      `  aiwg regenerate --workspace --provider ${provider} --dry-run`,
+      `  aiwg regenerate --workspace --provider ${provider}`,
+    ]),
+    '  aiwg workspace-context doctor',
+    `Shared parallelism defaults and labels use primary provider '${cfg.providers?.[0] ?? 'unknown'}' (providers[0]); --provider selects the adapter/context target.`,
+  ];
+  console.error(lines.join('\n'));
+}
 
 /**
  * Main CLI entry point for `aiwg config <subcommand> [args]`
@@ -425,6 +449,7 @@ async function projectConfigSet(key: string, raw: string, args: string[], quiet 
   const cfg = key === 'rules' || key.startsWith('rules.')
     ? (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : emptyConfig())
     : (await readAiwgConfig(projectDir)) ?? emptyConfig();
+  const before = structuredClone(getDottedPath(cfg as unknown as Record<string, unknown>, key));
   setDottedPath(cfg as unknown as Record<string, unknown>, key, value);
   const externalLinkErrors = validateExternalLinks(cfg.externalLinks);
   if (externalLinkErrors.length > 0) {
@@ -447,6 +472,7 @@ async function projectConfigSet(key: string, raw: string, args: string[], quiet 
   }
   await writeAiwgConfig(projectDir, cfg);
   if (!quiet) console.log(`Set --project ${key} = ${raw}`);
+  if (!quiet) warnStaleParallelism(cfg, projectDir, key, before);
 }
 
 /** Read a dotted path from a nested record. Returns undefined when any segment is missing. */
@@ -694,6 +720,7 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
 
   const primary = cfg.providers[0];
   const defaults = getProviderParallelismDefaults(primary);
+  const before = structuredClone(getDottedPath(cfg as unknown as Record<string, unknown>, key));
 
   if (key === 'parallelism') {
     cfg.parallelism = {
@@ -704,6 +731,7 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
     };
     await writeAiwgConfig(projectDir, cfg);
     console.log(`Reset --project parallelism to provider default (${primary ?? 'unknown'})`);
+    warnStaleParallelism(cfg, projectDir, key, before);
     return;
   }
 
@@ -717,6 +745,7 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
       if (current) delete current[last];
       await writeAiwgConfig(projectDir, cfg);
       console.log(`Reset --project ${key}`);
+      warnStaleParallelism(cfg, projectDir, key, before);
       return;
     }
 
@@ -726,6 +755,7 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
       (cfg.parallelism as Record<string, unknown>)[field] = defaults[field];
       await writeAiwgConfig(projectDir, cfg);
       console.log(`Reset --project ${key} to provider default (${defaults[field]})`);
+      warnStaleParallelism(cfg, projectDir, key, before);
       return;
     }
   }

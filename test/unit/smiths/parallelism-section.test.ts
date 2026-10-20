@@ -107,6 +107,8 @@ describe('buildParallelismSection (#1362)', () => {
     await writeAiwgConfig(tmpDir, emptyConfig(['claude']));
     const section = await buildParallelismSection(tmpDir);
     expect(section).toContain('## Parallelism Cap');
+    expect(section).toContain('follow the emitted provider-specific regeneration commands');
+    expect(section).toContain('aiwg workspace-context doctor');
     expect(section).toContain('max_parallel_subagents');
     expect(section).toContain('4 (provider default for claude)');
     expect(section).toContain('2 (provider default for claude)'); // ralph loops
@@ -264,6 +266,7 @@ This project caps parallel agent fan-out (#1359):
 *Rationale*: Provider default for codex — adjust via 'aiwg config set --project parallelism.max_parallel_subagents N'
 
 Delegation policy and model-worker selection: \`aiwg show rule subagent-scoping\`.
+After changing project parallelism with \`aiwg config set/reset --project\`, follow the emitted provider-specific regeneration commands and run \`aiwg workspace-context doctor\`.
 
 **Provider behavior (codex)**: native custom subagents can select the deployed model-worker wrapper. Verify the resolved model when provider or account policy may substitute it.
 

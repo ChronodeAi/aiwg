@@ -246,6 +246,7 @@ export async function buildParallelismSection(projectPath: string, deps: Paralle
   }
   lines.push('');
   lines.push('Delegation policy and model-worker selection: `aiwg show rule subagent-scoping`.');
+  lines.push('After changing project parallelism with `aiwg config set/reset --project`, follow the emitted provider-specific regeneration commands and run `aiwg workspace-context doctor`.');
   lines.push('');
   lines.push(delegationSupport(primary));
   lines.push('');
