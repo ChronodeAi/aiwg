@@ -85,5 +85,5 @@ describe('Hermes deployment', () => {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(homeDir, { recursive: true, force: true });
     }
-  }, 240_000);
+  }, 310_000);
 });

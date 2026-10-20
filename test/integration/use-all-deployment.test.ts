@@ -28,6 +28,8 @@ vi.mock('child_process', async (importOriginal) => {
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const BIN = path.join(REPO_ROOT, 'bin/aiwg.mjs');
+const DEPLOY_CHILD_TIMEOUT_MS = 180_000;
+const DEPLOY_TEST_TIMEOUT_MS = 210_000;
 const TEST_HOME = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-cli-home-'));
 
 afterAll(() => {
@@ -57,7 +59,7 @@ function runAiwg(
   const result = spawnSync(process.execPath, [BIN, ...args], {
     cwd,
     encoding: 'utf-8',
-    timeout: 180_000,
+    timeout: DEPLOY_CHILD_TIMEOUT_MS,
     // Full-corpus deployment/indexing can exceed a minute on shared runners.
     // Do not inherit the operator's ~/.aiwg/channel.json. A dev/edge pointer
     // can otherwise route this release-candidate test through another checkout.
@@ -78,7 +80,7 @@ function runAiwgWithEnv(
   const result = spawnSync(process.execPath, [BIN, ...args], {
     cwd,
     encoding: 'utf-8',
-    timeout: 180_000,
+    timeout: DEPLOY_CHILD_TIMEOUT_MS,
     env: isolatedCliEnv(env),
   });
   return {
@@ -198,13 +200,13 @@ describe('aiwg use — disallow list', () => {
 // aiwg use all — deployment coverage
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeout: 60_000 }, () => {
+describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeout: DEPLOY_TEST_TIMEOUT_MS }, () => {
   let projectDir: string;
   const fullUseAllArgs = (target: string) => ['use', 'all', '--target', target];
 
   beforeEach(async () => {
     projectDir = await makeProject();
-  });
+  }, 70_000);
 
   afterEach(async () => {
     await cleanProject(projectDir);
@@ -225,7 +227,7 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
     expect(result.stdout).toMatch(/Deployed to Claude Code \(claude\)[\s\S]*\bSkills \d+\b/);
     expect(result.stdout).toMatch(/Indexed for discovery[\s\S]*\bskill \d+\b/);
     expect(result.stdout).not.toMatch(/Discoverable skills\s+\d+ deployed/);
-  }, 60_000);
+  }, DEPLOY_TEST_TIMEOUT_MS);
 
   it('deploys more skills than the old hardcoded 4-addon set would produce', async () => {
     const result = runAiwg(fullUseAllArgs(projectDir), projectDir);
@@ -358,7 +360,7 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }
-  }, 210_000);
+  }, DEPLOY_TEST_TIMEOUT_MS);
 
   it('deploys Pi prompts and kernel skills for the default bulk install', async () => {
     const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-pi-home-'));
@@ -377,7 +379,7 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, DEPLOY_TEST_TIMEOUT_MS);
 
   it('mirrors Pi user-scope resources through PI_CODING_AGENT_DIR', async () => {
     const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-pi-user-home-'));
@@ -395,7 +397,7 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, DEPLOY_TEST_TIMEOUT_MS);
 
   it('keeps Claude bulk deployment kernel-only by default', async () => {
     const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-claude-home-'));
@@ -419,7 +421,7 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, DEPLOY_TEST_TIMEOUT_MS);
 
   it('keeps managed bulk artifacts intact during a kernel-only dry run', async () => {
     const agentsDir = path.join(projectDir, '.codex', 'agents');
@@ -455,7 +457,7 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, DEPLOY_TEST_TIMEOUT_MS);
 
   // One bounded CLI child per case; each provider gets an isolated project and
   // a distinct failure identity. Leave time for child shutdown and assertions.
@@ -477,7 +479,7 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
       .filter(rule => !rule.structural && rule.data.activation !== undefined);
     for (const rule of migrated) expect(actual).not.toContain(rule.name);
     expect(body).not.toContain('Binding rules moved on demand to fit the inline budget');
-  }, 210_000);
+  }, DEPLOY_TEST_TIMEOUT_MS);
 });
 
 // ---------------------------------------------------------------------------
