@@ -288,6 +288,11 @@ describe('decision ask', () => {
 
   it('shares one timeout across waves and aborts in-flight passes', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(milliseconds => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), milliseconds);
+      return controller.signal;
+    });
     try {
       const fake = scripted([0.95], 40);
       const resultPromise = askDecision({ question: 'Proceed?', mode: { kind: 'yes-no' }, passes: 16, timeoutMs: 100 }, {
@@ -313,7 +318,11 @@ describe('decision ask', () => {
       expect(fake.evaluate.mock.calls.at(-1)?.[0].signal.aborted).toBe(true);
       await vi.advanceTimersByTimeAsync(100);
       expect(fake.evaluate).toHaveBeenCalledTimes(12);
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.clearAllTimers();
+      timeout.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('bounds an injected evaluator that never resolves by the same ask deadline', async () => {
