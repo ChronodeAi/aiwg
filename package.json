@@ -91,6 +91,7 @@
     "build:copy-mjs": "node tools/scripts/copy-build-resources.mjs",
     "build:web": "node tools/scripts/resource-preflight.mjs --profile web && npm --prefix apps/web ci && npm --prefix apps/web run build",
     "test": "node tools/testing/run-default-lane.mjs",
+    "test:deployment": "node tools/testing/run-default-lane.mjs --config config/vitest.deployment.config.js",
     "lint:session-fixtures": "node tools/ci/session-fixture-sanitize.mjs",
     "features:sqlite": "npm install --no-save --save-dev --package-lock=false --min-release-age=0 better-sqlite3@12.8.0",
     "test:sessions:sqlite": "npm run build:cli && node tools/ci/session-sqlite-gate.mjs",

@@ -79,7 +79,7 @@ describe('GitHub release before publish, advisory registry checks last', () => {
     expect(release).toBeLessThan(index('Build TypeScript'));
     const gates = [
       'Verify workflow identity is tag-bound', 'Verify signed tag (#1299 / A9 gate)',
-      'Run tests', 'Verify packaged SQLite feature installation (#182)',
+      'Run tests', 'Run provider deployment integration lane', 'Verify packaged SQLite feature installation (#182)',
       'Verify .aiwg/ excluded from package', 'Audit dep-graph signatures (#1288 / A12)',
       'Audit tarball top-level entries (#1288 / A11)', 'Check package contents',
       'Check Cockpit package contents', 'Check lightweight CLI package contents',
@@ -89,6 +89,10 @@ describe('GitHub release before publish, advisory registry checks last', () => {
       expect(index(name)).toBeLessThan(index(publishNames[0]));
       expect(step(name)['continue-on-error']).toBeUndefined();
     }
+    expect(index('Run provider deployment integration lane')).toBeGreaterThan(index('Run tests'));
+    expect(step('Run provider deployment integration lane').run).toBe('node tools/ci/run-with-hang-report.mjs --timeout 18m -- npm run test:deployment');
+    expect(step('Run provider deployment integration lane').if).toBeUndefined();
+    expect(workflow.jobs['publish-to-npmjs-org']['timeout-minutes']).toBeGreaterThanOrEqual(45 + 18);
     const ordered = [
       'Pack local release tarball', ...publishNames,
       'Generate tarball + cosign sign + manifest', 'Generate CycloneDX SBOM',

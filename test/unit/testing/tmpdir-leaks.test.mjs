@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runDefaultLane } from '../../../tools/testing/run-default-lane.mjs';
+import { parseLaneInvocation, runDefaultLane } from '../../../tools/testing/run-default-lane.mjs';
 
 import { DEFAULT_ALLOWED_ENTRIES, findLeakedEntries } from '../../../tools/testing/check-tmpdir-leaks.mjs';
 
@@ -59,6 +59,18 @@ describe('tmpdir leak gate (#3018)', () => {
 
 
 describe('default lane private TMPDIR', () => {
+  it('selects an owned lane config without forwarding the wrapper option', () => {
+    expect(parseLaneInvocation(['--config', 'config/vitest.deployment.config.js', '--run'])).toEqual({
+      config: 'config/vitest.deployment.config.js',
+      args: ['--run'],
+    });
+    expect(parseLaneInvocation(['--run'])).toEqual({
+      config: 'config/vitest.config.js',
+      args: ['--run'],
+    });
+    expect(() => parseLaneInvocation(['--config'])).toThrow('--config requires a path');
+  });
+
   async function runChild(source) {
     const root = await tmpDir('aiwg-lane-wrapper-');
     vi.stubEnv('TMPDIR', root);

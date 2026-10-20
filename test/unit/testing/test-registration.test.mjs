@@ -82,6 +82,24 @@ describe('test runner registration gate', () => {
     expect(report.units).toBe('Source files and imported APIs, not registered or executed cases');
   });
 
+  it('assigns full-corpus provider deployments only to the required deployment lane', () => {
+    const script = `import { inspectTestRegistration } from ${JSON.stringify(checker)}; console.log(JSON.stringify(await inspectTestRegistration(${JSON.stringify(repo)})));`;
+    const report = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
+      cwd: repo, encoding: 'utf8', timeout: 15_000, maxBuffer: 4 * 1024 * 1024,
+    }));
+    expect(report.errors).toEqual([]);
+    for (const file of [
+      'test/integration/use-all-deployment.test.ts',
+      'test/integration/hermes-deployment.test.ts',
+    ]) {
+      expect(report.files.find(row => row.file === file)).toEqual({
+        file,
+        runner: 'vitest',
+        lanes: [{ id: 'config/vitest.deployment.config.js', live: false }],
+      });
+    }
+  });
+
   it('excludes only owned root and framework input-fixture trees', () => {
     const { child, report } = run(project({ files: {
       'test/fixtures/scenario/invalid.test.ts': 'deliberately invalid source',

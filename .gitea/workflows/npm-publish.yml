@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 (see ci/digests.txt)
     # Stable publication is the only active npm publication lane.
-    timeout-minutes: 30
+    timeout-minutes: 50
     defaults:
       run:
         shell: bash
@@ -161,6 +161,9 @@ jobs:
           AIWG_PERF_BUDGET_HELP_MS: "750"
           AIWG_PERF_SAMPLE_COUNT: "7"
         run: npm test -- --run
+
+      - name: Run provider deployment integration lane
+        run: node tools/ci/run-with-hang-report.mjs --timeout 18m -- npm run test:deployment
 
       - name: Verify packaged SQLite feature installation (#182)
         # Hard release gate: install the packed CLI without optional peers,

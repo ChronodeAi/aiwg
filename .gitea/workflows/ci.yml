@@ -276,6 +276,24 @@ jobs:
           AIWG_SERVE_HTTP_TIMEOUT_MS: "30000"
         run: npm run test:integration:serve
 
+  # Full-corpus provider deployments spawn bounded child CLIs and share one
+  # immutable source cache. Keep them serial and outside the general worker
+  # pool while retaining them as a required build prerequisite.
+  deployment:
+    name: Provider deployment integration
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build CLI prerequisites
+        run: npm run build:cli
+      - name: Run serial provider deployment integration
+        run: node tools/ci/run-with-hang-report.mjs --timeout 18m -- npm run test:deployment
+
   # Full-corpus index performance, real package installation/build, and
   # full-corpus discovery are isolated gates. They must not compete with the
   # general test workers or each other while measuring repository-scale work.
@@ -350,7 +368,7 @@ jobs:
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
     timeout-minutes: 10
-    needs: [test, d29-slow, packaging, release-discovery]
+    needs: [test, deployment, d29-slow, packaging, release-discovery]
 
     steps:
       - name: Checkout code
