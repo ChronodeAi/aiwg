@@ -238,13 +238,20 @@ describe('eighteen-provider session release conformance', () => {
     const workflow = parseYaml(readFileSync(resolve(root, '.gitea/workflows/ci.yml'), 'utf8'));
     const testJob = workflow.jobs.test;
     expect(testJob.name).toBe('Test');
-    const commands = testJob.steps.map((step: { run?: string }) => step.run ?? '');
-    // Substring, not equality: the gate is "the full suite runs in required
-    // CI", and the step is wrapped by the hang reporter (#2521). Pinning the
-    // exact invocation would break on any such wrapper without the contract
-    // this test exists to protect having changed.
-    expect(commands.some((command) => command.includes('npm run test:ci'))).toBe(true);
-    expect(commands).toContain('npm run test:sessions:sqlite');
+    const steps = testJob.steps as Array<{ run?: string; if?: string; 'continue-on-error'?: boolean }>;
+    const required = [
+      'npm run test:sessions:sqlite',
+      'node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test',
+      'node tools/ci/run-with-hang-report.mjs --timeout 3m -- npm run uat',
+      'npm run test:integration:serve',
+    ];
+    const positions = required.map(command => steps.findIndex(step => step.run === command));
+    for (let i = 0; i < positions.length; i++) {
+      expect(positions[i], required[i]).toBeGreaterThan(-1);
+      if (i > 0) expect(positions[i], required[i]).toBeGreaterThan(positions[i - 1]);
+      expect(steps[positions[i]].if, required[i]).toBeUndefined();
+      expect(steps[positions[i]]['continue-on-error'], required[i]).toBeUndefined();
+    }
     expect(workflow.jobs.build.name).toBe('Build');
     expect(workflow.jobs.build.needs).toContain('test');
   });
