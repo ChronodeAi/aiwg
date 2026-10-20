@@ -323,6 +323,7 @@ describe('@aiwg/cli packaged web distribution', () => {
     )).toBe(true);
     const allowedToolPrefixes = [
       'tools/_resolve-impl.mjs',
+      'tools/cli/workspace-status.mjs',
       'tools/ralph-external/session-launcher.mjs',
       'tools/ralph-external/process-monitor.mjs',
       'tools/ralph-external/lib/session-environment.mjs',
@@ -371,6 +372,7 @@ describe('@aiwg/cli packaged web distribution', () => {
     expect(paths).toContain('dist/src/models/model-catalog.v1.json');
     expect(paths).toContain('agentic/code/providers/model-catalog.v1.json');
     expect(paths).toContain('tools/_resolve-impl.mjs');
+    expect(paths).toContain('tools/cli/workspace-status.mjs');
     expect(paths).toContain('tools/agents/deploy-agents.mjs');
     expect(paths).toContain('tools/agents/providers/antigravity.mjs');
     expect(paths).toContain('tools/providers/antigravity-transport.mjs');
@@ -388,6 +390,18 @@ describe('@aiwg/cli packaged web distribution', () => {
     expect(installedReadme).not.toContain('## CLI Guide');
     expect(installedReadme).toContain('## Security Model');
     expect(installedReadme).toContain('## Installation Troubleshooting');
+  });
+
+  it('runs workspace status from the installed lightweight tarball', async () => {
+    const result = await runCli(['status', '--json']);
+
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      workspace: {
+        exists: false,
+      },
+    });
   });
 
   it('ships every decision schema needed by the public API and job contract', async () => {

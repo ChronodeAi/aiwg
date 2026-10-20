@@ -62,6 +62,7 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     path.join(repoRoot, 'dist', 'src', 'process', 'bounded-child-process.mjs'),
     path.join(repoRoot, 'dist', 'src', 'process', 'signal-child.mjs'),
     path.join(repoRoot, 'tools', '_resolve-impl.mjs'),
+    path.join(repoRoot, 'tools', 'cli', 'workspace-status.mjs'),
     path.join(repoRoot, 'tools', 'agents', 'deploy-agents.mjs'),
     path.join(repoRoot, 'tools', 'providers', 'antigravity-transport.mjs'),
     path.join(repoRoot, 'tools', 'commands', 'deploy-prompts-codex.mjs'),
@@ -144,11 +145,13 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     { recursive: true },
   );
   await mkdir(path.join(outputDir, 'tools', 'agents'), { recursive: true });
+  await mkdir(path.join(outputDir, 'tools', 'cli'), { recursive: true });
   await mkdir(path.join(outputDir, 'tools', 'commands'), { recursive: true });
   await mkdir(path.join(outputDir, 'tools', 'plugin'), { recursive: true });
   await mkdir(path.join(outputDir, 'tools', 'providers'), { recursive: true });
   await mkdir(path.join(outputDir, 'tools', 'skills'), { recursive: true });
   await cp(path.join(repoRoot, 'tools', '_resolve-impl.mjs'), path.join(outputDir, 'tools', '_resolve-impl.mjs'));
+  await cp(path.join(repoRoot, 'tools', 'cli', 'workspace-status.mjs'), path.join(outputDir, 'tools', 'cli', 'workspace-status.mjs'));
   await cp(path.join(repoRoot, 'tools', 'agents', 'deploy-agents.mjs'), path.join(outputDir, 'tools', 'agents', 'deploy-agents.mjs'));
   await cp(
     path.join(repoRoot, 'tools', 'agents', 'providers'),
