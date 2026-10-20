@@ -1,11 +1,17 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('node:child_process', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
 import { RC_LANES, RC_STEPS, RC_WORKFLOW, SURFACES, sha256, writeCandidateManifest } from '../../../tools/release/release-candidate.mjs';
 import { evaluateAssertions } from '../../../tools/rules/run-rule-probes.mjs';
 import { DIMENSIONS, comparisonPlan, comparisonReport, loadScenarios } from '../../../tools/rules/release-compare.mjs';
-import { RELEASE_APPROVAL_SCHEMA, acquireGithubReleaseEvidence, createGithubApiEvidenceClient,
+import { RELEASE_APPROVAL_SCHEMA, acquireGithubReleaseEvidence, acquireGithubProductionReleaseEvidence, createGithubApiEvidenceClient,
   verifyComparisonApprovalGate, verifyComparisonApprovalReceipt, verifyComparisonReport,
   verifySignedTagPair } from '../../../tools/release/release-evidence.mjs';
 
@@ -154,6 +160,69 @@ describe('release evidence acquisition and approval gates (#3201)', () => {
     await expect(acquireGithubReleaseEvidence({ client: clientFor(fixture, data), repository, workflowId: data.workflowId,
       runId: data.runId, artifactId: data.artifactId, destination: fixture.destination,
       tags: JSON.parse(JSON.stringify(tags)) })).rejects.toThrow(/locally verified/);
+  });
+
+  it('acquires and extracts the authenticated archive through the production boundary', async () => {
+    const fixture = candidateFixture();
+    const zipped = spawnSync('python3', ['-c', `import os,sys,zipfile
+z=zipfile.ZipFile(sys.argv[2],'w',zipfile.ZIP_DEFLATED)
+for name in os.listdir(sys.argv[1]): z.write(os.path.join(sys.argv[1],name),name)
+z.close()`, fixture.directory, fixture.archivePath]);
+    expect(zipped.status).toBe(0);
+    const data = apiData(fixture), tags = signedTags(), target = temp();
+    const fetchImpl = async url => {
+      const parsed = new URL(url), pathname = parsed.pathname;
+      let body;
+      if (pathname === '/user') body = { id: 77, login: 'release-app' };
+      else if (pathname.endsWith('/actions/workflows/73')) body = data.workflow;
+      else if (pathname.endsWith('/actions/runs/12')) body = data.run;
+      else if (pathname.endsWith('/attempts/1/jobs')) body = { total_count: data.jobs.length, jobs: data.jobs };
+      else if (pathname.endsWith('/actions/artifacts/44/zip')) return new Response(fs.readFileSync(fixture.archivePath));
+      else if (pathname.endsWith('/actions/artifacts/44')) body = data.artifact;
+      else if (pathname.includes('/contents/')) body = { type: 'file', path: RC_WORKFLOW, encoding: 'base64', content: Buffer.from(data.source.content).toString('base64') };
+      else if (pathname.endsWith('/comments')) body = [];
+      else throw new Error('Unexpected fake URL');
+      return new Response(JSON.stringify(body), { status: 200 });
+    };
+    const input = { token: 'test-token', approvalIssue: 3201, fetchImpl, repository, workflowId: 73, runId: 12, artifactId: 44, destination: target, tags };
+    const fakeBin = temp(), marker = path.join(fakeBin, 'executed');
+    fs.writeFileSync(path.join(fakeBin, 'python3'), `#!/bin/sh\necho invoked > "${marker}"\nexit 99\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(fakeBin, 'sitecustomize.py'), `import os\nopen(${JSON.stringify(marker)}, 'w').write(os.environ.get('GITHUB_TOKEN', 'absent'))\n`);
+    const previous = { PATH: process.env.PATH, PYTHONPATH: process.env.PYTHONPATH, GITHUB_TOKEN: process.env.GITHUB_TOKEN };
+    process.env.PATH = fakeBin; process.env.PYTHONPATH = fakeBin; process.env.GITHUB_TOKEN = 'credential-sentinel';
+    let result;
+    try { result = await acquireGithubProductionReleaseEvidence(input); }
+    finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+    expect(fs.existsSync(marker)).toBe(false);
+    const parserCall = vi.mocked(spawnSync).mock.calls.find(([command, args]) => args?.some(value => String(value).endsWith('extract-release-archive.py')));
+    expect(parserCall[0]).toBe(fs.realpathSync('/usr/bin/python3'));
+    expect(parserCall[2].env).toEqual({ LANG: 'C.UTF-8' });
+    expect(parserCall[2].env.GITHUB_TOKEN).toBeUndefined();
+    expect(result.archive.extraction_verified).toBe(true);
+    expect(result.candidate.manifest.commit).toBe(commit);
+    expect(result.ready_for_publication).toBe(false);
+    expect(result.production_identity_authenticated).toBe(false);
+    expect(result.unmet_requirements).toHaveLength(3);
+    const replay = { ...data, download: { archivePath: result.archive.path, bundleDirectory: result.candidate.directory } };
+    const replayInput = { client: clientFor(fixture, replay), repository, workflowId: 73, runId: 12, artifactId: 44, destination: target, tags };
+    const unchanged = await acquireGithubReleaseEvidence(replayInput);
+    expect(unchanged.archive.extraction_verified).toBe(false);
+    const manifestPath = path.join(result.candidate.directory, 'rc-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, injected: 'modified' }));
+    const modified = await acquireGithubReleaseEvidence(replayInput);
+    expect(modified.archive.extraction_verified).toBe(false);
+    expect(modified.unmet_requirements.join(' ')).toMatch(/extraction-to-directory/);
+    fs.unlinkSync(manifestPath);
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    const replaced = await acquireGithubReleaseEvidence(replayInput);
+    expect(replaced.archive.extraction_verified).toBe(false);
+    data.artifact = { ...data.artifact, digest: `sha256:${'f'.repeat(64)}` };
+    await expect(acquireGithubProductionReleaseEvidence({ ...input, destination: temp() })).rejects.toThrow(/digest/);
   });
 
   it('does not authenticate independently supplied bundle contents from the archive digest', async () => {
