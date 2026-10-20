@@ -180,12 +180,14 @@ export class IncrementalSessionImporter {
           'session import was cancelled at a durable batch boundary',
         );
       }
+      const identities = batch.map(recordIdentity);
+      const batchDigests = identities.map(identity => identity.digest);
       const runId = sha256([
         request.source.sourceId, request.adapter.adapterVersion,
         batchStart, checkpoint.recordsRead,
-        ...batch.map((record) => sha256(JSON.stringify(record))),
+        ...batchDigests,
       ].join('\0'));
-      const normalized = normalizeBatch(request, batch, runId, sourceObservedAt);
+      const normalized = normalizeBatch(request, batch, batchDigests, runId, sourceObservedAt);
       const run: ImportRun = {
         contractVersion: SESSION_CONTRACT_VERSION,
         importRunId: runId,
@@ -216,10 +218,7 @@ export class IncrementalSessionImporter {
       receipt.metrics = {
         records: batch.length,
         normalizedEvents: normalized.events.length,
-        normalizedBytes: batch.reduce(
-          (total, record) => total + Buffer.byteLength(JSON.stringify(record)),
-          0,
-        ),
+        normalizedBytes: identities.reduce((bytes, identity) => bytes + identity.bytes, 0),
         durationMs: performance.now() - importStarted,
         batchLatencyMs: performance.now() - flushStarted,
         heapUsedBytes: peakHeap,
@@ -245,7 +244,7 @@ export class IncrementalSessionImporter {
             'session import was cancelled and can resume from its durable checkpoint',
           );
         }
-        const bytes = Buffer.byteLength(JSON.stringify(record));
+        const bytes = recordBytes(record);
         assertImportByteLimit('maxRecordBytes', limits, bytes);
         if (!continuity) assertImportByteLimit('maxTotalBytes', limits, checkpoint.bytesRead + bytes);
         assertSessionResourceLimit('maxRecords', limits.maxRecords, checkpoint.recordsRead + 1);
@@ -313,19 +312,31 @@ export class IncrementalSessionImporter {
   }
 }
 
+/** Keep large temporary JSON strings out of the asynchronous import frame. */
+function recordBytes(record: ProviderRecord): number {
+  return Buffer.byteLength(JSON.stringify(record));
+}
+
+/** Compute flush-time identity once, preserving adapters that mutate yielded objects. */
+function recordIdentity(record: ProviderRecord): { bytes: number; digest: string } {
+  const serialized = JSON.stringify(record);
+  return { bytes: Buffer.byteLength(serialized), digest: sha256(serialized) };
+}
+
 function normalizeBatch(
   request: ImportRequest,
   records: ProviderRecord[],
+  digests: string[],
   importRunId: string,
   sourceObservedAt?: string,
 ): { sessions: Session[]; events: SessionEvent[] } {
   const sessions = new Map<string, Session>();
-  const events = records.map((record): SessionEvent => {
+  const events = records.map((record, index): SessionEvent => {
     const sessionId = stableSessionId(request.source.provider, request.source.sourceId, record.nativeSessionId);
     const native = sanitizeNativeExtensions(record.extensions ?? {});
     const lineage = request.source.provider === 'codex' && native.value.lineage
       ? { lineage: native.value.lineage } : {};
-    const digest = sha256(JSON.stringify(record));
+    const digest = digests[index];
     const origin = classifySessionEventOrigin(request.source.provider, record);
     const lifecycle = sessionLifecycle(request, record, sourceObservedAt);
     const lifecycleEvidence = sessionLifecycleEvidence(request, record, sourceObservedAt);
