@@ -73,6 +73,8 @@ describe('release comparison extends rule probes (#3298)', () => {
       },
       judge(request, context) {
         judgeInputs.push(request); expect(request.rubric).toEqual(DIMENSIONS);
+        expect(request.instructions).toContain('"correctness":INTEGER_0_TO_4');
+        expect(request.instructions).toContain('Every score must be an integer from 0 through 4');
         expect(request).not.toHaveProperty('fixtures'); expect(request).not.toHaveProperty('subject_model');
         const json = JSON.stringify(request);
         expect(json).not.toContain('2026.10.3'); expect(json).not.toContain('/operator/rc');
@@ -122,8 +124,10 @@ describe('release comparison extends rule probes (#3298)', () => {
     expect(report.scenarios[0].evidence[0].runs.A.error).toContain('model mismatch'); expect(checkpoints).toHaveLength(2);
   });
   it('fails closed for malformed judge output', () => {
-    const report = executeComparison(plan(), fixtures(), { subject: () => subjectResult(), judge: () => ({ model: 'judge', winner: 'tie' }) });
+    const raw = { model: 'judge', winner: 'tie', trace: { text: '{"winner":"tie"}' }, stdout: 'raw judge trace' };
+    const report = executeComparison(plan(), fixtures(), { subject: () => subjectResult(), judge: () => raw });
     expect(report.summary.invalid).toBe(1); expect(report.pass).toBe(false);
+    expect(report.scenarios[0].evidence[0].judge_raw).toEqual(raw);
   });
   it.each([
     subjectResult('follow', { trace: { text: '{}', tools: [], completed: false, failed: false } }),
@@ -264,10 +268,18 @@ describe('release comparison extends rule probes (#3298)', () => {
   it('removes RC source staging after failed packing without changing the source tree', () => {
     const tree = temp(), root = temp();
     fs.mkdirSync(path.join(tree, 'dist/src/cli'), { recursive: true });
-    fs.writeFileSync(path.join(tree, '.env.local'), 'local-only fixture content');
+    fs.writeFileSync(path.join(tree, 'marker.txt'), 'local-only fixture content');
     expect(() => prepareFixture(`tree:${tree}`, { root, provider: 'claude', spawn: () => ({ status: 1, stderr: 'pack failed' }) })).toThrow(/pack failed/);
     expect(fs.existsSync(path.join(root, 'pack-source'))).toBe(false);
-    expect(fs.readFileSync(path.join(tree, '.env.local'), 'utf8')).toBe('local-only fixture content');
+    expect(fs.readFileSync(path.join(tree, 'marker.txt'), 'utf8')).toBe('local-only fixture content');
+  });
+
+  it.each(['auth.json', '.credentials', '.env.local', 'credentials.json'])('rejects credential-bearing fixture %s before copying', name => {
+    const tree = temp(), root = temp();
+    fs.mkdirSync(path.join(tree, 'project')); fs.mkdirSync(path.join(tree, 'package'));
+    fs.writeFileSync(path.join(tree, 'project', name), 'never-copy');
+    expect(() => prepareFixture(`fixture:${tree}`, { root, provider: 'codex' })).toThrow(/Credential-bearing/);
+    expect(fs.existsSync(path.join(root, 'project', name))).toBe(false);
   });
 
 });

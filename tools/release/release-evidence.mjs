@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { createGithubEvidenceTransport } from './github-evidence-transport.mjs';
 import { importImpl } from '../_resolve-impl.mjs';
 import { RC_WORKFLOW, releaseIdentity, sha256, verifyRcBundle } from './release-candidate.mjs';
-import { evaluateAssertions } from '../rules/run-rule-probes.mjs';
+import { evaluateAssertions, parseTrace } from '../rules/run-rule-probes.mjs';
 import { DIMENSIONS, comparisonPlan, comparisonReport, loadScenarios } from '../rules/release-compare.mjs';
 
 const { boundedSpawnSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
@@ -227,7 +227,16 @@ function validateFixture(identity, side, { baselineVersion, candidate }) {
     || identity.tarball_sha256 !== candidate.package_tarball_sha256
     || path.basename(identity.spec.slice(8)) !== candidate.package_tarball) throw new Error('Candidate fixture is not the exact retained tarball');
 }
-function validateLivePair(pair, expected, report) {
+function verifyCodexReceipt(run, model, fixtureHash, sourceHashes) {
+  const receipt = run?.runtime_receipt;
+  const keys = ['schema', 'authenticated', 'provider', 'requested_model', 'requested_effort', 'reported_remote_model', 'reported_remote_backend', 'executable_sha256', 'adapter_source_sha256', 'runtime_source_sha256', 'trace_parser_sha256', 'argv_sha256', 'prompt_sha256', 'fixture_identity_sha256', 'transcript_sha256', 'trace_sha256'];
+  const digests = ['executable_sha256', 'adapter_source_sha256', 'runtime_source_sha256', 'trace_parser_sha256', 'argv_sha256', 'prompt_sha256', 'transcript_sha256', 'trace_sha256'];
+  if (!exactKeys(receipt, keys) || receipt.schema !== 'aiwg-comparison-runtime-observation/v1' || receipt.authenticated !== false || receipt.provider !== 'codex' || receipt.requested_model !== model || !nonempty(receipt.requested_effort) || receipt.reported_remote_model !== null || receipt.reported_remote_backend !== null || digests.some(key => !SHA256.test(receipt[key] ?? '')) || receipt.fixture_identity_sha256 !== fixtureHash || receipt.adapter_source_sha256 !== sourceHashes.adapter || receipt.runtime_source_sha256 !== sourceHashes.runtime || receipt.trace_parser_sha256 !== sourceHashes.parser || typeof run.stdout !== 'string' || receipt.transcript_sha256 !== hash(run.stdout) || receipt.trace_sha256 !== hash(JSON.stringify(run.trace)) || run.trace?.completed !== true || run.trace?.failed !== false) throw new Error('Invalid unauthenticated Codex runtime observation');
+  let parsed; try { parsed = parseTrace(run.stdout, 'codex'); } catch { throw new Error('Invalid Codex event stream'); }
+  if (!same(parsed, run.trace)) throw new Error('Codex trace differs from event stream');
+  return receipt;
+}
+function validateLivePair(pair, expected, report, sourceHashes) {
   if (pair.id !== expected.scenario.id || pair.repetition !== expected.repetition
     || !same(pair.order, expected.order) || !same(pair.judge_order, expected.judge_order)) throw new Error('Comparison pair schedule mismatch');
   for (const side of ['A', 'B']) {
@@ -235,15 +244,25 @@ function validateLivePair(pair, expected, report) {
     if (run?.model !== report.model || run.error !== null || typeof run.passed !== 'boolean'
       || run.trace?.completed !== true || run.trace?.failed !== false || !Array.isArray(run.trace?.tools)
       || !Array.isArray(run.assertions) || typeof run.trace.text !== 'string') throw new Error('Comparison contains incomplete or non-live subject results');
+    if (report.provider === 'codex') {
+      verifyCodexReceipt(run, report.model, hash(JSON.stringify(report.fixtures[side])), sourceHashes);
+    }
     const assertions = evaluateAssertions(expected.scenario.assertions, run.trace);
     const passed = assertions.length > 0 && assertions.every(assertion => assertion.pass);
     if (!same(assertions, run.assertions) || run.passed !== passed) {
       throw new Error('Comparison assertions or pass result do not match canonical retained trace evidence');
     }
   }
+  if (report.provider === 'codex' && ['requested_effort', 'executable_sha256', 'adapter_source_sha256', 'runtime_source_sha256', 'trace_parser_sha256'].some(key => pair.runs.A.runtime_receipt[key] !== pair.runs.B.runtime_receipt[key])) throw new Error('Codex comparison settings differ between sides');
   const judgment = pair.judgment;
   if (pair.judge_error !== null || judgment?.model !== report.judge_model || !['A', 'B', 'tie'].includes(judgment?.winner)
     || !nonempty(judgment?.reason)) throw new Error('Comparison contains incomplete or non-live judge results');
+  if (report.provider === 'codex') {
+    const receipt = verifyCodexReceipt(judgment, report.judge_model, null, sourceHashes);
+    if (receipt.executable_sha256 !== pair.runs.A.runtime_receipt.executable_sha256 || judgment.trace.events.some(event => !['thread.started', 'turn.started', 'turn.completed', 'item.started', 'item.updated', 'item.completed'].includes(event.type) || (event.type.startsWith('item.') && (!event.item || !['agent_message', 'reasoning'].includes(event.item.type))))) throw new Error('Invalid Codex judge runtime trace');
+    let blind; try { blind = JSON.parse(judgment.trace.text); } catch { throw new Error('Invalid Codex judge response'); }
+    if (!['left', 'right', 'tie'].includes(blind.winner) || (blind.winner === 'tie' ? 'tie' : pair.judge_order[blind.winner === 'left' ? 0 : 1]) !== judgment.winner || blind.reason !== judgment.reason || !same(blind.scores?.left, judgment.scores[pair.judge_order[0]]) || !same(blind.scores?.right, judgment.scores[pair.judge_order[1]])) throw new Error('Codex judge response does not match retained trace');
+  }
   for (const side of ['A', 'B']) for (const dimension of Object.keys(DIMENSIONS)) {
     const score = judgment.scores?.[side]?.[dimension];
     if (!Number.isInteger(score) || score < 0 || score > 4) throw new Error('Comparison judge score is invalid');
@@ -293,6 +312,8 @@ export function verifyComparisonReport({ file, report, plan, candidate, baseline
   validateFixture(report.fixtures?.B, 'B', { baselineVersion, candidate });
   const subjectAdapterSha256 = validateAdapter(report.adapters?.subject, 'Subject');
   const judgeAdapterSha256 = validateAdapter(report.adapters?.judge, 'Judge');
+  const sourceHashes = report.provider === 'codex' ? { adapter: subjectAdapterSha256, runtime: sha256(path.join(path.dirname(report.adapters.subject), 'codex-evaluation-runtime.mjs')), parser: sha256(path.join(path.dirname(report.adapters.subject), 'run-rule-probes.mjs')) } : null;
+  if (report.provider === 'codex' && subjectAdapterSha256 !== judgeAdapterSha256) throw new Error('Codex subject and judge must use the same reviewed adapter');
   const expectedPairs = new Map(plan.pairs.map(pair => [`${pair.scenario.id}\u0000${pair.repetition}`, pair]));
   const results = [];
   if (!Array.isArray(report.scenarios)) throw new Error('Comparison scenarios are missing');
@@ -303,10 +324,18 @@ export function verifyComparisonReport({ file, report, plan, candidate, baseline
     for (const pair of scenario.evidence) {
       const key = `${scenario.id}\u0000${pair.repetition}`, expected = expectedPairs.get(key);
       if (!expected) throw new Error('Unexpected or duplicate comparison case');
-      validateLivePair(pair, expected, report); expectedPairs.delete(key); results.push(pair);
+      validateLivePair(pair, expected, report, sourceHashes); expectedPairs.delete(key); results.push(pair);
     }
   }
   if (expectedPairs.size || results.length !== plan.pairs.length) throw new Error('Comparison case coverage is incomplete');
+  if (report.provider === 'codex' && results.length) {
+    const first = results[0];
+    for (const pair of results) for (const role of ['A', 'B', 'judge']) {
+      const receipt = role === 'judge' ? pair.judgment.runtime_receipt : pair.runs[role].runtime_receipt;
+      const reference = role === 'judge' ? first.judgment.runtime_receipt : first.runs.A.runtime_receipt;
+      if (['requested_effort', 'executable_sha256', 'adapter_source_sha256', 'runtime_source_sha256', 'trace_parser_sha256'].some(key => receipt[key] !== reference[key])) throw new Error('Codex runtime settings differ across comparison pairs');
+    }
+  }
   const recomputed = comparisonReport(plan, results, report.fixtures);
   if (!same(recomputed.summary, report.summary) || recomputed.pass !== report.pass
     || !same(recomputed.scenarios, report.scenarios)) {

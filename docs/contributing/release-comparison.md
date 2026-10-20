@@ -36,6 +36,40 @@ These are process environment and copy boundaries, not an operating-system sandb
 
 A usable Claude subject/judge adapter ships at `tools/rules/release-compare-claude.mjs`. It reuses the canonical #2936 read-only invocation, requires an exact dated Claude model snapshot, verifies observed assistant-model telemetry, and disables tools for judging. Pass that file for both runner flags with different subject/judge snapshots. Supply authentication explicitly (for example an API key in the environment); it does not load the real provider home. The adapter is inert on import and is tested with fake transports; do not execute it until model work is authorized.
 
+A Codex subject and judge adapter ships at `tools/rules/release-compare-codex.mjs`.
+Set `AIWG_RELEASE_CODEX_BINARY` to the absolute reviewed executable path,
+`AIWG_RELEASE_CODEX_EFFORT` to the subject effort, `AIWG_RELEASE_CODEX_JUDGE_EFFORT` to the judge effort, and
+`AIWG_RELEASE_CODEX_AUTH_SOURCE=account-home` with
+`AIWG_RELEASE_CODEX_ACCOUNT_HOME` pointing to the existing authenticated account
+home outside the fixture. It may contain a private regular `auth.json`, or an
+`auth.json` symlink whose private canonical file is named explicitly by
+`AIWG_RELEASE_CODEX_AUTH_TARGET`. For a clean Codex home, copy the independently
+qualified intrinsic skill inventory into `skills/.system` and name its separate,
+private reference directory with `AIWG_RELEASE_CODEX_SKILLS_REFERENCE`. The
+adapter requires that inventory to match exactly before and after every call. It
+rejects provider instructions, operator skills, configuration, and unrecognized
+account files while admitting the installed Codex version's qualified database,
+model-cache, shell-snapshot, and temporary runtime state. The reviewed executable
+must be outside both denied roots. The adapter disables the optional Codex apps
+and plugins features so their metadata does not become additional account state. Provision and manage the
+authentication lifecycle explicitly; do not copy a live OAuth session. Credential files are not copied into fixtures, and
+credential-bearing fixtures are rejected. The CLI loads that account while its
+named read-only sandbox profile denies shell access to both the account directory
+and the canonical credential root;
+`shell_environment_policy.inherit="none"` prevents automatic environment
+inheritance by model-invoked shells. Qualify the sandbox on the execution host
+before live use; the profile does not protect unrelated credential locations.
+
+The judge starts in an empty workspace, receives anonymous responses, and is
+instructed not to use tools. Any observed tool attempt or unknown item invalidates
+the judgment; tools are not claimed to be disabled. Use a different judge model
+from the subject. The adapter records the requested model and effort, executable
+and invocation digests, fixture identity, transcript and trace hashes in an
+**unauthenticated runtime observation**. The stream does not establish the remote
+backend or actual model, so both remain unknown. Trusted runner attestation must
+bind these observations to an authorized workflow and invocation before production
+promotion. This Codex-only phase does not satisfy the full three-provider criterion.
+
 Both adapters are explicit Node entry points, supplied with `--subject-runner FILE.mjs` and `--judge-runner FILE.mjs`. The harness executes each with an argument array, sends one JSON request on stdin, and expects one JSON response on stdout. Send diagnostics to stderr. No model is invoked merely by importing this harness. Provider SDK/CLI integrations can use the installed provider's qualified execution profile without adding another model framework here.
 
 Subject input:
