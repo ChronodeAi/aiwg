@@ -123,7 +123,7 @@ jobs:
     needs: build
     # Healthy runs finish in 3-5 min. Without a bound, a non-terminating test
     # handle pins the runner indefinitely (a hang held one for 3h on 2026-09-12).
-    timeout-minutes: 15
+    timeout-minutes: 40
 
     steps:
       - name: Checkout code
@@ -157,5 +157,8 @@ jobs:
         # Vitest's own exit guard is armed only once the run completes, so a
         # wedged worker never trips it (#2521). Healthy Validate Build runs
         # measured 3.0-4.8 min end to end, so 10m is roughly 2x headroom on the
-        # whole job and still fires ahead of the 15m job cap.
+        # whole job; the additional deployment lane has a separate 18m cap.
         run: node tools/ci/run-with-hang-report.mjs --timeout 10m -- npm test -- --run
+
+      - name: Run provider deployment integration lane
+        run: node tools/ci/run-with-hang-report.mjs --timeout 18m -- npm run test:deployment

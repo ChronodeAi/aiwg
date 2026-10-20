@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Run the default lane in an owned TMPDIR and check it even when tests fail. */
+/** Run a Vitest lane in an owned TMPDIR and check it even when tests fail. */
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readdirSync, rmSync, rmdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,7 +10,13 @@ import { importImpl } from '../_resolve-impl.mjs';
 
 const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
-export async function runDefaultLane(args = [], { command = process.execPath, runnerArgs } = {}) {
+export function parseLaneInvocation(args) {
+  if (args[0] !== '--config') return { config: 'config/vitest.config.js', args };
+  if (!args[1] || args[1].startsWith('-')) throw new Error('--config requires a path');
+  return { config: args[1], args: args.slice(2) };
+}
+
+export async function runDefaultLane(args = [], { command = process.execPath, runnerArgs, config = 'config/vitest.config.js' } = {}) {
   // Keep the extra path component short for Unix-domain socket fixtures.
   const directory = mkdtempSync(path.join(tmpdir(), 'awt-'));
   const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -22,7 +28,7 @@ export async function runDefaultLane(args = [], { command = process.execPath, ru
   try {
     child = spawn(command, runnerArgs ?? [
       path.join(root, 'node_modules/vitest/vitest.mjs'), 'run',
-      '--config', 'config/vitest.config.js', ...args,
+      '--config', config, ...args,
     ], {
       cwd: root,
       stdio: 'inherit',
@@ -58,5 +64,6 @@ export async function runDefaultLane(args = [], { command = process.execPath, ru
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exitCode = await runDefaultLane(process.argv.slice(2));
+  const invocation = parseLaneInvocation(process.argv.slice(2));
+  process.exitCode = await runDefaultLane(invocation.args, { config: invocation.config });
 }

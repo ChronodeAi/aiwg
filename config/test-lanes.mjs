@@ -22,6 +22,12 @@ export const artifactIndexFiles = [
   'test/integration/artifacts/multi-graph.test.ts',
 ];
 export const discoveryFiles = ['test/integration/artifacts/discover-fortemi-corpus.test.ts'];
+// Full-corpus provider deployment owns one shared immutable source cache and
+// runs serially so multiple child CLIs do not compete inside the default lane.
+export const deploymentFiles = [
+  'test/integration/use-all-deployment.test.ts',
+  'test/integration/hermes-deployment.test.ts',
+];
 // Shared S0 infrastructure and frozen contracts run in the existing offline
 // conformance lane. Mechanism suites retain their source owner's unit lane.
 export const orchestrationConformanceFiles = [

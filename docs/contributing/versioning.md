@@ -628,9 +628,9 @@ tools/release/cut-tag.sh 2026.10.4-rc.1
 `.github/workflows/release-candidate.yml` verifies the signed annotated tag and
 main ancestry, checks stable-version identity, installs locked dependencies and
 the mandatory SQLite backend, runs the full build (including apps/web), and
-executes the 42 required lanes enumerated in
+executes the 43 required lanes enumerated in
 `tools/release/release-candidate.mjs`. These include default/leak/UAT via
-`test:ci`, contracts, conformance, coverage gates, SQLite/performance, serve and
+`test:ci`, the separately required `test:deployment` provider lane, contracts, conformance, coverage gates, SQLite/performance, serve and
 artifact-index integration, D29/D17 studies, package budgets/lifecycle, installed
 discovery, dependency signatures, license boundaries, and tarball audits. The
 configured affected-package feed and available provider sandbox use the same

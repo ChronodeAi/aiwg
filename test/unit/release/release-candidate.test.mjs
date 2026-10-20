@@ -134,6 +134,15 @@ describe('signed RC identity and exact-artifact promotion foundation (#3201)', (
     fs.writeFileSync(validation, JSON.stringify(evidence)); rewriteManifest(failed, manifest => { manifest.files['validation.json'] = sha256(validation); });
     expect(() => verifyRcBundle(failed)).toThrow(/validation lane/);
   });
+  it.each(['missing', 'failed'])('rejects %s deployment lane evidence', kind => {
+    const f = fixture(), validation = path.join(f.directory, 'validation.json');
+    const evidence = JSON.parse(fs.readFileSync(validation, 'utf8'));
+    if (kind === 'missing') evidence.lanes = evidence.lanes.filter(item => item.lane !== 'test:deployment');
+    else evidence.lanes.find(item => item.lane === 'test:deployment').status = 'failure';
+    fs.writeFileSync(validation, JSON.stringify(evidence));
+    rewriteManifest(f, manifest => { manifest.files['validation.json'] = sha256(validation); });
+    expect(() => verifyRcBundle(f)).toThrow(/validation lane/);
+  });
   it.each(['file', 'directory', 'symlink'])('rejects an extra unmanifested %s in the retained bundle', kind => {
     const f = fixture(), extra = path.join(f.directory, `extra-${kind}`);
     if (kind === 'file') fs.writeFileSync(extra, 'unmanifested');
@@ -159,7 +168,20 @@ describe('signed RC identity and exact-artifact promotion foundation (#3201)', (
     const evidence = validateRelease({ root, output: path.join(root, 'validation.json'), spawn(command) { return { status: 0, stdout: command === 'git' ? commit : '' }; } });
     expect(evidence.pass).toBe(true); expect(evidence.lanes.map(item => item.lane)).toEqual(RC_LANES);
     expect(new Set(RC_LANES).size).toBe(RC_LANES.length);
-    for (const lane of ['build', 'test:ci', 'test:conformance', 'test:packaging', 'test:d29-slow', 'ci:fortemi-index']) expect(RC_LANES).toContain(lane);
+    for (const lane of ['build', 'test:ci', 'test:deployment', 'test:conformance', 'test:packaging', 'test:d29-slow', 'ci:fortemi-index']) expect(RC_LANES).toContain(lane);
+    expect(RC_LANES.indexOf('test:deployment')).toBe(RC_LANES.indexOf('test:ci') + 1);
+  });
+  it('bounds the deployment lane and stops validation when it fails', () => {
+    const root = temp(), output = path.join(root, 'validation.json'), calls = [];
+    expect(() => validateRelease({ root, output, spawn(command, args) {
+      if (command === 'git') return { status: 0, stdout: commit };
+      calls.push({ command, args });
+      return { status: args.at(-1) === 'test:deployment' ? 1 : 0 };
+    } })).toThrow(/failed/);
+    expect(calls.at(-1).args.slice(-6)).toEqual(['--timeout', '18m', '--', 'npm', 'run', 'test:deployment']);
+    const evidence = JSON.parse(fs.readFileSync(output, 'utf8'));
+    expect(evidence.pass).toBe(false);
+    expect(evidence.lanes.at(-1)).toMatchObject({ lane: 'test:deployment', status: 'failure' });
   });
   it('smoke-installs the exact packed tarballs with isolated HOME and checks installed identity', () => {
     const root = temp(), output = path.join(root, 'bundle'), calls = [], homes = [];

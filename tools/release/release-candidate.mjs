@@ -39,7 +39,7 @@ export const RC_LANES = [
   'test:coverage:testing-quality', 'test:coverage:audit-foundations', 'test:coverage:enforcement',
   'test:conformance:example', 'test:contract', 'test:conformance', 'test:conformance:dataset',
   'test:security:attestation-conformance', 'test:node', 'test:conformance:storage', 'verify:storage-claims',
-  'lint:session-fixtures', 'test:sessions:sqlite', 'benchmark:sessions', 'test:ci', 'test:integration:serve',
+  'lint:session-fixtures', 'test:sessions:sqlite', 'benchmark:sessions', 'test:ci', 'test:deployment', 'test:integration:serve',
   'test:integration:artifact-index', 'test:d29-slow', 'check:budgets', 'test:packaging',
   'ci:fortemi-index', 'test:sessions:feature-install', 'lint:tarball',
 ];
@@ -76,7 +76,7 @@ export function validateRelease({ root = ROOT, output, spawn = boundedSpawnSync,
     const record = { lane, started_at: new Date().toISOString(), status: 'running' }; evidence.lanes.push(record);
     fs.writeFileSync(output, JSON.stringify(evidence, null, 2) + '\n');
     try {
-      const budget = lane === 'test:ci' ? '40m' : lane === 'test:d29-slow' ? '25m' : null;
+      const budget = lane === 'test:ci' ? '40m' : lane === 'test:deployment' ? '18m' : lane === 'test:d29-slow' ? '25m' : null;
       if (budget) command(process.execPath, [path.join(root, 'tools/ci/run-with-hang-report.mjs'), '--timeout', budget, '--', 'npm', 'run', lane], { cwd: root, env, spawn, stdio: 'inherit' });
       else command('npm', ['run', lane], { cwd: root, env, spawn, stdio: 'inherit' });
       record.status = 'success';
