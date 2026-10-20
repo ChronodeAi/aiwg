@@ -810,6 +810,12 @@ requires review of all those values and a specific transport level
 (`github-authenticated-user-api`) and a reviewed credential kind. The dedicated
 `AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN` must support GitHub's authenticated-user API;
 the built-in Actions `GITHUB_TOKEN` remains limited to release assets and OIDC.
+GitHub Actions receives that credential from its dedicated repository secret.
+Gitea Actions receives the distinct evidence credential through the existing
+AppRole bootstrap and `ci/vault-fetch.npm-publish-evidence.spec`; it does not
+fall back to the CI-issued token or the GitHub mirror credential. The Gitea
+workflow checks the offline policy activation state before either publication
+credential is fetched from vault.
 Because the provider backends do not expose a
 cryptographic model attestation, the only currently implementable runtime level is
 `requested-cli-model`; policy must explicitly set
@@ -838,8 +844,8 @@ a tag. Real policy activation and full production evidence remain required.
   supply-chain distribution and verification.
 - **Gitea npm registry (mirror) — Gitea Actions only.** `.gitea/workflows/npm-publish.yml`
   publishes the same retained files after exact npmjs identities are visible.
-  Uses the `NPM_TOKEN` secret — a **Gitea API token (`gta_…`)** with `package:write`
-  (despite the name, it is NOT an npmjs.org token).
+  It fetches the Gitea package token and dedicated GitHub evidence credential
+  through scoped vault routes after the offline promotion-policy preflight.
 - **Releases:** Gitea release = `.gitea/workflows/gitea-release.yml`; GitHub release
   = `.github/workflows/npm-publish.yml` (the mirror workflow can also create it).
 
