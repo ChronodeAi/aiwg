@@ -22,7 +22,8 @@ jobs:
     # npm's registry-key rotation. Keep the signature hard gate on the same
     # digest-pinned npm 11 runtime used by the publication workflow.
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
-    timeout-minutes: 25
+    # Preserve setup and post-test headroom around the bounded test and UAT steps.
+    timeout-minutes: 35
 
     steps:
       - name: Checkout code
@@ -258,12 +259,12 @@ jobs:
           AIWG_PERF_BUDGET_VERSION_MS: "300"
           AIWG_PERF_BUDGET_HELP_MS: "750"
           AIWG_PERF_SAMPLE_COUNT: "7"
-        # See #2521 — bound the full suite below this job's 25m cap so a hang is
-        # reported with a process tree rather than dying anonymously. The unit
-        # pass alone reached 9.1-9.5 min under runner load by 2026-10-14 (UAT
-        # follows), so the former 10m bound tripped on healthy runs mid-UAT;
-        # 20m keeps ~2x headroom while still catching a genuine hang.
-        run: node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm run test:ci
+        # Bound the default suite at 20 minutes with hang diagnostics. UAT has
+        # its own required 3-minute bound; the job also leaves time for serve.
+        run: node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test
+
+      - name: Run UAT
+        run: node tools/ci/run-with-hang-report.mjs --timeout 3m -- npm run uat
 
       - name: Run tier-3 integration suite (#1174)
         # Spawns aiwg serve via bin/aiwg.mjs on an ephemeral port. The
