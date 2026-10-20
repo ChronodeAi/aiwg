@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import yaml from 'js-yaml';
-import { releaseIdentity, sha256, RC_LANES, RC_WORKFLOW, RC_STEPS, RC_JOB, SURFACES,
+import { releaseIdentity, sha256, RC_LANES, ROUTINE_RC_LANES, RC_VALIDATION_PROFILES, RC_WORKFLOW, RC_STEPS, RC_JOB, SURFACES,
   validateRelease, packAndSmoke, writeCandidateManifest, verifyRcBundle, promotionPlan } from '../../../tools/release/release-candidate.mjs';
 const roots = [];
 const temp = () => { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rc-test-')); roots.push(root); return root; };
@@ -39,6 +39,11 @@ function rewriteManifest(fixture, mutate) {
   const file = path.join(fixture.directory, 'rc-manifest.json'), manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
   mutate(manifest); fs.writeFileSync(file, JSON.stringify(manifest));
 }
+function rewriteValidation(f, mutate) {
+  const file = path.join(f.directory, 'validation.json'), evidence = JSON.parse(fs.readFileSync(file, 'utf8'));
+  mutate(evidence); fs.writeFileSync(file, JSON.stringify(evidence));
+  rewriteManifest(f, manifest => { manifest.files['validation.json'] = sha256(file); });
+}
 
 describe('signed RC identity and exact-artifact promotion foundation (#3201)', () => {
   it('validates RC tags against the unchanged stable package version', () => {
@@ -62,6 +67,39 @@ describe('signed RC identity and exact-artifact promotion foundation (#3201)', (
     expect(plan.unmet_gates.join(' ')).toContain('release-comparison');
     expect(sha256(plan.sbom)).toBe(f.manifest.files[`aiwg-${version}.cdx.json`]);
     expect(sha256(plan.installer)).toBe(f.manifest.files['install.sh']);
+  });
+  it('accepts an exact versioned routine profile and rejects mislabeled profile inventories', () => {
+    const routine = fixture();
+    rewriteValidation(routine, evidence => {
+      evidence.version = 2; evidence.profile = 'routine-release-v1';
+      evidence.lanes = ROUTINE_RC_LANES.map(lane => ({ lane, status: 'success' }));
+    });
+    expect(verifyRcBundle(routine).validation_profile).toBe('routine-release-v1');
+    routine.run.event = 'workflow_dispatch';
+    expect(verifyRcBundle(routine).validation_profile).toBe('routine-release-v1');
+
+    const extra = fixture();
+    rewriteValidation(extra, evidence => {
+      evidence.version = 2; evidence.profile = 'routine-release-v1';
+      evidence.lanes = [...ROUTINE_RC_LANES, 'test:deployment'].map(lane => ({ lane, status: 'success' }));
+    });
+    expect(() => verifyRcBundle(extra)).toThrow(/validation lane/);
+
+    const unknown = fixture();
+    rewriteValidation(unknown, evidence => { evidence.version = 2; evidence.profile = 'quarterly-full-v2'; });
+    expect(() => verifyRcBundle(unknown)).toThrow(/validation lane/);
+  });
+  it('authenticates the quarterly-full profile only from an explicit dispatch on the signed RC tag', () => {
+    const quarterly = fixture(); quarterly.run.event = 'workflow_dispatch';
+    rewriteValidation(quarterly, evidence => {
+      evidence.version = 2; evidence.profile = 'quarterly-full-v1';
+      evidence.lanes = RC_LANES.map(lane => ({ lane, status: 'success' }));
+    });
+    expect(verifyRcBundle(quarterly).validation_profile).toBe('quarterly-full-v1');
+    quarterly.run.event = 'push';
+    expect(() => verifyRcBundle(quarterly)).toThrow(/workflow trigger/);
+    const legacy = fixture(); legacy.run.event = 'workflow_dispatch';
+    expect(() => verifyRcBundle(legacy)).toThrow(/workflow trigger/);
   });
   it.each(['missing', 'failure', 'cancelled', 'skipped', 'in_progress'])('rejects a %s RC run', state => {
     const f = fixture();
@@ -166,14 +204,23 @@ describe('signed RC identity and exact-artifact promotion foundation (#3201)', (
   it('records complete successful validation with exact required lane inventory', () => {
     const root = temp();
     const evidence = validateRelease({ root, output: path.join(root, 'validation.json'), spawn(command) { return { status: 0, stdout: command === 'git' ? commit : '' }; } });
-    expect(evidence.pass).toBe(true); expect(evidence.lanes.map(item => item.lane)).toEqual(RC_LANES);
+    expect(evidence.pass).toBe(true); expect(evidence.profile).toBe('routine-release-v1');
+    expect(evidence.lanes.map(item => item.lane)).toEqual(ROUTINE_RC_LANES);
+    expect(new Set(ROUTINE_RC_LANES).size).toBe(ROUTINE_RC_LANES.length);
+    expect(ROUTINE_RC_LANES).toContain('test:release:routine-deployment');
+    expect(ROUTINE_RC_LANES).not.toContain('test:deployment');
+    const quarterly = validateRelease({ root, profile: 'quarterly-full-v1', output: path.join(root, 'quarterly.json'),
+      spawn(command) { return { status: 0, stdout: command === 'git' ? commit : '' }; } });
+    expect(quarterly.lanes.map(item => item.lane)).toEqual(RC_LANES);
     expect(new Set(RC_LANES).size).toBe(RC_LANES.length);
     for (const lane of ['build', 'test:ci', 'test:deployment', 'test:conformance', 'test:packaging', 'test:d29-slow', 'ci:fortemi-index']) expect(RC_LANES).toContain(lane);
     expect(RC_LANES.indexOf('test:deployment')).toBe(RC_LANES.indexOf('test:ci') + 1);
+    expect(RC_VALIDATION_PROFILES).toEqual({ 'routine-release-v1': ROUTINE_RC_LANES, 'quarterly-full-v1': RC_LANES });
+    expect(() => validateRelease({ root, profile: 'unknown', output: path.join(root, 'bad.json') })).toThrow(/Unknown/);
   });
   it('bounds the deployment lane and stops validation when it fails', () => {
     const root = temp(), output = path.join(root, 'validation.json'), calls = [];
-    expect(() => validateRelease({ root, output, spawn(command, args) {
+    expect(() => validateRelease({ root, output, profile: 'quarterly-full-v1', spawn(command, args) {
       if (command === 'git') return { status: 0, stdout: commit };
       calls.push({ command, args });
       return { status: args.at(-1) === 'test:deployment' ? 1 : 0 };
@@ -207,10 +254,12 @@ describe('signed RC identity and exact-artifact promotion foundation (#3201)', (
     expect(calls.filter(call => call.command === 'npm' && call.args[0] === 'install').every(call => path.dirname(call.args.at(-1)) === output)).toBe(true);
     expect(homes.every(home => !fs.existsSync(home))).toBe(true);
   });
-  it('RC workflow retains pinned actions, signed-tag gate and all-success artifact upload; stable publish stays unchanged', () => {
+  it('RC workflow retains pinned actions, signed-tag gate and all-success artifact upload; stable publish consumes it', () => {
     const root = repoRoot;
     const workflow = yaml.load(fs.readFileSync(workflowFile, 'utf8'));
     expect(workflow.on.push.tags).toEqual(['v*-rc.*']); expect(workflow.permissions).toEqual({ contents: 'read' });
+    expect(workflow.on.workflow_dispatch.inputs.profile).toMatchObject({ required: true, default: 'routine-release-v1',
+      options: ['routine-release-v1', 'quarterly-full-v1'] });
     const steps = workflow.jobs.validate.steps;
     expect(steps.filter(step => step.name !== 'Preserve failed validation diagnostics').map(step => step.name)).toEqual(RC_STEPS);
     for (const name of RC_STEPS) {
@@ -223,7 +272,15 @@ describe('signed RC identity and exact-artifact promotion foundation (#3201)', (
     const upload = steps.find(step => step.name === 'Retain validated release candidate');
     expect(upload.with['if-no-files-found']).toBe('error'); expect(upload.with.name).toContain('github.run_attempt');
     const stable = yaml.load(fs.readFileSync(path.join(root, '.github/workflows/npm-publish.yml'), 'utf8'));
-    expect(stable.jobs['publish-to-npmjs-org'].steps.find(step => step.name === 'Run tests')).toBeDefined();
+    const promotion = stable.jobs['publish-to-npmjs-org'].steps.find(step => step.name === 'Authorize and publish exact retained RC to npmjs.org');
+    expect(promotion.run).toContain('release-promotion.mjs publish');
+    expect(promotion.env.RC_TAG).toBe('${{ github.event.inputs.rc_tag }}');
+    expect(promotion.run).toContain('--rc-tag "$RC_TAG"');
+    expect(stable.jobs['publish-to-npmjs-org'].steps.find(step => step.name === 'Run tests')).toBeUndefined();
+    const profile = steps.find(step => step.name === 'Resolve validation profile');
+    expect(profile.run).toContain("if [ \"${{ github.event_name }}\" = push ]");
+    expect(profile.run).toContain("PROFILE='routine-release-v1'");
+    expect(profile.run).toContain('routine-release-v1|quarterly-full-v1');
   });
   it('the tag helper validates an RC tag using stable package versions without reaching signing', () => {
     const root = temp(), script = path.resolve(import.meta.dirname, '../../../tools/release/cut-tag.sh');

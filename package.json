@@ -92,6 +92,7 @@
     "build:web": "node tools/scripts/resource-preflight.mjs --profile web && npm --prefix apps/web ci && npm --prefix apps/web run build",
     "test": "node tools/testing/run-default-lane.mjs",
     "test:deployment": "node tools/testing/run-default-lane.mjs --config config/vitest.deployment.config.js",
+    "test:release:routine-deployment": "vitest run --config config/vitest.config.js --maxWorkers=1 --fileParallelism=false test/integration/provider-file-locations.test.ts test/integration/use-self-verification.test.ts",
     "lint:session-fixtures": "node tools/ci/session-fixture-sanitize.mjs",
     "features:sqlite": "npm install --no-save --save-dev --package-lock=false --min-release-age=0 better-sqlite3@12.8.0",
     "test:sessions:sqlite": "npm run build:cli && node tools/ci/session-sqlite-gate.mjs",

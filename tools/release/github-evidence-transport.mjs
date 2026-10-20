@@ -15,11 +15,12 @@ export function createGithubEvidenceTransport({ token, approvalIssue, fetchImpl 
     try { return await fetchImpl(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(120000) }); }
     catch { throw new Error('GitHub evidence request failed'); }
   };
-  const api = async pathname => {
+  const apiResponse = async pathname => {
     const response = await request(`${API}${pathname}`);
     if (!response.ok) throw new Error(`GitHub evidence API returned HTTP ${response.status}`);
-    return response.json();
+    return { data: await response.json(), serverDate: response.headers.get('date') };
   };
+  const api = async pathname => (await apiResponse(pathname)).data;
   const collection = async (pathname, field) => {
     const items = []; let total;
     for (let page = 1; page <= 1000; page++) {
@@ -43,11 +44,18 @@ export function createGithubEvidenceTransport({ token, approvalIssue, fetchImpl 
     return `/repos/${repository}`;
   };
   return {
-    getAuthenticatedIdentity: () => api('/user'),
+    async getAuthenticatedIdentity() {
+      const { data, serverDate } = await apiResponse('/user');
+      return { ...data, server_date: serverDate };
+    },
     getWorkflow: ({ repository, workflowId }) => { if (!positive(workflowId)) throw new Error('Invalid workflow ID'); return api(`${repoPath(repository)}/actions/workflows/${workflowId}`); },
     getRun: ({ repository, runId }) => { if (!positive(runId)) throw new Error('Invalid run ID'); return api(`${repoPath(repository)}/actions/runs/${runId}`); },
     listJobs: ({ repository, runId, attempt }) => { if (!positive(runId) || !positive(attempt)) throw new Error('Invalid run attempt'); return collection(`${repoPath(repository)}/actions/runs/${runId}/attempts/${attempt}/jobs`, 'jobs'); },
     getArtifact: ({ repository, artifactId }) => { if (!positive(artifactId)) throw new Error('Invalid artifact ID'); return api(`${repoPath(repository)}/actions/artifacts/${artifactId}`); },
+    compareCommits: ({ repository, base, head }) => {
+      if (!/^[a-f0-9]{40}$/.test(base ?? '') || !/^[a-f0-9]{40}$/.test(head ?? '')) throw new Error('Invalid commit comparison identity');
+      return api(`${repoPath(repository)}/compare/${base}...${head}`);
+    },
     async getWorkflowSource({ repository, path: sourcePath, commit }) {
       if (!/^[a-f0-9]{40}$/.test(commit ?? '') || sourcePath !== '.github/workflows/release-candidate.yml') throw new Error('Invalid workflow source identity');
       const data = await api(`${repoPath(repository)}/contents/${sourcePath}?ref=${commit}`);
@@ -56,7 +64,7 @@ export function createGithubEvidenceTransport({ token, approvalIssue, fetchImpl 
     },
     async listApprovals({ repository }) {
       const page = await collection(`${repoPath(repository)}/issues/${approvalIssue}/comments`);
-      const approvals = page.items.filter(item => { try { return JSON.parse(item.body)?.schema === 'aiwg-release-comparison-approval/v1'; } catch { return false; } });
+      const approvals = page.items.filter(item => { try { return ['aiwg-release-comparison-approval/v1', 'aiwg-release-comparison-approval/v2'].includes(JSON.parse(item.body)?.schema); } catch { return false; } });
       return { items: approvals.map(item => ({ id: item.id, html_url: item.html_url, actor: item.user, created_at: item.created_at, updated_at: item.updated_at, body: item.body })), complete: true, totalCount: approvals.length };
     },
     async downloadArtifact({ repository, artifactId, destination }) {

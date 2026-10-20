@@ -1,0 +1,65 @@
+{
+  "schema": "aiwg-release-promotion-policy/v1",
+  "enabled": false,
+  "repository": "jmagly/aiwg",
+  "rc_workflow_id": null,
+  "github_api_actor_ids": [],
+  "github_transport_trust": null,
+  "github_evidence_credential_kind": null,
+  "comparison": {
+    "mode": "utc-calendar-quarter",
+    "workflow_id": null,
+    "required_job_name": null,
+    "required_steps": [],
+    "repetitions": 5,
+    "seed": null,
+    "baseline_version": null,
+    "expected_bundles": [
+      "sdlc",
+      "security-engineering"
+    ],
+    "allowed_approval_issuer_ids": [],
+    "runtime_identity": {
+      "allow_unattested_backend": false,
+      "providers": {
+        "claude": null,
+        "codex": null,
+        "hermes": null
+      }
+    },
+    "models": {
+      "claude": {
+        "subject": null,
+        "judge": null
+      },
+      "codex": {
+        "subject": null,
+        "judge": null
+      },
+      "hermes": {
+        "subject": null,
+        "judge": null
+      }
+    }
+  },
+  "publication": {
+    "order": [
+      "npmjs",
+      "gitea"
+    ],
+    "registries": {
+      "npmjs": {
+        "url": "https://registry.npmjs.org",
+        "tag": "latest",
+        "access": "public",
+        "provenance": true
+      },
+      "gitea": {
+        "url": "https://git.integrolabs.net/api/packages/roctinam/npm/",
+        "tag": "latest",
+        "access": "public",
+        "provenance": false
+      }
+    }
+  }
+}

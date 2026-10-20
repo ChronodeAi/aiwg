@@ -72,19 +72,25 @@ gh run list --repo jmagly/aiwg --limit 5
 gh run view <run-id> --repo jmagly/aiwg
 ```
 
-The GitHub job creates or updates a normal release immediately after tag-identity
-and signed-tag verification, before build/test/publish; only stable versions are
-marked latest. Tests and package/security checks block npm publication. After all
-three npm publishes, it signs the locally packed tarball, generates and signs a
-CycloneDX SBOM of the built tree, and uploads the signed assets, `SHA256SUMS`, `aiwg-*.tgz`, and
-`install.sh`, independently of npm registry visibility.
+Stable tag pushes fail closed because they cannot carry retained-RC evidence.
+Publication uses a tag-bound dispatch with the signed RC tag, RC run/artifact,
+current UTC-quarter full-validation/comparison run and artifact, candidate-bound
+approval issue, and exact approval-body SHA-256. Routine RCs use the versioned
+routine profile; quarterly validation uses the exact 43-lane full profile. Both
+workflows require a dedicated `AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN` that supports
+GitHub's authenticated-user API. The checked-in policy is currently disabled.
+
+The GitHub job publishes the three retained RC tarballs through
+`tools/release/release-promotion.mjs`, then creates the release, signs the retained
+root tarball and SBOM, and uploads all three tarballs plus the signed assets,
+`SHA256SUMS`, and retained `install.sh`. The Gitea job runs after npmjs identities
+are visible and mirrors the same retained files.
 
 npm visibility/provenance and stable dist-tag checks run last with short, bounded
 waits and are advisory: failures emit warnings and job-summary recovery commands
 without failing the job or preventing the subsequent Socket audit. Real npm
 publish failures still block; already-published versions count as success.
-Recovery for a partial publish or advisory failure uses the same tag:
-`gh workflow run npm-publish.yml --repo jmagly/aiwg --ref <tag> -f tag_to_publish=<tag>`.
+Recovery reruns the same stable tag with the same complete evidence-input set.
 
 Source of record: `docs/contributing/versioning.md` ("Publication surfaces").
 

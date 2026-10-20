@@ -12,8 +12,10 @@ vi.mock('node:child_process', async importOriginal => {
 import { RC_LANES, RC_STEPS, RC_WORKFLOW, SURFACES, sha256, writeCandidateManifest } from '../../../tools/release/release-candidate.mjs';
 import { evaluateAssertions, parseTrace } from '../../../tools/rules/run-rule-probes.mjs';
 import { DIMENSIONS, comparisonPlan, comparisonReport, loadScenarios } from '../../../tools/rules/release-compare.mjs';
-import { RELEASE_APPROVAL_SCHEMA, acquireGithubReleaseEvidence, acquireGithubProductionReleaseEvidence, createGithubApiEvidenceClient,
-  verifyComparisonApprovalGate, verifyComparisonApprovalReceipt, verifyComparisonReport,
+import { QUARTERLY_RELEASE_APPROVAL_SCHEMA, RELEASE_APPROVAL_SCHEMA, acquireGithubReleaseEvidence,
+  acquireGithubProductionComparisonReports, acquireGithubProductionReleaseEvidence, createGithubApiEvidenceClient,
+  resolveQuarterlyComparisonSources, verifyComparisonApprovalGate, verifyComparisonApprovalReceipt, verifyComparisonReport,
+  verifyQuarterlySourceIdentity,
   verifySignedTagPair } from '../../../tools/release/release-evidence.mjs';
 
 const roots = [];
@@ -23,6 +25,16 @@ const repoRoot = path.resolve(import.meta.dirname, '../../..');
 const version = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version;
 const repository = 'jmagly/aiwg', commit = 'a'.repeat(40), rcObject = 'b'.repeat(40), stableObject = 'c'.repeat(40);
 const rcTag = `v${version}-rc.2`, stableTag = `v${version}`;
+function quarterlySources() {
+  const identity = sourcePath => ({ path: sourcePath, sha256: fs.existsSync(path.join(repoRoot, sourcePath))
+    ? sha256(path.join(repoRoot, sourcePath)) : '8'.repeat(64) });
+  return {
+    claude: { subject: identity('tools/rules/release-compare-claude.mjs'), judge: identity('tools/rules/release-compare-claude.mjs') },
+    codex: { subject: identity('tools/rules/release-compare-codex.mjs'), judge: identity('tools/rules/release-compare-codex.mjs'),
+      runtime: identity('tools/rules/codex-evaluation-runtime.mjs'), parser: identity('tools/rules/run-rule-probes.mjs') },
+    hermes: { subject: identity('tools/rules/release-compare-hermes.mjs'), judge: identity('tools/rules/release-compare-hermes.mjs') },
+  };
+}
 
 function signedTags({ stableCommit = commit, checkout = commit } = {}) {
   return verifySignedTagPair({ root: repoRoot, rcTag, stableTag, spawn(command, args) {
@@ -91,6 +103,53 @@ async function acquire(fixture, data, tags = signedTags()) {
   return acquireGithubReleaseEvidence({ client: clientFor(fixture, data), repository,
     workflowId: data.workflowId, runId: data.runId, artifactId: data.artifactId,
     destination: fixture.destination, tags });
+}
+
+async function quarterlyReceipt(candidateCommit = commit) {
+  const testedCommit = commit, workflowId = 74, runId = 55, artifactId = 66, directory = temp();
+  const reports = {};
+  for (const provider of ['claude', 'codex', 'hermes']) {
+    const bytes = JSON.stringify({ provider }); fs.writeFileSync(path.join(directory, `${provider}.json`), bytes);
+    reports[provider] = textHash(bytes);
+  }
+  const validation = { version: 2, profile: 'quarterly-full-v1', commit: testedCommit, runner: 'quarterly', node: process.version, pass: true,
+    lanes: RC_LANES.map(lane => ({ lane, started_at: '2026-10-10T12:05:00Z', completed_at: '2026-10-10T12:50:00Z', status: 'success' })) };
+  const validationBytes = JSON.stringify(validation); fs.writeFileSync(path.join(directory, 'validation.json'), validationBytes);
+  const attestation = { schema: 'aiwg-quarterly-comparison-attestation/v1', profile: 'quarterly-full-v1', repository,
+    quarter: '2026-Q4', valid_from: '2026-10-01T00:00:00.000Z', valid_through: '2027-01-01T00:00:00.000Z', tested_commit: testedCommit,
+    workflow_id: workflowId, run_id: runId, run_attempt: 2, started_at: '2026-10-10T12:05:00Z', completed_at: '2026-10-10T12:55:00Z',
+    package_version: version, package_tarball: `aiwg-${version}.tgz`, package_tarball_sha256: '9'.repeat(64),
+    validation_sha256: textHash(validationBytes), reports, sources: quarterlySources() };
+  fs.writeFileSync(path.join(directory, 'quarterly-attestation.json'), JSON.stringify(attestation));
+  const archive = path.join(temp(), 'quarterly.zip');
+  const zipped = spawnSync('python3', ['-c', `import os,sys,zipfile
+z=zipfile.ZipFile(sys.argv[2],'w',zipfile.ZIP_DEFLATED)
+for name in os.listdir(sys.argv[1]): z.write(os.path.join(sys.argv[1],name),name)
+z.close()`, directory, archive], { timeout: 30000, killSignal: 'SIGKILL' });
+  expect(zipped.status).toBe(0);
+  const bytes = fs.readFileSync(archive), digest = textHash(bytes);
+  const response = data => new Response(JSON.stringify(data), { status: 200,
+    headers: { 'content-type': 'application/json', date: 'Tue, 20 Oct 2026 18:00:00 GMT' } });
+  const fetchImpl = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname === '/user') return response({ id: 77, login: 'release-app', type: 'User' });
+    if (pathname.endsWith(`/actions/workflows/${workflowId}`)) return response({ id: workflowId, path: '.github/workflows/release-comparison.yml' });
+    if (pathname.endsWith(`/actions/runs/${runId}`)) return response({ id: runId, workflow_id: workflowId, head_sha: testedCommit,
+      status: 'completed', conclusion: 'success', run_attempt: 2, run_started_at: '2026-10-10T12:00:00Z', updated_at: '2026-10-10T13:00:00Z' });
+    if (pathname.endsWith(`/attempts/2/jobs`)) return response({ total_count: 1, jobs: [{ name: 'Retain comparisons', run_id: runId,
+      head_sha: testedCommit, status: 'completed', conclusion: 'success', steps: [{ name: 'Run comparisons', status: 'completed', conclusion: 'success' },
+        { name: 'Retain comparison evidence', status: 'completed', conclusion: 'success' }] }] });
+    if (pathname.endsWith(`/actions/artifacts/${artifactId}`)) return response({ id: artifactId, expired: false,
+      digest: `sha256:${digest}`, workflow_run: { id: runId, head_sha: testedCommit } });
+    if (pathname.includes('/compare/')) return response(candidateCommit === testedCommit
+      ? { status: 'identical', ahead_by: 0, behind_by: 0, base_commit: { sha: testedCommit }, merge_base_commit: { sha: testedCommit }, commits: [] }
+      : { status: 'ahead', ahead_by: 1, behind_by: 0, base_commit: { sha: testedCommit }, merge_base_commit: { sha: testedCommit }, commits: [{ sha: candidateCommit }] });
+    if (pathname.endsWith(`/actions/artifacts/${artifactId}/zip`)) return new Response(bytes, { status: 200, headers: { 'content-length': String(bytes.length) } });
+    return response({});
+  };
+  return acquireGithubProductionComparisonReports({ token: 'test-user-token', approvalIssue: 3201, repository,
+    workflowId, runId, artifactId, candidateCommit, destination: temp(), requiredJobName: 'Retain comparisons',
+    requiredSteps: ['Run comparisons', 'Retain comparison evidence'], fetchImpl });
 }
 
 const scenario = (id = 'case') => ({ id, kind: 'positive', providers: ['claude', 'codex', 'hermes'], domain: 'delivery',
@@ -368,6 +427,59 @@ z.close()`, fixture.directory, fixture.archivePath], { timeout: 30000, killSigna
     expect(comparison.binding.regressions[0].repetition).toBeGreaterThan(0);
     expect(() => verifyComparisonApprovalReceipt({ evidence: JSON.parse(JSON.stringify(evidence)),
       reportBindings: [comparison.binding], policy: { allowedApprovalIssuerIds: [1159087] } })).toThrow(/acquired GitHub evidence/);
+  });
+
+  it('binds quarterly approval to the exact current attestation and candidate validation profile', async () => {
+    const fixture = candidateFixture(), comparison = comparisonFixture(fixture.candidate), comparisonEvidence = await quarterlyReceipt();
+    const candidate = candidateApproval(fixture, comparison.binding).candidate;
+    candidate.validation_profile = 'legacy-full-v1';
+    const approval = { schema: QUARTERLY_RELEASE_APPROVAL_SCHEMA, repository, decision: 'approve',
+      basis: 'quarterly-cross-provider-comparison', candidate_behavior_directly_compared: false, candidate,
+      quarterly_attestation: { quarter: comparisonEvidence.quarter.id, valid_from: comparisonEvidence.quarter.valid_from,
+        valid_through: comparisonEvidence.quarter.valid_through, tested_commit: comparisonEvidence.run.commit,
+        candidate_commit: comparisonEvidence.ancestry.candidate_commit, relation: comparisonEvidence.ancestry.relation,
+        workflow_id: comparisonEvidence.workflow.id, run_id: comparisonEvidence.run.id, run_attempt: comparisonEvidence.run.attempt,
+        artifact_id: comparisonEvidence.artifact.id, artifact_sha256: comparisonEvidence.archive_sha256,
+        manifest_sha256: comparisonEvidence.attestation.sha256, validation_profile: comparisonEvidence.validation.profile,
+        validation_sha256: comparisonEvidence.validation.sha256 },
+      reports: [Object.fromEntries(Object.entries(comparison.binding).filter(([key]) => key !== 'regressions'))], dispositions: [] };
+    const evidence = await acquire(fixture, apiData(fixture, JSON.stringify(approval)));
+    expect(verifyComparisonApprovalReceipt({ evidence, comparisonEvidence, reportBindings: [comparison.binding],
+      policy: { mode: 'utc-calendar-quarter', allowedApprovalIssuerIds: [1159087] } }).issuer.id).toBe(1159087);
+
+    const wrong = structuredClone(approval); wrong.candidate.validation_profile = 'quarterly-full-v1';
+    const wrongEvidence = await acquire(fixture, apiData(fixture, JSON.stringify(wrong)));
+    expect(() => verifyComparisonApprovalReceipt({ evidence: wrongEvidence, comparisonEvidence,
+      reportBindings: [comparison.binding], policy: { mode: 'utc-calendar-quarter', allowedApprovalIssuerIds: [1159087] } }))
+      .toThrow(/exact candidate/);
+  });
+
+  it('resolves quarterly sources in the consumer workspace and ignores stale producer absolute adapter paths', async () => {
+    const fixture = candidateFixture(), comparisonEvidence = await quarterlyReceipt();
+    const comparison = comparisonFixture(fixture.candidate, { provider: 'claude' });
+    comparison.report.adapters = { subject: '/producer/runner/tools/rules/release-compare-claude.mjs',
+      judge: '/producer/runner/tools/rules/release-compare-claude.mjs' };
+    fs.writeFileSync(comparison.file, JSON.stringify(comparison.report));
+    const trustedSources = resolveQuarterlyComparisonSources(comparisonEvidence, 'claude');
+    expect(verifyComparisonReport({ file: comparison.file, report: comparison.report, plan: comparison.plan,
+      candidate: fixture.candidate, baselineVersion: '2026.10.2', expectedBundles: comparison.report.bundles,
+      trustedSources }).provider).toBe('claude');
+    expect(() => verifyComparisonReport({ file: comparison.file, report: comparison.report, plan: comparison.plan,
+      candidate: fixture.candidate, baselineVersion: '2026.10.2', expectedBundles: comparison.report.bundles,
+      trustedSources: structuredClone(trustedSources) })).toThrow(/in-process receipt/);
+  });
+
+  it('rejects escaped, symlinked, and changed quarterly source identities', () => {
+    const root = temp(), source = path.join(root, 'tools/rules/source.mjs'); fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, 'export default 1;\n');
+    const identity = { path: 'tools/rules/source.mjs', sha256: sha256(source) };
+    expect(verifyQuarterlySourceIdentity({ root, identity, expectedPath: identity.path }).sha256).toBe(identity.sha256);
+    expect(() => verifyQuarterlySourceIdentity({ root, identity: { path: '../escape.mjs', sha256: identity.sha256 },
+      expectedPath: '../escape.mjs' })).toThrow(/escapes/);
+    fs.appendFileSync(source, 'changed\n');
+    expect(() => verifyQuarterlySourceIdentity({ root, identity, expectedPath: identity.path })).toThrow(/differs/);
+    fs.rmSync(source); const outside = path.join(root, 'outside.mjs'); fs.writeFileSync(outside, 'export default 1;\n'); fs.symlinkSync(outside, source);
+    expect(() => verifyQuarterlySourceIdentity({ root, identity: { ...identity, sha256: sha256(outside) }, expectedPath: identity.path })).toThrow(/differs/);
   });
 
   it.each(['unauthorized', 'self-asserted-issuer', 'missing-disposition', 'wrong-report'])('rejects %s approval claims', async failure => {

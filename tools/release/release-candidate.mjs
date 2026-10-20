@@ -21,7 +21,8 @@ export const RC_STEPS = [
   'Install locked dependencies',
   'Install mandatory SQLite session test backend',
   'Scan known affected package feed',
-  'Run full release validation',
+  'Resolve validation profile',
+  'Run release validation profile',
   'Require provider sandbox tests when supported',
   'Pack and smoke-test exact npm surfaces',
   'Install syft (SBOM generator)',
@@ -43,6 +44,19 @@ export const RC_LANES = [
   'test:integration:artifact-index', 'test:d29-slow', 'check:budgets', 'test:packaging',
   'ci:fortemi-index', 'test:sessions:feature-install', 'lint:tarball',
 ];
+export const ROUTINE_RC_LANES = [
+  'typecheck', 'build', 'package:cli',
+  'lint:dep-sources', 'lint:eval-imports', 'lint:package-license-boundary', 'lint:audit-signatures',
+  'lint:test-registration', 'lint:test-process-timeouts', 'lint:schemas', 'lint:generated-artifacts',
+  'lint:plugin-copies', 'lint:vault-migration',
+  'test:contract', 'test:security:attestation-conformance', 'test:node', 'verify:storage-claims',
+  'lint:session-fixtures', 'test:sessions:sqlite', 'test:release:routine-deployment',
+  'test:packaging', 'ci:fortemi-index', 'test:sessions:feature-install', 'lint:tarball',
+];
+export const RC_VALIDATION_PROFILES = Object.freeze({
+  'routine-release-v1': ROUTINE_RC_LANES,
+  'quarterly-full-v1': RC_LANES,
+});
 export const SURFACES = [
   { name: 'aiwg', dir: '.', stem: 'aiwg', bin: 'bin/aiwg.mjs' },
   { name: '@aiwg/cli', dir: 'dist/packages/cli', stem: 'aiwg-cli', bin: 'bin/aiwg.mjs' },
@@ -67,12 +81,14 @@ function command(command, args, { cwd = ROOT, env = process.env, spawn = bounded
   if (result.error || result.status !== 0) throw new Error(`${command} ${args.slice(0, 2).join(' ')} failed: ${result.error?.message ?? result.status}`);
   return result.stdout ?? '';
 }
-export function validateRelease({ root = ROOT, output, spawn = boundedSpawnSync, env = process.env } = {}) {
+export function validateRelease({ root = ROOT, output, profile = 'routine-release-v1', spawn = boundedSpawnSync, env = process.env } = {}) {
   if (!output) throw new Error('Validation output is required');
-  const evidence = { version: 1, commit: command('git', ['rev-parse', 'HEAD'], { cwd: root, spawn }).trim(),
+  const lanes = RC_VALIDATION_PROFILES[profile];
+  if (!lanes) throw new Error('Unknown RC validation profile');
+  const evidence = { version: 2, profile, commit: command('git', ['rev-parse', 'HEAD'], { cwd: root, spawn }).trim(),
     runner: env.RUNNER_NAME ?? 'local', node: process.version, lanes: [], pass: false };
   fs.mkdirSync(path.dirname(output), { recursive: true });
-  for (const lane of RC_LANES) {
+  for (const lane of lanes) {
     const record = { lane, started_at: new Date().toISOString(), status: 'running' }; evidence.lanes.push(record);
     fs.writeFileSync(output, JSON.stringify(evidence, null, 2) + '\n');
     try {
@@ -138,8 +154,15 @@ export function packAndSmoke({ root = ROOT, output, spawn = boundedSpawnSync, en
   fs.writeFileSync(path.join(output, 'installed-smoke.json'), JSON.stringify(evidence, null, 2) + '\n'); return evidence;
 }
 function validateLanes(evidence, commit) {
-  if (!evidence || evidence.commit !== commit || evidence.pass !== true || !Array.isArray(evidence.lanes)
-    || evidence.lanes.length !== RC_LANES.length || RC_LANES.some(lane => evidence.lanes.filter(item => item.lane === lane && item.status === 'success').length !== 1)) throw new Error('Missing or failed RC validation lane');
+  const legacy = evidence?.version === 1 && evidence.profile === undefined;
+  const profile = legacy ? 'legacy-full-v1' : evidence?.profile;
+  const lanes = legacy ? RC_LANES : RC_VALIDATION_PROFILES[profile];
+  if (!evidence || !lanes || (!legacy && evidence.version !== 2) || evidence.commit !== commit || evidence.pass !== true
+    || !Array.isArray(evidence.lanes) || evidence.lanes.length !== lanes.length
+    || lanes.some(lane => evidence.lanes.filter(item => item.lane === lane && item.status === 'success').length !== 1)) {
+    throw new Error('Missing or failed RC validation lane');
+  }
+  return profile;
 }
 export function writeCandidateManifest({ root = ROOT, output, tag, env = process.env, spawn = boundedSpawnSync } = {}) {
   const version = readJson(path.join(root, 'package.json')).version;
@@ -185,7 +208,7 @@ export function verifyRcBundle({ directory, run, jobs, artifact, workflow, workf
     || workflowSource.schema !== 'workflow-source/v1' || workflowSource.repository !== repository || workflowSource.path !== RC_WORKFLOW
     || workflowSource.commit !== commit || !/^[a-f0-9]{64}$/.test(workflowSource.sha256 ?? '')
     || !fs.existsSync(workflowFile) || !fs.lstatSync(workflowFile).isFile() || sha256(workflowFile) !== workflowSource.sha256) throw new Error('Untrusted or mismatching RC workflow identity');
-  if (!run.id || run.status !== 'completed' || run.conclusion !== 'success' || run.event !== 'push'
+  if (!run.id || run.status !== 'completed' || run.conclusion !== 'success'
     || run.repository?.full_name !== repository || run.head_repository?.full_name !== repository
     || run.path !== RC_WORKFLOW || run.head_sha !== commit || run.head_branch !== manifest.rc_tag
     || run.run_attempt !== manifest.run_attempt || run.id !== manifest.run_id
@@ -203,13 +226,19 @@ export function verifyRcBundle({ directory, run, jobs, artifact, workflow, workf
   if (entries.length !== expectedEntries.size || entries.some(entry => !expectedEntries.has(entry.name) || !entry.isFile())) throw new Error('Invalid RC bundle inventory');
   if (!manifest.files || Object.keys(manifest.files).length !== expected.length || expected.some(file => !/^[a-f0-9]{64}$/.test(manifest.files[file] ?? '')
     || !fs.existsSync(path.join(directory, file)) || !fs.lstatSync(path.join(directory, file)).isFile() || sha256(path.join(directory, file)) !== manifest.files[file])) throw new Error('Missing or mismatching RC artifact digest');
-  validateLanes(readJson(path.join(directory, 'validation.json')), commit);
+  const validationProfile = validateLanes(readJson(path.join(directory, 'validation.json')), commit);
+  const validTrigger = validationProfile === 'quarterly-full-v1' ? run.event === 'workflow_dispatch'
+    : validationProfile === 'routine-release-v1' ? ['push', 'workflow_dispatch'].includes(run.event)
+      : run.event === 'push';
+  if (!validTrigger) {
+    throw new Error('RC validation identity profile does not match its authenticated workflow trigger');
+  }
   const smoke = readJson(path.join(directory, 'installed-smoke.json'));
   if (smoke.pass !== true || smoke.packages?.length !== 3 || SURFACES.some(surface => {
     const filename = `${surface.stem}-${manifest.package_version}.tgz`;
     return smoke.packages.filter(item => item.package === surface.name && item.status === 'success' && item.filename === filename && item.sha256 === manifest.files[filename] && item.installed_version === manifest.package_version).length !== 1;
   })) throw new Error('Mismatching exact installed smoke evidence');
-  return { manifest, directory: path.resolve(directory), artifact_id: artifact.id };
+  return { manifest, directory: path.resolve(directory), artifact_id: artifact.id, validation_profile: validationProfile };
 }
 export function promotionPlan(verified) {
   if (!verified?.manifest || !verified.directory) throw new Error('A verified RC bundle is required');
@@ -221,11 +250,11 @@ export function promotionPlan(verified) {
     sbom: path.join(verified.directory, `aiwg-${verified.manifest.package_version}.cdx.json`), installer: path.join(verified.directory, 'install.sh') };
 }
 function main() {
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: { output: { type: 'string' }, tag: { type: 'string' },
+  const { values, positionals } = parseArgs({ allowPositionals: true, options: { output: { type: 'string' }, tag: { type: 'string' }, profile: { type: 'string' },
     directory: { type: 'string' }, run: { type: 'string' }, jobs: { type: 'string' }, artifact: { type: 'string' },
     workflow: { type: 'string' }, 'workflow-source': { type: 'string' }, repository: { type: 'string' }, commit: { type: 'string' }, 'rc-tag-object': { type: 'string' } } });
   if (positionals[0] === 'identity') console.log(JSON.stringify(releaseIdentity(values.tag, readJson(path.join(ROOT, 'package.json')).version)));
-  else if (positionals[0] === 'validate') validateRelease({ output: values.output });
+  else if (positionals[0] === 'validate') validateRelease({ output: values.output, profile: values.profile });
   else if (positionals[0] === 'pack') packAndSmoke({ output: values.output });
   else if (positionals[0] === 'manifest') writeCandidateManifest({ output: values.output, tag: values.tag });
   else if (positionals[0] === 'verify') {

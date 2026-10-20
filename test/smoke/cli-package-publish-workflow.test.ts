@@ -1,15 +1,18 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
 
 describe('@aiwg/cli release workflow wiring', () => {
-  it('publishes the assembled package to npmjs with provenance and verifies it', () => {
+  it('publishes the exact retained CLI tarball to npmjs with provenance and verifies it', () => {
     const workflow = readFileSync(path.join(ROOT, '.github/workflows/npm-publish.yml'), 'utf8');
 
-    expect(workflow).toContain('npm run package:cli');
-    expect(workflow).toContain('npm publish ./dist/packages/cli --provenance --access public');
+    expect(workflow).not.toContain('npm run package:cli');
+    expect(workflow).toContain('release-promotion.mjs publish');
+    expect(workflow).toContain('--registry npmjs');
+    expect(workflow).toContain('aiwg-cli-${VERSION}.tgz');
     expect(workflow).toContain('verify_attestations @aiwg/cli');
     expect(workflow).toContain('for attempt in 1 2 3; do');
     expect(workflow).toContain('--json --prefer-online');
@@ -17,33 +20,33 @@ describe('@aiwg/cli release workflow wiring', () => {
     expect(workflow).toContain('Report advisory npm registry checks');
     expect(workflow).toContain('bash tools/release/verify-npm-dist-tags.sh "$VERSION"');
     expect(workflow).toContain('[ "$NPM_TAG" = latest ]');
-    expect(workflow).toContain('GIT_CONFIG_KEY_0: safe.directory');
-    expect(workflow).toContain('GIT_CONFIG_VALUE_0: ${{ github.workspace }}');
     expect(workflow).toContain('Verify workflow identity is tag-bound');
     expect(workflow).toContain(
-      "gh workflow run npm-publish.yml --ref '$TAG' -f tag_to_publish='$TAG'",
+      "dispatch npm-publish.yml with --ref '$TAG' and the same complete retained-RC evidence inputs",
     );
     expect(workflow).toContain('NPM_TAG=latest');
     expect(workflow).toContain('npm publication accepts stable versions only');
     expect(workflow).toContain("github.event_name == 'push' && !contains(github.ref_name, '-')");
+    expect(workflow).toContain('Stable tag pushes cannot supply authenticated retained-RC evidence.');
     expect(workflow).not.toContain('secrets.NPM_DIST_TAG_TOKEN');
     expect(workflow).not.toMatch(/^\s+npm dist-tag (?:add|rm) /m);
     expect(workflow).not.toContain('NPM_TAG=prerelease');
     expect(workflow).not.toContain('NPM_TAG=nightly');
   });
 
-  it('publishes and promotes the assembled package in the Gitea registry', () => {
+  it('publishes and promotes the exact retained package in the Gitea registry', () => {
     const workflow = readFileSync(path.join(ROOT, '.gitea/workflows/npm-publish.yml'), 'utf8');
+    const parsed = parse(workflow);
     const workflowHeader = workflow.slice(0, workflow.indexOf('\njobs:'));
 
-    expect(workflow.match(/npm run package:cli/g)).toHaveLength(1);
+    expect(workflow).not.toContain('npm run package:cli');
     expect(workflowHeader).not.toContain('GT_NPM_TOKEN_VAULT_FIELD');
     expect(workflow.match(/GT_NPM_TOKEN_VAULT_FIELD: \$\{\{ vars\.GT_NPM_TOKEN_VAULT_FIELD \}\}/g)).toHaveLength(1);
-    expect(workflow).toContain('npm publish ./dist/packages/cli --registry=');
-    expect(workflow).toContain('npm dist-tag add "@aiwg/cli@${VERSION}" latest');
+    expect(workflow).toContain('release-promotion.mjs publish');
+    expect(workflow).toContain('--registry gitea');
     expect(workflow).toContain('Retire next on Gitea');
     expect(workflow).toContain('npm dist-tag rm "$PACKAGE" next');
-    expect(workflow).toContain('# Stable publishes deliberately omit `--tag`');
+    expect(workflow).not.toContain('# Stable publishes deliberately omit `--tag`');
     expect(workflow).toContain("'^v[0-9]+\\.[0-9]+\\.[0-9]+$'");
     expect(workflow).not.toContain('build-and-publish-prerelease');
     expect(workflow).not.toContain('--tag next');
@@ -58,9 +61,24 @@ describe('@aiwg/cli release workflow wiring', () => {
     );
     expect(workflow).toContain('version: ${{ steps.version.outputs.version }}');
     expect(workflow).toContain('VERSION="${{ needs.build-and-publish.outputs.version }}"');
-    expect(
-      workflow.match(/cannot publish over the previously published versions/g),
-    ).toHaveLength(3);
+    expect(workflow).toContain('AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN');
+    expect(workflow).toContain('Verify workflow identity is tag-bound');
+    const promotion = parsed.jobs['build-and-publish'].steps.find(
+      (step: { name?: string }) => step.name === 'Authorize and publish exact retained RC to Gitea npm registry',
+    );
+    expect(promotion.env.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN).toBe(
+      '${{ secrets.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN }}',
+    );
+    expect(promotion.env).not.toHaveProperty('GITHUB_TOKEN');
+    expect(promotion.run).toContain('--rc-tag "$RC_TAG"');
+    const preserve = parsed.jobs['build-and-publish'].steps.find(
+      (step: { name?: string }) => step.name === 'Preserve promotion decision and partial receipt',
+    );
+    expect(preserve.if).toBe('always()');
+    expect(preserve.uses).toBe('actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d');
+    expect(preserve.with.path).toContain('${{ runner.temp }}/promotion-decision.json');
+    expect(preserve.with.path).toContain('${{ runner.temp }}/gitea-publication.json');
+    expect(preserve.with['if-no-files-found']).toBe('warn');
     expect(workflow).toMatch(
       /verify-install:[\s\S]*?defaults:\s*\n\s*run:\s*\n\s*shell: bash/,
     );
