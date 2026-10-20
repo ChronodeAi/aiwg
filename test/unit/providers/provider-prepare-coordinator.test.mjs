@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { prepareProviderDeployments } from '../../../tools/agents/providers/provider-prepare-coordinator.mjs';
 import { main as deployProvider } from '../../../tools/agents/deploy-agents.mjs';
+import { signalChild } from '../../../src/process/signal-child.mjs';
 
 const roots = [];
 afterEach(() => roots.splice(0).forEach(root => fs.rmSync(root, { recursive: true, force: true })));
@@ -189,19 +190,54 @@ describe('provider prepare subprocess coordinator', () => {
     await expect(prepareProviderDeployments({
       srcRoot: h.root,
       jobs: [
-        { order: 0, provider: 'bad', target: h.root, args: ['--fail', '--delay=50'] },
-        { order: 1, provider: 'slow', target: h.root, args: ['--delay=500'] },
+        { order: 0, provider: 'bad', target: h.root, args: ['--fail', '--wait-for-sibling'] },
+        { order: 1, provider: 'slow', target: h.root, args: ['--hold-for-termination'] },
       ],
       workerPath,
       workerEnv: { AIWG_COORDINATOR_TRACE: h.trace },
       transaction: h.transaction,
+      timeoutMs: 60_000,
       onSessionRoot: root => { scratch = root; },
     })).rejects.toThrow(/fixture failure/);
     const events = fs.readFileSync(h.trace, 'utf8').trim().split('\n');
-    expect(events.some(line => line.startsWith('term:'))).toBe(true);
-    expect(events.some(line => line.startsWith('exit:'))).toBe(true);
+    expect(events.some(line => line.startsWith('start:1:'))).toBe(true);
+    const term = events.find(line => line.startsWith('term:1:'));
+    expect(term).toBeDefined();
+    const pid = term.split(':')[2];
+    expect(events.some(line => line.startsWith(`exit:1:${pid}:`))).toBe(true);
     expect(fs.existsSync(scratch)).toBe(false);
     expect(h.committed).toEqual([]);
+  });
+
+  it.each(['throw', 'refuse'])('keeps scratch until sibling exits when TERM can %s', async mode => {
+    const h = harness();
+    let scratch, sawEscalation = false, sawExit = false;
+    await expect(prepareProviderDeployments({
+      srcRoot: h.root,
+      jobs: [
+        { order: 0, provider: 'bad', target: h.root, args: ['--fail', '--wait-for-sibling'] },
+        { order: 1, provider: 'slow', target: h.root, args: ['--hold-for-termination'] },
+      ],
+      workerPath,
+      workerEnv: { AIWG_COORDINATOR_TRACE: h.trace },
+      transaction: h.transaction,
+      timeoutMs: 60_000,
+      onSessionRoot: root => { scratch = root; },
+      signal(child, name) {
+        if (name === 'SIGTERM') {
+          child.once('exit', () => { sawExit = true; });
+          if (mode === 'throw') throw new Error('synthetic TERM failure');
+          return false;
+        }
+        expect(name).toBe('SIGKILL');
+        expect(fs.existsSync(scratch)).toBe(true);
+        sawEscalation = true;
+        return signalChild(child, name);
+      },
+    })).rejects.toThrow(/fixture failure/);
+    expect(sawEscalation).toBe(true);
+    expect(sawExit).toBe(true);
+    expect(fs.existsSync(scratch)).toBe(false);
   });
 
   it('permits one stale retry and rejects a repeated stale result', async () => {
