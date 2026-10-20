@@ -11,11 +11,11 @@ afterEach(() => roots.splice(0).forEach(dir => fs.rmSync(dir, { recursive: true,
 const extractor = path.resolve('tools/release/extract-release-archive.py');
 function zip(mode) {
   const script = `import sys, zipfile\nz=zipfile.ZipFile(sys.stdout.buffer,'w',zipfile.ZIP_DEFLATED)\nmode=sys.argv[1]\nif mode=='duplicate':\n z.writestr('a','one'); z.writestr('a','two')\nelif mode=='symlink':\n i=zipfile.ZipInfo('link'); i.create_system=3; i.external_attr=0o120777<<16; z.writestr(i,'target')\nelif mode=='bomb':\n z.writestr('a',b'0'*(4*1024*1024))\nelif mode=='traversal':\n z.writestr('../outside','bad')\nelse:\n z.writestr('rc-manifest.json','{}'); z.writestr('aiwg.tgz','package')\nz.close()`;
-  const output = spawnSync('python3', ['-c', script, mode], { maxBuffer: 8 * 1024 * 1024 });
+  const output = spawnSync('python3', ['-c', script, mode], { timeout: 30000, killSignal: 'SIGKILL', maxBuffer: 8 * 1024 * 1024 });
   if (output.status !== 0) throw new Error(output.stderr.toString());
   return output.stdout;
 }
-function extract(bytes, root) { return spawnSync('python3', [extractor, root], { input: bytes, encoding: 'utf8' }); }
+function extract(bytes, root) { return spawnSync('python3', [extractor, root], { input: bytes, encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' }); }
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 
 describe('authenticated GitHub release evidence transport', () => {

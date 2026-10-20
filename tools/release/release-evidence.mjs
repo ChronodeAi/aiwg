@@ -191,7 +191,7 @@ export async function acquireGithubProductionReleaseEvidence({ token, approvalIs
       if (current === path.parse(current).root) break;
     }
     const result = spawnSync(interpreter, ['-I', '-S', path.join(ROOT, 'tools/release/extract-release-archive.py'), directory],
-      { input: bytes, encoding: 'utf8', timeout: 120000, maxBuffer: 1024 * 1024, env: { LANG: 'C.UTF-8' } });
+      { input: bytes, encoding: 'utf8', timeout: 120000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env: { LANG: 'C.UTF-8' } });
     if (result.error || result.status !== 0) {
       fs.rmSync(directory, { recursive: true, force: true });
       throw new Error(`Release archive extraction failed: ${result.error?.message ?? result.stderr}`);
