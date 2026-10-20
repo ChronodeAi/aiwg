@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { stringify } from 'yaml';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { importImpl } from '../../_resolve-impl.mjs';
 import {
   listMdFiles, discoverAddons, getFrameworksForMode, collectBehaviorDirs,
@@ -15,6 +15,8 @@ const { parseRuleFrontmatter, inferRuleActivation, RULE_BINDING_TYPES } = await 
 const { trackTemporaryDirectory } = await importImpl(import.meta.url, 'utils/temporary-directory.js');
 const { loadRulePinConfigs, installedRuleCapabilities, resolveRulePins } = await importImpl(import.meta.url, 'rules/pins.mjs');
 const { guardRulesInlineBudget } = await importImpl(import.meta.url, 'rules/inline-budget.mjs');
+const { userConfigFile } = await importImpl(import.meta.url, 'config/user-config-dir.mjs');
+const { resolveProjectAiwgDir } = await importImpl(import.meta.url, 'config/project-artifacts-runtime.mjs');
 
 function walk(dir) {
   if (!fs.existsSync(dir)) return [];
@@ -72,7 +74,7 @@ export async function prepareRuleDelivery(opts) {
       name: behavior ? `behavior/${path.basename(path.dirname(file))}` : parsed.data.name || path.basename(file, '.md') };
     if (!rule.tagged) rule.activation = behavior ? 'kernel' : inferRuleActivation(ruleEnforcementLevel(content));
     for (const diagnostic of parsed.diagnostics) {
-      console.warn(`${file}: ${diagnostic.code}: ${diagnostic.code === 'missing-activation' ? `Missing activation; inferred ${rule.activation} delivery (migration fallback).` : diagnostic.message}`);
+      console.warn(`${opts.logicalInputPath ? opts.logicalInputPath(file) : file}: ${diagnostic.code}: ${diagnostic.code === 'missing-activation' ? `Missing activation; inferred ${rule.activation} delivery (migration fallback).` : diagnostic.message}`);
     }
     return rule;
   });
@@ -120,14 +122,15 @@ export async function prepareRuleDelivery(opts) {
       const anchor = entry.path.startsWith('agentic/code/') ? root : cwd;
       const key = `${anchor}\0${entry.path}`;
       if (!entryPaths.has(key)) entryPaths.set(key, path.resolve(anchor, entry.path));
-      return { ...entry, path: entryPaths.get(key) };
+      const resolvedPath = entryPaths.get(key);
+      return { ...entry, path: opts.mapInputPath ? opts.mapInputPath(resolvedPath) : resolvedPath };
     });
     let rebuilt = false;
     const cacheDir = process.env.AIWG_RULE_BINDING_INDEX_CACHE;
-    const cacheFile = cacheDir && path.join(cacheDir, `${contentHash(root)}.json`);
+    const cacheFile = cacheDir && path.join(cacheDir, `${contentHash(opts.logicalInputPath ? opts.logicalInputPath(root) : root)}.json`);
     const buildSourceEntries = async (refresh = false) => {
       if (!refresh && cacheFile) {
-        try { return JSON.parse(fs.readFileSync(cacheFile, 'utf8')); }
+        try { return JSON.parse(fs.readFileSync(cacheFile, 'utf8')).map(entry => ({ ...entry, path: opts.mapInputPath ? opts.mapInputPath(entry.path) : entry.path })); }
         catch (error) {
           if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
         }
@@ -143,7 +146,7 @@ export async function prepareRuleDelivery(opts) {
           fs.mkdirSync(cacheDir, { recursive: true });
           // Workers may publish the same immutable source snapshot concurrently.
           const temporary = `${cacheFile}.${process.pid}.tmp`;
-          fs.writeFileSync(temporary, JSON.stringify(entries));
+          fs.writeFileSync(temporary, JSON.stringify(entries.map(entry => ({ ...entry, path: opts.logicalInputPath ? opts.logicalInputPath(entry.path) : entry.path }))));
           fs.renameSync(temporary, cacheFile);
         }
         return entries;
@@ -158,7 +161,12 @@ export async function prepareRuleDelivery(opts) {
         ? Object.values(packageRelations.index.artifacts).map(entry => ({ ...entry,
           indexScope: 'packaged', indexGraph: 'framework' }))
         : loadEntries(root);
-      entries.push(...sourceEntries);
+      // A relocated project graph may also be visible while querying the
+      // package root. Keep its project-anchored instance only.
+      const uniqueSources = sourceEntries.filter(entry => !(opts.sharedProjectGraph &&
+        entry.path.startsWith(path.join(root, '.aiwg') + path.sep) &&
+        localEntries.some(local => local.type === entry.type && local.name === entry.name)));
+      entries.push(...uniqueSources);
       if (!sourceEntries.length) entries.push(...await buildSourceEntries());
     }
     // Project-local installed bundles are outside the package source index.
@@ -511,32 +519,328 @@ function startupFiles(opts, provider) {
   });
 }
 
+// Plans contain only JSON values and a scratch directory. The preparing process
+// owns that directory until disposal; cross-process transfer needs a separate lease.
+const stagedCleanups = new Map();
+function capturePreimage(file, ancestors = new Set()) {
+  let stat;
+  try { stat = fs.lstatSync(file); } catch (error) {
+    if (error.code === 'ENOENT') return { kind: 'missing' };
+    throw error;
+  }
+  const mode = stat.mode & 0o7777;
+  if (stat.isSymbolicLink()) {
+    const target = fs.readlinkSync(file);
+    const resolved = path.resolve(path.dirname(file), target);
+    if (ancestors.has(resolved)) throw new Error(`Cyclic deployment preimage: ${file}`);
+    return { kind: 'symlink', mode, target, resolved: capturePreimage(resolved, new Set([...ancestors, resolved])) };
+  }
+  if (stat.isFile()) return { kind: 'file', mode, digest: fileDigest(file) };
+  if (stat.isDirectory()) return { kind: 'directory', mode, entries: fs.readdirSync(file).sort().map(name => [name, capturePreimage(path.join(file, name), new Set([...ancestors, path.resolve(file)]))]) };
+  throw new Error(`Unsupported deployment preimage: ${file}`);
+}
+// cpSync materializes links; compare its output with the recursively resolved
+// content while retaining the original link-shaped preimage for commit drift.
+function materializeInput(from, to, ancestors = new Set()) {
+  if (!fs.existsSync(from)) return;
+  const real = fs.realpathSync(from);
+  if (ancestors.has(real)) throw new Error(`Cyclic deployment input: ${from}`);
+  const stat = fs.statSync(from);
+  if (stat.isDirectory()) {
+    fs.mkdirSync(to, { recursive: true });
+    for (const name of fs.readdirSync(from)) materializeInput(path.join(from, name), path.join(to, name), new Set([...ancestors, real]));
+    fs.chmodSync(to, stat.mode & 0o7777);
+  } else if (stat.isFile()) {
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.copyFileSync(from, to); fs.chmodSync(to, stat.mode & 0o7777);
+  } else throw new Error(`Unsupported deployment input: ${from}`);
+}
+function materializedPreimage(state) {
+  if (state.kind === 'symlink') return materializedPreimage(state.resolved);
+  if (state.kind === 'directory') return { ...state, entries: state.entries.map(([name, child]) => [name, materializedPreimage(child)]) };
+  return state;
+}
+function snapshotPreimages(paths) {
+  return [...new Set(paths.map(file => path.resolve(file)))].map(file => ({ path: file, state: capturePreimage(file) }));
+}
+function planSeal(plan) { return createHash('sha256').update(JSON.stringify(plan)).digest('hex'); }
+function planOwner(plan) {
+  const owner = stagedCleanups.get(plan?.lease);
+  return owner && owner.seal === planSeal(plan) ? owner : null;
+}
+export function disposeRuleDeploymentPlan(plan) {
+  const owner = planOwner(plan);
+  if (owner) { stagedCleanups.delete(plan.lease); owner.cleanup(); }
+}
+function captureAnchors(paths) {
+  const names = new Set();
+  for (const name of paths) {
+    let current = path.resolve(name);
+    for (;;) {
+      names.add(current);
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  return [...names].sort().map(file => {
+    try {
+      const stat = fs.lstatSync(file, { bigint: true });
+      return { path: file, dev: String(stat.dev), ino: String(stat.ino), mode: String(stat.mode),
+        link: stat.isSymbolicLink() ? fs.readlinkSync(file) : null, real: fs.realpathSync(file) };
+    } catch (error) {
+      if (error.code === 'ENOENT') return { path: file, missing: true };
+      throw error;
+    }
+  });
+}
+
+// Opaque coordinator-owned input pool. A plan retains a lease until committed or
+// disposed, so disposing the creator's handle cannot invalidate active stages.
+const inputPools = new WeakMap();
+// Executable links are identity-bound but their installed code is trusted host
+// state. Data files, modes, directory membership, and links are sealed in full.
+function poolInventory(file) {
+  let stat;
+  try { stat = fs.lstatSync(file); } catch (error) {
+    if (error.code === 'ENOENT') return { kind: 'missing' };
+    throw error;
+  }
+  const mode = stat.mode & 0o7777;
+  if (stat.isSymbolicLink()) return { kind: 'symlink', mode, target: fs.readlinkSync(file) };
+  if (stat.isFile()) return { kind: 'file', mode, digest: fileDigest(file) };
+  if (stat.isDirectory()) return { kind: 'directory', mode, entries: fs.readdirSync(file).sort().map(name => [name, poolInventory(path.join(file, name))]) };
+  throw new Error(`Unsupported shared input pool entry: ${file}`);
+}
+function setPoolWritable(file, writable) {
+  let stat;
+  try { stat = fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  if (stat.isSymbolicLink()) return;
+  if (stat.isDirectory() && writable) fs.chmodSync(file, (stat.mode & 0o7777) | 0o700);
+  if (stat.isDirectory()) for (const name of fs.readdirSync(file)) setPoolWritable(path.join(file, name), writable);
+  if (!writable) fs.chmodSync(file, (stat.mode & 0o7777) & ~0o222);
+}
+function verifyInputPool(pool) {
+  try {
+    if (planSeal(poolInventory(pool.snapshotRoot)) === pool.inventorySeal &&
+      JSON.stringify(captureAnchors(pool.execAnchors.map(anchor => anchor.path))) === JSON.stringify(pool.execAnchors)) return;
+  } catch (error) { throw new Error(`Shared input pool changed: ${error.message}`); }
+  throw new Error('Shared input pool changed');
+}
+
+export function createRuleDeploymentInputPool(srcRoot) {
+  const corpusRoot = resolveAiwgRoot(srcRoot) || srcRoot;
+  const sourceTree = fs.existsSync(path.join(corpusRoot, 'agentic', 'code')) ? path.join(corpusRoot, 'agentic', 'code') : srcRoot;
+  const isCorpusTree = path.relative(corpusRoot, sourceTree) === path.join('agentic', 'code');
+  const paths = [sourceTree, path.join(corpusRoot, 'prebuilt', 'framework-relations'), path.join(corpusRoot, 'package.json'), path.join(corpusRoot, 'schemas')];
+  const preimages = snapshotPreimages(paths);
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rule-input-'));
+  const cleanup = trackTemporaryDirectory(temp);
+  try {
+    const snapshotRoot = path.join(temp, 'input');
+    const snapshotTree = isCorpusTree ? path.join(snapshotRoot, 'agentic', 'code') : snapshotRoot;
+    materializeInput(sourceTree, snapshotTree);
+    if (JSON.stringify(capturePreimage(snapshotTree)) !== JSON.stringify(materializedPreimage(preimages[0].state))) throw new Error('Source changed while preparing immutable snapshot');
+    const trustedExec = [];
+    if (isCorpusTree) {
+      for (const rel of ['package.json', 'prebuilt/framework-relations', 'schemas']) {
+        const from = path.join(corpusRoot, rel), to = path.join(snapshotRoot, rel);
+        materializeInput(from, to);
+        const expected = preimages.find(item => item.path === path.resolve(from));
+        if (JSON.stringify(capturePreimage(to)) !== JSON.stringify(materializedPreimage(expected.state))) throw new Error(`Package input changed while preparing snapshot: ${from}`);
+      }
+      for (const rel of ['tools', 'dist', 'node_modules', 'src']) {
+        const from = path.join(corpusRoot, rel), to = path.join(snapshotRoot, rel);
+        if (fs.existsSync(from)) { fs.symlinkSync(from, to, 'dir'); trustedExec.push(from); }
+      }
+    }
+    setPoolWritable(snapshotRoot, false);
+    const inventorySeal = planSeal(poolInventory(snapshotRoot));
+    const execAnchors = captureAnchors(trustedExec);
+    const safeCleanup = () => { setPoolWritable(snapshotRoot, true); cleanup(); };
+    const token = Object.freeze({});
+    inputPools.set(token, { corpusRoot: path.resolve(corpusRoot), sourceTree: path.resolve(sourceTree), snapshotRoot, snapshotTree, isCorpusTree, preimages, inventorySeal, execAnchors, refs: 1, closed: false, cleanup: safeCleanup });
+    return token;
+  } catch (error) { setPoolWritable(path.join(temp, 'input'), true); cleanup(); throw error; }
+}
+function releaseInputPool(pool) { if (--pool.refs === 0) pool.cleanup(); }
+export function disposeRuleDeploymentInputPool(token) {
+  const pool = inputPools.get(token);
+  if (pool && !pool.closed) { pool.closed = true; releaseInputPool(pool); }
+}
+
 /** Stage only provider/context output, never the user's source tree. On failure
  * no staged output (including skills and behaviors) reaches the prior deployment. */
-export async function deployWithRuleDelivery(original, provider, deploy) {
-  if (original.ruleDelivery) return deploy(original);
+export async function prepareRuleDeployment(original, provider, deploy) {
+  const budgetEnv = { ...process.env };
   const ruleDir = path.isAbsolute(provider.paths.rules || '') ? provider.paths.rules : path.join(original.target, provider.paths.rules || `.${provider.name}/rules`);
   const manifestFile = path.join(ruleDir, '.aiwg-manifest.json');
-  const previous = fs.existsSync(manifestFile) ? JSON.parse(read(manifestFile)) : {};
-  const delivery = await prepareRuleDelivery({ ...original, previousRuleSources: previous.ruleSources || [] });
+  const previousText = fs.existsSync(manifestFile) ? read(manifestFile) : '';
+  const previous = previousText ? JSON.parse(previousText) : {};
+  const corpusRoot = resolveAiwgRoot(original.srcRoot) || original.srcRoot;
+  const sourceTree = fs.existsSync(path.join(corpusRoot, 'agentic', 'code'))
+    ? path.join(corpusRoot, 'agentic', 'code') : original.srcRoot;
+  const pool = original.inputPool && inputPools.get(original.inputPool);
+  if (original.inputPool && (!pool || pool.closed || pool.corpusRoot !== path.resolve(corpusRoot) || pool.sourceTree !== path.resolve(sourceTree))) throw new Error('Invalid or closed rule deployment input pool');
+  if (pool) verifyInputPool(pool);
+  let projectConfig = original.config;
+  if (!projectConfig) {
+    try { projectConfig = JSON.parse(read(path.join(original.target, '.aiwg', 'aiwg.config')) || '{}'); } catch { projectConfig = {}; }
+  }
+  const artifactRoot = resolveProjectAiwgDir(original.target);
+  const userIndexRoot = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'aiwg', 'index');
+  const projectGraphFiles = ['.index/metadata.json', '.index/project/metadata.json'].map(name => path.join(artifactRoot, name));
+  const userGraphFiles = ['user'].map(name => path.join(userIndexRoot, name, 'metadata.json'));
+  const localSources = Object.values(projectConfig.installed || {}).filter(entry => entry?.localPath)
+    .map(entry => path.resolve(original.target, entry.localPath));
+  const selectedRules = collectDeploymentRuleSources({ ...original, previousRuleSources: previous.ruleSources || [] });
+  const initialPreimages = [...(pool ? pool.preimages : snapshotPreimages([sourceTree, path.join(corpusRoot, 'prebuilt', 'framework-relations'), path.join(corpusRoot, 'package.json'), path.join(corpusRoot, 'schemas')])), ...snapshotPreimages([path.join(corpusRoot, '.aiwg', '.index'),
+    manifestFile, path.join(original.target, '.aiwg', 'aiwg.config'), path.join(original.target, '.aiwg', 'AIWG.md'), path.join(original.target, '.aiwg', 'skills'), path.join(original.target, '.aiwg-location'), ...projectGraphFiles, ...userGraphFiles, ...localSources,
+    ...(path.resolve(original.srcRoot) === path.resolve(corpusRoot) ? [] : [original.srcRoot]), ...selectedRules, ...selectedRules.map(file => path.dirname(file)),
+    userConfigFile('aiwg.config'), process.env.AIWG_USER_REGISTRY_PATH || userConfigFile('installed.json'),
+    ...(original.ruleSources || []), ...(previous.ruleSources || []), ...(original.bindingEntries || []).map(entry => entry.path)])];
+  let manifestState = initialPreimages.find(item => item.path === path.resolve(manifestFile)).state;
+  if (manifestState.kind === 'symlink') manifestState = manifestState.resolved;
+  const manifestDigest = previousText ? createHash('sha256').update(previousText).digest('hex') : null;
+  if ((manifestState.kind === 'missing' ? null : manifestState.digest) !== manifestDigest) throw new Error('Rule manifest changed while preparing snapshot');
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rule-deploy-'));
-  const removeTemp = trackTemporaryDirectory(temp);
+  const removeStage = trackTemporaryDirectory(temp);
+  if (pool) pool.refs++;
+  const removeTemp = () => { removeStage(); if (pool) releaseInputPool(pool); };
+  const lease = randomUUID();
+  stagedCleanups.set(lease, { temp, cleanup: removeTemp, pool, seal: null });
   const mappings = [];
+  const preimages = [...initialPreimages];
+  let retained = false;
   const originals = { ...provider.paths };
+  const logicalTarget = original.target;
+  const priorAiwgRoot = process.env.AIWG_ROOT;
+  const priorRegistry = process.env.AIWG_USER_REGISTRY_PATH;
+  const priorArtifacts = process.env.AIWG_ARTIFACTS_PATH;
+  const priorXdgData = process.env.XDG_DATA_HOME;
   try {
+    const snapshotRoot = pool ? pool.snapshotRoot : path.join(temp, 'input');
+    const treeRelative = path.relative(corpusRoot, sourceTree);
+    const isCorpusTree = treeRelative === path.join('agentic', 'code');
+    const snapshotTree = isCorpusTree ? path.join(snapshotRoot, 'agentic', 'code') : snapshotRoot;
+    if (!pool) { fs.mkdirSync(path.dirname(snapshotTree), { recursive: true }); materializeInput(sourceTree, snapshotTree); }
+    const expectedTree = initialPreimages.find(item => item.path === path.resolve(sourceTree));
+    if (!pool && JSON.stringify(capturePreimage(snapshotTree)) !== JSON.stringify(materializedPreimage(expectedTree.state))) throw new Error('Source changed while preparing immutable snapshot');
+    if (isCorpusTree && !pool) {
+      for (const rel of ['package.json', 'prebuilt', 'schemas']) {
+        const from = path.join(corpusRoot, rel), to = path.join(snapshotRoot, rel);
+        if (fs.existsSync(from)) materializeInput(from, to);
+        const expected = initialPreimages.find(item => item.path === path.resolve(from));
+        if (expected && JSON.stringify(capturePreimage(to)) !== JSON.stringify(materializedPreimage(expected.state))) throw new Error(`Package input changed while preparing snapshot: ${from}`);
+      }
+      // The projector helpers execute installed code but receive the snapshot as data.
+      for (const rel of ['tools', 'dist', 'node_modules', 'src']) {
+        const from = path.join(corpusRoot, rel), to = path.join(snapshotRoot, rel);
+        if (fs.existsSync(from)) fs.symlinkSync(from, to, 'dir');
+      }
+    }
+    // Keep standalone fixture/bundle snapshots from inheriting the installed
+    // package's unrelated prebuilt relations through module-root fallback.
+    process.env.AIWG_ROOT = snapshotRoot;
+    const frozenConfigDir = path.join(temp, 'config');
+    fs.mkdirSync(frozenConfigDir);
+    const frozenFile = (from, name, expected) => {
+      const to = path.join(frozenConfigDir, name);
+      if (fs.existsSync(from)) { fs.copyFileSync(from, to); fs.chmodSync(to, fs.statSync(from).mode & 0o7777); }
+      if (JSON.stringify(capturePreimage(to)) !== JSON.stringify(materializedPreimage(expected || { kind: 'missing' }))) throw new Error(`Configuration changed while preparing snapshot: ${from}`);
+      return to;
+    };
+    const projectFile = path.join(logicalTarget, '.aiwg', 'aiwg.config');
+    const projectFileState = initialPreimages.find(item => item.path === path.resolve(projectFile))?.state;
+    const userFile = userConfigFile('aiwg.config');
+    const registryFile = priorRegistry || userConfigFile('installed.json');
+    const projectSnapshot = frozenFile(projectFile, 'project.json', projectFileState);
+    const userSnapshot = frozenFile(userFile, 'user.json', initialPreimages.find(item => item.path === path.resolve(userFile))?.state);
+    const registrySnapshot = frozenFile(registryFile, 'registry.json', initialPreimages.find(item => item.path === path.resolve(registryFile))?.state);
+    const readConfig = file => fs.existsSync(file) ? JSON.parse(read(file)) : {};
+    const effectiveConfig = structuredClone(original.config || readConfig(projectSnapshot));
+    const pinConfigs = structuredClone(original.pinConfigs || { project: effectiveConfig, user: readConfig(userSnapshot) });
+    const frozenLocal = Object.values(pinConfigs.project.installed || {}).filter(entry => entry?.localPath)
+      .map(entry => path.resolve(logicalTarget, entry.localPath));
+    if (JSON.stringify([...new Set(frozenLocal)].sort()) !== JSON.stringify([...new Set(localSources)].sort())) throw new Error('Project-local configuration changed while preparing snapshot');
+    const sourceMappings = [{ from: path.resolve(sourceTree), to: snapshotTree }];
+    for (const [index, from] of [...new Set(localSources)].entries()) {
+      const to = path.join(temp, 'local-input', String(index));
+      const expected = initialPreimages.find(item => item.path === from)?.state;
+      if (fs.existsSync(from)) { fs.mkdirSync(path.dirname(to), { recursive: true }); materializeInput(from, to); }
+      if (JSON.stringify(capturePreimage(to)) !== JSON.stringify(materializedPreimage(expected || { kind: 'missing' }))) throw new Error(`Project-local input changed while preparing snapshot: ${from}`);
+      sourceMappings.push({ from, to });
+    }
+    const externalInputs = [...new Set([...(path.resolve(original.srcRoot) === path.resolve(corpusRoot) ? [] : [original.srcRoot]), ...(original.ruleSources || []), ...(previous.ruleSources || []),
+      ...(original.bindingEntries || []).map(entry => entry.path)].map(file => path.resolve(file)))];
+    for (const [index, from] of externalInputs.entries()) {
+      if (sourceMappings.some(item => from === item.from || from.startsWith(`${item.from}${path.sep}`))) continue;
+      const to = path.join(temp, 'external-input', String(index), path.basename(from));
+      const expected = initialPreimages.find(item => item.path === from)?.state;
+      if (fs.existsSync(from)) { fs.mkdirSync(path.dirname(to), { recursive: true }); materializeInput(from, to); }
+      if (JSON.stringify(capturePreimage(to)) !== JSON.stringify(materializedPreimage(expected || { kind: 'missing' }))) throw new Error(`External input changed while preparing snapshot: ${from}`);
+      sourceMappings.push({ from, to });
+    }
+    for (const entry of Object.values(pinConfigs.project.installed || {})) {
+      if (!entry?.localPath) continue;
+      const from = path.resolve(logicalTarget, entry.localPath);
+      entry.localPath = sourceMappings.find(mapping => mapping.from === from).to;
+    }
+    process.env.AIWG_USER_REGISTRY_PATH = registrySnapshot;
+    let stagedProjectRoot;
+    const mapSource = file => {
+      let absolute = path.resolve(file);
+      if (stagedProjectRoot && absolute.startsWith(`${stagedProjectRoot}${path.sep}`)) {
+        const logical = path.join(logicalTarget, path.relative(stagedProjectRoot, absolute));
+        if (sourceMappings.some(item => logical === item.from || logical.startsWith(`${item.from}${path.sep}`)) || !fs.existsSync(absolute)) absolute = logical;
+      }
+      const mapping = [...sourceMappings].sort((a, b) => b.from.length - a.from.length)
+        .find(item => absolute === item.from || absolute.startsWith(`${item.from}${path.sep}`));
+      if (mapping) return path.join(mapping.to, path.relative(mapping.from, absolute));
+      if (isCorpusTree && absolute === path.resolve(corpusRoot)) return snapshotRoot;
+      return file;
+    };
+    const logicalInputPath = file => {
+      let result = file;
+      for (const mapping of [...sourceMappings].sort((a, b) => b.to.length - a.to.length)) result = result.split(mapping.to).join(mapping.from);
+      return result.split(snapshotRoot).join(corpusRoot);
+    };
+    original = { ...original, config: effectiveConfig, srcRoot: mapSource(original.srcRoot), pinConfigs, mapInputPath: mapSource, logicalInputPath,
+      ...(original.ruleSources ? { ruleSources: original.ruleSources.map(mapSource) } : {}),
+      ...(original.bindingEntries ? { bindingEntries: original.bindingEntries.map(entry => ({ ...entry, path: mapSource(entry.path) })) } : {}) };
     const target = path.resolve(original.target);
     const stage = path.join(temp, 'project');
+    stagedProjectRoot = stage;
     fs.mkdirSync(stage);
     const mount = (from, to) => {
       if (mappings.some(mapping => mapping.from === from)) return;
-      const before = new Map(walk(from).map(file => [path.relative(from, file), fileDigest(file)]));
-      if (fs.existsSync(from)) fs.cpSync(from, to, { recursive: true, dereference: true });
+      const mountPreimage = snapshotPreimages([from])[0];
+      preimages.push(mountPreimage);
+      if (fs.existsSync(from)) materializeInput(from, to);
+      const before = new Map(walk(to).map(file => [path.relative(to, file), fileDigest(file)]));
+      if (JSON.stringify(capturePreimage(to)) !== JSON.stringify(materializedPreimage(mountPreimage.state))) throw new Error(`Deployment input changed while preparing snapshot: ${from}`);
       mappings.push({ from, to, before });
     };
     // Mount directories independently so only provider-owned surfaces are promoted.
-    for (const dir of [`.${provider.name}`, '.agents', '.aiwg']) mount(path.join(target, dir), path.join(stage, dir));
-    const rootNames = ['AGENTS.md', 'AIWG.md', 'WORKSPACE.md', 'CLAUDE.md', 'WARP.md', '.hermes.md'];
-    for (const name of rootNames) if (fs.existsSync(path.join(target, name))) fs.copyFileSync(path.join(target, name), path.join(stage, name));
+    for (const dir of [`.${provider.name}`, '.agents', '.aiwg/skills']) mount(path.join(target, dir), path.join(stage, dir));
+    fs.mkdirSync(path.join(stage, '.aiwg'), { recursive: true });
+    if (fs.existsSync(projectSnapshot)) materializeInput(projectSnapshot, path.join(stage, '.aiwg', 'aiwg.config'));
+    const rootNames = ['AGENTS.md', 'AIWG.md', 'WORKSPACE.md', 'CLAUDE.md', 'WARP.md', '.hermes.md', '.aiwg/AIWG.md', '.aiwg/frameworks/registry.json'];
+    for (const framework of getFrameworksForMode(original.srcRoot, original.mode)) {
+      for (const entry of framework.manifest?.memory?.creates || []) {
+        if (typeof entry?.path !== 'string' || !entry.path.startsWith('.aiwg/') || !path.extname(entry.path)) continue;
+        const safe = path.normalize(entry.path);
+        if (!safe.startsWith(`.aiwg${path.sep}`)) throw new Error(`Invalid framework workspace path: ${entry.path}`);
+        if (!rootNames.includes(safe)) rootNames.push(safe);
+      }
+    }
+    preimages.push(...snapshotPreimages(rootNames.map(name => path.join(target, name))));
+    for (const name of rootNames) {
+      const from = path.join(target, name), to = path.join(stage, name);
+      if (fs.existsSync(from)) { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.copyFileSync(from, to); fs.chmodSync(to, fs.statSync(from).mode & 0o7777); }
+      const expected = preimages.find(item => item.path === path.resolve(from));
+      if (JSON.stringify(capturePreimage(to)) !== JSON.stringify(materializedPreimage(expected.state))) throw new Error(`Deployment input changed while preparing snapshot: ${from}`);
+    }
     const home = path.join(temp, 'home');
     for (const [key, dir] of Object.entries(provider.paths)) {
       if (!path.isAbsolute(dir)) continue;
@@ -564,12 +868,71 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
       legacyCodexSkills = path.join(temp, 'codex-legacy-skills');
       mount(path.join(os.homedir(), '.codex', 'skills'), legacyCodexSkills);
     }
+    // Existing receipts carry logical source paths. Projectors operate against
+    // the immutable snapshot, so translate those paths before stale cleanup;
+    // promotion normalizes them back to their logical paths.
+    for (const { to } of mappings) {
+      for (const file of walk(to).filter(name => path.basename(name) === '.aiwg-manifest.json')) {
+        let receipt; try { receipt = JSON.parse(read(file)); } catch { continue; }
+        let changed = false;
+        const remap = value => {
+          if (!value || typeof value !== 'object') return;
+          for (const [key, child] of Object.entries(value)) {
+            if (['skillSource', 'flowSource', 'sourcePath'].includes(key) && typeof child === 'string' && path.isAbsolute(child)) {
+              const mapped = mapSource(child); if (mapped !== child) { value[key] = mapped; changed = true; }
+            }
+            else remap(child);
+          }
+        };
+        remap(receipt); if (changed) fs.writeFileSync(file, `${JSON.stringify(receipt, null, 2)}\n`);
+      }
+    }
     let activeWorkspace;
     if (provider.resolveOpenClawWorkspace) {
       const from = provider.resolveOpenClawWorkspace();
       activeWorkspace = path.join(temp, 'active-workspace');
       mount(from, activeWorkspace);
     }
+    // Graph discovery must read the same immutable inputs as projection, including
+    // relocated project indexes and shared user indexes.
+    const graphRoot = path.join(temp, 'graph-artifacts');
+    const xdgRoot = path.join(temp, 'xdg-data');
+    const copyGraph = (from, to) => {
+      const expected = initialPreimages.find(item => item.path === path.resolve(from)).state;
+      materializeInput(from, to);
+      if (JSON.stringify(capturePreimage(to)) !== JSON.stringify(materializedPreimage(expected))) throw new Error(`Graph input changed while preparing snapshot: ${from}`);
+    };
+    for (const from of projectGraphFiles) copyGraph(from, path.join(graphRoot, path.relative(artifactRoot, from)));
+    for (const from of userGraphFiles) copyGraph(from, path.join(xdgRoot, 'aiwg', 'index', path.relative(userIndexRoot, from)));
+    // Non-index graph targets remain logical until selected, then are copied
+    // individually by the discovered-input loop below.
+    if (path.resolve(artifactRoot) !== path.resolve(target, '.aiwg')) sourceMappings.push({ from: path.resolve(target, '.aiwg'), to: artifactRoot });
+    process.env.AIWG_ARTIFACTS_PATH = graphRoot;
+    process.env.XDG_DATA_HOME = xdgRoot;
+    const delivery = await prepareRuleDelivery({ ...original, target: stage, sharedProjectGraph: path.resolve(artifactRoot) !== path.resolve(target, '.aiwg'), previousRuleSources: (previous.ruleSources || []).map(mapSource) });
+    // Provider writes belong to the staged project control plane, not the
+    // read-only graph snapshot used for binding discovery.
+    process.env.AIWG_ARTIFACTS_PATH = path.join(stage, '.aiwg');
+    // Discovery can select absolute user/project sources not known at entry.
+    // Bind the exact copied bytes before any projector consumes them.
+    const remappedBindings = new Map();
+    for (const entry of delivery.targets) {
+      const source = path.resolve(entry.source);
+      const alreadyFrozen = source.startsWith(`${temp}${path.sep}`);
+      if (!alreadyFrozen) {
+        const state = capturePreimage(source);
+        const to = path.join(temp, 'discovered-input', String(sourceMappings.length), path.basename(source));
+        materializeInput(source, to);
+        if (JSON.stringify(capturePreimage(to)) !== JSON.stringify(materializedPreimage(state))) throw new Error(`Discovered input changed while preparing snapshot: ${source}`);
+        preimages.push({ path: source, state });
+        sourceMappings.push({ from: source, to });
+        entry.source = to;
+      }
+      const rules = delivery.bindings.get(source);
+      if (rules) remappedBindings.set(entry.source, rules);
+    }
+    delivery.bindings = remappedBindings;
+    preimages.push(...snapshotPreimages([...delivery.rules.map(rule => rule.file), ...delivery.targets.map(entry => entry.source), path.join(target, '.aiwg', 'aiwg.config')]));
     const opts = { ...original, target: stage, dryRun: false, ruleDelivery: delivery,
       kernelSkillsPath: kernel, deploymentHome: home, activeWorkspace, hermesLegacySkills, legacyCodexSkills, staging: true };
     await deploy(opts);
@@ -600,13 +963,13 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
     // Normalize all generated path wrappers before counting or promoting bytes.
     const normalize = content => {
       for (const mapping of [...mappings].sort((a, b) => b.to.length - a.to.length)) content = content.split(mapping.to).join(mapping.from);
-      return content.split(stage).join(target);
+      for (const mapping of [...sourceMappings].sort((a, b) => b.to.length - a.to.length)) content = content.split(mapping.to).join(mapping.from);
+      return content.split(snapshotRoot).join(corpusRoot).split(stage).join(target);
     };
     const projected = startupFiles(opts, provider).map(file => ({ path: normalize(file.path), content: normalize(file.content) }));
-    const configFile = path.join(target, '.aiwg', 'aiwg.config');
-    const config = original.config || (fs.existsSync(configFile) ? JSON.parse(read(configFile)) : {});
-    const guarded = guardRulesInlineBudget({ provider: provider.name, files: projected, config,
-      reportOnly: delivery.pins.length ? original.allowOverBudget === true : original.reportOnly !== false && !original.strict && !process.env.CI });
+    const config = effectiveConfig;
+    const guarded = guardRulesInlineBudget({ provider: provider.name, files: projected, config, env: budgetEnv,
+      reportOnly: delivery.pins.length ? original.allowOverBudget === true : original.reportOnly !== false && !original.strict && !budgetEnv.CI });
     guarded.report.pins = delivery.pins.map(rule => ({ id: rule.id, name: rule.name, matches: rule.matches, canonical_activation: rule.canonical_activation, bytes: Buffer.byteLength(rule.body || '') }));
     const pinDetails = delivery.pins.map(rule => `${rule.name}: ${Buffer.byteLength(rule.body || '')} body bytes via ${JSON.stringify(rule.matches)}`).join('; ');
     const budgetFailure = message => new Error(`${provider.name}: ${message}; ${guarded.report.selected_bytes} startup bytes. Pins: ${pinDetails || '(none)'}.${delivery.pins.length ? ' Use --allow-over-budget to retain every pinned body.' : ''}`);
@@ -630,7 +993,8 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
     const delegated = (from, rel) => mappings.some(mapping => mapping.from !== from
       && mapping.from.startsWith(`${from}${path.sep}`)
       && (path.join(from, rel) === mapping.from || path.join(from, rel).startsWith(`${mapping.from}${path.sep}`)));
-    if (original.previewReport) return guarded.report;
+    if (pool) verifyInputPool(pool);
+    if (original.previewReport) return { report: guarded.report, noop: true };
     if (original.dryRun) {
       // A validated plan must describe the operator's final paths, rather than
       // exposing only the temporary paths used to assemble that plan.
@@ -647,8 +1011,58 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
         if (fs.existsSync(file) && normalize(read(file)) !== read(path.join(target, name))) console.log(`[dry-run] Would write ${path.join(target, name)}`);
       }
       console.log(`[dry-run] Planned ${provider.name} deployment: ${guarded.report.selected_bytes} startup bytes; no output promoted.`);
-      return guarded.report;
+      return { report: guarded.report, noop: true };
     }
+    const workspaceDirs = [];
+    const collectDirs = (dir, rel = '') => {
+      if (!fs.existsSync(dir)) return;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const name = path.join(rel, entry.name); workspaceDirs.push(name);
+        collectDirs(path.join(dir, entry.name), name);
+      }
+    };
+    collectDirs(path.join(stage, '.aiwg'), '.aiwg');
+    const plan = { version: 1, lease, temp, target, stage, rootNames, workspaceDirs, preimages, poolSeal: pool?.inventorySeal || null,
+      anchors: captureAnchors([target, ...mappings.map(mapping => mapping.from), ...workspaceDirs.map(dir => path.join(target, dir))]),
+      snapshotRoot, corpusRoot, sourceMappings, staged: snapshotPreimages([stage, ...mappings.map(mapping => mapping.to)]), report: guarded.report,
+      mappings: mappings.map(({ from, to, before }) => ({ from, to, before: [...before] })) };
+    stagedCleanups.get(lease).seal = planSeal(plan);
+    retained = true;
+    return plan;
+  } finally {
+    Object.assign(provider.paths, originals);
+    if (priorAiwgRoot === undefined) delete process.env.AIWG_ROOT; else process.env.AIWG_ROOT = priorAiwgRoot;
+    if (priorRegistry === undefined) delete process.env.AIWG_USER_REGISTRY_PATH; else process.env.AIWG_USER_REGISTRY_PATH = priorRegistry;
+    if (priorArtifacts === undefined) delete process.env.AIWG_ARTIFACTS_PATH; else process.env.AIWG_ARTIFACTS_PATH = priorArtifacts;
+    if (priorXdgData === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = priorXdgData;
+    if (!retained) { stagedCleanups.delete(lease); removeTemp(); }
+  }
+}
+
+/** Validate every captured input before applying a staged provider plan. */
+export function commitRuleDeploymentPlan(plan) {
+  if (plan.noop) return plan.report;
+  try {
+    if (plan.version !== 1 || !plan.temp || !plan.stage || !Array.isArray(plan.preimages)) throw new Error('Invalid rule deployment plan');
+    const owner = planOwner(plan);
+    if (!owner) throw new Error('Unowned or modified rule deployment plan');
+    if (owner.pool) { if (plan.poolSeal !== owner.pool.inventorySeal) throw new Error('Shared input pool lease changed'); verifyInputPool(owner.pool); }
+    if (JSON.stringify(snapshotPreimages(plan.staged.map(item => item.path))) !== JSON.stringify(plan.staged)) throw new Error('Staged provider output changed');
+    if (JSON.stringify(captureAnchors(plan.anchors.map(item => item.path))) !== JSON.stringify(plan.anchors)) throw new Error('Provider deployment root or ancestor changed');
+    const stale = plan.preimages.filter(item => JSON.stringify(capturePreimage(item.path)) !== JSON.stringify(item.state)).map(item => item.path);
+    if (stale.length) throw new Error(`Provider deployment preimage changed: ${stale.join(', ')}`);
+    const { target, stage, rootNames } = plan;
+    for (const dir of plan.workspaceDirs || []) fs.mkdirSync(path.join(target, dir), { recursive: true });
+    const mappings = plan.mappings.map(({ from, to, before }) => ({ from, to, before: new Map(before) }));
+    const normalize = content => {
+      for (const mapping of [...mappings].sort((a, b) => b.to.length - a.to.length)) content = content.split(mapping.to).join(mapping.from);
+      for (const mapping of [...plan.sourceMappings].sort((a, b) => b.to.length - a.to.length)) content = content.split(mapping.to).join(mapping.from);
+      return content.split(plan.snapshotRoot).join(plan.corpusRoot).split(stage).join(target);
+    };
+    const delegated = (from, rel) => mappings.some(mapping => mapping.from !== from
+      && mapping.from.startsWith(`${from}${path.sep}`)
+      && (path.join(from, rel) === mapping.from || path.join(from, rel).startsWith(`${mapping.from}${path.sep}`)));
     for (const { from, to, before } of mappings) {
       if (!fs.existsSync(to)) {
         if (before.size) fs.rmSync(from, { recursive: true, force: true });
@@ -677,9 +1091,14 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
       }
     }
     for (const name of rootNames) if (fs.existsSync(path.join(stage, name))) put(path.join(target, name), normalize(read(path.join(stage, name))));
-    return guarded.report;
+    return plan.report;
   } finally {
-    Object.assign(provider.paths, originals);
-    removeTemp();
+    disposeRuleDeploymentPlan(plan);
   }
+}
+
+/** Stage and commit serially for existing provider callers. */
+export async function deployWithRuleDelivery(original, provider, deploy) {
+  if (original.ruleDelivery) return deploy(original);
+  return commitRuleDeploymentPlan(await prepareRuleDeployment(original, provider, deploy));
 }
