@@ -12,12 +12,14 @@
 #
 # REQUIRED TRACKER SECRETS:
 #   VAULT_CI_ROLE_ID, VAULT_CI_SECRET_ID - vault AppRole bootstrap pair.
-#   AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN - dedicated read-scoped GitHub user API
-#   credential for retained-RC/comparison/approval evidence. It is not fetched
-#   from the Gitea Vault path below.
 #
-# vault fetch spec:
-#   ci/vault-fetch.npm-publish.spec -> NODE_AUTH_TOKEN
+# The dedicated read-scoped GitHub authenticated-user API credential for
+# retained-RC/comparison/approval evidence is fetched from vault only after the
+# versioned promotion policy passes its offline activation preflight.
+#
+# vault fetch specs:
+#   ci/vault-fetch.npm-publish.spec          -> NODE_AUTH_TOKEN
+#   ci/vault-fetch.npm-publish-evidence.spec -> AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE
 #
 # To publish a new version:
 #   1. Update version in package.json
@@ -177,6 +179,21 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
 
+      - name: Require enabled release promotion policy before credential access
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { assessPromotionPolicyConfiguration } from './tools/release/release-promotion.mjs';
+
+          const policy = JSON.parse(readFileSync('config/release-promotion-policy.json', 'utf8'));
+          const assessment = assessPromotionPolicyConfiguration(policy);
+          if (!assessment.ready) {
+            console.error('Release promotion policy is not active:');
+            for (const requirement of assessment.unmet_requirements) console.error(`- ${requirement}`);
+            process.exit(1);
+          }
+          NODE
+
       - name: Install vault fetch dependencies
         run: |
           apt-get update
@@ -191,10 +208,19 @@ jobs:
           VAULT_CI_SECRET_ID: ${{ secrets.VAULT_CI_SECRET_ID }}
         run: bash ci/vault-fetch.sh --spec ci/vault-fetch.npm-publish.spec
 
+      - name: Fetch dedicated GitHub evidence token from vault
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+          AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_PATH: ${{ vars.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_PATH }}
+          AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_FIELD: ${{ vars.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_FIELD }}
+          VAULT_CI_ROLE_ID: ${{ secrets.VAULT_CI_ROLE_ID }}
+          VAULT_CI_SECRET_ID: ${{ secrets.VAULT_CI_SECRET_ID }}
+        run: bash ci/vault-fetch.sh --spec ci/vault-fetch.npm-publish-evidence.spec
+
       - name: Authorize and publish exact retained RC to Gitea npm registry
         id: promotion
         env:
-          AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN: ${{ secrets.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN }}
           RC_TAG: ${{ github.event.inputs.rc_tag }}
           RC_RUN_ID: ${{ github.event.inputs.rc_run_id }}
           RC_ARTIFACT_ID: ${{ github.event.inputs.rc_artifact_id }}
@@ -204,12 +230,19 @@ jobs:
           APPROVAL_SHA256: ${{ github.event.inputs.approval_sha256 }}
         run: |
           set -euo pipefail
-          test -n "${AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN:-}" || { echo "Dedicated GitHub user evidence token is required" >&2; exit 1; }
+          test -n "${AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE:-}" || { echo "Dedicated GitHub evidence token file is required" >&2; exit 1; }
+          test -f "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE" && test ! -L "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE" || { echo "Dedicated GitHub evidence token file is invalid" >&2; exit 1; }
+          test "$(stat -c '%a' "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE")" = 600 || { echo "Dedicated GitHub evidence token file must use mode 0600" >&2; exit 1; }
+          case "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE" in
+            "$RUNNER_TEMP"/vault-AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE.*) ;;
+            *) echo "Dedicated GitHub evidence token file is outside RUNNER_TEMP" >&2; exit 1 ;;
+          esac
           cat > .npmrc << 'NPMRC'
           //git.integrolabs.net/api/packages/roctinam/npm/:_authToken=${NODE_AUTH_TOKEN}
           NPMRC
           RC_DIR=$(mktemp -d "$RUNNER_TEMP/aiwg-rc.XXXXXX")
           CMP_DIR=$(mktemp -d "$RUNNER_TEMP/aiwg-comparison.XXXXXX")
+          AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN="$(cat -- "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE")" \
           node tools/release/release-promotion.mjs publish \
             --rc-tag "$RC_TAG" \
             --stable-tag '${{ steps.release_tag.outputs.release_tag }}' \
@@ -222,6 +255,10 @@ jobs:
             --destination "$RC_DIR" --comparison-destination "$CMP_DIR" \
             --registry gitea --receipt "$RUNNER_TEMP/gitea-publication.json" \
             --output "$RUNNER_TEMP/promotion-decision.json"
+
+      - name: Remove dedicated GitHub evidence credential
+        if: always()
+        run: bash ci/vault-fetch.sh --cleanup
 
       - name: Preserve promotion decision and partial receipt
         if: always()

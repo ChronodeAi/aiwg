@@ -63,13 +63,64 @@ describe('@aiwg/cli release workflow wiring', () => {
     expect(workflow).toContain('VERSION="${{ needs.build-and-publish.outputs.version }}"');
     expect(workflow).toContain('AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN');
     expect(workflow).toContain('Verify workflow identity is tag-bound');
+    expect(workflow).not.toContain('secrets.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN');
+    expect(workflow).not.toContain('GH_MIRROR_TOKEN_VAULT_PATH');
+    expect(workflow).not.toContain('GH_TOKEN');
+    const steps = parsed.jobs['build-and-publish'].steps;
+    const stepIndex = (name: string) => steps.findIndex((step: { name?: string }) => step.name === name);
+    const policyPreflight = steps[stepIndex('Require enabled release promotion policy before credential access')];
+    const npmTokenFetch = steps[stepIndex('Fetch Gitea npm token from vault')];
+    const evidenceTokenFetch = steps[stepIndex('Fetch dedicated GitHub evidence token from vault')];
+    expect(policyPreflight.run).toContain('assessPromotionPolicyConfiguration');
+    expect(policyPreflight.run).toContain('config/release-promotion-policy.json');
+    expect(policyPreflight.env).toBeUndefined();
+    expect(npmTokenFetch.run).toBe('bash ci/vault-fetch.sh --spec ci/vault-fetch.npm-publish.spec');
+    expect(evidenceTokenFetch.run).toBe(
+      'bash ci/vault-fetch.sh --spec ci/vault-fetch.npm-publish-evidence.spec',
+    );
+    expect(evidenceTokenFetch.env).toEqual({
+      RUNNER_TEMP: '${{ runner.temp }}',
+      VAULT_ADDR: '${{ vars.VAULT_ADDR }}',
+      AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_PATH:
+        '${{ vars.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_PATH }}',
+      AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_FIELD:
+        '${{ vars.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_FIELD }}',
+      VAULT_CI_ROLE_ID: '${{ secrets.VAULT_CI_ROLE_ID }}',
+      VAULT_CI_SECRET_ID: '${{ secrets.VAULT_CI_SECRET_ID }}',
+    });
+    expect(stepIndex('Require enabled release promotion policy before credential access')).toBeLessThan(
+      stepIndex('Fetch Gitea npm token from vault'),
+    );
+    expect(stepIndex('Fetch Gitea npm token from vault')).toBeLessThan(
+      stepIndex('Fetch dedicated GitHub evidence token from vault'),
+    );
+    expect(stepIndex('Fetch dedicated GitHub evidence token from vault')).toBeLessThan(
+      stepIndex('Authorize and publish exact retained RC to Gitea npm registry'),
+    );
     const promotion = parsed.jobs['build-and-publish'].steps.find(
       (step: { name?: string }) => step.name === 'Authorize and publish exact retained RC to Gitea npm registry',
     );
-    expect(promotion.env.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN).toBe(
-      '${{ secrets.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN }}',
-    );
+    expect(promotion.env).not.toHaveProperty('AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN');
+    expect(promotion.env).not.toHaveProperty('AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE');
     expect(promotion.env).not.toHaveProperty('GITHUB_TOKEN');
+    expect(promotion.run).toContain('test ! -L "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE"');
+    expect(promotion.run).toContain('must use mode 0600');
+    expect(promotion.run).toContain(
+      'AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN="$(cat -- "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE")"',
+    );
+    const cleanup = steps[stepIndex('Remove dedicated GitHub evidence credential')];
+    expect(cleanup.if).toBe('always()');
+    expect(cleanup.run).toBe('bash ci/vault-fetch.sh --cleanup');
+    expect(stepIndex('Authorize and publish exact retained RC to Gitea npm registry')).toBeLessThan(
+      stepIndex('Remove dedicated GitHub evidence credential'),
+    );
+    expect(stepIndex('Remove dedicated GitHub evidence credential')).toBeLessThan(
+      stepIndex('Preserve promotion decision and partial receipt'),
+    );
+    for (const laterStep of steps.slice(stepIndex('Remove dedicated GitHub evidence credential') + 1)) {
+      expect(laterStep.env ?? {}).not.toHaveProperty('AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN');
+      expect(laterStep.env ?? {}).not.toHaveProperty('AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE');
+    }
     expect(promotion.run).toContain('--rc-tag "$RC_TAG"');
     const preserve = parsed.jobs['build-and-publish'].steps.find(
       (step: { name?: string }) => step.name === 'Preserve promotion decision and partial receipt',
