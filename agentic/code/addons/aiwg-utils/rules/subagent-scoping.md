@@ -223,6 +223,16 @@ Optional activity-log receipt fields: task/attempt, transport/profile/version, c
 
 Consider subagents when non-trivial work decomposes into independent, bounded units. The decision per subtask is: atomic, context minimal (<20% of window), output scoped, independent, collision-safe, and worth the coordination cost? If yes, dispatch up to the effective cap and aggregate in the primary agent. If no—especially for trivial, tightly coupled, inherently serial, or shared-state-sensitive work—keep it local.
 
+Maintain a checkpoint with the active objective, the next bounded action, its owner, and the condition for starting it.
+Report `blocked` while a prerequisite or authorization is missing, `running` when the action has actually started, and
+`complete` only when its completion criteria are met. A status-only user turn requests an update; it does not replace
+the active objective or require a new instruction to proceed.
+
+When a worker completes or a CI dependency clears, reconcile the evidence and start the next eligible bounded action,
+delegating independent work where appropriate. Preserve the existing authorization, budgets and concurrency caps, and
+serialize builds when required. If the next action remains blocked, report the specific condition and owner rather than
+claiming it is running. Jev advice is advisory and does not itself block dispatch.
+
 ## Integration with Other Rules
 
 - `instruction-comprehension` — understand the full request before splitting it.
