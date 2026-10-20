@@ -124,10 +124,19 @@ function exportSignature(file: string): string {
   return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 }
 
-function readExportSnapshot(file: string): ExportSnapshot {
+function readExportSnapshot(
+  file: string,
+  expectedChecksum: string | null,
+): ExportSnapshot {
   const signature = exportSignature(file);
   const cached = exportSnapshots.get(file);
-  if (cached?.signature === signature) return cached;
+  // The manifest checksum is part of the snapshot identity. Filesystems may
+  // preserve every stat field across a same-size rewrite within one timestamp
+  // tick, while the manifest already names the replacement's checksum.
+  if (
+    cached?.signature === signature &&
+    cached.checksum === expectedChecksum
+  ) return cached;
   exportSnapshots.delete(file);
   const text = fs.readFileSync(file, "utf-8");
   const exported = JSON.parse(text) as AiwgFortemiIndexExport;
@@ -143,7 +152,7 @@ function readExportSnapshot(file: string): ExportSnapshot {
 /** Transfer a checked snapshot to the query reader without sharing mutable results. */
 export function consumeFortemiCoreExport(file: string, expectedChecksum: string | null): AiwgFortemiIndexExport {
   try {
-    const snapshot = readExportSnapshot(file);
+    const snapshot = readExportSnapshot(file, expectedChecksum);
     if (snapshot.checksum !== expectedChecksum) throw new Error("export checksum does not match manifest");
     return snapshot.exported;
   } finally {
@@ -370,7 +379,10 @@ export function getFortemiCoreSyncStatus(
   let exportChecksumMatches = false;
   if (exportExists) {
     try {
-      const { exported, checksum } = readExportSnapshot(exportPath);
+      const { exported, checksum } = readExportSnapshot(
+        exportPath,
+        manifest.export_checksum,
+      );
       exportChecksumMatches = checksum === manifest.export_checksum;
       if (exportChecksumMatches) {
         if (exported.schema_version !== manifest.export_schema_version) {
@@ -447,7 +459,10 @@ export function getFortemiCorePrebuiltStatus(
   let reason: string | null = null;
   if (exportExists) {
     try {
-      const { exported, checksum } = readExportSnapshot(exportPath);
+      const { exported, checksum } = readExportSnapshot(
+        exportPath,
+        prebuiltManifest.export_checksum,
+      );
       if (
         prebuiltManifest.schema_version !== "aiwg.fortemi.prebuilt.v1" ||
         prebuiltManifest.backend !== "fortemi-core" ||
