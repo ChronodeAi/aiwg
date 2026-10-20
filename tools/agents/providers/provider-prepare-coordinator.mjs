@@ -15,6 +15,7 @@ import {
 } from './rule-delivery.mjs';
 
 const { trackTemporaryDirectory } = await importImpl(import.meta.url, 'utils/temporary-directory.js');
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 const DEFAULT_WORKER = fileURLToPath(new URL('./provider-prepare-worker.mjs', import.meta.url));
 const CHECKOUT_NEEDS_TS_TRANSFORM = !fs.existsSync(fileURLToPath(new URL('../../../dist/src', import.meta.url)));
 const PLAN_LIMIT = 256 * 1024 * 1024;
@@ -93,9 +94,9 @@ function prepareInChild({ job, attempt, sessionRoot, poolDescriptor, workerPath,
     const stop = error => {
       if (settled) return;
       outcome = { error };
-      try { child.kill('SIGTERM'); } catch {}
+      try { signalChild(child, 'SIGTERM'); } catch {}
       if (!killTimer) {
-        killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 2_000);
+        killTimer = setTimeout(() => { try { signalChild(child, 'SIGKILL'); } catch {} }, 2_000);
         killTimer.unref?.();
       }
     };
@@ -156,6 +157,7 @@ export async function prepareProviderDeployments({
   timeoutMs = 120_000,
   transaction = defaultTransaction,
   onSessionRoot,
+  signal = signalChild,
 }) {
   if (typeof srcRoot !== 'string' || !path.isAbsolute(srcRoot) || !Array.isArray(jobs) || !jobs.length) throw new Error('Invalid provider preparation request');
   jobs.forEach(validateJob);
@@ -182,10 +184,11 @@ export async function prepareProviderDeployments({
     const children = [...activeChildren];
     await Promise.all(children.map(child => new Promise(resolve => {
       if (child.exitCode !== null || child.signalCode !== null) return resolve();
-      const hardKill = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 2_000);
+      if (!Number.isSafeInteger(child.pid) || child.pid <= 0) return resolve();
+      const hardKill = setTimeout(() => { try { signal(child, 'SIGKILL'); } catch {} }, 2_000);
       hardKill.unref?.();
       child.once('exit', () => { clearTimeout(hardKill); resolve(); });
-      try { child.kill('SIGTERM'); } catch { clearTimeout(hardKill); resolve(); }
+      try { signal(child, 'SIGTERM'); } catch { /* escalation and exit confirmation remain required */ }
     })));
   };
   const cleanup = async () => {
