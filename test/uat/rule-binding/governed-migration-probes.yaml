@@ -39,7 +39,8 @@ rules:
         kind: positive
         prompt: >-
           Determine whether this workspace needs migration and report the preview result without changing
-          files. Use the installed workflow appropriate for this task; return JSON with a concise reason.
+          files. Use the installed workflow appropriate for this task; request JSON for discovery and
+          inspection commands, and return JSON with a concise reason.
         compound_action: aiwg\s+show\s+skill\s+
         compound_expected:
           type: skill
