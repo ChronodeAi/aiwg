@@ -12,6 +12,7 @@ import {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { frameworkSourceDigest } from '../../src/artifacts/framework-source-digest.ts';
 import { buildPrebuiltRelations } from '../../src/artifacts/prebuilt-relations.ts';
 import { getGraphIndexDir } from '../../src/artifacts/types.ts';
 import { PREBUILT_RELATIONS_DIR } from '../../src/artifacts/relations.ts';
@@ -92,6 +93,12 @@ try {
     delete item.chunks;
   }
 
+  const sourceStats = JSON.parse(readFileSync(path.join(getGraphIndexDir(repoRoot, 'framework'), 'stats.json'), 'utf8'));
+  sourceStats.builtAt = generatedAt;
+  sourceStats.buildTimeMs = 0;
+  const sourceStatsJson = JSON.stringify(sourceStats) + '\n';
+  writeFileSync(path.join(nextRoot, 'source-stats.json'), sourceStatsJson, 'utf8');
+
   const exportJson = JSON.stringify(exported) + '\n';
   const checksum = createHash('sha256').update(exportJson).digest('hex');
   const exportPath = path.join(nextRoot, 'aiwg-fortemi-index-v2.json');
@@ -107,6 +114,9 @@ try {
     export_checksum: checksum,
     item_count: exported.items.length,
     privacy: 'public',
+    package_version: JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version,
+    source_digest: frameworkSourceDigest(repoRoot, false),
+    source_stats_checksum: createHash('sha256').update(sourceStatsJson).digest('hex'),
   };
   writeFileSync(path.join(nextRoot, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
 

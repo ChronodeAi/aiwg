@@ -9,6 +9,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+vi.mock('../../../src/artifacts/prebuilt-deployment.js', () => ({ loadPrebuiltDeploymentIndex: vi.fn(() => null) }));
+import { loadPrebuiltDeploymentIndex } from '../../../src/artifacts/prebuilt-deployment.js';
 import { showStats } from '../../../src/artifacts/stats.js';
 import { buildIndex } from '../../../src/artifacts/index-builder.js';
 import { collectGraphIndexFiles, findArtifactFiles } from '../../../src/artifacts/index-files.js';
@@ -21,6 +23,7 @@ describe('Artifact Index Statistics', () => {
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
   let prevHome: string | undefined;
   let prevXdgDataHome: string | undefined;
+  let frameworkDefaultBuild: boolean;
 
   const mockStats: IndexStats = {
     version: '1.0.0',
@@ -66,6 +69,7 @@ describe('Artifact Index Statistics', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-stats-test-'));
+    frameworkDefaultBuild = GRAPH_CONFIGS.framework.defaultBuild;
     prevHome = process.env.HOME;
     prevXdgDataHome = process.env.XDG_DATA_HOME;
     const indexDir = path.join(tmpDir, INDEX_DIR);
@@ -85,11 +89,13 @@ describe('Artifact Index Statistics', () => {
   });
 
   afterEach(() => {
+    GRAPH_CONFIGS.framework.defaultBuild = frameworkDefaultBuild;
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
     if (prevXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = prevXdgDataHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.mocked(loadPrebuiltDeploymentIndex).mockReset().mockReturnValue(null);
     consoleSpy.mockRestore();
     consoleErrorSpy.mockRestore();
     for (const key of Object.keys(GRAPH_CONFIGS)) {
@@ -134,6 +140,32 @@ describe('Artifact Index Statistics', () => {
     expect(parsed.coverage.indexed).toBe(0);
     expect(parsed.coverage.totalFiles).toBe(0);
     expect(parsed.coverage.percentage).toBe(100);
+  });
+
+  it.each(['single', 'aggregate'] as const)('prefers validated packaged framework statistics to an older local cache (%s)', async (mode) => {
+    process.env.XDG_DATA_HOME = path.join(tmpDir, 'xdg');
+    GRAPH_CONFIGS.framework.defaultBuild = true;
+    const dir = getGraphIndexDir(tmpDir, 'framework');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'stats.json'), JSON.stringify(mockStats));
+    const packaged = { ...mockStats, totalArtifacts: 29, byType: { skill: 29 } };
+    vi.mocked(loadPrebuiltDeploymentIndex).mockReturnValue({ stats: packaged, index: {} as never });
+    await showStats(tmpDir, { json: true, ...(mode === 'single' ? { graph: 'framework' } : {}) });
+    const output = JSON.parse(consoleSpy.mock.calls.at(-1)?.[0] as string);
+    expect((mode === 'single' ? output : output.framework).totalArtifacts).toBe(29);
+    expect((mode === 'single' ? output : output.framework).byType).toEqual({ skill: 29 });
+  });
+
+  it.each(['single', 'aggregate'] as const)('uses local framework statistics when packaged validation fails (%s)', async (mode) => {
+    process.env.XDG_DATA_HOME = path.join(tmpDir, 'xdg');
+    GRAPH_CONFIGS.framework.defaultBuild = true;
+    const dir = getGraphIndexDir(tmpDir, 'framework');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'stats.json'), JSON.stringify(mockStats));
+    vi.mocked(loadPrebuiltDeploymentIndex).mockReturnValue(null);
+    await showStats(tmpDir, { json: true, ...(mode === 'single' ? { graph: 'framework' } : {}) });
+    const output = JSON.parse(consoleSpy.mock.calls.at(-1)?.[0] as string);
+    expect((mode === 'single' ? output : output.framework).totalArtifacts).toBe(15);
   });
 
   it('reports project graph coverage over WORKSPACE context and .aiwg files', async () => {

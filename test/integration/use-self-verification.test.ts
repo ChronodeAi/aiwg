@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { loadPrebuiltDeploymentIndex } from '../../src/artifacts/prebuilt-deployment.js';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -231,14 +232,16 @@ describe.sequential('aiwg use self-verifying provider deployment (#2069)', () =>
     expect(rootKeys).toHaveLength(1);
     const indexRoot = path.join(rootsDir, rootKeys[0]);
     const fortemiRoot = path.join(indexRoot, 'fortemi-core', 'framework');
-    const fortemiManifest = JSON.parse(readFileSync(path.join(fortemiRoot, 'manifest.json'), 'utf8'));
-    const frameworkMetadata = JSON.parse(readFileSync(
-      path.join(indexRoot, 'framework', 'metadata.json'),
-      'utf8',
-    ));
-    expect(existsSync(path.join(fortemiRoot, 'aiwg-fortemi-index-v2.json'))).toBe(true);
-    expect(fortemiManifest.item_count).toBe(stats.totalArtifacts);
-    expect(fortemiManifest.source_index_built_at).toBe(frameworkMetadata.builtAt);
+    if (loadPrebuiltDeploymentIndex(REPO_ROOT)) {
+      expect(existsSync(path.join(indexRoot, 'framework', 'metadata.json'))).toBe(false);
+      expect(existsSync(path.join(fortemiRoot, 'aiwg-fortemi-index-v2.json'))).toBe(false);
+    } else {
+      const fortemiManifest = JSON.parse(readFileSync(path.join(fortemiRoot, 'manifest.json'), 'utf8'));
+      const frameworkMetadata = JSON.parse(readFileSync(path.join(indexRoot, 'framework', 'metadata.json'), 'utf8'));
+      expect(existsSync(path.join(fortemiRoot, 'aiwg-fortemi-index-v2.json'))).toBe(true);
+      expect(fortemiManifest.item_count).toBe(stats.totalArtifacts);
+      expect(fortemiManifest.source_index_built_at).toBe(frameworkMetadata.builtAt);
+    }
   }, 120_000);
 
   it('keeps default non-TTY output compact, colorless, and free of registry chatter', () => {

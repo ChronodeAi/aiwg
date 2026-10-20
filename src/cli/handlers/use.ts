@@ -2329,6 +2329,8 @@ async function generateGlobalProjectContext(opts: {
 async function reconcileSelectedFrameworkSource(root: string): Promise<void> {
   const { refreshFrameworkCapabilities, resolveFrameworkCorpusRoot } = await import('../../artifacts/framework-capabilities.js');
   if (resolveFrameworkCorpusRoot(root)) {
+    const { loadPrebuiltDeploymentIndex } = await import('../../artifacts/prebuilt-deployment.js');
+    if (loadPrebuiltDeploymentIndex(root, { strictRoot: true })) return;
     await refreshFrameworkCapabilities(root, true, { force: true });
     return;
   }
@@ -2362,8 +2364,9 @@ async function ensurePostDeployPhases(opts: {
       getFortemiCoreSyncStatus,
       syncFortemiCoreIndex,
     } = await import('../../artifacts/fortemi-core-sync.js');
+    const { loadPrebuiltDeploymentIndex } = await import('../../artifacts/prebuilt-deployment.js');
     const status = getFortemiCoreSyncStatus(opts.frameworkRoot, 'framework');
-    if (!status.built || status.stale) {
+    if (!loadPrebuiltDeploymentIndex(opts.frameworkRoot, { strictRoot: true }) && (!status.built || status.stale)) {
       syncFortemiCoreIndex(opts.frameworkRoot, { graph: 'framework' });
     }
   } catch {
@@ -4185,7 +4188,14 @@ export class UseHandler implements CommandHandler {
         // progress through; otherwise we show a single-line spinner-
         // style message and capture the noisy stat lines.
         ui.blank();
-        ui.info('Building capability index…');
+        const { loadPrebuiltDeploymentIndex } = await import('../../artifacts/prebuilt-deployment.js');
+        const prebuilt = loadPrebuiltDeploymentIndex(aiwgRootForIndex, { strictRoot: true });
+        ui.info(prebuilt ? 'Validating packaged capability index…' : 'Building capability index…');
+        if (!prebuilt && await fs.access(path.join(aiwgRootForIndex, 'prebuilt', 'framework-relations', 'manifest.json')).then(() => true).catch(() => false)) {
+          const { selectPrebuiltRelations } = await import('../../artifacts/relations.js');
+          const reason = selectPrebuiltRelations(aiwgRootForIndex).reason ?? 'packaged search index is missing, stale, or does not match the source';
+          ui.dim(`  Packaged index unavailable: ${reason}.`);
+        }
         ui.dim('  Indexing operational assets for agent-side lookup.');
 
         const indexStart = Date.now();
