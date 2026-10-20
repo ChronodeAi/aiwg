@@ -78,6 +78,11 @@ function canonicalKernelNames(): string[] {
 
 const EXPECTED_KERNEL = canonicalKernelNames();
 const CODEX_LISTING_CHAR_CAP = 8_000;
+const DEPLOY_CHILD_TIMEOUT_MS = 60_000;
+const SINGLE_DEPLOY_TEST_TIMEOUT_MS = DEPLOY_CHILD_TIMEOUT_MS + 15_000;
+const DOUBLE_DEPLOY_TEST_TIMEOUT_MS = 2 * DEPLOY_CHILD_TIMEOUT_MS + 15_000;
+const USER_SCOPE_CHILD_TIMEOUT_MS = 120_000;
+const USER_SCOPE_TEST_TIMEOUT_MS = USER_SCOPE_CHILD_TIMEOUT_MS + 15_000;
 
 function codexListingStats(root: string): { count: number; totalChars: number } {
   let count = 0;
@@ -120,7 +125,7 @@ function deploy(
     ...(options.dryRun ? ['--dry-run'] : []),
     // #284: the Grok Bot skill root is user scope only.
     ...(provider === 'grokbot' && !options.projectScope ? ['--scope', 'user'] : []),
-  ], { timeout: 60_000,
+  ], { timeout: DEPLOY_CHILD_TIMEOUT_MS,
     cwd: REPO_ROOT,
     // #2119: pin HERMES_HOME to the fake home too. Without this, a HERMES_HOME
     // inherited from the developer's environment (e.g. a per-role Hermes home)
@@ -148,7 +153,7 @@ describe('kernel deployment conformance', () => {
 
     expect(stats.count).toBe(EXPECTED_KERNEL.length);
     expect(stats.totalChars).toBeLessThanOrEqual(CODEX_LISTING_CHAR_CAP);
-  });
+  }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
 
   for (const provider of PROVIDERS) {
     it(`${provider.id} deploys every canonical kernel skill and no standard skills`, () => {
@@ -170,7 +175,7 @@ describe('kernel deployment conformance', () => {
         );
         expect(content.length, `${provider.id}/${name}`).toBeGreaterThan(100);
       }
-    });
+    }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
 
     it(`${provider.id} copies the standard tier only with --copy-all`, () => {
       const defaultDeploy = deploy(provider.id, { suffix: 'no-copy' });
@@ -187,7 +192,7 @@ describe('kernel deployment conformance', () => {
           `${provider.id}/${kernelName}`,
         ).toBe(true);
       }
-    });
+    }, DOUBLE_DEPLOY_TEST_TIMEOUT_MS);
   }
 
   it('repeat deploy prunes stale managed skills while preserving operator-owned skills', () => {
@@ -208,7 +213,7 @@ describe('kernel deployment conformance', () => {
     expect(skillDirs(root).map(dir => dir.split('/').at(-1)!).filter(name =>
       EXPECTED_KERNEL.includes(name)
     ).sort()).toEqual(EXPECTED_KERNEL);
-  });
+  }, DOUBLE_DEPLOY_TEST_TIMEOUT_MS);
 
   for (const provider of PROVIDERS) {
     it(`${provider.id} repairs a full-copy deployment while preserving operator-owned skills`, () => {
@@ -235,7 +240,7 @@ describe('kernel deployment conformance', () => {
         expect(stats.count).toBe(EXPECTED_KERNEL.length + 1);
         expect(stats.totalChars).toBeLessThanOrEqual(CODEX_LISTING_CHAR_CAP);
       }
-    });
+    }, DOUBLE_DEPLOY_TEST_TIMEOUT_MS);
   }
 
   it('moves managed skills cleanly across kernel and standard tiers', async () => {
@@ -284,7 +289,7 @@ describe('kernel deployment conformance', () => {
 
     expect(readFileSync(sentinel, 'utf8')).toBe(before);
     expect(existsSync(join(root, 'voice-apply', 'SKILL.md'))).toBe(false);
-  });
+  }, DOUBLE_DEPLOY_TEST_TIMEOUT_MS);
 
   it('matches the command mirror policy for every deployable provider', () => {
     const commandProviders = ['factory', 'opencode', 'warp', 'windsurf', 'copilot', 'codex', 'openclaw'];
@@ -322,7 +327,7 @@ describe('grokbot fail-closed kernel deploy (#219)', () => {
     const { project, home } = deploy('grokbot', { suffix: 'project-scope', projectScope: true });
     expect(existsSync(join(home, 'configured-grokbot-skills'))).toBe(false);
     expect(skillDirs(project)).toEqual([]);
-  });
+  }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
 
   it('does not invent ~/grokbot-skills when AIWG_GROKBOT_SKILLS_DIR is unset', () => {
     const project = join(TEST_ROOT, 'grokbot-unset');
@@ -338,7 +343,7 @@ describe('grokbot fail-closed kernel deploy (#219)', () => {
       stdout = execFileSync(
         'node',
         [join(REPO_ROOT, 'bin/aiwg.mjs'), 'use', 'all', '--provider', 'grokbot', '--scope', 'user', '--dry-run'],
-        { cwd: project, env, encoding: 'utf8', timeout: 120_000 },
+        { cwd: project, env, encoding: 'utf8', timeout: USER_SCOPE_CHILD_TIMEOUT_MS },
       );
     } catch (error) {
       const err = error as { status?: number; stdout?: string; stderr?: string };
@@ -351,7 +356,7 @@ describe('grokbot fail-closed kernel deploy (#219)', () => {
     expect(existsSync(join(home, 'grokbot-skills'))).toBe(false);
     expect(existsSync(join(home, '.grokbot'))).toBe(false);
     expect(existsSync(join(project, '.cursor'))).toBe(false);
-  });
+  }, USER_SCOPE_TEST_TIMEOUT_MS);
 });
 
 
@@ -372,7 +377,7 @@ describe('muse XDG user-scope kernel deploy (#236)', () => {
       output = execFileSync(
         'node',
         [join(REPO_ROOT, 'bin/aiwg.mjs'), 'use', 'all', '--provider', 'muse', '--scope', 'user', '--dry-run'],
-        { cwd: project, env, encoding: 'utf8', timeout: 120_000 },
+        { cwd: project, env, encoding: 'utf8', timeout: USER_SCOPE_CHILD_TIMEOUT_MS },
       );
     } catch (error) {
       const err = error as { status?: number; stdout?: string; stderr?: string };
@@ -395,7 +400,7 @@ describe('muse XDG user-scope kernel deploy (#236)', () => {
     expect(existsSync(join(home, '.muse'))).toBe(false);
     expect(existsSync(join(home, '.config', 'muse'))).toBe(false);
     expect(existsSync(join(project, '.cursor'))).toBe(false);
-  });
+  }, USER_SCOPE_TEST_TIMEOUT_MS);
 
   it('passes the user-scope gate with a documented XDG root and invents no ~/.muse tree', () => {
     const xdg = join(TEST_ROOT, 'muse-userscope-xdg');
@@ -411,7 +416,7 @@ describe('muse XDG user-scope kernel deploy (#236)', () => {
     expect(existsSync(join(home, '.muse'))).toBe(false);
     expect(existsSync(join(home, '.agents', 'skills'))).toBe(false);
     expect(existsSync(join(project, '.cursor'))).toBe(false);
-  });
+  }, USER_SCOPE_TEST_TIMEOUT_MS);
 
   it('pins the documented user skill roots ($XDG_CONFIG_HOME/muse/skills, ~/.config/muse/skills default)', async () => {
     const { resolveMuseXdgSkillsDir } = await import('../../src/providers/muse-paths.js');
@@ -428,5 +433,5 @@ describe('muse XDG user-scope kernel deploy (#236)', () => {
     expect(existsSync(join(project, '.cursor'))).toBe(false);
     expect(existsSync(join(home, '.muse'))).toBe(false);
     expect(existsSync(join(museEntry.root(project, home), 'aiwg-issue', 'SKILL.md'))).toBe(true);
-  });
+  }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
 });
