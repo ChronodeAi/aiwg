@@ -524,6 +524,9 @@ export async function executePlan(plan, { output, baseline, packageRoot, expecte
         fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.writeFileSync(dest, content);
       }
       const bin = path.join(temp, 'bin'); fs.mkdirSync(bin);
+      // Some installed CLI commands spawn `node` by name. Keep that lookup
+      // bound to the controller's executable without exposing its whole directory.
+      fs.symlinkSync(process.execPath, path.join(bin, 'node'));
       // Quoted arguments and paths are passed as positional parameters, not shell text.
       const shim = path.join(bin, 'aiwg');
       const quote = value => `'${value.replace(/'/g, "'\\''")}'`;
