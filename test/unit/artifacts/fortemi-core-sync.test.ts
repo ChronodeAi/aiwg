@@ -113,6 +113,18 @@ describe("Fortemi Core static index sync (#1687)", () => {
     const text = fs.readFileSync(status.exportPath, 'utf8');
     fs.writeFileSync(status.exportPath, text.replace('AIWG Doctor', 'AIWG Tester'));
     fs.utimesSync(status.exportPath, fixed, fixed);
+    // Model an advancing filesystem change timestamp deterministically: CI
+    // overlay filesystems can report the same ctime for consecutive writes.
+    const statSync = fs.statSync.bind(fs);
+    vi.spyOn(fs, 'statSync').mockImplementation(((file, options) => {
+      const stat = statSync(file, options);
+      if (file === status.exportPath && options?.bigint) {
+        return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+          ctimeNs: before.ctimeNs + 1n,
+        });
+      }
+      return stat;
+    }) as typeof fs.statSync);
     const after = fs.statSync(status.exportPath, { bigint: true });
     expect(after.size).toBe(before.size);
     expect(after.mtimeNs).toBe(before.mtimeNs);
