@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,7 +10,7 @@ vi.mock('node:child_process', async importOriginal => {
   return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
 });
 import { RC_LANES, RC_STEPS, RC_WORKFLOW, SURFACES, sha256, writeCandidateManifest } from '../../../tools/release/release-candidate.mjs';
-import { evaluateAssertions } from '../../../tools/rules/run-rule-probes.mjs';
+import { evaluateAssertions, parseTrace } from '../../../tools/rules/run-rule-probes.mjs';
 import { DIMENSIONS, comparisonPlan, comparisonReport, loadScenarios } from '../../../tools/rules/release-compare.mjs';
 import { RELEASE_APPROVAL_SCHEMA, acquireGithubReleaseEvidence, acquireGithubProductionReleaseEvidence, createGithubApiEvidenceClient,
   verifyComparisonApprovalGate, verifyComparisonApprovalReceipt, verifyComparisonReport,
@@ -95,6 +96,29 @@ async function acquire(fixture, data, tags = signedTags()) {
 const scenario = (id = 'case') => ({ id, kind: 'positive', providers: ['claude', 'codex', 'hermes'], domain: 'delivery',
   prompt: 'Return JSON.', assertions: [{ type: 'json-equals', path: 'action', value: 'follow' }], files: {}, suspected_cause: 'test' });
 const scores = value => Object.fromEntries(Object.keys(DIMENSIONS).map(dimension => [dimension, value]));
+const textHash = value => createHash('sha256').update(value).digest('hex');
+function addSyntheticCodexReceipts(results, identities, model, judgeModel, adapter) {
+  const makeTrace = (text, tools = []) => {
+    const events = [{ type: 'thread.started' }, { type: 'turn.started' }];
+    for (const [index, tool] of tools.entries()) { const id = `tool-${index}`; events.push({ type: 'item.started', item: { id, type: 'command_execution' } }, { type: 'item.completed', item: { id, type: 'command_execution', command: typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input), aggregated_output: 'synthetic body', exit_code: 0, status: 'completed' } }); }
+    events.push({ type: 'item.completed', item: { id: 'message', type: 'agent_message', text } }, { type: 'turn.completed' });
+    const stdout = events.map(JSON.stringify).join('\n');
+    return { stdout, trace: parseTrace(stdout, 'codex') };
+  };
+  const source = { adapter_source_sha256: sha256(adapter), runtime_source_sha256: sha256(path.join(path.dirname(adapter), 'codex-evaluation-runtime.mjs')), trace_parser_sha256: sha256(path.join(path.dirname(adapter), 'run-rule-probes.mjs')) };
+  const receipt = (run, requestedModel, fixtureHash) => ({ schema: 'aiwg-comparison-runtime-observation/v1', authenticated: false, provider: 'codex', requested_model: requestedModel, requested_effort: 'low', reported_remote_model: null, reported_remote_backend: null, executable_sha256: 'a'.repeat(64), ...source, argv_sha256: 'b'.repeat(64), prompt_sha256: 'c'.repeat(64), fixture_identity_sha256: fixtureHash, transcript_sha256: textHash(run.stdout), trace_sha256: textHash(JSON.stringify(run.trace)) });
+  for (const pair of results) {
+    for (const side of ['A', 'B']) {
+      const run = pair.runs[side]; Object.assign(run, makeTrace(run.trace.text, run.trace.tools));
+      run.runtime_receipt = receipt(run, model, textHash(JSON.stringify(identities[side])));
+    }
+    const j = pair.judgment;
+    const blind = { winner: j.winner === 'tie' ? 'tie' : pair.judge_order[0] === j.winner ? 'left' : 'right', reason: j.reason, scores: { left: j.scores[pair.judge_order[0]], right: j.scores[pair.judge_order[1]] } };
+    Object.assign(j, makeTrace(JSON.stringify(blind)));
+    j.runtime_receipt = receipt(j, judgeModel, null);
+  }
+}
+
 function comparisonFixture(candidate, { provider = 'claude', n = 2, regression = false } = {}) {
   const root = temp(), subject = path.join(root, 'synthetic-contract-subject.mjs'), judge = path.join(root, 'synthetic-contract-judge.mjs');
   fs.writeFileSync(subject, 'export default async function subject() {}\n');
@@ -119,11 +143,22 @@ function comparisonFixture(candidate, { provider = 'claude', n = 2, regression =
       tarball_sha256: candidate.package_tarball_sha256, deployed_context_sha256: '4'.repeat(64),
       package_tree_sha256: '5'.repeat(64), installation_lock_sha256: '6'.repeat(64) },
   };
+  if (provider === 'codex') {
+    const adapter = path.resolve('tools/rules/release-compare-codex.mjs');
+    addSyntheticCodexReceipts(results, identities, model, judgeModel, adapter);
+    return syntheticCodexReport(root, candidate, plan, results, identities, adapter);
+  }
   const report = { ...comparisonReport(plan, results, identities), fixture_inputs: { A: 'aiwg@2026.10.2', B: identities.B.spec },
     bundles: ['sdlc', 'security-engineering'], adapters: { subject, judge } };
   const file = path.join(root, `${provider}.json`); fs.writeFileSync(file, JSON.stringify(report));
   return { root, file, report, plan, binding: verifyComparisonReport({ file, report, plan, candidate,
     baselineVersion: '2026.10.2', expectedBundles: report.bundles }) };
+}
+
+function syntheticCodexReport(root, candidate, plan, results, identities, adapter) {
+  const report = { ...comparisonReport(plan, results, identities), fixture_inputs: { A: 'aiwg@2026.10.2', B: identities.B.spec }, bundles: ['sdlc', 'security-engineering'], adapters: { subject: adapter, judge: adapter } };
+  const file = path.join(root, 'codex.json'); fs.writeFileSync(file, JSON.stringify(report));
+  return { root, file, report, plan, binding: verifyComparisonReport({ file, report, plan, candidate, baselineVersion: '2026.10.2', expectedBundles: report.bundles }) };
 }
 
 function candidateApproval(fixture, binding, { dispositions, extra = {} } = {}) {
@@ -290,6 +325,23 @@ z.close()`, fixture.directory, fixture.archivePath], { timeout: 30000, killSigna
       candidate: fixture.candidate, baselineVersion: '2026.10.2', expectedBundles: comparison.report.bundles })).toThrow(/identity mismatch/);
   });
 
+  it('rejects an invalid retained Codex judge winner before mapping judge order', () => {
+    const fixture = candidateFixture(), comparison = comparisonFixture(fixture.candidate, { provider: 'codex', n: 1 });
+    const pair = comparison.report.scenarios[0].evidence[0], judgment = pair.judgment;
+    const events = judgment.stdout.trim().split('\n').map(line => JSON.parse(line));
+    const message = events.find(event => event.type === 'item.completed' && event.item?.type === 'agent_message');
+    const blind = JSON.parse(message.item.text); blind.winner = 'sideways'; message.item.text = JSON.stringify(blind);
+    judgment.stdout = events.map(JSON.stringify).join('\n'); judgment.trace = parseTrace(judgment.stdout, 'codex');
+    judgment.winner = pair.judge_order[1];
+    judgment.runtime_receipt.transcript_sha256 = textHash(judgment.stdout);
+    judgment.runtime_receipt.trace_sha256 = textHash(JSON.stringify(judgment.trace));
+    const recomputed = comparisonReport(comparison.plan, comparison.report.scenarios.flatMap(item => item.evidence), comparison.report.fixtures);
+    comparison.report.summary = recomputed.summary; comparison.report.pass = recomputed.pass; comparison.report.scenarios = recomputed.scenarios;
+    fs.writeFileSync(comparison.file, JSON.stringify(comparison.report));
+    expect(() => verifyComparisonReport({ file: comparison.file, report: comparison.report, plan: comparison.plan,
+      candidate: fixture.candidate, baselineVersion: '2026.10.2', expectedBundles: comparison.report.bundles })).toThrow(/judge response/);
+  });
+
   it.each(['stub-adapter', 'candidate-digest', 'incomplete-live', 'same-judge'])('rejects %s comparison evidence', failure => {
     const fixture = candidateFixture(), comparison = comparisonFixture(fixture.candidate);
     if (failure === 'stub-adapter') {
@@ -371,6 +423,7 @@ z.close()`, fixture.directory, fixture.archivePath], { timeout: 30000, killSigna
           judgment: { model: plan.judge_model, winner: 'tie', reason: 'Synthetic contract fixture only.',
             scores: { A: scores(4), B: scores(4) } }, judge_error: null };
       });
+      if (provider === 'codex') addSyntheticCodexReceipts(results, template.report.fixtures, plan.model, plan.judge_model, template.report.adapters.subject);
       pairs += results.length;
       const report = { ...comparisonReport(plan, results, template.report.fixtures),
         fixture_inputs: template.report.fixture_inputs, bundles: policy.expectedBundles, adapters: template.report.adapters };
