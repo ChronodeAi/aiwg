@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseTrace, evaluateCompoundTrace, parseAIWGCommand, loadProbes, buildPlan, validateBaseline } from '../../../tools/rules/run-rule-probes.mjs';
+import { parseTrace, evaluateCompoundTrace, evaluateRequiredRuleChecks, parseAIWGCommand, loadProbes, buildPlan, validateBaseline } from '../../../tools/rules/run-rule-probes.mjs';
 import { ROOT } from '../../../tools/rules/measure-startup-context.mjs';
 import path from 'node:path';
 
@@ -29,6 +29,34 @@ describe('governed migration preview', () => {
     expect(evaluate([...discovery, ...show, ...fetch, ...cmd('bad', '/foreign/aiwg migrate-workspace --dry-run', 'no'), ...action])).toMatchObject({ status: 'invalid', pass: false });
     expect(evaluate([...discovery, ...show, ...fetch, ...cmd('bad', 'aiwg migrate-workspace', 'no'), ...action])).toMatchObject({ status: 'invalid', pass: false });
     expect(evaluate([...discovery, ...show, ...fetch, ...cmd('bad', '"/foreign/aiwg" migrate-workspace', 'no'), ...action])).toMatchObject({ status: 'invalid', pass: false });
+  });
+  it('accepts a selected CLI JSON alias only when its entire envelope binds the aligned checklist identity', () => {
+    const alias = cmd('alias', 'aiwg show rule cli-secondary --json', JSON.stringify({ id: 'aiwg:rule:abc', type: 'rule', name: 'cli-secondary', content: 'rule body' }));
+    expect(evaluate([...discovery, ...show, ...alias, ...action])).toMatchObject({ status: 'checked', pass: true });
+    expect(evaluate([...discovery, ...show, ...action, ...alias])).toMatchObject({ status: 'checked', pass: false });
+    for (const type of ['rule', 'behavior']) {
+      const id = `aiwg:${type}:abc`, name = 'cli-secondary';
+      const check = { rule_id: id, fetch_command: `aiwg show ${type} ${id}` };
+      const envelope = { id, type, name, content: 'complete body' };
+      const evaluateFetch = (command, output, exit = 0, late = false, bound = name) => {
+        const events = late ? [...action, ...cmd('alias', command, output, exit)] : [...cmd('alias', command, output, exit), ...action];
+        const trace = parseTrace([...events, { type: 'turn.completed' }].map(JSON.stringify).join('\n'), 'codex');
+        const start = trace.tools.find(tool => parseAIWGCommand(tool.input, identities)?.kind === 'migration-preview').start_event;
+        return evaluateRequiredRuleChecks([check], trace, null, identities, start, [{ name: bound }])[0].pass;
+      };
+      const command = `aiwg show ${type} ${name} --json`, body = JSON.stringify(envelope);
+      expect(evaluateFetch(command, body)).toBe(true);
+      expect(evaluateFetch(`aiwg show ${type} ${name}`, body)).toBe(false);
+      expect(evaluateFetch(command, 'complete body')).toBe(false);
+      expect(evaluateFetch(command, body, 1)).toBe(false);
+      expect(evaluateFetch(command, body, 0, true)).toBe(false);
+      expect(evaluateFetch(`/foreign/${command}`, body)).toBe(false);
+      expect(evaluateFetch(command, body, 0, false, 'different')).toBe(false);
+      for (const payload of [[], { result: envelope }, { ...envelope, id: `aiwg:${type}:other` },
+        { ...envelope, type: 'other' }, { ...envelope, name: 'other' }, { ...envelope, content: '  ' },
+        { ...envelope, content: ['body'] }]) expect(evaluateFetch(command, JSON.stringify(payload))).toBe(false);
+      expect(evaluateFetch(command, `${body}\ntrailing prose`)).toBe(false);
+    }
   });
   it('rejects forged equal or incorrectly bound baseline integrity evidence', () => {
     const data = loadProbes(path.join(ROOT, 'test/uat/rule-binding/governed-migration-probes.yaml'));

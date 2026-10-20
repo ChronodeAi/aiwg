@@ -182,7 +182,7 @@ export function parseAIWGCommand(input, identities) {
   else if (args[0] === identities?.shim || args[0] === identities?.cli) args[0] = 'aiwg';
   if (args[0] !== 'aiwg') return null;
   if (args[1] === 'show' && args.length >= 4 && args.length <= 5 && /^(rule|behavior|skill|agent|command|flow)$/.test(args[2])
-      && /^[\w:.-]+$/.test(args[3]) && (args.length === 4 || args[4] === '--json')) return { kind: 'show', type: args[2], id: args[3] };
+      && /^[\w:.-]+$/.test(args[3]) && (args.length === 4 || args[4] === '--json')) return { kind: 'show', type: args[2], id: args[3], ...(args.length === 5 ? { json: true } : {}) };
   if (args[1] === 'migrate-workspace' && args.length === 3 && args[2] === '--dry-run') return { kind: 'migration-preview' };
   if (args[1] === 'discover') {
     const types = new Set(['skill', 'agent', 'command', 'rule', 'schema', 'decision-definition', 'decision-ruleset', 'decision-binding', 'gate-pack', 'flow', 'runbook', 'template', 'behavior']);
@@ -228,15 +228,24 @@ export function ruleFetches(tools, rule, bodyFingerprint = '', artifactType = 'r
 }
 
 /** Offline/probe gate: a successful full rule fetch must finish before governed action begins. */
-export function evaluateRequiredRuleChecks(checks, trace, actionPattern, identities, actionStart) {
+export function evaluateRequiredRuleChecks(checks, trace, actionPattern, identities, actionStart, boundRules = []) {
   const actions = actionPattern ? trace.tools.filter(tool => new RegExp(actionPattern, 'i').test(`${tool.name} ${JSON.stringify(tool.input)}`)) : [];
   const terminal = trace.events?.findIndex(event => event.type === 'result' || event.type === 'turn.completed');
   const boundary = actionStart ?? (actions.length ? Math.min(...actions.map(tool => tool.start_event ?? -1)) : terminal);
-  return checks.map(check => {
+  return checks.map((check, index) => {
     const fetch = check.fetch_command?.match(/^aiwg show (rule|behavior) ([a-z0-9:-]+)$/);
     const fetched = fetch ? trace.tools.filter(tool => {
       const parsed = parseAIWGCommand(tool.input, identities);
-      return /^(?:shell|Bash)$/i.test(tool.name) && parsed?.kind === 'show' && parsed.type === fetch[1] && parsed.id === fetch[2];
+      if (!/^(?:shell|Bash)$/i.test(tool.name) || parsed?.kind !== 'show' || parsed.type !== fetch[1]) return false;
+      if (parsed.id === fetch[2]) return true;
+      const alias = boundRules[index]?.name;
+      if (!parsed.json || typeof alias !== 'string' || !alias || parsed.id !== alias || typeof tool.output !== 'string') return false;
+      try {
+        const body = JSON.parse(tool.output);
+        return body && typeof body === 'object' && !Array.isArray(body)
+          && body.id === check.rule_id && body.id === fetch[2] && body.type === fetch[1]
+          && body.name === alias && typeof body.content === 'string' && !!body.content.trim();
+      } catch { return false; }
     }) : [];
     const pass = Number.isInteger(boundary) && boundary >= 0 && fetched.some(tool => tool.success === true
       && outputText(tool.output).trim() && Number.isInteger(tool.completed_event) && tool.completed_event < boundary);
@@ -293,7 +302,8 @@ export function evaluateCompoundTrace(trace, actionPattern, expected = {}, ident
   if (!rows.length || new Set(rows.map(row => row.id)).size !== 1 || !rows[0].id) return { status: 'invalid', pass: false, reason: 'No stable selected discovery identity' };
   const row = rows[0];
   if (expected.names && !expected.names.includes(row.name)) return { status: 'invalid', pass: false, reason: 'Unexpected selected capability' };
-  if (rows.some(other => JSON.stringify(other.required_rule_checks ?? null) !== JSON.stringify(row.required_rule_checks ?? null))) return { status: 'invalid', pass: false, reason: 'Conflicting discovery checklists' };
+  if (rows.some(other => JSON.stringify(other.required_rule_checks ?? null) !== JSON.stringify(row.required_rule_checks ?? null)
+    || JSON.stringify(other.bound_rules ?? null) !== JSON.stringify(row.bound_rules ?? null))) return { status: 'invalid', pass: false, reason: 'Conflicting discovery checklists' };
   if (!Object.hasOwn(row, 'required_rule_checks')) return { status: 'legacy-or-unbound', pass: true, checks: [] };
   if (!Array.isArray(row.required_rule_checks) || !row.required_rule_checks.length)
     return { status: 'invalid', pass: false, reason: 'Malformed or empty required checks' };
@@ -301,7 +311,7 @@ export function evaluateCompoundTrace(trace, actionPattern, expected = {}, ident
     || !row.bound_rules.some((rule, index) => rule.name === expected.rule && row.required_rule_checks[index]?.rule_id
       && row.required_rule_checks[index]?.fetch_command?.endsWith(` ${row.required_rule_checks[index].rule_id}`))))
     return { status: 'invalid', pass: false, reason: 'Expected scenario rule missing from selected checklist' };
-  const checks = evaluateRequiredRuleChecks(row.required_rule_checks, trace, actionPattern, identities, boundary);
+  const checks = evaluateRequiredRuleChecks(row.required_rule_checks, trace, actionPattern, identities, boundary, row.bound_rules);
   return { status: 'checked', pass: checks.every(check => check.pass), checks };
 }
 

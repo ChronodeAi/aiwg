@@ -204,3 +204,9 @@ The earlier compound and common-target lanes require fetches before inspection, 
 stronger surrogate than checking before governed work. Governed migration instead
 uses the actual preview invocation as its boundary. An n=1 smoke is exploratory and
 does not establish full U5 qualification.
+
+A selected CLI's JSON rule or behavior show may satisfy a required check by name
+only when the name aligns with that discovered checklist entry and the complete
+JSON response binds the same canonical ID, type, name, and nonempty content.
+Plaintext names do not provide that identity binding. Earlier raw results remain
+unchanged; this support applies to prospective evaluations.
