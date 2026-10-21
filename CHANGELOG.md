@@ -9,6 +9,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- `aiwg mc dispatch --provider <name>` runs a mission on any provider the ralph
+  loop supports (`claude` by default; unknown names are refused). The provider is
+  stored on the mission, shown by `mc status` and `mc list`, and passed to the
+  loop by `mc run`. OMP missions now report usage and spend: the loop counts each
+  assistant `message_end` once (not its `turn_end`/`agent_end` repeats) plus billed
+  `cache_warming_end` events, and counts `tool_execution_start` as a tool call, so
+  `--max-total-cost`, token, tool-call and wall-clock ceilings apply on `omp` as on
+  `claude`. OMP has no budget flag, so the launcher stops an OMP session itself
+  once the cost reported on its JSON events reaches the per-iteration `--budget`.
+
 - Add configurable multi-pass Jev decision validation with escalation, bounded
   concurrency and a shared timeout; CLI/MCP sampling overrides, aggregate JSON,
   ledger agreement telemetry and hit rates grouped by pass policy/escalation.
@@ -41,6 +51,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- The `mc run` cost estimate and its inert-ceiling warning judge each mission by
+  the provider it runs on, instead of the project's first configured provider.
 - Credentials are redacted on import before anything is stored or indexed, across
   every catalog sink (events, sessions, sources, extensions, FTS, analytics, receipts,
   checkpoints, diagnostics, candidates, audit and export plans). Detection now also

@@ -127,6 +127,21 @@ native recursive fan-out is disabled. Shared workspace slots bound concurrent
 CLI runs. A stale slot reports its owner for reviewed cleanup instead of
 silently stealing capacity.
 
+`aiwg mc` runs a mission on OMP with `aiwg mc dispatch <session> "<objective>"
+--completion "<criteria>" --provider omp`. The loop reads usage only from each
+assistant `message_end` and from a billed `cache_warming_end` (`input`, `output`,
+`cacheRead`, `cacheWrite`, `totalTokens`, and `cost.total` in USD); the copies
+of that usage on `turn_end` and `agent_end` are not counted again. Tool calls are
+`tool_execution_start` events. The `--max-total-cost`, `--max-total-tokens`,
+`--max-output-tokens`, `--max-tool-calls` and `--max-wall-clock-minutes`
+ceilings therefore apply as they do on Claude. OMP has no budget flag, so the
+launcher enforces the per-iteration `--budget` itself: it adds up the cost
+reported on OMP's JSON events while the session runs and stops the session once
+the total reaches the budget. A backend that reports no `cost.total` leaves
+spend unobservable and the spend ceilings inert. OMP sends a single event
+larger than 1 MiB as `rpc_chunk` frames, and the loop does not reassemble those
+for accounting.
+
 A model listing failure is not an empty successful catalog. Check the selected
 profile, configured backend credentials, binary version, and diagnostic stderr.
 `aiwg runtime-info --providers --provider omp --json` reports the executable,
