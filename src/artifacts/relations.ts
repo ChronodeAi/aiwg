@@ -128,7 +128,7 @@ export interface RelationsStamp {
 export interface PrebuiltSelection { reader: RelationsReader | null; reason?: string }
 
 /** Validate the running root, never the root from which this module was loaded. */
-function selectPrebuiltRelationsSource(cwd: string): PrebuiltSelection {
+function selectPrebuiltRelationsSource(cwd: string, cacheSourceDigest = true): PrebuiltSelection {
   const root = resolveFrameworkIndexRoot(cwd);
   const dir = path.join(root, PREBUILT_RELATIONS_DIR);
   try {
@@ -136,7 +136,7 @@ function selectPrebuiltRelationsSource(cwd: string): PrebuiltSelection {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
     if (stamp.schema_version !== 'aiwg.relationships.prebuilt.v1') return { reader: null, reason: 'unsupported prebuilt relationship schema' };
     if (stamp.package_version !== pkg.version) return { reader: null, reason: 'prebuilt relationship package version differs' };
-    if (stamp.source_digest !== frameworkSourceDigest(root)) return { reader: null, reason: 'prebuilt relationship source digest differs (modified, added or removed corpus source)' };
+    if (stamp.source_digest !== frameworkSourceDigest(root, cacheSourceDigest)) return { reader: null, reason: 'prebuilt relationship source digest differs (modified, added or removed corpus source)' };
     const text = fs.readFileSync(path.join(dir, 'relations.json'), 'utf8');
     if (createHash('sha256').update(text).digest('hex') !== stamp.checksums['relations.json']) return { reader: null, reason: 'prebuilt relationship checksum differs' };
     const bindings = fs.readFileSync(path.join(dir, 'bindings.json'), 'utf8');
@@ -150,14 +150,14 @@ function selectPrebuiltRelationsSource(cwd: string): PrebuiltSelection {
 }
 
 /** Apply local pins only after cache validation so policy errors cannot masquerade as cache misses. */
-export function selectPrebuiltRelations(cwd: string, pinCwd = cwd): PrebuiltSelection {
-  const selected = selectPrebuiltRelationsSource(cwd);
+export function selectPrebuiltRelations(cwd: string, pinCwd = cwd, cacheSourceDigest = true): PrebuiltSelection {
+  const selected = selectPrebuiltRelationsSource(cwd, cacheSourceDigest);
   return selected.reader ? { reader: readerWithPins(selected.reader.index, pinCwd) } : selected;
 }
 
 /** Synchronous read API: prebuilt first, then this root's built sidecar. */
-export function loadRelations(cwd: string, pinCwd = cwd): RelationsReader | null {
-  return selectPrebuiltRelations(cwd, pinCwd).reader ?? loadBuiltRelations(cwd, pinCwd);
+export function loadRelations(cwd: string, pinCwd = cwd, cacheSourceDigest = true): RelationsReader | null {
+  return selectPrebuiltRelations(cwd, pinCwd, cacheSourceDigest).reader ?? loadBuiltRelations(cwd, pinCwd);
 }
 
 /** Read paths reconcile through the existing lock/receipt when prebuilt is stale. */

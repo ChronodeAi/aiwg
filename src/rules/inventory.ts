@@ -31,8 +31,8 @@ function includedByAll(root: string, cap: string): boolean {
 export async function ruleInventory(cwd: string, root: string, options: InventoryOptions) {
   const configs = loadRulePinConfigs(cwd);
   const selected = options.scope === 'user' ? { project: {}, user: configs.user } : configs;
-  const state = rulePinState(cwd, root, selected, true);
-  const relations = loadRelations(cwd) ?? loadRelations(root, cwd);
+  const state = rulePinState(cwd, root, selected, true, false);
+  const relations = loadRelations(cwd, cwd, false) ?? loadRelations(root, cwd, false);
   const userRegistry = await readUserRegistry();
   const inventory = [...state.inventory];
   if (options.scope === 'catalog') {
