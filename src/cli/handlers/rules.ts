@@ -6,11 +6,12 @@ import type { RulePinSelector } from '../../rules/inline-budget.mjs';
 
 const usage = `Usage: aiwg rules pin|unpin [rule...] [--tier critical,high] [--capability id,... | --group name] [--all-tiers] [--all]
        aiwg rules pinned [--capability id] [--json]
+       aiwg rules inventory|list [--scope workspace|user|installation|catalog] [--capability id,...] [--activation mode,...] [--tier level,...] [--provider name] [--bodies] [--json]
        aiwg rules group set <name> <capability>... | group list
 Flags: --project (default), --user, --dry-run, --no-deploy, --json, --allow-over-budget
 Pins and group changes validate every input without prompting. --dry-run prints effective rules and per-provider startup bytes.`;
-const valueFlags = new Set(['--tier', '--capability', '--group']);
-const boolFlags = new Set(['--all-tiers', '--all', '--dry-run', '--no-deploy', '--json', '--allow-over-budget', '--user', '--project', '--help', '-h']);
+const valueFlags = new Set(['--tier', '--capability', '--group', '--scope', '--activation', '--provider']);
+const boolFlags = new Set(['--all-tiers', '--all', '--dry-run', '--no-deploy', '--json', '--allow-over-budget', '--user', '--project', '--help', '-h', '--bodies']);
 function parse(args: string[]) {
   const values = new Map<string, string>();
   const flags = new Set<string>();
@@ -50,6 +51,21 @@ export const rulesHandler: CommandHandler = {
       const { rulePinState } = await import('../../rules/pin-state.js');
       const { setRuleConfigKey } = await import('../../config/cli.js');
       const [command, ...ids] = positional;
+      if (command === 'inventory' || command === 'list') {
+        if (ids.length || values.has('--group') || [...flags].some(flag => !['--json', '--bodies'].includes(flag))) throw new Error('inventory accepts only inventory filters and output flags');
+        const scope = values.get('--scope') ?? 'workspace';
+        if (!['workspace', 'user', 'installation', 'catalog'].includes(scope)) throw new Error('Invalid inventory scope');
+        const activation = list('--activation');
+        const tier = list('--tier');
+        if (activation?.some(value => !['kernel', 'summary', 'bound', 'paths', 'on-demand'].includes(value))) throw new Error('Invalid activation filter');
+        if (tier?.some(value => !['critical', 'high', 'medium', 'low'].includes(value))) throw new Error('Invalid tier filter');
+        if (list('--capability')?.some(value => !value)) throw new Error('Invalid capability filter');
+        const { ruleInventory } = await import('../../rules/inventory.js');
+        const report = await ruleInventory(ctx.cwd, ctx.frameworkRoot, { scope: scope as 'workspace' | 'user' | 'installation' | 'catalog', capability: list('--capability'), activation, enforcement: tier, provider: values.get('--provider'), bodies: flags.has('--bodies') });
+        return { exitCode: 0, rawOutput: true, message: json ? JSON.stringify(report, null, 2) :
+          [`Scope: ${report.scope} (${report.scope_description})`, 'Per-rule delivery and session loading: unknown.', ...report.rules.map(rule => `${rule.capability}/${rule.name} [${rule.effective_activation ?? 'unconfigured'}, ${rule.enforcement ?? 'unknown'}]: ${rule.summary ?? '(no summary)'}; ${rule.fetch_command ?? 'fetch ID unknown'}${rule.content ? `\n${rule.content}` : ''}`), ...report.warnings, ...(!report.rules.length ? ['No matching rules.'] : [])].join('\n') };
+      }
+      if (values.has('--scope') || values.has('--activation') || values.has('--provider') || flags.has('--bodies')) throw new Error('Inventory filters are only valid for rules inventory');
       const source = flags.has('--user') ? 'user' : 'project';
       const configs = loadRulePinConfigs(ctx.cwd);
       const before = rulePinState(ctx.cwd, ctx.frameworkRoot, configs, true);

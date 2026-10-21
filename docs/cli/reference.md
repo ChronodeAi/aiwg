@@ -35,6 +35,25 @@ Complete reference for all `aiwg` CLI commands.
 
 **Prerequisites:** Node.js ≥24 and `npm install -g aiwg`
 
+## Rule inventory
+
+```bash
+aiwg rules inventory --scope workspace --json
+aiwg rules list --capability aiwg-utils --bodies
+aiwg rules inventory --scope catalog --activation bound --tier critical,high
+```
+
+Workspace means the current repository and user configuration, without scanning
+other repositories. User selects user configuration and the user registry;
+installation lists configured capabilities; catalog additionally lists
+available installation sources. Filters compose. The report distinguishes
+canonical and effective activation, pins, bindings and configured providers.
+Delivery and native session loading remain unknown without direct evidence.
+`--bodies` returns complete source text and reports missing indexed files as an
+error. MCP exposes the same operation as `rule-inventory`.
+The inventory does not deploy or change configuration. Generic CLI hooks and
+opt-in command logging remain governed by their existing settings.
+
 ## Authentication
 
 ```bash
