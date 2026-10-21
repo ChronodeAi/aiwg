@@ -10,6 +10,7 @@ import { importImpl } from '../_resolve-impl.mjs';
 import { RC_LANES, RC_WORKFLOW, releaseIdentity, sha256, verifyRcBundle } from './release-candidate.mjs';
 import { evaluateAssertions, parseTrace } from '../rules/run-rule-probes.mjs';
 import { DIMENSIONS, comparisonPlan, comparisonReport, loadScenarios } from '../rules/release-compare.mjs';
+import { buildHermesArgs, parseHermesStream } from '../rules/release-compare-hermes.mjs';
 
 const { boundedSpawnSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 const ROOT = path.resolve(import.meta.dirname, '../..');
@@ -502,6 +503,33 @@ function verifyCodexReceipt(run, model, fixtureHash, sourceHashes) {
   if (!same(parsed, run.trace)) throw new Error('Codex trace differs from event stream');
   return receipt;
 }
+function verifyHermesReceipt(run, model, fixtureHash, sourceHashes, judge = false) {
+  const receipt = run?.runtime_receipt;
+  const keys = ['schema', 'authenticated', 'provider', 'requested_model', 'requested_provider', 'requested_effort', 'hermes_version', 'reported_remote_model', 'reported_remote_backend',
+    'qualification_authenticated', 'qualification_id', 'qualification_controller', 'qualification_producer', 'launcher_sha256', 'hermes_executable_sha256',
+    'boundary_profile_sha256', 'boundary_receipt_sha256', 'adapter_source_sha256', 'argv_sha256', 'prompt_sha256', 'fixture_identity_sha256', 'transcript_sha256', 'trace_sha256'];
+  const digests = ['launcher_sha256', 'hermes_executable_sha256', 'boundary_profile_sha256', 'boundary_receipt_sha256', 'adapter_source_sha256', 'argv_sha256', 'prompt_sha256', 'transcript_sha256', 'trace_sha256'];
+  const allowedEfforts = new Set(['low', 'medium', 'high']);
+  let expectedArgvSha256 = null;
+  try { expectedArgvSha256 = hash(JSON.stringify(buildHermesArgs({ model, provider: receipt?.requested_provider, effort: receipt?.requested_effort, judge }))); }
+  catch { /* The common validation below reports the invalid runtime observation. */ }
+  if (!exactKeys(receipt, keys) || receipt.schema !== 'aiwg-comparison-runtime-observation/v1' || receipt.authenticated !== false
+    || receipt.provider !== 'hermes' || receipt.requested_model !== model || !nonempty(receipt.requested_provider) || receipt.requested_provider === 'auto'
+    || receipt.hermes_version !== '0.21.6+387.gdce1e9b'
+    || !allowedEfforts.has(receipt.requested_effort) || receipt.argv_sha256 !== expectedArgvSha256
+    || receipt.reported_remote_model !== null || receipt.reported_remote_backend !== null
+    || receipt.qualification_authenticated !== false || !nonempty(receipt.qualification_id) || !nonempty(receipt.qualification_controller)
+    || !nonempty(receipt.qualification_producer) || digests.some(key => !SHA256.test(receipt[key] ?? ''))
+    || receipt.fixture_identity_sha256 !== fixtureHash || receipt.adapter_source_sha256 !== sourceHashes.adapter
+    || typeof run.stdout !== 'string' || receipt.transcript_sha256 !== hash(run.stdout)
+    || receipt.trace_sha256 !== hash(JSON.stringify(run.trace)) || run.trace?.completed !== true || run.trace?.failed !== false) {
+    throw new Error('Invalid unauthenticated Hermes runtime observation');
+  }
+  let parsed; try { parsed = parseHermesStream(run.stdout, { judge, expectedModel: model }); }
+  catch { throw new Error('Invalid Hermes stream-json evidence'); }
+  if (!same(parsed, run.trace)) throw new Error('Hermes trace differs from stream-json evidence');
+  return receipt;
+}
 function validateLivePair(pair, expected, report, sourceHashes) {
   if (pair.id !== expected.scenario.id || pair.repetition !== expected.repetition
     || !same(pair.order, expected.order) || !same(pair.judge_order, expected.judge_order)) throw new Error('Comparison pair schedule mismatch');
@@ -512,6 +540,8 @@ function validateLivePair(pair, expected, report, sourceHashes) {
       || !Array.isArray(run.assertions) || typeof run.trace.text !== 'string') throw new Error('Comparison contains incomplete or non-live subject results');
     if (report.provider === 'codex') {
       verifyCodexReceipt(run, report.model, hash(JSON.stringify(report.fixtures[side])), sourceHashes);
+    } else if (report.provider === 'hermes') {
+      verifyHermesReceipt(run, report.model, hash(JSON.stringify(report.fixtures[side])), sourceHashes);
     }
     const assertions = evaluateAssertions(expected.scenario.assertions, run.trace);
     const passed = assertions.length > 0 && assertions.every(assertion => assertion.pass);
@@ -520,6 +550,7 @@ function validateLivePair(pair, expected, report, sourceHashes) {
     }
   }
   if (report.provider === 'codex' && ['requested_effort', 'executable_sha256', 'adapter_source_sha256', 'runtime_source_sha256', 'trace_parser_sha256'].some(key => pair.runs.A.runtime_receipt[key] !== pair.runs.B.runtime_receipt[key])) throw new Error('Codex comparison settings differ between sides');
+  if (report.provider === 'hermes' && ['requested_provider', 'requested_effort', 'hermes_version', 'qualification_id', 'qualification_controller', 'qualification_producer', 'launcher_sha256', 'hermes_executable_sha256', 'boundary_profile_sha256', 'boundary_receipt_sha256', 'adapter_source_sha256', 'argv_sha256', 'prompt_sha256'].some(key => pair.runs.A.runtime_receipt[key] !== pair.runs.B.runtime_receipt[key])) throw new Error('Hermes comparison settings differ between sides');
   const judgment = pair.judgment;
   if (pair.judge_error !== null || judgment?.model !== report.judge_model || !['A', 'B', 'tie'].includes(judgment?.winner)
     || !nonempty(judgment?.reason)) throw new Error('Comparison contains incomplete or non-live judge results');
@@ -528,6 +559,12 @@ function validateLivePair(pair, expected, report, sourceHashes) {
     if (receipt.executable_sha256 !== pair.runs.A.runtime_receipt.executable_sha256 || judgment.trace.events.some(event => !['thread.started', 'turn.started', 'turn.completed', 'item.started', 'item.updated', 'item.completed'].includes(event.type) || (event.type.startsWith('item.') && (!event.item || !['agent_message', 'reasoning'].includes(event.item.type))))) throw new Error('Invalid Codex judge runtime trace');
     let blind; try { blind = JSON.parse(judgment.trace.text); } catch { throw new Error('Invalid Codex judge response'); }
     if (!['left', 'right', 'tie'].includes(blind.winner) || (blind.winner === 'tie' ? 'tie' : pair.judge_order[blind.winner === 'left' ? 0 : 1]) !== judgment.winner || blind.reason !== judgment.reason || !same(blind.scores?.left, judgment.scores[pair.judge_order[0]]) || !same(blind.scores?.right, judgment.scores[pair.judge_order[1]])) throw new Error('Codex judge response does not match retained trace');
+  } else if (report.provider === 'hermes') {
+    const receipt = verifyHermesReceipt(judgment, report.judge_model, null, sourceHashes, true);
+    const subject = pair.runs.A.runtime_receipt;
+    if (['requested_provider', 'hermes_version', 'qualification_id', 'qualification_controller', 'qualification_producer', 'launcher_sha256', 'hermes_executable_sha256', 'boundary_profile_sha256', 'boundary_receipt_sha256', 'adapter_source_sha256'].some(key => receipt[key] !== subject[key])) throw new Error('Hermes judge boundary differs from subject boundary');
+    let blind; try { blind = JSON.parse(judgment.trace.text); } catch { throw new Error('Invalid Hermes judge response'); }
+    if (!['left', 'right', 'tie'].includes(blind.winner) || (blind.winner === 'tie' ? 'tie' : pair.judge_order[blind.winner === 'left' ? 0 : 1]) !== judgment.winner || blind.reason !== judgment.reason || !same(blind.scores?.left, judgment.scores[pair.judge_order[0]]) || !same(blind.scores?.right, judgment.scores[pair.judge_order[1]])) throw new Error('Hermes judge response does not match retained trace');
   }
   for (const side of ['A', 'B']) for (const dimension of Object.keys(DIMENSIONS)) {
     const score = judgment.scores?.[side]?.[dimension];
@@ -581,12 +618,14 @@ export function verifyComparisonReport({ file, report, plan, candidate, baseline
   const judgeAdapterSha256 = trustedSources?.judge?.sha256 ?? validateAdapter(report.adapters?.judge, 'Judge');
   const sourceHashes = report.provider === 'codex' ? (trustedSources
     ? { adapter: subjectAdapterSha256, runtime: trustedSources.runtime?.sha256, parser: trustedSources.parser?.sha256 }
-    : { adapter: subjectAdapterSha256, runtime: sha256(path.join(path.dirname(report.adapters.subject), 'codex-evaluation-runtime.mjs')), parser: sha256(path.join(path.dirname(report.adapters.subject), 'run-rule-probes.mjs')) }) : null;
+    : { adapter: subjectAdapterSha256, runtime: sha256(path.join(path.dirname(report.adapters.subject), 'codex-evaluation-runtime.mjs')), parser: sha256(path.join(path.dirname(report.adapters.subject), 'run-rule-probes.mjs')) })
+    : report.provider === 'hermes' ? { adapter: subjectAdapterSha256 } : null;
   if (trustedSources && (!SHA256.test(subjectAdapterSha256) || !SHA256.test(judgeAdapterSha256)
     || (report.provider === 'codex' && (!SHA256.test(sourceHashes.runtime) || !SHA256.test(sourceHashes.parser))))) {
     throw new Error('Trusted quarterly comparison source identities are incomplete');
   }
   if (report.provider === 'codex' && subjectAdapterSha256 !== judgeAdapterSha256) throw new Error('Codex subject and judge must use the same reviewed adapter');
+  if (report.provider === 'hermes' && subjectAdapterSha256 !== judgeAdapterSha256) throw new Error('Hermes subject and judge must use the same reviewed adapter');
   const expectedPairs = new Map(plan.pairs.map(pair => [`${pair.scenario.id}\u0000${pair.repetition}`, pair]));
   const results = [];
   if (!Array.isArray(report.scenarios)) throw new Error('Comparison scenarios are missing');
@@ -607,6 +646,14 @@ export function verifyComparisonReport({ file, report, plan, candidate, baseline
       const receipt = role === 'judge' ? pair.judgment.runtime_receipt : pair.runs[role].runtime_receipt;
       const reference = role === 'judge' ? first.judgment.runtime_receipt : first.runs.A.runtime_receipt;
       if (['requested_effort', 'executable_sha256', 'adapter_source_sha256', 'runtime_source_sha256', 'trace_parser_sha256'].some(key => receipt[key] !== reference[key])) throw new Error('Codex runtime settings differ across comparison pairs');
+    }
+  }
+  if (report.provider === 'hermes' && results.length) {
+    const first = results[0];
+    for (const pair of results) for (const role of ['A', 'B', 'judge']) {
+      const receipt = role === 'judge' ? pair.judgment.runtime_receipt : pair.runs[role].runtime_receipt;
+      const reference = role === 'judge' ? first.judgment.runtime_receipt : first.runs.A.runtime_receipt;
+      if (['requested_provider', 'requested_effort', 'hermes_version', 'qualification_id', 'qualification_controller', 'qualification_producer', 'launcher_sha256', 'hermes_executable_sha256', 'boundary_profile_sha256', 'boundary_receipt_sha256', 'adapter_source_sha256', 'argv_sha256'].some(key => receipt[key] !== reference[key])) throw new Error('Hermes runtime boundary differs across comparison pairs');
     }
   }
   const recomputed = comparisonReport(plan, results, report.fixtures);
