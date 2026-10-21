@@ -1,47 +1,13 @@
 {
-  "schema": "aiwg-release-promotion-policy/v1",
-  "enabled": false,
+  "schema": "aiwg-release-promotion-policy/v2",
+  "enabled": true,
   "repository": "jmagly/aiwg",
-  "rc_workflow_id": null,
-  "github_api_actor_ids": [],
-  "github_transport_trust": null,
-  "github_evidence_credential_kind": null,
-  "comparison": {
-    "mode": "utc-calendar-quarter",
-    "workflow_id": null,
-    "required_job_name": null,
-    "required_steps": [],
-    "repetitions": 5,
-    "seed": null,
-    "baseline_version": null,
-    "expected_bundles": [
-      "sdlc",
-      "security-engineering"
-    ],
-    "allowed_approval_issuer_ids": [],
-    "runtime_identity": {
-      "allow_unattested_backend": false,
-      "providers": {
-        "claude": null,
-        "codex": null,
-        "hermes": null
-      }
-    },
-    "models": {
-      "claude": {
-        "subject": null,
-        "judge": null
-      },
-      "codex": {
-        "subject": null,
-        "judge": null
-      },
-      "hermes": {
-        "subject": null,
-        "judge": null
-      }
-    }
-  },
+  "rc_workflow_id": 389991872,
+  "github_api_actor_ids": [
+    1159087
+  ],
+  "github_transport_trust": "github-authenticated-user-api",
+  "github_evidence_credential_kind": "classic-personal-access-token",
   "publication": {
     "order": [
       "npmjs",
@@ -61,5 +27,9 @@
         "provenance": false
       }
     }
-  }
+  },
+  "allowed_approval_issuer_ids": [
+    1159087
+  ],
+  "required_validation_profile": "routine-release-v1"
 }

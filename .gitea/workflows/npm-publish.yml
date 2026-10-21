@@ -14,7 +14,7 @@
 #   VAULT_CI_ROLE_ID, VAULT_CI_SECRET_ID - vault AppRole bootstrap pair.
 #
 # The dedicated read-scoped GitHub authenticated-user API credential for
-# retained-RC/comparison/approval evidence is fetched from vault only after the
+# retained-RC/approval evidence is fetched from vault only after the
 # versioned promotion policy passes its offline activation preflight.
 #
 # vault fetch specs:
@@ -54,14 +54,6 @@ on:
         type: string
       rc_artifact_id:
         description: 'Retained-RC artifact ID from that run'
-        required: true
-        type: string
-      comparison_run_id:
-        description: 'Successful trusted current-quarter comparison/validation workflow run ID'
-        required: true
-        type: string
-      comparison_artifact_id:
-        description: 'Current-quarter full-validation and three-provider comparison artifact ID'
         required: true
         type: string
       approval_issue:
@@ -224,8 +216,6 @@ jobs:
           RC_TAG: ${{ github.event.inputs.rc_tag }}
           RC_RUN_ID: ${{ github.event.inputs.rc_run_id }}
           RC_ARTIFACT_ID: ${{ github.event.inputs.rc_artifact_id }}
-          COMPARISON_RUN_ID: ${{ github.event.inputs.comparison_run_id }}
-          COMPARISON_ARTIFACT_ID: ${{ github.event.inputs.comparison_artifact_id }}
           APPROVAL_ISSUE: ${{ github.event.inputs.approval_issue }}
           APPROVAL_SHA256: ${{ github.event.inputs.approval_sha256 }}
         run: |
@@ -241,18 +231,15 @@ jobs:
           //git.integrolabs.net/api/packages/roctinam/npm/:_authToken=${NODE_AUTH_TOKEN}
           NPMRC
           RC_DIR=$(mktemp -d "$RUNNER_TEMP/aiwg-rc.XXXXXX")
-          CMP_DIR=$(mktemp -d "$RUNNER_TEMP/aiwg-comparison.XXXXXX")
           AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN="$(cat -- "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE")" \
           node tools/release/release-promotion.mjs publish \
             --rc-tag "$RC_TAG" \
             --stable-tag '${{ steps.release_tag.outputs.release_tag }}' \
             --run-id "$RC_RUN_ID" \
             --artifact-id "$RC_ARTIFACT_ID" \
-            --comparison-run-id "$COMPARISON_RUN_ID" \
-            --comparison-artifact-id "$COMPARISON_ARTIFACT_ID" \
             --approval-issue "$APPROVAL_ISSUE" \
             --approval-sha256 "$APPROVAL_SHA256" \
-            --destination "$RC_DIR" --comparison-destination "$CMP_DIR" \
+            --destination "$RC_DIR" \
             --registry gitea --receipt "$RUNNER_TEMP/gitea-publication.json" \
             --output "$RUNNER_TEMP/promotion-decision.json"
 

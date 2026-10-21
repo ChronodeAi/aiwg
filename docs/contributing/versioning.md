@@ -367,10 +367,10 @@ In addition to the four steps above, the following CI workflows act as **release
 
 ### A2A Conformance Gate Details
 
-The `A2A Conformance` workflow provisions a reference agentic-sandbox instance via Docker Compose, builds the `roctinam/agentic-sandbox-conformance` Go harness, and runs the suite end-to-end. The separate `npm run uat:serve-live` lane exercises AIWG's own versioned client; set `AIWG_A2A_LIVE_DISPATCH=1 AIWG_A2A_LIVE_REQUIRE_BOTH=1` for a release qualification that requires live 0.3 and 1.0 interfaces. Mock and fixture results are recorded separately and do not substitute for this live lane. Failure blocks the release.
+The `A2A Conformance` workflow provisions a reference agentic-sandbox instance via Docker Compose, builds the `roctinam/agentic-sandbox-conformance` Go harness, and runs the suite end-to-end. The separate `npm run uat:serve-live` lane exercises AIWG's own versioned client; set `AIWG_A2A_LIVE_DISPATCH=1 AIWG_A2A_LIVE_REQUIRE_BOTH=1` for a release qualification that requires live 0.3 and 1.0 interfaces. Mock and fixture results are recorded separately and do not substitute for this live lane. This optional conformance qualification does not gate stable publication.
 
-- **What to do on green**: proceed with tagging.
-- **What to do on red**: open the run, download the `conformance-reports-*` artifact (`report.md` + `report.junit.xml`), and diagnose. Common categories of failure are listed in the harness's own `report.md`. Do **not** force a stable tag past a red conformance run without explicit issue documentation and a follow-up tracking issue — that's how interop regressions ship.
+- **What to do on green**: retain the qualification evidence.
+- **What to do on red**: retain the `conformance-reports-*` artifact and track the interoperability defect for follow-up.
 - **Workflow inputs**: the manual-dispatch form accepts `sandbox_ref` and `conformance_ref` for pinned-ref retries (e.g., to verify a fix against a specific sandbox commit before the release engineer is back online).
 
 ## npm publication channel
@@ -592,28 +592,12 @@ is intentional; don't try to "unify" them.
 
 ### Two-stage release candidates (#3201)
 
-**Staged implementation:** signed RC validation, exact-artifact verification, and
-fail-closed stable workflow integration are available. Both stable workflows use
-`tools/release/release-promotion.mjs` as their sole package publisher and no longer
-rebuild, retest, or repack in the shipping stage. The checked-in production policy
-remains disabled and its workflow, actor, model, and approval trust values remain
-unconfigured. This source change does not authorize a release or close #3201.
-
-The intended sequence is a routine RC build and bounded release validation,
-followed by promotion against the current UTC calendar quarter's full validation
-and real release-comparison record (#3298). The quarterly record may test an
-earlier commit only when that commit is an authenticated ancestor of the exact RC
-commit. The candidate-specific approval must name both commits and explicitly say
-that the candidate was not directly behavior-compared. Fix or explicitly accept
-each measured regression before that quarterly record is approved.
-The merged [release-comparison harness](release-comparison.md) records package,
-fixture, corpus, and deployed-tree identities, but no comparison has been run for
-this candidate. Production promotion must verify those reports and bind their
-tested tarball or fixture digests plus every regression disposition to the
-quarterly attestation, and separately bind the exact RC manifest and validation
-profile before stable publication can switch to promotion. A successful RC build
-alone is insufficient authorization to ship. No current-quarter record is
-checked in or implied by this implementation.
+Stable promotion requires the exact retained RC, its signed same-commit tags,
+routine release validation, and an authenticated candidate-specific approval.
+The signed promotion policy names the configured RC workflow and
+authenticated API actor and issuer identities. Quarterly cross-provider
+comparison is an optional scheduled qualification and is not a publication gate.
+No comparison record or model identity is invented by the promotion process.
 
 RC tags label validation attempts rather than package prerelease versions. For
 example, commit C contains version `2026.10.4` consistently in package manifests,
@@ -689,8 +673,7 @@ signed tag, fetch the workflow metadata and exact-commit source, and
 obtain/download the artifact through trusted APIs before invoking the verifier.
 Candidate-provided JSON is not a substitute for trusted API metadata.
 `tools/release/release-promotion.mjs` is the production orchestration entry point,
-but its checked-in policy is disabled until the external identities below are
-reviewed and populated.
+and its signed policy specifies the trusted API identities.
 
 The helper's `verify` command is an **offline diagnostic** accepting captured
 metadata files, including `--workflow` API metadata and the separate
@@ -699,7 +682,7 @@ therefore does not qualify them for publication. Its promotion plan lists the
 original tarball paths/digests and proposed
 `npm publish <tarball> --ignore-scripts --provenance` arguments; it never publishes
 and exits nonzero with `ready_for_publication: false`. The production orchestrator
-adds the real comparison/approval gate and an opaque in-process publication
+adds the authenticated exact-RC approval gate and an opaque in-process publication
 decision. Its publisher accepts only that decision, copies exactly the three
 retained tarballs into a private read-only staging directory, and rechecks the
 complete inventory before and after every registry action. It treats a registry
@@ -717,131 +700,23 @@ Offline stub tests prove validation and identity logic only. No real signed RC
 run, package installation from a release candidate, model comparison, publication,
 or end-to-end promotion was performed by this change.
 
-#### Production evidence and comparison approval contract
+#### Production evidence and stable approval contract
 
-`tools/release/release-evidence.mjs` provides a library-only trust boundary.
-`acquireGithubProductionReleaseEvidence` constructs the read-only GitHub API
-transport from an explicitly supplied token and approval issue. It fetches the
-exact-attempt jobs, paginated issue comments, candidate metadata, and workflow
-source at the signed commit. Artifact redirects are restricted to trusted HTTPS
-hosts and never receive the API token. The helper checks the GitHub artifact
-SHA256 against the downloaded bytes before extracting them into a fresh private
-directory with the standard ZIP library of the root-owned `/usr/bin/python3`.
-The interpreter and its parent directories must not be group- or world-writable;
-it runs with isolated startup and a minimal environment without credentials.
-Extraction rejects traversal,
-duplicates, links, non-regular entries, oversized archives and excessive expansion;
-the verifier then checks the exact bundle inventory and retained file digests.
-The existing diagnostic seam remains deliberately untrusted when an independent
-bundle directory is supplied.
+The signed commit contains `aiwg-release-promotion-policy/v2`. It names the
+trusted RC workflow, GitHub authenticated-user API actors, approval issuers,
+`routine-release-v1` validation profile and publication registries. It contains no
+model or comparison requirement. A configured authenticated GitHub user API credential supplies
+trusted run, artifact, and approval metadata; policy and signed-tag bindings are
+rechecked before publication. The signed policy configures the authenticated user and RC workflow identity.
 
-This is a reviewed implementation boundary, not a remote authentication
-attestation. Production configuration must select the trusted repository, issue,
-workflow and run identities, provide suitably scoped credentials, and retain the
-existing model-execution and publisher holds. The GitHub Actions token identity and
-artifact redirect host policy need live qualification before production use.
-
-Both the RC and stable tags are independently checked with the repository's
-maintainer keyring through `tools/ci/verify-signed-tag.sh`. They must be annotated,
-match the unchanged stable package version, peel to the same commit, and match the
-verifier's checked-out `HEAD`. The resulting in-process receipt cannot be replaced
-by serialized candidate data.
-
-The comparison gate consumes the unchanged #3298 report format. Trusted policy,
-separate from the reports, fixes all three providers, the subject and distinct
-judge snapshots, seed, `n=5`, baseline version, deployed bundle set, and allowed
-GitHub issuer IDs. Verification recomputes the canonical scenario plan and report
-aggregates, requires every expected provider/scenario/repetition exactly once,
-rejects invalid or incomplete subject/judge results, and binds the candidate
-tarball, corpus, package tree, deployed context, installation lock, report, and
-adapter digests. `fixture:`/`tree:` candidates and the shipped offline adapters —
-including copied adapters with the same digest — are rejected.
-
-Per-release compatibility approval content uses
-`aiwg-release-comparison-approval/v1`. Quarterly policy uses
-`aiwg-release-comparison-approval/v2`, which binds the exact candidate (including
-its RC validation profile), the current-quarter attestation and full-validation
-digest, tested/candidate ancestry, and report identities. Its basis is
-`quarterly-cross-provider-comparison` and
-`candidate_behavior_directly_compared` must be false. Candidate and report
-digests plus workflow/run/artifact and signed-tag identities must match exactly.
-Every measured regression needs one disposition for its provider, scenario,
-repetition, report digest, and precise regression signals. Issuer identity comes
-only from the authenticated GitHub API envelope and must match a trusted policy
-ID; an `issuer` claim inside approval content is rejected.
-
-The quarterly comparison artifact contains exactly
-`quarterly-attestation.json`, `validation.json`, and one JSON report for each of
-Claude, Codex, and Hermes. The validation record must use profile
-`quarterly-full-v1`, bind the tested commit, and prove all 43 lanes exactly once.
-The attestation binds every file digest, tested package identity, workflow/run/
-attempt, canonical repository-relative subject/judge source paths and digests
-(plus Codex runtime/parser), and the exact UTC-quarter interval. Producer runner
-absolute paths remain unchanged inside the report JSON but grant no trust: the
-publisher resolves only the attested canonical paths in its own checkout, rejects
-escapes and symlinks, and requires those current source bytes to match. Source or
-corpus drift therefore requires a new quarterly run. Its validation start/completion must
-fall within the authenticated successful run; GitHub's authenticated HTTP `Date`
-must be after run completion and still in that quarter. The run's `updated_at` is
-a conservative authenticated upper bound rather than a timestamp copied into the
-artifact, because artifact creation precedes final workflow completion. The
-authenticated compare API must prove that the tested commit is the candidate or
-its ancestor and that the documented final comparison commit is the exact
-candidate. Artifact retention expiry is independent of quarter validity; missing
-or expired evidence fails closed. Retain the quarterly artifact for at least 120
-days so a record produced near the quarter boundary remains available throughout
-the longest calendar quarter. The dispatch-only producer in
-`.github/workflows/release-comparison.yml` assembles this exact five-file
-artifact from its authenticated quarterly-full validation and three authorized,
-complete comparison shard sets. It runs only on the dedicated qualified runner
-pool, retains the final artifact for 120 days, and neither tags nor publishes a
-release. Adding the producer does not schedule model work or claim that a
-workflow run, qualified three-provider boundary, or accepted quarterly artifact
-currently exists.
-
-The canonical Hermes comparison adapter is
-`tools/rules/release-compare-hermes.mjs`. Its fixture-tested transport retains
-Hermes JSONL events and pinned launcher/boundary digests, but the boundary receipt
-is explicitly unauthenticated and no production-qualified launcher, receipt, or
-current Hermes comparison record is supplied. A production Hermes comparison
-must satisfy those operational qualifications before inference; the disabled
-promotion policy and absent three-provider artifact continue to hold credential,
-network acquisition, and publication. Claude/Codex source bindings and offline
-fixtures cannot substitute for Hermes production qualification or the required
-three-provider record.
-
-`config/release-promotion-policy.json` is the sole versioned authorization source.
-It is currently `enabled: false` and intentionally omits the workflow IDs, GitHub
-API actor IDs, frozen baseline/seed/models, and runtime identity trust
-decision. Candidate files and CLI flags cannot select another policy. Enabling it
-requires review of all those values and a specific transport level
-(`github-authenticated-user-api`) and a reviewed credential kind. The dedicated
-`AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN` must support GitHub's authenticated-user API;
-the built-in Actions `GITHUB_TOKEN` remains limited to release assets and OIDC.
-GitHub Actions receives that credential from its dedicated repository secret.
-Gitea Actions receives the distinct evidence credential through the existing
-AppRole bootstrap and `ci/vault-fetch.npm-publish-evidence.spec`; it does not
-fall back to the CI-issued token or the GitHub mirror credential. The Gitea
-workflow checks the offline policy activation state before either publication
-credential is fetched from vault.
-Because the provider backends do not expose a
-cryptographic model attestation, the only currently implementable runtime level is
-`requested-cli-model`; policy must explicitly set
-`allow_unattested_backend: true` for all three providers to accept that limitation.
-The resulting decision records `backend_attestation_available: false` and never
-describes requested model identity as backend-authenticated.
-
-The evidence and comparison helpers continue to report
-`production_identity_authenticated: false`. The promotion orchestrator may produce
-a ready opaque decision only when the enabled versioned policy explicitly accepts
-the documented lower trust level, the GitHub API actor is on the policy allowlist,
-and every signed-tag, run/attempt/job, extraction, comparison and approval check
-passes in the same process. The checked-in policy selects
-`utc-calendar-quarter` cadence but remains disabled; the legacy `per-release`
-mode is retained only as an explicit compatibility mode. Today the policy and
-missing current-quarter three-provider production
-evidence keep `ready_for_publication: false`. No verifier invokes a model or creates
-a tag. Real policy activation and full production evidence remain required.
+The approval issue must contain one comment from an allowed authenticated issuer.
+Its exact JSON body uses `aiwg-stable-release-approval/v1`, repository, decision
+`approve`, `policy_sha256`, and the exact candidate binding including the signed RC tag
+object, RC workflow/run/attempt, artifact, manifest, package digest and validation
+profile. The dispatch supplies the SHA-256 of that body. The stable tag is signed afterward at the same commit and verified independently.
+Approval and retained artifacts remain bound to that commit; no comparison IDs are required.
+The quarterly comparison workflow and its evidence verification remain available
+independently as optional qualification.
 
 ### Publication surfaces
 
@@ -881,7 +756,6 @@ then rerun the GitHub job on the same tag with the same evidence:
 gh workflow run npm-publish.yml --repo jmagly/aiwg --ref <stable-tag> \
   -f tag_to_publish=<stable-tag> -f rc_tag=<rc-tag> \
   -f rc_run_id=<run> -f rc_artifact_id=<artifact> \
-  -f comparison_run_id=<run> -f comparison_artifact_id=<artifact> \
   -f approval_issue=<issue> -f approval_sha256=<sha256>
 ```
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Stable promotion of an exact retained RC bundle. The checked-in policy is
-// deliberately disabled until production transport/model identities and
-// approval principals have been qualified. No serialized receipt is authority.
+// binds authenticated release evidence and approval to the signed policy.
+// No serialized receipt is authority.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,19 +12,16 @@ import { importImpl } from '../_resolve-impl.mjs';
 import { SURFACES, sha256 } from './release-candidate.mjs';
 import {
   acquireGithubProductionReleaseEvidence,
-  acquireGithubProductionComparisonReports,
-  assertProductionComparisonReports,
   assertProductionReleaseEvidence,
-  assertVerifiedComparisonApprovalGate,
-  verifyComparisonApprovalGate,
-  verifySignedTagPair, quarterlySourceAvailability,
+  verifyStableReleaseApproval,
+  verifySignedTagPair,
 } from './release-evidence.mjs';
 
 const { boundedSpawnSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 const ROOT = path.resolve(import.meta.dirname, '../..');
 export const PROMOTION_POLICY = 'config/release-promotion-policy.json';
-export const PROMOTION_SCHEMA = 'aiwg-release-promotion-policy/v1';
-export const PROMOTION_DECISION_SCHEMA = 'aiwg-release-promotion-decision/v1';
+export const PROMOTION_SCHEMA = 'aiwg-release-promotion-policy/v2';
+export const PROMOTION_DECISION_SCHEMA = 'aiwg-release-promotion-decision/v2';
 const SHA256 = /^[a-f0-9]{64}$/;
 const canonicalPolicies = new WeakSet();
 const signedPolicyBindings = new WeakMap();
@@ -62,29 +59,12 @@ function validateRegistry(name, value) {
 
 function validatePolicy(value) {
   if (!exactKeys(value, ['schema', 'enabled', 'repository', 'rc_workflow_id',
-    'github_api_actor_ids', 'github_transport_trust', 'github_evidence_credential_kind', 'comparison', 'publication']) || value.schema !== PROMOTION_SCHEMA
+    'github_api_actor_ids', 'github_transport_trust', 'github_evidence_credential_kind', 'allowed_approval_issuer_ids', 'required_validation_profile', 'publication']) || value.schema !== PROMOTION_SCHEMA
     || typeof value.enabled !== 'boolean' || value.repository !== 'jmagly/aiwg'
-    || !Array.isArray(value.github_api_actor_ids)) throw new Error('Invalid release promotion policy');
-  const comparison = value.comparison;
-  if (!exactKeys(comparison, ['mode', 'workflow_id', 'required_job_name', 'required_steps', 'repetitions', 'seed', 'baseline_version', 'expected_bundles',
-    'allowed_approval_issuer_ids', 'runtime_identity', 'models']) || comparison.repetitions !== 5
-    || !['per-release', 'utc-calendar-quarter'].includes(comparison.mode)
-    || !Array.isArray(comparison.expected_bundles) || !comparison.expected_bundles.length
-    || comparison.expected_bundles.some(item => !nonempty(item))
-    || new Set(comparison.expected_bundles).size !== comparison.expected_bundles.length
-    || !Array.isArray(comparison.allowed_approval_issuer_ids)
-    || !Array.isArray(comparison.required_steps)
-    || new Set(comparison.allowed_approval_issuer_ids.map(String)).size !== comparison.allowed_approval_issuer_ids.length
-    || new Set(value.github_api_actor_ids.map(String)).size !== value.github_api_actor_ids.length
-    || !exactKeys(comparison.runtime_identity, ['allow_unattested_backend', 'providers'])
-    || typeof comparison.runtime_identity.allow_unattested_backend !== 'boolean'
-    || !exactKeys(comparison.runtime_identity.providers, ['claude', 'codex', 'hermes'])
-    || !exactKeys(comparison.models, ['claude', 'codex', 'hermes'])) {
-    throw new Error('Invalid release comparison policy');
-  }
-  for (const provider of ['claude', 'codex', 'hermes']) {
-    if (!exactKeys(comparison.models[provider], ['subject', 'judge'])) throw new Error(`Invalid ${provider} model policy`);
-  }
+    || !Array.isArray(value.github_api_actor_ids) || value.required_validation_profile !== 'routine-release-v1') throw new Error('Invalid release promotion policy');
+  if (!Array.isArray(value.allowed_approval_issuer_ids)
+    || new Set(value.allowed_approval_issuer_ids.map(String)).size !== value.allowed_approval_issuer_ids.length
+    || new Set(value.github_api_actor_ids.map(String)).size !== value.github_api_actor_ids.length) throw new Error('Invalid approval issuer policy');
   if (!exactKeys(value.publication, ['order', 'registries'])
     || JSON.stringify(value.publication.order) !== JSON.stringify(['npmjs', 'gitea'])
     || !exactKeys(value.publication.registries, ['npmjs', 'gitea'])) throw new Error('Invalid publication order policy');
@@ -94,32 +74,13 @@ function validatePolicy(value) {
 }
 
 function activationProblems(policy) {
-  const comparison = policy.comparison, problems = [];
+  const problems = [];
   if (!policy.enabled) problems.push('The versioned release-promotion policy is disabled.');
   if (!Number.isSafeInteger(policy.rc_workflow_id) || policy.rc_workflow_id < 1) problems.push('No trusted RC workflow ID is configured.');
   if (!policy.github_api_actor_ids.length || policy.github_api_actor_ids.some(id => !Number.isSafeInteger(id) || id < 1)) problems.push('No qualified GitHub API actor IDs are configured.');
   if (policy.github_transport_trust !== 'github-authenticated-user-api') problems.push('The authenticated GitHub user API transport trust level is not approved.');
-  if (!['fine-grained-personal-access-token', 'github-app-user-access-token'].includes(policy.github_evidence_credential_kind)) problems.push('No supported dedicated GitHub evidence credential kind is configured.');
-  if (!Number.isSafeInteger(comparison.workflow_id) || comparison.workflow_id < 1) problems.push('No trusted comparison workflow ID is configured.');
-  if (!nonempty(comparison.required_job_name) || !comparison.required_steps.length
-    || comparison.required_steps.some(step => !nonempty(step))
-    || new Set(comparison.required_steps).size !== comparison.required_steps.length) {
-    problems.push('No trusted comparison job/step contract is configured.');
-  }
-  if (!nonempty(comparison.seed)) problems.push('No frozen comparison seed is configured.');
-  if (!/^\d{4}\.(?:[1-9]|1[0-2])\.(?:0|[1-9]\d*)$/.test(comparison.baseline_version ?? '')) problems.push('No stable comparison baseline is configured.');
-  if (!comparison.allowed_approval_issuer_ids.length || comparison.allowed_approval_issuer_ids.some(id => !Number.isSafeInteger(id) || id < 1)) problems.push('No authenticated approval issuer IDs are configured.');
-  for (const provider of ['claude', 'codex', 'hermes']) {
-    const model = comparison.models[provider];
-    if (!nonempty(model.subject) || !nonempty(model.judge) || model.subject?.trim().toLowerCase() === model.judge?.trim().toLowerCase()) {
-      problems.push(`No distinct trusted ${provider} subject/judge model identities are configured.`);
-    }
-    if (comparison.runtime_identity.providers[provider] !== 'requested-cli-model') {
-      problems.push(`No supported ${provider} runtime identity trust level is configured.`);
-    }
-  }
-  if (comparison.runtime_identity.allow_unattested_backend !== true) problems.push('Policy does not authorize backend-unattested requested model identity.');
-  if (comparison.mode === 'utc-calendar-quarter') problems.push(...quarterlySourceAvailability());
+  if (!['fine-grained-personal-access-token', 'classic-personal-access-token', 'github-app-user-access-token'].includes(policy.github_evidence_credential_kind)) problems.push('No supported dedicated GitHub evidence credential kind is configured.');
+  if (!policy.allowed_approval_issuer_ids.length || policy.allowed_approval_issuer_ids.some(id => !Number.isSafeInteger(id) || id < 1)) problems.push('No authenticated approval issuer IDs are configured.');
   return problems;
 }
 
@@ -178,22 +139,6 @@ function assertPolicyStillBound(policy, commit) {
   verifyPromotionPolicyCommitBinding({ commit, expectedSha256: policy.sha256 });
 }
 
-function comparisonPolicy(policy) {
-  return {
-    mode: policy.comparison.mode,
-    repetitions: policy.comparison.repetitions,
-    seed: policy.comparison.seed,
-    baselineVersion: policy.comparison.baseline_version,
-    expectedBundles: policy.comparison.expected_bundles,
-    allowedApprovalIssuerIds: policy.comparison.allowed_approval_issuer_ids,
-    models: policy.comparison.models,
-    runtimeIdentity: {
-      allowUnattestedBackend: policy.comparison.runtime_identity.allow_unattested_backend,
-      providers: policy.comparison.runtime_identity.providers,
-    },
-  };
-}
-
 function packageBindings(evidence) {
   return SURFACES.map(surface => {
     const filename = `${surface.stem}-${evidence.candidate.manifest.package_version}.tgz`;
@@ -209,20 +154,19 @@ function packageBindings(evidence) {
   });
 }
 
-function makeDecision({ policy, evidence = null, comparisonEvidence = null, gate = null, extraProblems = [] }) {
+function makeDecision({ policy, evidence = null, stableApproval = null, extraProblems = [] }) {
   if (!canonicalPolicies.has(policy)) throw new Error('Stable promotion requires the canonical in-process policy receipt');
   const problems = [...activationProblems(policy), ...extraProblems];
-  let packages = [], candidate = null, authenticatedGithubActor = null, approval = null, comparisons = [];
-  if (evidence || gate) {
+  let packages = [], candidate = null, authenticatedGithubActor = null, approval = null;
+  if (evidence || stableApproval) {
     if (signedPolicyBindings.get(policy) !== evidence?.tags?.commit) {
       throw new Error('Promotion policy is not bound to the verified signed release commit');
     }
     assertProductionReleaseEvidence(evidence);
-    assertVerifiedComparisonApprovalGate(gate, evidence, comparisonEvidence);
-    if (gate.policy_sha256 !== hashJson(comparisonPolicy(policy))) throw new Error('Comparison gate is not bound to the canonical promotion policy');
+    if (evidence.candidate.validation_profile !== policy.required_validation_profile) throw new Error('Stable promotion requires the routine release validation profile');
     if (evidence.repository !== policy.repository) throw new Error('Production evidence repository differs from promotion policy');
     if (!policy.github_api_actor_ids.map(String).includes(String(evidence.apiCaller.id))) problems.push('GitHub API caller is not a qualified policy actor.');
-    if (gate.runtime_identity_policy_satisfied !== true) problems.push('Comparison runtime identity does not satisfy the versioned trust policy.');
+    if (!stableApproval) throw new Error('Authenticated stable release approval is required');
     packages = packageBindings(evidence);
     candidate = {
       commit: evidence.candidate.manifest.commit,
@@ -235,18 +179,15 @@ function makeDecision({ policy, evidence = null, comparisonEvidence = null, gate
       manifest_sha256: evidence.candidate.manifest_sha256,
     };
     authenticatedGithubActor = evidence.apiCaller;
-    approval = gate.approval;
-    comparisons = gate.comparison_reports;
+    approval = stableApproval;
   }
   const unmet = [...new Set(problems)];
   const receipt = deepFreeze({ schema: PROMOTION_DECISION_SCHEMA, policy: { source: policy.source, sha256: policy.sha256 },
     repository: policy.repository, candidate, packages, authenticated_github_actor: authenticatedGithubActor,
-    comparison_reports: comparisons, approval,
-    quarterly_attestation: gate?.quarterly_attestation ?? null,
-    identity_basis: gate ? { github_transport: policy.github_transport_trust,
-      providers: gate.runtime_identity, backend_attestation_available: false } : null,
+    approval,
+    identity_basis: evidence ? { github_transport: policy.github_transport_trust } : null,
     production_identity_authenticated: evidence?.production_identity_authenticated === true,
-    production_identity_policy_satisfied: Boolean(gate?.runtime_identity_policy_satisfied),
+    production_identity_policy_satisfied: Boolean(evidence && stableApproval && policy.github_api_actor_ids.map(String).includes(String(evidence.apiCaller.id))),
     ready_for_publication: unmet.length === 0, unmet_requirements: unmet });
   promotionDecisions.add(receipt);
   return receipt;
@@ -256,17 +197,16 @@ function makeDecision({ policy, evidence = null, comparisonEvidence = null, gate
  * Acquire and evaluate the complete production gate. Disabled/incomplete policy
  * returns a non-ready receipt without touching GitHub or reading credentials.
  */
-export async function evaluateReleasePromotion({ rcTag, stableTag, runId, artifactId, comparisonRunId,
-  comparisonArtifactId, approvalIssue, approvalSha256, destination, comparisonDestination,
+export async function evaluateReleasePromotion({ rcTag, stableTag, runId, artifactId,
+  approvalIssue, approvalSha256, destination,
   token } = {}) {
   const policy = loadCanonicalPromotionPolicy();
   if (activationProblems(policy).length) return makeDecision({ policy });
   const evidenceToken = token ?? process.env.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN;
   if (!nonempty(evidenceToken) || !nonempty(destination) || !Number.isSafeInteger(runId) || runId < 1
-    || !Number.isSafeInteger(artifactId) || artifactId < 1 || !Number.isSafeInteger(comparisonRunId) || comparisonRunId < 1
-    || !Number.isSafeInteger(comparisonArtifactId) || comparisonArtifactId < 1
+    || !Number.isSafeInteger(artifactId) || artifactId < 1
     || !Number.isSafeInteger(approvalIssue) || approvalIssue < 1 || !SHA256.test(approvalSha256 ?? '')
-    || !nonempty(comparisonDestination)) {
+) {
     throw new Error('Complete production promotion inputs are required');
   }
   const tags = verifySignedTagPair({ root: ROOT, rcTag, stableTag });
@@ -274,17 +214,9 @@ export async function evaluateReleasePromotion({ rcTag, stableTag, runId, artifa
   const evidence = await acquireGithubProductionReleaseEvidence({ token: evidenceToken, approvalIssue,
     repository: policy.repository, workflowId: policy.rc_workflow_id, runId, artifactId,
     destination, tags });
-  const comparison = await acquireGithubProductionComparisonReports({ token: evidenceToken, approvalIssue,
-    repository: policy.repository, workflowId: policy.comparison.workflow_id, runId: comparisonRunId,
-    artifactId: comparisonArtifactId, candidateCommit: tags.commit, destination: comparisonDestination,
-    requiredJobName: policy.comparison.required_job_name, requiredSteps: policy.comparison.required_steps,
-    mode: policy.comparison.mode });
-  assertProductionComparisonReports(comparison);
-  if (String(comparison.apiCaller.id) !== String(evidence.apiCaller.id)) throw new Error('GitHub evidence caller changed between artifact acquisitions');
-  const gate = verifyComparisonApprovalGate({ evidence, comparisonEvidence: comparison,
-    reportFiles: comparison.reportFiles, policy: comparisonPolicy(policy) });
-  if (gate.approval.body_sha256 !== approvalSha256) throw new Error('Authenticated approval digest mismatch');
-  return makeDecision({ policy, evidence, comparisonEvidence: comparison, gate });
+  const stableApproval = verifyStableReleaseApproval({ evidence,
+    allowedIssuerIds: policy.allowed_approval_issuer_ids, bodySha256: approvalSha256, policySha256: policy.sha256 });
+  return makeDecision({ policy, evidence, stableApproval });
 }
 
 export function localRegistryIdentity(file) {
@@ -457,18 +389,15 @@ export async function publishReleasePromotion({ decision, registryName, receiptP
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     'rc-tag': { type: 'string' }, 'stable-tag': { type: 'string' }, 'run-id': { type: 'string' },
-    'artifact-id': { type: 'string' }, 'comparison-run-id': { type: 'string' },
-    'comparison-artifact-id': { type: 'string' }, 'approval-issue': { type: 'string' },
+    'artifact-id': { type: 'string' }, 'approval-issue': { type: 'string' },
     'approval-sha256': { type: 'string' }, destination: { type: 'string' },
-    'comparison-destination': { type: 'string' },
     output: { type: 'string' }, receipt: { type: 'string' }, registry: { type: 'string' },
   } });
-  if (!['verify', 'publish'].includes(positionals[0])) throw new Error('Usage: release-promotion.mjs verify|publish --rc-tag TAG --stable-tag TAG --run-id ID --artifact-id ID --report FILE --destination DIR --output FILE');
+  if (!['verify', 'publish'].includes(positionals[0])) throw new Error('Usage: release-promotion.mjs verify|publish --rc-tag TAG --stable-tag TAG --run-id ID --artifact-id ID --approval-issue ID --approval-sha256 SHA --destination DIR --output FILE');
   const decision = await evaluateReleasePromotion({ rcTag: values['rc-tag'], stableTag: values['stable-tag'],
     runId: Number(values['run-id']), artifactId: Number(values['artifact-id']),
-    comparisonRunId: Number(values['comparison-run-id']), comparisonArtifactId: Number(values['comparison-artifact-id']),
     approvalIssue: Number(values['approval-issue']), approvalSha256: values['approval-sha256'],
-    destination: values.destination, comparisonDestination: values['comparison-destination'] });
+    destination: values.destination });
   if (values.output) fs.writeFileSync(values.output, JSON.stringify(decision, null, 2) + '\n', { mode: 0o600 });
   else console.log(JSON.stringify(decision, null, 2));
   if (positionals[0] === 'publish') await publishReleasePromotion({ decision, registryName: values.registry,

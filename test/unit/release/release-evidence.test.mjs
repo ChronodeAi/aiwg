@@ -15,7 +15,7 @@ import { buildHermesArgs, parseHermesStream } from '../../../tools/rules/release
 import { DIMENSIONS, comparisonPlan, comparisonReport, loadScenarios } from '../../../tools/rules/release-compare.mjs';
 import { QUARTERLY_RELEASE_APPROVAL_SCHEMA, RELEASE_APPROVAL_SCHEMA, acquireGithubReleaseEvidence,
   acquireGithubProductionComparisonReports, acquireGithubProductionReleaseEvidence, createGithubApiEvidenceClient,
-  resolveQuarterlyComparisonSources, verifyComparisonApprovalGate, verifyComparisonApprovalReceipt, verifyComparisonReport,
+  resolveQuarterlyComparisonSources, verifyComparisonApprovalGate, verifyComparisonApprovalReceipt, verifyComparisonReport, verifyStableReleaseApproval,
   verifyQuarterlySourceIdentity,
   verifySignedTagPair } from '../../../tools/release/release-evidence.mjs';
 
@@ -75,7 +75,7 @@ function apiData(fixture, approvalBody = '{}', overrides = {}) {
   const workflowId = 73, runId = 12, artifactId = 44;
   const workflow = { id: workflowId, path: RC_WORKFLOW };
   const run = { id: runId, workflow_id: workflowId, run_attempt: 1, status: 'completed', conclusion: 'success', event: 'push', path: RC_WORKFLOW,
-    repository: { full_name: repository }, head_repository: { full_name: repository }, head_sha: commit, head_branch: rcTag };
+    repository: { full_name: repository }, head_repository: { full_name: repository }, head_sha: commit, head_branch: rcTag, updated_at: '2026-10-19T17:00:00Z' };
   const jobs = [{ name: 'Validate release candidate', run_id: runId, head_sha: commit, runner_name: 'runner-1', status: 'completed', conclusion: 'success',
     steps: RC_STEPS.map(name => ({ name, status: 'completed', conclusion: 'success' })) }];
   const artifact = { id: artifactId, name: `release-candidate-${commit}-${runId}-1`, expired: false,
@@ -89,7 +89,7 @@ function apiData(fixture, approvalBody = '{}', overrides = {}) {
 
 function clientFor(fixture, data, calls = []) {
   return createGithubApiEvidenceClient({
-    getAuthenticatedIdentity(input) { calls.push(['identity', input]); return { id: 77, login: 'release-app', type: 'Bot' }; },
+    getAuthenticatedIdentity(input) { calls.push(['identity', input]); return { id: 77, login: 'release-app', type: 'Bot', server_date: '2026-10-20T00:00:00Z' }; },
     getWorkflow(input) { calls.push(['workflow', input]); return data.workflow; },
     getRun(input) { calls.push(['run', input]); return data.run; },
     listJobs(input) { calls.push(['jobs', input]); return data.jobsPage ?? { items: data.jobs, complete: true, totalCount: data.jobs.length }; },
@@ -459,7 +459,9 @@ z.close()`, fixture.directory, fixture.archivePath], { timeout: 30000, killSigna
   it('takes approval issuer identity from the authenticated API envelope and binds every regression disposition', async () => {
     const fixture = candidateFixture(), comparison = comparisonFixture(fixture.candidate, { regression: true });
     const approval = candidateApproval(fixture, comparison.binding);
-    const evidence = await acquire(fixture, apiData(fixture, JSON.stringify(approval)));
+    const data = apiData(fixture, JSON.stringify(approval));
+    data.approvalsPage = { items: [data.approval, { ...data.approval, id: 902, body: JSON.stringify({ schema: 'aiwg-stable-release-approval/v1' }) }], complete: true, totalCount: 2 };
+    const evidence = await acquire(fixture, data);
     const verified = verifyComparisonApprovalReceipt({ evidence, reportBindings: [comparison.binding],
       policy: { allowedApprovalIssuerIds: [1159087] } });
     expect(verified.issuer).toEqual({ id: 1159087, login: 'jmagly', type: 'User' });
@@ -467,6 +469,29 @@ z.close()`, fixture.directory, fixture.archivePath], { timeout: 30000, killSigna
     expect(comparison.binding.regressions[0].repetition).toBeGreaterThan(0);
     expect(() => verifyComparisonApprovalReceipt({ evidence: JSON.parse(JSON.stringify(evidence)),
       reportBindings: [comparison.binding], policy: { allowedApprovalIssuerIds: [1159087] } })).toThrow(/acquired GitHub evidence/);
+  });
+
+  it('authenticates an exact stable approval without comparison reports', async () => {
+    const fixture = candidateFixture(), comparison = comparisonFixture(fixture.candidate);
+    const candidate = candidateApproval(fixture, comparison.binding).candidate;
+    candidate.validation_profile = 'legacy-full-v1';
+    delete candidate.stable_tag; delete candidate.stable_tag_object_sha;
+    const body = JSON.stringify({ schema: 'aiwg-stable-release-approval/v1', repository: 'jmagly/aiwg', decision: 'approve', policy_sha256: '9'.repeat(64), candidate });
+    const data = apiData(fixture, body);
+    data.approvalsPage = { items: [data.approval, { ...data.approval, id: 902, body: JSON.stringify(candidateApproval(fixture, comparison.binding)) }], complete: true, totalCount: 2 };
+    const evidence = await acquire(fixture, data);
+    expect(verifyStableReleaseApproval({ evidence, allowedIssuerIds: [1159087], policySha256: '9'.repeat(64), bodySha256: textHash(body) }).issuer.id).toBe(1159087);
+    expect(() => verifyStableReleaseApproval({ evidence, allowedIssuerIds: [999], policySha256: '9'.repeat(64), bodySha256: textHash(body) })).toThrow();
+    expect(() => verifyStableReleaseApproval({ evidence, allowedIssuerIds: [1159087], policySha256: '9'.repeat(64), bodySha256: 'f'.repeat(64) })).toThrow();
+    expect(() => verifyStableReleaseApproval({ evidence: JSON.parse(JSON.stringify(evidence)), allowedIssuerIds: [1159087], policySha256: '9'.repeat(64), bodySha256: textHash(body) })).toThrow();
+    const altered = JSON.parse(body); altered.candidate.commit = 'f'.repeat(40);
+    const wrong = await acquire(fixture, apiData(fixture, JSON.stringify(altered)));
+    expect(() => verifyStableReleaseApproval({ evidence: wrong, allowedIssuerIds: [1159087], policySha256: '9'.repeat(64), bodySha256: textHash(JSON.stringify(altered)) })).toThrow();
+    expect(() => verifyStableReleaseApproval({ evidence, allowedIssuerIds: [1159087], policySha256: '8'.repeat(64), bodySha256: textHash(body) })).toThrow();
+    const stale = apiData(fixture, body); stale.approval.updated_at = '2026-10-19T16:00:00Z';
+    const staleEvidence = await acquire(fixture, stale);
+    expect(() => verifyStableReleaseApproval({ evidence: staleEvidence, allowedIssuerIds: [1159087], policySha256: '9'.repeat(64), bodySha256: textHash(body) })).toThrow(/timestamp/);
+
   });
 
   it('binds quarterly approval to the exact current attestation and candidate validation profile', async () => {
