@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { syntheticSecrets } from '../../fixtures/sessions/redaction-secrets.js';
+import { multilineSecrets, multilineSecretValue, strictScannerPatterns, syntheticSecrets } from '../../fixtures/sessions/redaction-secrets.js';
 import { median } from '../../helpers/cli-perf-policy.js';
 import { SessionRejectionDetailSchema } from '../../../src/sessions/contracts.js';
 import {
@@ -189,6 +189,59 @@ describe('session source and content policy', () => {
     const result = redactSessionText(value);
     expect(result.text).toBe(`[REDACTED:${classification}]`);
     expect(result.decisions[classification]).toBe(1);
+  });
+
+  it.each(multilineSecrets)('redacts bounded multiline %s and counts it (%#)', (classification, value) => {
+    expect(redactSessionText(value)).toMatchObject({
+      text: `[REDACTED:${classification}]`, decisions: { [classification]: 1 },
+    });
+  });
+
+  it.each(['password', 'token', 'secret', 'api_key', 'MY_API_TOKEN'])('preserves multiline %s prose and bounds the gap', key => {
+    const separator = key === 'MY_API_TOKEN' ? '=' : ':';
+    for (const value of ['- description', 'ordinary prose', '123456789012345678901234',
+      'abcdefghijklmnopqrstuvwxyz', '```sh\necho fixture\n```', '`unterminated', '"unterminated']) {
+      const text = `${key}${separator}\n  ${value}`;
+      expect(redactSessionText(text)).toMatchObject({ text, decisions: {} });
+    }
+    const text = `${key}${separator}\n\n\n${multilineSecretValue}`;
+    expect(redactSessionText(text).text).toBe(text);
+    expect(redactSessionText('token budget:\nnone').text).toBe('token budget:\nnone');
+  });
+
+  it.each(['"', "'", '`'])('accepts short quoted multiline values with %s delimiters', quote => {
+    for (const [key, classification] of [['password:', 'credential'], ['MY_API_TOKEN=', 'environment-assignment']]) {
+      expect(redactSessionText(`${key}\n  ${quote}fake ${quote === '"' ? '\\"' : ''}value${quote}`))
+        .toMatchObject({ text: `[REDACTED:${classification}]`, decisions: { [classification]: 1 } });
+    }
+  });
+
+  it('preserves a prose fence that needs scanner-policy adjudication', () => {
+    // Masked scanner hit: token:<LF><BACKTICK x 3><letters x 10>.
+    const text = 'token:\n```typescript\nconst example = true;\n```';
+    expect(redactSessionText(text)).toMatchObject({ text, decisions: {} });
+    expect(strictScannerPatterns[0].test(text)).toBe(true);
+  });
+
+  it.each(['Bearer', 'Authorization:', 'Cookie:', 'Set-Cookie:', 'https://fixture-user:'])
+    ('bounds the newline gap for %s', prefix => {
+      const text = `${prefix}\n\n\n${multilineSecretValue}${prefix.startsWith('https') ? '@localhost/path' : ''}`;
+      expect(redactSessionText(text)).toMatchObject({ text, decisions: {} });
+    });
+
+  it('redacts a folded authorization header and a next-line cookie assignment', () => {
+    expect(redactSessionText(`Authorization:\r\n\tBearer\r\n  ${multilineSecretValue}`))
+      .toMatchObject({ text: '[REDACTED:authorization]', decisions: { authorization: 1, 'bearer-token': 1 } });
+    expect(redactSessionText(`Set-Cookie:\n  session=${multilineSecretValue}; Path=/; HttpOnly`))
+      .toMatchObject({ text: '[REDACTED:cookie]', decisions: { cookie: 1 } });
+  });
+
+  it('retains same-line unterminated quote coverage', () => {
+    for (const [key, classification] of [['password=', 'credential'], ['MY_API_TOKEN=', 'environment-assignment']]) {
+      expect(redactSessionText(`${key}"${multilineSecretValue}`).text).toBe(`[REDACTED:${classification}]`);
+    }
+    expect(redactSessionText(`MY_API_TOKEN=${multilineSecretValue}\\"fake-suffix`).text)
+      .toBe('[REDACTED:environment-assignment]');
   });
 
   it('redacts JWTs with large claims and lower-case AWS configuration assignments', () => {

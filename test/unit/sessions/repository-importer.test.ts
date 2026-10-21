@@ -28,7 +28,7 @@ import {
   type SessionSource,
   type SessionSourceAdapter,
 } from '../../../src/sessions/index.js';
-import { syntheticSecrets } from '../../fixtures/sessions/redaction-secrets.js';
+import { multilineSecrets, multilineSecretValue, strictScannerPatterns, syntheticSecrets } from '../../fixtures/sessions/redaction-secrets.js';
 import { describeWithSqlite } from '../../helpers/sqlite.js';
 // File-owned temp dirs are removed after the file, even when a test fails (#3018).
 import { mkdtemp } from '../../helpers/temp-dir.js';
@@ -93,12 +93,31 @@ describeWithSqlite('transactional session repository and importer', () => {
     const canary = 'redaction-canary-metadata';
     const nativeSessionId = `session-${canary}`;
     const sessionId = stableSessionId('generic', source.sourceId, nativeSessionId);
+    const expectedDecisions: Record<string, number> = {
+      'provider-token': 12, credential: 1, 'environment-assignment': 1,
+    };
+    for (const [classification] of multilineSecrets) {
+      expectedDecisions[classification] = (expectedDecisions[classification] ?? 0) + 1;
+    }
+    const scanStrings = (value: unknown): void => {
+      if (value && typeof value === 'object') {
+        for (const [key, item] of Object.entries(value)) { scanStrings(key); scanStrings(item); }
+      } else if (typeof value === 'string') {
+        for (const pattern of strictScannerPatterns) expect(pattern.test(value), pattern.source).toBe(false);
+        // SQLite JSON columns must be decoded to inspect actual line breaks.
+        let decoded: unknown;
+        try { decoded = JSON.parse(value); } catch { return; }
+        if (decoded !== value) scanStrings(decoded);
+      }
+    };
     const noSecrets = (value: unknown): void => {
+      scanStrings(value);
       const text = typeof value === 'string' ? value : JSON.stringify(value);
       expect(text).not.toContain(canary);
       for (const [, secret] of syntheticSecrets) expect(text).not.toContain(secret);
       expect(text).not.toContain('FAKEPRIVATEKEYBODY');
       expect(text).not.toContain('fake-netrc-value');
+      expect(text).not.toContain(multilineSecretValue);
     };
     try {
       const receipts = await new IncrementalSessionImporter(repository).import({
@@ -111,7 +130,7 @@ describeWithSqlite('transactional session repository and importer', () => {
           kind: 'tool-call', role: 'user', participant: canary, toolName: canary,
           toolCallId: canary, model: canary, entities: [canary], extractionState: canary,
           text: 'Decision: retain safe prose ' + syntheticSecrets[0][1] + '\n'
-            + syntheticSecrets.slice(1).map(([, value]) => value).join('\n'),
+            + [...syntheticSecrets.slice(1), ...multilineSecrets].map(([, value]) => value).join('\n'),
           rawReference: { locatorClass: canary, sequence: 0 },
           extensions: { [canary]: { name: canary }, status: canary,
             items: [{ name: canary }], dataBytes: [...Buffer.from(canary)] },
@@ -126,8 +145,12 @@ describeWithSqlite('transactional session repository and importer', () => {
         'provider-token', 'private-key', 'environment-assignment', 'fixture-credential',
       ]));
       expect(event.extensions['native.redaction']).toMatchObject({
-        decisions: expect.arrayContaining([{ classification: 'provider-token', count: 12 }]),
+        decisions: expect.arrayContaining(Object.entries(expectedDecisions)
+          .map(([classification, count]) => ({ classification, count }))),
       });
+      expect(raw.prepare('SELECT c1 FROM session_event_fts_content WHERE c0=?').get(event.eventId).c1)
+        .toBe(event.searchableText);
+      scanTables(); // Verify the fresh import before any reindex can repair derived data.
       expect(repository.search({ query: 'FAKE00000000000000000000', workspaceId: 'workspace-1', limit: 10 }).items).toHaveLength(0);
       expect(repository.search({ query: '"redaction-canary-metadata"', workspaceId: 'workspace-1', limit: 10 }).items).toHaveLength(0);
       for (const [, secret] of syntheticSecrets) {
@@ -170,14 +193,14 @@ describeWithSqlite('transactional session repository and importer', () => {
       const selection = buildSessionExportPlan(repository, { workspaceId: 'workspace-1', sessionIds: [sessionId] });
       noSecrets(selection.plan);
       noSecrets(buildSessionAiwgFortemiIndexExport('workspace-1', selection.sessions, selection.eventsBySessionId));
-      const scanTables = (): void => {
+      function scanTables(): void {
         for (const { name } of raw.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()) {
           const rows = raw.prepare(`SELECT * FROM "${String(name).replaceAll('"', '""')}"`).all();
           for (const row of rows) for (const value of Object.values(row)) {
             noSecrets(Buffer.isBuffer(value) ? value.toString('utf8') : value);
           }
         }
-      };
+      }
       scanTables();
       const preview = repository.previewPurge(sessionId, 'workspace-1');
       repository.purgeSession({ preview, actorClass: canary, reasonCode: canary,
