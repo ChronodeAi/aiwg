@@ -257,6 +257,9 @@ export function redactSessionText(input: string): RedactionResult {
   };
   let text = redactJwts(redactPrivateKeys(input, mark), mark);
   for (const [classification, pattern] of SECRET_PATTERNS) {
+    // Every email match requires an at-sign. Avoid costly bounded local-part
+    // backtracking on large records containing only email-shaped near matches.
+    if (classification === 'email' && !text.includes('@')) continue;
     text = text.replace(pattern, () => mark(classification));
   }
   const classes = Object.keys(decisions).sort();

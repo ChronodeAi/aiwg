@@ -145,6 +145,13 @@ describe('session source and content policy', () => {
     expect(result.sensitivity).toBe('sensitive');
   });
 
+  it('still redacts email after long email-shaped prose without an at-sign', () => {
+    const near = 'a.'.repeat(2_048);
+    expect(redactSessionText(near).text).toBe(near);
+    expect(redactSessionText(`${near} owner@example.com`).text)
+      .toBe(`${near} [REDACTED:email]`);
+  });
+
   it('recursively sanitizes native attributes with typed bounded markers', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
