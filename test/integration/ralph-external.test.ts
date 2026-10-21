@@ -152,6 +152,79 @@ describe('External Ralph Loop Integration', () => {
       expect(finalState?.filesModified).toContain('final.ts');
     });
 
+    it('runs the PID controller from iteration 2 and records its advisory decision', { timeout: 10000 }, async () => {
+      const orchestrator = new Orchestrator(testDir);
+      let callCount = 0;
+
+      vi.spyOn(orchestrator.sessionLauncher, 'launch').mockResolvedValue({
+        exitCode: 0,
+        killed: false,
+        pid: 12345,
+      });
+
+      // Incomplete twice, complete on the third iteration.
+      vi.spyOn(orchestrator.outputAnalyzer, 'analyze').mockImplementation(async () => {
+        callCount++;
+        if (callCount < 3) {
+          return {
+            completed: false,
+            success: null,
+            failureClass: null,
+            completionPercentage: callCount * 30,
+            shouldContinue: true,
+            learnings: `Progress in iteration ${callCount}`,
+            artifactsModified: [],
+            blockers: [],
+            nextApproach: 'Continue implementation',
+          };
+        }
+        return {
+          completed: true,
+          success: true,
+          failureClass: null,
+          completionPercentage: 100,
+          shouldContinue: false,
+          learnings: 'All done',
+          artifactsModified: [],
+          blockers: [],
+          nextApproach: '',
+        };
+      });
+
+      vi.spyOn(orchestrator.stateManager, 'setCurrentPid').mockImplementation(() => {});
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await orchestrator.execute({
+        objective: 'PID-controlled task',
+        completionCriteria: 'All tests pass',
+        maxIterations: 5,
+        enablePIDControl: true,
+        enableOverseer: false,
+        enableSemanticMemory: false,
+        crossTask: false,
+        enableAnalytics: false,
+        enableBestOutput: false,
+        enableEarlyStopping: false,
+        enableClaudeIntelligence: false,
+        enableSnapshots: false,
+        enableCheckpoints: false,
+      });
+
+      expect(errors).not.toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      expect(result.iterations).toBe(3);
+
+      const finalState = orchestrator.stateManager.load();
+      expect(finalState?.iterations.map((iteration: { status: string }) => iteration.status))
+        .toEqual(['incomplete', 'incomplete', 'completed']);
+      // No previous iteration to judge before the first session.
+      expect(finalState?.iterations[0].controlSignals).toBeNull();
+      for (const iteration of finalState!.iterations.slice(1)) {
+        expect(['continue', 'adjust', 'pause', 'abort']).toContain(iteration.controlSignals.action);
+      }
+    });
+
     it('should stop when max iterations reached', { timeout: 10000 }, async () => {
       const orchestrator = new Orchestrator(testDir);
 

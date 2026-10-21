@@ -44,7 +44,6 @@ import { RecoveryEngine } from './recovery-engine.mjs';
 // ========== EPIC #26 COMPONENTS ==========
 // PID Control Layer (#23)
 import { PIDController } from './pid-controller.mjs';
-import { GainScheduler } from './gain-scheduler.mjs';
 import { MetricsCollector } from './metrics-collector.mjs';
 import { ControlAlarms } from './control-alarms.mjs';
 
@@ -143,7 +142,6 @@ export class Orchestrator {
     // ========== EPIC #26 COMPONENTS ==========
     // PID Control Layer
     this.pidController = null;
-    this.gainScheduler = null;
     this.metricsCollector = null;
     this.controlAlarms = null;
 
@@ -415,13 +413,13 @@ export class Orchestrator {
 
     // PID Control Layer
     if (state.config.enablePIDControl) {
+      // Iteration metrics for the overseer. The PID controller keeps its own
+      // collector, gain scheduler and alarms.
       this.metricsCollector = new MetricsCollector({
         windowSize: 5,
         integralDecay: 0.9,
         noiseThreshold: 0.05,
       });
-
-      this.gainScheduler = new GainScheduler();
 
       this.pidController = new PIDController({
         kp: 0.5,  // Initial proportional gain
@@ -429,6 +427,13 @@ export class Orchestrator {
         kd: 0.3,  // Initial derivative gain
         outputMin: 0,
         outputMax: 1,
+      });
+      // process() refuses to run before initialize(). On resume the controller
+      // is rebuilt here and starts a fresh metrics window.
+      this.pidController.initialize({
+        objective: state.objective,
+        completionCriteria: state.completionCriteria,
+        maxIterations: state.maxIterations,
       });
 
       this.controlAlarms = new ControlAlarms({
@@ -739,27 +744,16 @@ export class Orchestrator {
             || `Re-run the completion check (${state.completionCriteria}); an unchanged result signals the approach is exhausted.`,
         };
 
-        // PID Controller: Compute control signals
+        // PID Controller: advisory control decision from the previous iteration.
+        // It is recorded on the iteration and handed to the prompt generator;
+        // it never stops or pauses the loop.
         let controlSignals = null;
-        if (this.pidController && this.metricsCollector && state.currentIteration > 1) {
-          // Extract metrics from last iteration
-          const metrics = this.metricsCollector.extractIterationMetrics(lastIteration);
-          const pidMetrics = this.metricsCollector.computePIDMetrics(metrics);
-
-          // Adjust gains based on situation
-          if (this.gainScheduler && assessment) {
-            const adjustedGains = this.gainScheduler.adjustGains({
-              phase: assessment.phase || 'normal',
-              volatility: pidMetrics.derivative,
-              errorMagnitude: pidMetrics.proportional,
-            });
-            this.pidController.updateGains(adjustedGains);
-          }
-
-          // Compute control output
-          controlSignals = this.pidController.compute(pidMetrics.proportional);
-
-          console.log(`[External Ralph] PID control: P=${pidMetrics.proportional.toFixed(3)}, output=${controlSignals.output.toFixed(3)}`);
+        if (this.pidController && state.currentIteration > 1) {
+          controlSignals = this.pidController.process(lastIteration, {
+            currentIteration: state.currentIteration,
+            maxIterations: state.maxIterations,
+          });
+          console.log(`[External Ralph] PID control: action=${controlSignals.action}, urgency=${controlSignals.urgency}`);
         }
 
         // ValidationAgent: Pre-iteration validation

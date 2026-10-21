@@ -51,6 +51,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- With PID control enabled (the default), the ralph loop no longer fails every
+  iteration after the first with "this.metricsCollector.computePIDMetrics is not
+  a function". The orchestrator initializes its `PIDController` and records the
+  controller's decision on each iteration as advisory `controlSignals`; the
+  decision never stops or pauses the loop.
 - OMP ralph sessions receive `ANTHROPIC_OAUTH_TOKEN` and OMP's auth-broker client
   variables (`OMP_AUTH_BROKER_URL`, `OMP_AUTH_BROKER_TOKEN`,
   `OMP_AUTH_BROKER_SNAPSHOT_TTL_MS`, `OMP_AUTH_BROKER_SNAPSHOT_CACHE`,
