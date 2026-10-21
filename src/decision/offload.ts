@@ -160,7 +160,9 @@ async function bounded<T>(work: Promise<T>, timeoutMs: number): Promise<T | type
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<typeof TIMED_OUT>(resolve => {
     timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
-    timer.unref?.();
+    // Keep this timer referenced: it is the only liveness guarantee when an
+    // injected resolver or filesystem promise never settles in a standalone
+    // CLI process. Unref would let Node exit before the ask can run.
   });
   try {
     const outcome = await Promise.race([work, timeout]);

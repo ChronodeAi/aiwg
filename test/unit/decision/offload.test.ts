@@ -1,6 +1,9 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DecisionAskInput, DecisionAskResult } from '../../../src/decision/ask.js';
 import { DecisionAskUsageError } from '../../../src/decision/ask.js';
@@ -26,6 +29,7 @@ const fallback: DecisionAskResult = {
 };
 
 const roots: string[] = [];
+const execFileAsync = promisify(execFile);
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
@@ -148,6 +152,31 @@ describe('decision offload checkpoint', () => {
     expect(ask).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ outcome: 'answered', result: answered, attemptRecorded: null, opportunityRecorded: null,
       opportunity: { provider: 'unknown', ledgerRecorded: null } });
+  });
+
+  it('keeps deadline timers alive in a standalone process with no Vitest handles', async () => {
+    const projectRoot = await root();
+    const moduleUrl = pathToFileURL(path.resolve('src/decision/offload.ts')).href;
+    const script = `
+      import { runDecisionOffloadCheckpoint } from ${JSON.stringify(moduleUrl)};
+      const answer = { schema:'aiwg-decision-ask/v1', status:'answered', answer:true, confidence:0.9,
+        fallback:null, reason:'none', model:'fixture', usage:null, latencyMs:1 };
+      const base = { transport:'cli', projectRoot:${JSON.stringify(projectRoot)}, caller:'control:liveness',
+        explicitSessionId:'child', env:{}, ask:async()=>answer, recordAsk:async()=>null, warn:()=>{} };
+      const stalled = async () => new Promise(() => {});
+      const attribution = await runDecisionOffloadCheckpoint({ question:'q', mode:{kind:'yes-no'} },
+        { ...base, resolveProvider:stalled, providerTimeoutMs:25, appendOpportunity:async()=>true });
+      const journal = await runDecisionOffloadCheckpoint({ question:'q', mode:{kind:'yes-no'} },
+        { ...base, resolveProvider:async()=>({provider:'codex',source:'explicit',candidates:['codex'],reason:'fixture'}),
+          providerTimeoutMs:25, appendOpportunity:stalled, opportunityTimeoutMs:25 });
+      process.stdout.write(JSON.stringify({ attribution:attribution.outcome, provider:attribution.opportunity.provider,
+        journal:journal.outcome, attemptRecorded:journal.attemptRecorded, opportunityRecorded:journal.opportunityRecorded }));
+    `;
+    const { stdout } = await execFileAsync(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', script], {
+      cwd: process.cwd(), timeout: 5_000,
+    });
+    expect(JSON.parse(stdout)).toEqual({ attribution: 'answered', provider: 'unknown', journal: 'answered',
+      attemptRecorded: null, opportunityRecorded: null });
   });
 
   it('keeps a completed answer when injected recording callbacks reject', async () => {
