@@ -51,6 +51,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- With semantic memory enabled (the default), a verified completing iteration no
+  longer fails with "this.learningExtractor.extract is not a function", which
+  discarded the completion and ran the loop to its iteration limit. Learnings now
+  go through `MemoryPromotion.processPipeline` (extract, validate, promote) and the
+  loop logs the pipeline counts.
 - On OMP, the ralph loop's Claude tier names (`haiku`, `sonnet`, `opus`, matched
   exactly and in any case) become OMP role selectors (`@smol`, `@default`,
   `@slow`) that the operator configures under `modelRoles` in OMP's `config.yml`.

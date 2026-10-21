@@ -152,6 +152,60 @@ describe('External Ralph Loop Integration', () => {
       expect(finalState?.filesModified).toContain('final.ts');
     });
 
+    it('promotes learnings from a verified completion and ends after that iteration', { timeout: 10000 }, async () => {
+      const orchestrator = new Orchestrator(testDir);
+
+      const launch = vi.spyOn(orchestrator.sessionLauncher, 'launch').mockResolvedValue({
+        exitCode: 0,
+        killed: false,
+        pid: 12345,
+      });
+
+      vi.spyOn(orchestrator.outputAnalyzer, 'analyze').mockResolvedValue({
+        completed: true,
+        success: true,
+        failureClass: null,
+        completionPercentage: 100,
+        shouldContinue: false,
+        progressMade: true,
+        learnings: 'Implemented the change step by step',
+        artifactsModified: ['src/feature.ts'],
+        blockers: [],
+        nextApproach: '',
+      });
+
+      vi.spyOn(orchestrator.stateManager, 'setCurrentPid').mockImplementation(() => {});
+      const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await orchestrator.execute({
+        objective: 'Implement the feature',
+        completionCriteria: 'Feature tests pass',
+        maxIterations: 3,
+        enablePIDControl: false,
+        enableOverseer: false,
+        enableSemanticMemory: true,
+        crossTask: false,
+        enableAnalytics: false,
+        enableBestOutput: false,
+        enableEarlyStopping: false,
+        enableClaudeIntelligence: false,
+        enableSnapshots: false,
+        enableCheckpoints: false,
+      });
+
+      expect(errors).not.toHaveBeenCalled();
+      expect(launch).toHaveBeenCalledTimes(1);
+      expect(result.success).toBe(true);
+      expect(result.iterations).toBe(1);
+      expect(logs).toHaveBeenCalledWith(expect.stringMatching(/Learnings: extracted=\d+, validated=\d+, rejected=\d+, promoted=\d+, skipped=\d+/));
+
+      const finalState = orchestrator.stateManager.load();
+      expect(finalState?.status).toBe('completed');
+      expect(finalState?.iterations.map((iteration: { status: string }) => iteration.status)).toEqual(['completed']);
+    });
+
     it('runs the PID controller from iteration 2 and records its advisory decision', { timeout: 10000 }, async () => {
       const orchestrator = new Orchestrator(testDir);
       let callCount = 0;

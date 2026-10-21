@@ -1332,22 +1332,19 @@ export class Orchestrator {
           });
         }
 
-        // LearningExtractor & MemoryPromotion
+        // LearningExtractor & MemoryPromotion: extract learnings from the loop
+        // so far, stage and validate them, then promote the validated ones.
         if (this.learningExtractor && this.memoryPromotion && verificationPassed) {
           console.log('[External Ralph] Extracting and promoting learnings...');
-          const learnings = await this.learningExtractor.extract({
-            iteration: state.currentIteration,
-            analysis,
-            strategy,
+          const pipeline = this.memoryPromotion.processPipeline({
+            loopId: state.loopId,
+            objective: state.objective,
+            // The extractor's iteration and complexity estimates read this.
+            currentIteration: state.currentIteration,
+            iterations: state.iterations,
             outcome: 'success',
           });
-
-          if (learnings.length > 0) {
-            await this.memoryPromotion.promote({
-              learnings,
-              source: `loop-${state.loopId}-iteration-${state.currentIteration}`,
-            });
-          }
+          console.log(`[External Ralph] Learnings: extracted=${pipeline.extracted}, validated=${pipeline.validated}, rejected=${pipeline.rejected}, promoted=${pipeline.promoted}, skipped=${pipeline.skipped}`);
         }
 
         // ========== CHECK EARLY STOPPING ==========
