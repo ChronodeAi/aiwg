@@ -22,6 +22,13 @@ export interface DecisionConfig {
       output_tokens?: number;
     };
   };
+  /** Offline, advisory adoption reporting. These thresholds never block work. */
+  offload_report?: {
+    window_hours?: number;
+    minimum_eligible?: number;
+    minimum_attempt_rate?: number;
+    repeated_fallbacks?: number;
+  };
 }
 
 export interface DecisionEnablementOptions {
@@ -39,8 +46,26 @@ export function validateDecisionConfig(value: unknown): string[] {
   if (value === undefined) return [];
   if (!value || typeof value !== 'object' || Array.isArray(value)) return ['decision must be an object'];
   const errors: string[] = [];
-  const { enabled, ask } = value as DecisionConfig;
+  const { enabled, ask, offload_report: report } = value as DecisionConfig;
   if (enabled !== undefined && typeof enabled !== 'boolean') errors.push('decision.enabled must be a boolean');
+  if (report !== undefined) {
+    if (!report || typeof report !== 'object' || Array.isArray(report)) errors.push('decision.offload_report must be an object');
+    else {
+      for (const key of ['window_hours', 'minimum_eligible', 'repeated_fallbacks'] as const) {
+        const configured = report[key];
+        if (configured !== undefined && (!Number.isSafeInteger(configured) || configured < (key === 'minimum_eligible' ? 0 : 1))) {
+          errors.push(`decision.offload_report.${key} must be a ${key === 'minimum_eligible' ? 'non-negative' : 'positive'} safe integer`);
+        }
+      }
+      if (report.minimum_attempt_rate !== undefined && (typeof report.minimum_attempt_rate !== 'number'
+        || !Number.isFinite(report.minimum_attempt_rate) || report.minimum_attempt_rate < 0 || report.minimum_attempt_rate > 1)) {
+        errors.push('decision.offload_report.minimum_attempt_rate must be a probability from 0 to 1');
+      }
+      for (const key of Object.keys(report)) if (!['window_hours', 'minimum_eligible', 'minimum_attempt_rate', 'repeated_fallbacks'].includes(key)) {
+        errors.push(`unknown decision.offload_report.${key}`);
+      }
+    }
+  }
   if (ask === undefined) return errors;
   if (!ask || typeof ask !== 'object' || Array.isArray(ask)) return [...errors, 'decision.ask must be an object'];
   const sampling: string[] = [];

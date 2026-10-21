@@ -13,7 +13,6 @@
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { DeployedArtifactCounts, InstalledEntry } from './aiwg-config.js';
 import { userScopeConfigPath } from '../cli/scope-resolver.js';
@@ -89,6 +88,34 @@ export function emptyUserRegistry(): UserRegistry {
   return { version: '1', installed: {} };
 }
 
+export interface UserRegistryInspection {
+  registry: UserRegistry;
+  status: 'available' | 'absent' | 'unreadable';
+}
+
+/**
+ * Read the user registry while preserving whether empty means absent or
+ * unreadable. Callers making adoption/readiness claims must not collapse a
+ * corrupt or inaccessible registry into proof that an addon is missing.
+ */
+export async function inspectUserRegistry(): Promise<UserRegistryInspection> {
+  const registryFile = userRegistryPath();
+  try {
+    const raw = await readFile(registryFile, 'utf-8');
+    const parsed = JSON.parse(raw) as UserRegistry;
+    if (!parsed.installed || typeof parsed.installed !== 'object' || Array.isArray(parsed.installed)) {
+      throw new Error('installed must be an object');
+    }
+    return { registry: { version: '1', installed: parsed.installed }, status: 'available' };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { registry: emptyUserRegistry(), status: 'absent' };
+    }
+    process.stderr.write(`[user-registry] failed to parse ${registryFile}: ${err instanceof Error ? err.message : String(err)} — using empty registry\n`);
+    return { registry: emptyUserRegistry(), status: 'unreadable' };
+  }
+}
+
 /**
  * Read the per-user registry. Returns an empty registry when the file doesn't
  * exist — that's the normal case before the operator's first `aiwg use --scope
@@ -96,19 +123,7 @@ export function emptyUserRegistry(): UserRegistry {
  * warning (the broken file is preserved so the operator can inspect it).
  */
 export async function readUserRegistry(): Promise<UserRegistry> {
-  const path = userRegistryPath();
-  if (!existsSync(path)) return emptyUserRegistry();
-  try {
-    const raw = await readFile(path, 'utf-8');
-    const parsed = JSON.parse(raw) as UserRegistry;
-    if (!parsed.installed || typeof parsed.installed !== 'object') {
-      return emptyUserRegistry();
-    }
-    return { version: '1', installed: parsed.installed };
-  } catch (err) {
-    process.stderr.write(`[user-registry] failed to parse ${path}: ${err instanceof Error ? err.message : String(err)} — using empty registry\n`);
-    return emptyUserRegistry();
-  }
+  return (await inspectUserRegistry()).registry;
 }
 
 /**

@@ -120,6 +120,10 @@ large; both commands tolerate a missing file.
 
 ## Caller tags
 
+After a checkpoint or compaction, re-read `aiwg show rule decision-offload`
+when decision ask is enabled. Apply it at the next eligible bounded decision;
+recorded guidance alone does not imply an ask call occurred.
+
 Orchestration skills/rules pass `--caller <skill-or-rule>:<checkpoint>` at
 each bounded-decision point so `aiwg decision stats --group-by caller`
 reports adoption per checkpoint. Add a row here whenever a new checkpoint is

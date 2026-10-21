@@ -21,6 +21,12 @@ export interface JevCredentialLookupResult {
   enabled: boolean;
 }
 
+export interface JevCredentialInspection {
+  configured: boolean | null;
+  enabled: boolean | null;
+  source: 'env' | 'file' | 'none' | 'unknown';
+}
+
 export interface JevCredentialOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -98,6 +104,17 @@ export async function lookupJevCredential(options: JevCredentialOptions = {}): P
   };
   if (!fileRecord) return null;
   return { source: 'file', token: fileRecord.token, region: fileRecord.region, ...(fileRecord.endpoint ? { endpoint: fileRecord.endpoint } : {}), enabled };
+}
+
+/** Offline metadata-only inspection. Never probes Jev and never returns credential bytes. */
+export async function inspectJevCredential(options: JevCredentialOptions = {}): Promise<JevCredentialInspection> {
+  try {
+    const credential = await lookupJevCredential(options);
+    if (!credential) return { configured: false, enabled: false, source: 'none' };
+    return { configured: true, enabled: credential.enabled, source: credential.source };
+  } catch {
+    return { configured: null, enabled: null, source: 'unknown' };
+  }
 }
 
 export async function resolveJevCredentialBytes(logicalRef: string, options: JevCredentialOptions = {}): Promise<Uint8Array> {

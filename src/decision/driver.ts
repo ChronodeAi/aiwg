@@ -52,6 +52,24 @@ import {
 } from './ledger.js';
 export { DEFAULT_DECISION_SAVINGS_WEIGHTS, decisionSavingsWeights, type DecisionSavingsWeights, type DecisionSavingsMethod } from './savings.js';
 import { resolveActiveProvider } from '../cli/provider-resolution.js';
+export {
+  appendDecisionOpportunity,
+  buildDecisionOffloadSnapshot,
+  decisionOffloadCategory,
+  DECISION_OFFLOAD_CHECKPOINT_COVERAGE,
+  DECISION_OFFLOAD_EXECUTABLE_COVERAGE,
+  DECISION_OFFLOAD_SNAPSHOT_SCHEMA,
+  DECISION_OPPORTUNITY_SCHEMA,
+  runDecisionOffloadCheckpoint,
+} from './offload.js';
+export type {
+  BuildDecisionOffloadSnapshotOptions,
+  DecisionOffloadActivationEvidence,
+  DecisionOffloadCheckpointResult,
+  DecisionOffloadThresholds,
+  DecisionOpportunityRecord,
+  RunDecisionOffloadCheckpointOptions,
+} from './offload.js';
 import {
   assertDecisionEvaluateDispatcherConfig,
   decisionPatternPacks,

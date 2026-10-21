@@ -21,6 +21,7 @@
 
 import fs from 'fs/promises';
 import { importImpl } from '../_resolve-impl.mjs';
+import { collectDecisionOffloadReport, formatDecisionOffloadReport } from './decision-offload-report.mjs';
 import { existsSync } from 'fs';
 import http from 'http';
 import os from 'os';
@@ -356,6 +357,7 @@ async function buildWorkspaceStatus(projectRoot) {
   const pins = rulePinState(projectRoot, packageRoot);
   const result = {
     rule_pins: { rules: pins.rules, warnings: pins.warnings },
+    decisionOffload: await collectDecisionOffloadReport(projectRoot),
     workspace: {
       path: aiwgPath,
       exists: false,
@@ -745,6 +747,9 @@ async function workspaceStatus(args) {
 
     for (const rule of result.rule_pins.rules) console.log(`${rule.name}: pinned kernel (canonical ${rule.canonical_activation})`);
     for (const warning of result.rule_pins.warnings) console.log(warning);
+
+    for (const line of formatDecisionOffloadReport(result.decisionOffload)) console.log(line);
+    console.log('');
 
     // Workspace info
     console.log('Workspace:');

@@ -1,5 +1,18 @@
 # Jev Quickstart
 
+### Context and compaction
+
+When the decision-engine addon is explicitly installed and decision ask is
+enabled, regenerating provider context adds a short `Compact Instructions`
+pointer to the decision-offload rule. The generated pointer is an instruction,
+not evidence that a provider loaded it or invoked Jev. Regenerate context after
+changing the installation or enablement. The existing Claude SessionStart hook
+also emits the pointer for a compact event when its runtime is available and
+the same gate is enabled. Providers without that hook, including Codex, receive
+the generated instruction only; native loading and behavior require separate
+provider evidence. Fallback remains an ordinary local decision and never grants
+authorization.
+
 Jev offloads bounded decisions — a yes/no gate, a pick from N known options,
 or a 1–N severity or priority score — so the LLM does not spend reasoning on
 questions with a fixed answer shape. `aiwg decision ask` sends one question

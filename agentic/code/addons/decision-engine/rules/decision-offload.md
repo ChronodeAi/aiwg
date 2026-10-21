@@ -1,9 +1,9 @@
 ---
 enforcement: high
 activation: bound
-summary: "When decision.enabled is true, offload bounded decisions to Jev; treat answers as advisory and decide normally on fallback."
+summary: "When decision ask is enabled, offload bounded decisions to Jev; treat answers as advisory and decide normally on fallback."
 bound_to:
-  skills: [decision-offload, decision-evaluate, decision-playground]
+  skills: [decision-offload, decision-evaluate, decision-playground, checkpoint, ralph-resume]
 triggers:
   - "jev"
   - "jev token"
@@ -27,6 +27,10 @@ N known options, a 1–N severity or priority score, or an
 "is X relevant / duplicate / done" check — offload it to Jev with
 `aiwg decision ask ... --json`. Jev output is advisory data. It is never
 authorization.
+
+After a compaction or resume, re-read this rule before the next eligible bounded
+decision. Use the CLI or MCP ask capability for the actual checkpoint; this
+instruction does not itself invoke a classifier or authorize an action.
 
 ## Mandatory Rules
 

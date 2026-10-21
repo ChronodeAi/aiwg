@@ -15,6 +15,7 @@ import {
 } from '../../config/project-artifacts.js';
 import { renderTrackerProtocol, resolveTrackerAuthority } from '../../tracker/capability-protocol.js';
 import { readConfig, readGitRemoteUrls } from '../../tracker/project-inputs.js';
+import { DECISION_COMPACT_ANCHOR, inspectDecisionOffloadActivation } from '../../decision/offload-activation.js';
 import {
   buildExternalLinksSection,
   replaceOrAppendExternalLinksBlock,
@@ -68,6 +69,7 @@ export async function buildContextFinalizationBlock(
   }
 
   const trackerAuthority = resolveTrackerAuthority(config, remoteUrls);
+  const decision = await inspectDecisionOffloadActivation({ cwd: projectPath });
   const lines = [
     FINALIZATION_START,
     '## Context Finalization',
@@ -98,6 +100,7 @@ export async function buildContextFinalizationBlock(
     `- ${normalizedAiwgMdLabel} is the normalized project-local context entry point.`,
     '- Root `AIWG.md` is the generated cross-provider companion loaded through `AGENTS.md` and provider twins.',
     `- \`AGENTS.md\`, \`WARP.md\`, \`.hermes.md\`, and \`.github/copilot-instructions.md\` are provider-facing bridges, not replacements for ${normalizedAiwgMdLabel}.`,
+    ...(decision.shouldAnchor ? ['', '## Compact Instructions', '', DECISION_COMPACT_ANCHOR] : []),
     FINALIZATION_END,
     '',
   ];
