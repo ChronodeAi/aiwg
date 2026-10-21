@@ -38,3 +38,42 @@ test('private web release handoff follows mirrored evidence and carries signed-s
   assert.match(workflow, /after: "signed-release-and-attestations-published"/);
   assert.match(workflow, /httpMetadataIsNonAuthoritative: true/);
 });
+
+const PUBLIC_TOKEN_TO_MIRROR_OUTPUT = new Map([
+  ['$TARBALL', 'tarball'],
+  ['aiwg-cli-${VERSION}.tgz', 'cli_tarball'],
+  ['aiwg-cockpit-${VERSION}.tgz', 'cockpit_tarball'],
+  ['$TARBALL_SIG', 'tarball_sig'],
+  ['$MANIFEST', 'manifest'],
+  ['$MANIFEST_SIG', 'manifest_sig'],
+  ['$SBOM', 'sbom'],
+  ['$SBOM_SIG', 'sbom_sig'],
+  ['$INSTALLER', 'installer'],
+  ['$CHECKSUMS', 'checksums'],
+]);
+
+function section(source, start, end) {
+  const from = source.indexOf(start);
+  const to = source.indexOf(end, from + start.length);
+  assert.ok(from >= 0 && to > from, `missing section ${start}`);
+  return source.slice(from, to);
+}
+
+test('Gitea downloads, uploads and verifies the complete GitHub asset set', async () => {
+  const github = await readFile('.github/workflows/npm-publish.yml', 'utf8');
+  const mirror = await readFile('.gitea/workflows/upload-release-sigs.yml', 'utf8');
+  const publicUpload = section(github, 'gh release upload "$TAG"', '--clobber');
+  const download = section(mirror, '- name: Download signed assets from GitHub release', '- name: Look up Gitea release ID');
+  const upload = section(mirror, '- name: Upload signed assets to Gitea release', '- name: Verify release assets land on Gitea release');
+  const verify = section(mirror, '- name: Verify release assets land on Gitea release', '- name: Dispatch private web release pipeline');
+
+  for (const [publicToken, output] of PUBLIC_TOKEN_TO_MIRROR_OUTPUT) {
+    assert.ok(publicUpload.includes(publicToken), `GitHub upload must include ${publicToken}`);
+    const expression = `\${{ steps.tag.outputs.${output} }}`;
+    assert.ok(download.includes(expression), `mirror download must include ${output}`);
+    assert.ok(upload.includes(expression), `mirror upload must include ${output}`);
+    assert.ok(verify.includes(expression), `mirror verification must include ${output}`);
+  }
+  assert.match(verify, /COUNT=.*grep -cFx "\$f"/);
+  assert.match(verify, /expected exactly one \$f on Gitea release after upload/);
+});
