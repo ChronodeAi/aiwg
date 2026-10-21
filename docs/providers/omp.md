@@ -138,9 +138,13 @@ ceilings therefore apply as they do on Claude. OMP has no budget flag, so the
 launcher enforces the per-iteration `--budget` itself: it adds up the cost
 reported on OMP's JSON events while the session runs and stops the session once
 the total reaches the budget. If the message that crosses the budget is the
-final answer (not a tool call), that spend is already incurred, so the session
-is left to finish with its own exit code; it is stopped only if a new turn,
-message or billed event follows. A backend that reports no `cost.total` leaves
+final answer (stop reason `stop`), that spend is already incurred, so the
+session is left to finish with its own exit code. It is stopped if new work
+follows: a new turn or message, compaction or a retry, a billed event, or an
+`agent_end` that is not terminal (`isTerminal: false`, which OMP resumes from
+even when `yielded`). Any other stop reason, such as `length`, can trigger
+compaction or a retry, so a crossing there stops the session at once, as a
+tool call does. A backend that reports no `cost.total` leaves
 spend unobservable and the spend ceilings inert. OMP sends a single event
 larger than 1 MiB as `rpc_chunk` frames, and the loop does not reassemble those
 for accounting.

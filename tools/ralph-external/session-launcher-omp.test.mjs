@@ -247,18 +247,22 @@ test('omp: session and analysis args carry the mapped model', () => {
 
 test('omp: budgetBoundary marks final answers, resumed work and the end of the run', () => {
   const adapter = new OmpAdapter();
+  // Only a `stop` is a final answer; other stops can trigger compaction or a retry.
   assert.equal(adapter.budgetBoundary({ type: 'message_end', message: done }), 'final-answer');
-  assert.equal(adapter.budgetBoundary({ type: 'message_end', message: { ...done, stopReason: 'length' } }), 'final-answer');
-  assert.equal(adapter.budgetBoundary({ type: 'message_end', message: callBash }), null);
+  for (const stopReason of ['length', 'error', 'aborted', 'toolUse', undefined]) {
+    assert.equal(adapter.budgetBoundary({ type: 'message_end', message: { ...done, stopReason } }), null, String(stopReason));
+  }
   assert.equal(adapter.budgetBoundary({ type: 'message_end', message: user }), null);
-  assert.equal(adapter.budgetBoundary({ type: 'turn_start' }), 'resume');
-  assert.equal(adapter.budgetBoundary({ type: 'message_start', message: user }), 'resume');
+  for (const type of ['turn_start', 'message_start', 'auto_compaction_start', 'auto_retry_start']) {
+    assert.equal(adapter.budgetBoundary({ type }), 'resume', type);
+  }
+  // Only a terminal agent_end ends the run; OMP resumes after any other one.
   assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [], isTerminal: true, yielded: true }), 'run-end');
   assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [] }), 'run-end');
-  assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [], isTerminal: false, yielded: true }), 'run-end');
-  assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [], isTerminal: false }), null);
-  assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [], willContinue: true }), null);
-  for (const type of ['turn_end', 'tool_execution_start', 'cache_warming_end', 'agent_start']) {
+  assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [], isTerminal: false, yielded: true }), 'resume');
+  assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [], isTerminal: false }), 'resume');
+  assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [], willContinue: true }), 'resume');
+  for (const type of ['turn_end', 'tool_execution_start', 'cache_warming_end', 'agent_start', 'auto_compaction_end', 'auto_retry_end']) {
     assert.equal(adapter.budgetBoundary({ type }), null, type);
   }
   class PlainAdapter extends ProviderAdapter {}
@@ -268,7 +272,7 @@ test('omp: budgetBoundary marks final answers, resumed work and the end of the r
 // ── Live per-session cap ────────────────────────────────────────────────
 
 // Plays a scripted list of steps: { event, split? } writes one JSON line,
-// { sleep } waits. It then exits 0 on its own.
+// { sleep } waits, { exit } exits with that code. Otherwise it exits 0.
 const FAKE_OMP = `#!${process.execPath}
 import { readFileSync } from 'node:fs';
 const steps = JSON.parse(readFileSync(new URL('./fake-omp.json', import.meta.url), 'utf8'));
@@ -276,6 +280,7 @@ const write = text => new Promise(resolve => process.stdout.write(text, resolve)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 for (const step of steps) {
   if (step.sleep) { await sleep(step.sleep); continue; }
+  if (step.exit !== undefined) process.exit(step.exit);
   const line = JSON.stringify(step.event) + '\\n';
   if (step.split) {
     // Deliver one event in two writes so the reader must buffer a partial line.
@@ -306,8 +311,8 @@ function script(messages, tail, { split = false } = {}) {
 
 const terminalAgentEnd = messages => ({ event: { type: 'agent_end', messages, isTerminal: true, yielded: true } });
 
-/** Launch one session against a fake omp that plays `steps`. */
-async function launchFakeOmp(t, { steps, budget, adapter = new OmpAdapter() }) {
+/** Launch one session against a fake omp that plays `steps`, recording group signals. */
+async function launchFakeOmp(t, { steps, budget, timeoutMs = 60_000, adapter = new OmpAdapter() }) {
   const directory = tempDir(t, 'aiwg-omp-cap-');
   const binary = join(directory, 'fake-omp.mjs');
   writeFileSync(binary, FAKE_OMP);
@@ -318,6 +323,13 @@ async function launchFakeOmp(t, { steps, budget, adapter = new OmpAdapter() }) {
   t.after(() => {
     if (previous === undefined) delete process.env.AIWG_OMP_BIN;
     else process.env.AIWG_OMP_BIN = previous;
+  });
+  // OMP sessions are signalled as a process group (negative pid).
+  const realKill = process.kill.bind(process);
+  const groupSignals = [];
+  t.mock.method(process, 'kill', (pid, signal) => {
+    if (pid < 0) groupSignals.push(signal);
+    return realKill(pid, signal);
   });
   const launcher = new SessionLauncher();
   launcher.setProviderAdapter(adapter);
@@ -333,26 +345,28 @@ async function launchFakeOmp(t, { steps, budget, adapter = new OmpAdapter() }) {
     stdoutPath,
     stderrPath: join(directory, 'stderr.log'),
     outputDir: join(directory, 'output'),
-    timeoutMs: 60_000,
+    timeoutMs,
   });
   // A terminated fake may leave a partial last line; keep only whole events.
-  const types = readFileSync(stdoutPath, 'utf8').split('\n').flatMap(line => {
-    try { return [JSON.parse(line).type]; } catch { return []; }
+  const events = readFileSync(stdoutPath, 'utf8').split('\n').flatMap(line => {
+    try { return [JSON.parse(line)]; } catch { return []; }
   });
-  return { result, exceeded, types, elapsedMs: Date.now() - started };
+  const terms = groupSignals.filter(signal => signal === 'SIGTERM').length;
+  return { result, exceeded, types: events.map(event => event.type), events, terms, elapsedMs: Date.now() - started };
 }
 
 test('live cap (b): a tool-use message crossing the budget is terminated promptly', { timeout: 30_000 }, async t => {
   // 0.4 + 0.4 + 0.4 reaches the $1 budget on the third message_end, which
   // stops for a tool call. The fake would otherwise hold for 30 s.
   const messages = [0, 1, 2].map(index => assistant(index, 0.4, 'toolUse'));
-  const { result, exceeded, types, elapsedMs } = await launchFakeOmp(t, {
+  const { result, exceeded, types, terms, elapsedMs } = await launchFakeOmp(t, {
     steps: script(messages, [{ sleep: 30_000 }, terminalAgentEnd(messages)], { split: true }),
     budget: 1,
   });
   assert.equal(result.budgetExceeded, true);
   assert.equal(result.timedOut, false);
   assert.notEqual(result.exitCode, 0);
+  assert.equal(terms, 1);
   assert.ok(elapsedMs < 15_000, `terminated after ${elapsedMs} ms`);
   assert.ok(!types.includes('agent_end'));
   assert.equal(exceeded.length, 1);
@@ -365,13 +379,14 @@ test('live cap (b): a tool-use message crossing the budget is terminated promptl
 
 test('live cap (a): a final answer crossing the budget lets the run finish with its own exit code', { timeout: 30_000 }, async t => {
   const messages = [assistant(0, 0.6, 'toolUse'), assistant(1, 0.6, 'stop')];
-  const { result, exceeded, types, elapsedMs } = await launchFakeOmp(t, {
+  const { result, exceeded, types, terms, elapsedMs } = await launchFakeOmp(t, {
     steps: script(messages, [{ sleep: 500 }, terminalAgentEnd(messages)]),
     budget: 1,
   });
   assert.equal(result.budgetExceeded, true);
   assert.equal(result.timedOut, false);
   assert.equal(result.exitCode, 0);
+  assert.equal(terms, 0);
   assert.ok(elapsedMs >= 500, `exited after ${elapsedMs} ms`);
   assert.equal(types.at(-1), 'agent_end');
   assert.equal(exceeded.length, 1);
@@ -406,6 +421,86 @@ test('live cap: a final answer crossing the budget is terminated at the next bil
   assert.notEqual(result.exitCode, 0);
   assert.ok(elapsedMs >= 300 && elapsedMs < 15_000, `terminated after ${elapsedMs} ms`);
   assert.equal(types.at(-1), 'cache_warming_end');
+});
+
+test('live cap: a final answer crossing the budget is terminated at a non-terminal agent_end', { timeout: 30_000 }, async t => {
+  // OMP resumes after a non-terminal end, even a yielded one (queued input,
+  // background work), so it is not the end of the run.
+  const messages = [assistant(0, 0.6, 'toolUse'), assistant(1, 0.6, 'stop')];
+  const nonTerminal = { type: 'agent_end', messages, isTerminal: false, yielded: true };
+  const { result, exceeded, events, terms, elapsedMs } = await launchFakeOmp(t, {
+    steps: script(messages, [{ sleep: 300 }, { event: nonTerminal }, { sleep: 30_000 }, terminalAgentEnd(messages)]),
+    budget: 1,
+  });
+  assert.equal(result.budgetExceeded, true);
+  assert.equal(result.timedOut, false);
+  assert.notEqual(result.exitCode, 0);
+  assert.ok(elapsedMs >= 300 && elapsedMs < 15_000, `terminated after ${elapsedMs} ms`);
+  assert.deepEqual(events.at(-1), nonTerminal);
+  assert.equal(exceeded.length, 1);
+  assert.equal(exceeded[0].deferred, true);
+  assert.equal(terms, 1);
+});
+
+test('live cap: a final answer crossing the budget is terminated when compaction starts', { timeout: 30_000 }, async t => {
+  const messages = [assistant(0, 0.6, 'toolUse'), assistant(1, 0.6, 'stop')];
+  const { result, types, terms, elapsedMs } = await launchFakeOmp(t, {
+    steps: script(messages, [{ sleep: 300 }, { event: { type: 'auto_compaction_start', reason: 'threshold' } }, { sleep: 30_000 }, terminalAgentEnd(messages)]),
+    budget: 1,
+  });
+  assert.equal(result.budgetExceeded, true);
+  assert.notEqual(result.exitCode, 0);
+  assert.ok(elapsedMs >= 300 && elapsedMs < 15_000, `terminated after ${elapsedMs} ms`);
+  assert.equal(types.at(-1), 'auto_compaction_start');
+  assert.equal(terms, 1);
+});
+
+test('live cap: a length stop crossing the budget is terminated promptly', { timeout: 30_000 }, async t => {
+  // A `length` stop can trigger compaction or a retry, so it is not a final answer.
+  const messages = [assistant(0, 0.6, 'toolUse'), assistant(1, 0.6, 'length')];
+  const { result, exceeded, types, terms, elapsedMs } = await launchFakeOmp(t, {
+    steps: script(messages, [{ sleep: 30_000 }, terminalAgentEnd(messages)]),
+    budget: 1,
+  });
+  assert.equal(result.budgetExceeded, true);
+  assert.notEqual(result.exitCode, 0);
+  assert.ok(elapsedMs < 15_000, `terminated after ${elapsedMs} ms`);
+  assert.ok(!types.includes('agent_end'));
+  assert.equal(exceeded.length, 1);
+  assert.equal(exceeded[0].deferred, false);
+  assert.equal(terms, 1);
+});
+
+test('live cap: the session timeout still ends a deferred session, once', { timeout: 30_000 }, async t => {
+  const messages = [assistant(0, 0.6, 'toolUse'), assistant(1, 0.6, 'stop')];
+  const { result, exceeded, terms, elapsedMs } = await launchFakeOmp(t, {
+    // Nothing follows the crossing final answer; only the clock can end it.
+    steps: script(messages, [{ sleep: 30_000 }, terminalAgentEnd(messages)]),
+    budget: 1,
+    timeoutMs: 1_500,
+  });
+  assert.equal(result.timedOut, true);
+  assert.equal(result.budgetExceeded, true);
+  assert.notEqual(result.exitCode, 0);
+  assert.ok(elapsedMs >= 1_500 && elapsedMs < 15_000, `terminated after ${elapsedMs} ms`);
+  assert.equal(exceeded.length, 1);
+  assert.equal(exceeded[0].deferred, true);
+  assert.equal(terms, 1);
+});
+
+test('live cap: a deferred session that exits without agent_end keeps its own exit code', { timeout: 30_000 }, async t => {
+  const messages = [assistant(0, 0.6, 'toolUse'), assistant(1, 0.6, 'stop')];
+  const { result, exceeded, types, terms } = await launchFakeOmp(t, {
+    steps: script(messages, [{ sleep: 200 }, { exit: 7 }]),
+    budget: 1,
+  });
+  assert.equal(result.budgetExceeded, true);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.exitCode, 7);
+  assert.ok(!types.includes('agent_end'));
+  assert.equal(exceeded.length, 1);
+  assert.equal(exceeded[0].deferred, true);
+  assert.equal(terms, 0);
 });
 
 test('live cap: a fake omp under its per-session budget is not terminated', { timeout: 30_000 }, async t => {

@@ -690,12 +690,14 @@ export class ProviderAdapter {
   /**
    * Where one parsed stream event sits relative to the launcher's live
    * per-session spend cap, in this provider's own event grammar:
-   * - `'final-answer'`: the model finished its final answer. If this event's
-   *   cost crosses the budget, the spend is already incurred, so the session
-   *   is left to end on its own.
-   * - `'resume'`: billed work starts again (a new turn or message). A session
-   *   left running after a final-answer crossing is stopped here.
-   * - `'run-end'`: the run ended on its own; such a session is never stopped.
+   * - `'final-answer'`: the model finished its final answer and nothing else is
+   *   billed for it. If this event's cost crosses the budget, the spend is
+   *   already incurred, so the session is left to end on its own.
+   * - `'resume'`: billed work may start again (a new turn or message,
+   *   maintenance such as compaction or a retry, or a run end the provider
+   *   will resume from). A session left running after a final-answer crossing
+   *   is stopped here.
+   * - `'run-end'`: the run definitely ended; such a session is never stopped.
    *
    * The base returns `null` for every event: a crossing stops the session at
    * once, whatever the event.

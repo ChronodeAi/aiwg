@@ -218,18 +218,23 @@ export class OmpAdapter extends ProviderAdapter {
   }
 
   /**
-   * An assistant `message_end` that does not stop for a tool call is the final
-   * answer. A `turn_start` or `message_start` begins new work. A terminal
-   * `agent_end` (`isTerminal` not false, or `yielded`; never one that says
-   * `willContinue`) ends the run.
+   * Only an assistant `message_end` with stopReason `stop` is the final
+   * answer. Any other stop reason (`length`, `error`, ...) can trigger OMP's
+   * compaction or retry maintenance, a further model call, so a crossing there
+   * stops at once (null), as does a `toolUse` stop. New work begins with
+   * `turn_start`, `message_start`, `auto_compaction_start` or
+   * `auto_retry_start`. An `agent_end` ends the run only when it is terminal
+   * (`isTerminal` not false, and not `willContinue`): OMP resumes a session
+   * after a non-terminal end, even a `yielded` one, for queued input or
+   * background work, so that end is new work too.
    * @param {Object} event
    * @returns {'final-answer'|'resume'|'run-end'|null}
    */
   budgetBoundary(event) {
     const type = event?.type;
-    if (type === 'message_end' && event.message?.role === 'assistant') return event.message.stopReason === 'toolUse' ? null : 'final-answer';
-    if (type === 'turn_start' || type === 'message_start') return 'resume';
-    if (type === 'agent_end' && event.willContinue !== true && (event.isTerminal !== false || event.yielded === true)) return 'run-end';
+    if (type === 'message_end' && event.message?.role === 'assistant') return event.message.stopReason === 'stop' ? 'final-answer' : null;
+    if (type === 'turn_start' || type === 'message_start' || type === 'auto_compaction_start' || type === 'auto_retry_start') return 'resume';
+    if (type === 'agent_end') return event.willContinue !== true && event.isTerminal !== false ? 'run-end' : 'resume';
     return null;
   }
 

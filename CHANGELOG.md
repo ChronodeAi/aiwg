@@ -18,8 +18,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   `--max-total-cost`, token, tool-call and wall-clock ceilings apply on `omp` as on
   `claude`. OMP has no budget flag, so the launcher stops an OMP session itself
   once the cost reported on its JSON events reaches the per-iteration `--budget`.
-  A final answer that crosses the budget is not killed: that spend is already
-  incurred, so the session finishes with its own exit code unless new work starts.
+  A final answer (stop reason `stop`) that crosses the budget is not killed: that
+  spend is already incurred, so the session finishes with its own exit code unless
+  new work starts (a new turn or message, compaction, a retry, a billed event, or
+  a non-terminal `agent_end`).
 
 - Add configurable multi-pass Jev decision validation with escalation, bounded
   concurrency and a shared timeout; CLI/MCP sampling overrides, aggregate JSON,
