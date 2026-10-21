@@ -946,10 +946,11 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
  * Sync mission statuses from their backing ralph loop state files (#1439).
  *
  * Each mission launched by `mc run` carries a `ralphLoopId`. The ralph loop
- * writes its own session-state.json with a `status` field
- * (running|completed|failed|paused|aborted). This helper polls those files
- * and reflects the truth back into the mc session.json so `mc status` and
- * `mc watch` show actual progress without manual intervention.
+ * writes its own session-state.json with a `status` field. This helper polls
+ * those files and reflects the truth back into the mc session.json so
+ * `mc status` and `mc watch` show actual progress without manual intervention.
+ * A mission that leaves `running` gives up its admission lease; only a mission
+ * still running renews it.
  *
  * Sync is best-effort — a missing or unreadable ralph state file leaves the
  * mission status unchanged (typically 'running' until the ralph process
@@ -971,20 +972,33 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
     const loopId = mission.ralphLoopId;
     if (!loopId) continue;
     // A running loop keeps its state in loops/<id>/; when the loop ends the
-    // orchestrator moves that directory to archive/<id>/.
+    // orchestrator moves that directory to archive/<id>/, so any state read
+    // from the archive is final.
     const ralphDir = join(projectRoot, '.aiwg', 'ralph-external');
     try {
+      let archived = false;
       const raw = await fs.readFile(join(ralphDir, 'loops', loopId, 'session-state.json'), 'utf-8')
-        .catch(() => fs.readFile(join(ralphDir, 'archive', loopId, 'session-state.json'), 'utf-8'));
+        .catch(() => {
+          archived = true;
+          return fs.readFile(join(ralphDir, 'archive', loopId, 'session-state.json'), 'utf-8');
+        });
       const state = JSON.parse(raw);
       const ralphStatus = String(state.status || '').toLowerCase();
       // Map ralph status → mc mission status
       let nextStatus: MissionStatus | null = null;
+      let endedBecause: string | undefined;
       if (ralphStatus === 'completed') nextStatus = 'done';
       else if (ralphStatus === 'failed' || ralphStatus === 'crashed') nextStatus = 'failed';
       else if (ralphStatus === 'aborted') nextStatus = 'aborted';
-      else if (ralphStatus === 'paused') nextStatus = 'paused';
-      // 'running' stays running
+      // An interrupted loop can be resumed, like a paused one.
+      else if (ralphStatus === 'paused' || ralphStatus === 'interrupted') nextStatus = 'paused';
+      // Iteration cap, budget ceiling, quality plateau, or any other state of
+      // an archived (ended) loop: the mission did not complete.
+      else if (ralphStatus === 'limit_reached' || ralphStatus === 'budget_exhausted' || ralphStatus === 'plateau' || archived) {
+        nextStatus = 'failed';
+        endedBecause = `ralph loop ended: ${ralphStatus || 'unknown'}`;
+      }
+      // 'running' (and other live states) stays running.
 
       // Reflect iteration count if available
       const iter = typeof state.iteration === 'number' ? state.iteration : (typeof state.currentIteration === 'number' ? state.currentIteration : null);
@@ -995,12 +1009,14 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
 
       // mission.status is narrowed to 'running' by the early-continue above,
       // and nextStatus is one of {done, failed, aborted, paused}. So the
-      // transition is always real when nextStatus is set — no equality
-      // check needed.
+      // transition is always real when nextStatus is set, and it releases the
+      // admission lease; only a mission that stays running renews it.
       if (nextStatus) {
         mission.status = nextStatus;
         mission.completedAt = new Date().toISOString();
-        if (nextStatus === 'failed' && typeof state.error === 'string') {
+        if (endedBecause) {
+          mission.error = endedBecause;
+        } else if (nextStatus === 'failed' && typeof state.error === 'string') {
           mission.error = state.error;
         }
         mutated = true;

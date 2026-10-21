@@ -128,6 +128,7 @@ import {
   ralphLoopProviders,
 } from '../../../../src/cli/handlers/mc.js';
 import { launchExternalRalph } from '../../../../src/cli/handlers/ralph-launcher.js';
+import { SharedHostScheduler } from '../../../../src/serve/shared-host-scheduler.js';
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -770,6 +771,69 @@ describe('mc run (#1439)', () => {
     const synced = JSON.parse(inMemoryFs.store.get(sessionPath)!).missions[0];
     expect(synced).toMatchObject({ status: 'done', loop: 1, admissionState: 'released' });
     expect(synced.completedAt).toBeDefined();
+  });
+
+  it.each([
+    ['limit_reached', 'failed', 'ralph loop ended: limit_reached'],
+    ['budget_exhausted', 'failed', 'ralph loop ended: budget_exhausted'],
+    ['plateau', 'failed', 'ralph loop ended: plateau'],
+    ['interrupted', 'paused', undefined],
+  ])('ends a mission whose archived loop reports %s and releases its lease for good', async (ralphStatus, status, error) => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const renew = vi.spyOn(SharedHostScheduler.prototype, 'renew');
+    const release = vi.spyOn(SharedHostScheduler.prototype, 'release');
+    const sessionId = (await mcHandler.execute(makeCtx(['start']))).message!;
+    await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Ended mission', '--completion', 'tests pass']));
+    expect((await mcHandler.execute(makeCtx(['run', sessionId, '--accept-cost']))).exitCode).toBe(0);
+    const sessionPath = `.aiwg/ralph-external/mc/sessions/${sessionId}/session.json`;
+    const launched = JSON.parse(inMemoryFs.store.get(sessionPath)!).missions[0];
+    const loopState = (value: string) => inMemoryFs.store.set(
+      `/mock/cwd/.aiwg/ralph-external/archive/${launched.ralphLoopId}/session-state.json`,
+      JSON.stringify({ status: value, currentIteration: 3 }),
+    );
+
+    // While the loop state is live, status renews the lease.
+    inMemoryFs.store.set(
+      `/mock/cwd/.aiwg/ralph-external/loops/${launched.ralphLoopId}/session-state.json`,
+      JSON.stringify({ status: 'running', currentIteration: 2 }),
+    );
+    await mcHandler.execute(makeCtx(['status', sessionId]));
+    expect(renew).toHaveBeenCalledTimes(1);
+
+    // The orchestrator archives the loop when it ends.
+    inMemoryFs.store.delete(`/mock/cwd/.aiwg/ralph-external/loops/${launched.ralphLoopId}/session-state.json`);
+    loopState(ralphStatus);
+    await mcHandler.execute(makeCtx(['status', sessionId]));
+    const synced = JSON.parse(inMemoryFs.store.get(sessionPath)!).missions[0];
+    expect(synced).toMatchObject({ status, loop: 3, admissionState: 'released' });
+    expect(synced.error).toBe(error);
+    expect(synced.completedAt).toBeDefined();
+    expect(release).toHaveBeenCalledExactlyOnceWith(launched.admissionRequestId);
+
+    // Later status calls neither renew nor release the lease again.
+    await mcHandler.execute(makeCtx(['status', sessionId]));
+    await mcHandler.execute(makeCtx(['status', sessionId]));
+    expect(renew).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(inMemoryFs.store.get(sessionPath)!).missions[0]).toMatchObject({ status, admissionState: 'released' });
+  });
+
+  it('treats any other state read from the archive as ended', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const renew = vi.spyOn(SharedHostScheduler.prototype, 'renew');
+    const sessionId = (await mcHandler.execute(makeCtx(['start']))).message!;
+    await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Odd mission', '--completion', 'tests pass']));
+    await mcHandler.execute(makeCtx(['run', sessionId, '--accept-cost']));
+    const sessionPath = `.aiwg/ralph-external/mc/sessions/${sessionId}/session.json`;
+    const launched = JSON.parse(inMemoryFs.store.get(sessionPath)!).missions[0];
+    inMemoryFs.store.set(
+      `/mock/cwd/.aiwg/ralph-external/archive/${launched.ralphLoopId}/session-state.json`,
+      JSON.stringify({ status: 'running' }),
+    );
+    await mcHandler.execute(makeCtx(['status', sessionId]));
+    expect(JSON.parse(inMemoryFs.store.get(sessionPath)!).missions[0])
+      .toMatchObject({ status: 'failed', error: 'ralph loop ended: running', admissionState: 'released' });
+    expect(renew).not.toHaveBeenCalled();
   });
 
   it('passes each mission provider to the launcher and omits it when unset', async () => {
