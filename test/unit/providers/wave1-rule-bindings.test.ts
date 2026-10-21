@@ -63,10 +63,12 @@ describe('Wave 1 canonical rule delivery (#2941)', () => {
   }, 60_000);
   afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  it('keeps scoped activation and the existing decision opt-in gate', () => {
+  it('keeps scoped activation and the explicit decision ask opt-in gate', () => {
     for (const { name, data } of rules) expect(data.activation).toBe(name === 'debug-source-not-output' ? 'paths' : 'bound');
-    expect(rules.find(rule => rule.name === 'decision-offload')!.data.summary).toContain('decision.enabled');
-    expect(read(path.join(bundle, 'rules/decision-offload.md'))).toContain('reason: "not-configured"');
+    expect(rules.find(rule => rule.name === 'decision-offload')!.data.summary).toContain('decision ask is enabled');
+    const offloadRule = read(path.join(bundle, 'rules/decision-offload.md'));
+    expect(offloadRule).toContain('aiwg decision setup jev');
+    expect(offloadRule).toContain('reason: "not-configured"');
     const quota = rules.find(rule => rule.name === 'tool-quota')!.data;
     expect(quota.bound_to.skills).toEqual(expect.arrayContaining(['ralph', 'aiwg-mission']));
   });

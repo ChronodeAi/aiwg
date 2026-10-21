@@ -604,10 +604,11 @@ POSITIONING:
   MCP is optional and provider-agnostic. Baseline AIWG reachability is file
   deployment plus CLI discovery: aiwg discover / aiwg show <type> <name>.
 
-CORE TOOLS (16, always registered):
+CORE TOOLS (17, always registered):
   discover                         Cross-type ranked catalog search
   skill-list / skill-show           Skill catalog and SKILL.md body fetch
   command-list / command-show       CLI command catalog and command spec fetch
+  rule-inventory                    Scoped rule activation and binding inventory
   rule-list / rule-show             Rule catalog and rule body fetch
   agent-list / agent-show           Agent catalog and agent definition fetch
   template-list / template-show      Template catalog and raw template fetch
