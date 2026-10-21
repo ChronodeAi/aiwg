@@ -24,6 +24,8 @@ import { join } from 'path';
  * @property {number} [input_tokens] - Input token count
  * @property {number} [output_tokens] - Output token count
  * @property {number} [tool_calls] - Tool-call count
+ * @property {boolean} [session_budget_exceeded] - The live per-session spend cap
+ *   stopped this iteration's session. The cumulative ceilings still apply.
  * @property {number} execution_time_ms - Execution time in milliseconds
  * @property {string} verification_status - passed|failed|skipped|void
  * @property {string} output_snapshot_path - Path to snapshot
@@ -184,6 +186,7 @@ export class IterationAnalytics {
       input_tokens: keepUnknown(metrics.input_tokens),
       output_tokens: keepUnknown(metrics.output_tokens),
       tool_calls: metrics.tool_calls || 0,
+      session_budget_exceeded: metrics.session_budget_exceeded === true,
       execution_time_ms: metrics.execution_time_ms,
       verification_status: metrics.verification_status,
       output_snapshot_path: metrics.output_snapshot_path,
@@ -224,6 +227,7 @@ export class IterationAnalytics {
     if (metrics.output_snapshot_path != null && typeof metrics.output_snapshot_path !== 'string') throw new TypeError('output_snapshot_path must be a string or null');
     if (metrics.reflections !== undefined && (!Array.isArray(metrics.reflections) || metrics.reflections.some(value => typeof value !== 'string'))) throw new TypeError('reflections must be an array of strings');
     if (metrics.eval_human_override !== undefined && typeof metrics.eval_human_override !== 'boolean') throw new TypeError('eval_human_override must be boolean');
+    if (metrics.session_budget_exceeded !== undefined && typeof metrics.session_budget_exceeded !== 'boolean') throw new TypeError('session_budget_exceeded must be boolean');
     if (metrics.experiment != null) {
       objectValue('experiment', metrics.experiment);
       for (const name of ['hypothesis', 'expected_failure_mode', 'distinguishing_diagnostic', 'probe_or_generalization_signal']) {

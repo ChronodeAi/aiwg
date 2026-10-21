@@ -1004,6 +1004,12 @@ export class Orchestrator {
         if (sessionResult.toolCallCount) {
           console.log(`[External Ralph] Tool calls: ${sessionResult.toolCallCount}, errors: ${sessionResult.errorCount || 0}`);
         }
+        if (sessionResult.budgetExceeded) {
+          // The live per-session cap stopped this session. The iteration is
+          // still analyzed and recorded, and the cumulative mission ceilings
+          // are evaluated against it below.
+          console.log(`[External Ralph] Session stopped at the per-iteration budget ($${state.config.budgetPerIteration})`);
+        }
 
         // Verbose: show session output tail
         if (this._verbose && outputPaths.stdout) {
@@ -1158,6 +1164,7 @@ export class Orchestrator {
           totalTokens: sessionResult.totalTokens,
           costUsd: sessionResult.costUsd,
           errorCount: sessionResult.errorCount,
+          budgetExceeded: sessionResult.budgetExceeded === true,
           // Epic #26 data
           assessment,
           strategy,
@@ -1247,6 +1254,7 @@ export class Orchestrator {
             input_tokens: tokenUsageObserved ? (sessionResult.inputTokens || 0) : null,
             output_tokens: tokenUsageObserved ? (sessionResult.outputTokens || 0) : null,
             tool_calls: sessionResult.toolCallCount || 0,
+            session_budget_exceeded: sessionResult.budgetExceeded === true,
             token_cost_usd: costObserved ? (sessionResult.costUsd || 0) : null,
             execution_time_ms: duration,
             verification_status: verificationStatus,

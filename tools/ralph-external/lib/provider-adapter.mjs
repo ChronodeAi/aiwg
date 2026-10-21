@@ -252,6 +252,24 @@ export function isMuseRalphEnabled() {
  */
 
 /**
+ * Token and spend accounting read from one stream event. Counters are zero
+ * when the matching field is absent; the `has*` flags record whether the
+ * provider reported the field at all, so "observed 0" stays distinct from
+ * "cannot observe" (#1766).
+ *
+ * @typedef {Object} StreamUsage
+ * @property {number} inputTokens
+ * @property {number} outputTokens
+ * @property {number} cacheCreationInputTokens
+ * @property {number} cacheReadInputTokens
+ * @property {number} totalTokens
+ * @property {number} costUsd - Spend in USD
+ * @property {boolean} hasTokenField - Any token field was a finite number
+ * @property {boolean} hasCostField - A cost field was a finite number
+ * @property {boolean} hasUsage - `hasTokenField || hasCostField`
+ */
+
+/**
  * Base class for provider adapters.
  * Subclasses must override all methods that throw NotImplementedError.
  */
@@ -633,6 +651,41 @@ export class ProviderAdapter {
 
   /** JSONL written to stdin before bounded process termination, when supported. */
   getAbortInput() { return null; }
+
+  /**
+   * Read token and spend accounting from one parsed stream event using this
+   * provider's own event grammar.
+   *
+   * The base returns `null`: the launcher then applies its generic usage
+   * logic (`SessionLauncher._extractUsageStats`) unchanged. An override
+   * returns a {@link StreamUsage} for EVERY event, with zero counters and
+   * `hasUsage: false` for events that carry no accounting, so a provider that
+   * repeats one message's usage on several events can count it exactly once.
+   * Overriding this hook also arms the launcher's live per-session spend cap
+   * when the provider has no native budget control.
+   *
+   * @param {Object} event - One parsed JSON stream event
+   * @returns {StreamUsage|null}
+   */
+  extractUsage(event) { return null; }
+
+  /**
+   * Whether this adapter overrides {@link extractUsage} with its own grammar.
+   * @returns {boolean}
+   */
+  reportsStreamUsage() { return this.extractUsage !== ProviderAdapter.prototype.extractUsage; }
+
+  /**
+   * Categorize one parsed stream event as `tool_call`, `error`, `completion`
+   * or another event type, using this provider's own event grammar.
+   *
+   * The base returns `null`: the launcher then applies its generic
+   * categorization (`SessionLauncher._categorizeStreamEvent`) unchanged.
+   *
+   * @param {Object} event - One parsed JSON stream event
+   * @returns {string|null}
+   */
+  categorizeEvent(event) { return null; }
 
   /**
    * Observe execution through the selected profile's framing and grammar.

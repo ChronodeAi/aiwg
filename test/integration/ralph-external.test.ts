@@ -201,6 +201,70 @@ describe('External Ralph Loop Integration', () => {
       expect(finalState?.status).toBe('limit_reached');
     });
 
+    it('records a session stopped by the per-iteration cap and still enforces cumulative ceilings', { timeout: 10000 }, async () => {
+      const orchestrator = new Orchestrator(testDir);
+
+      // A provider without native budget control, stopped live at its
+      // per-iteration budget (SessionLauncher result shape).
+      const launch = vi.spyOn(orchestrator.sessionLauncher, 'launch').mockResolvedValue({
+        exitCode: 1,
+        timedOut: false,
+        budgetExceeded: true,
+        toolCallCount: 3,
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        costUsd: 2.5,
+        tokenUsageObserved: true,
+        costObserved: true,
+      });
+
+      vi.spyOn(orchestrator.outputAnalyzer, 'analyze').mockResolvedValue({
+        completed: false,
+        success: null,
+        failureClass: null,
+        completionPercentage: 50,
+        shouldContinue: true,
+        learnings: 'Stopped at the session cap',
+        artifactsModified: [],
+        blockers: [],
+        nextApproach: 'Continue',
+      });
+
+      vi.spyOn(orchestrator.stateManager, 'setCurrentPid').mockImplementation(() => {});
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      const result = await orchestrator.execute({
+        objective: 'Capped task',
+        completionCriteria: 'Never achievable',
+        maxIterations: 10,
+        budgetPerIteration: 2.5,
+        budgetLimits: { spend_usd: 4 },
+        enablePIDControl: false,
+        enableOverseer: false,
+        enableSemanticMemory: false,
+        crossTask: false,
+        enableAnalytics: true,
+        enableBestOutput: false,
+        enableEarlyStopping: false,
+        enableClaudeIntelligence: false,
+        enableSnapshots: false,
+        enableCheckpoints: false,
+      });
+
+      expect(launch).toHaveBeenCalledWith(expect.objectContaining({ budget: 2.5 }));
+      // $2.50 per capped session: the cumulative $4 ceiling stops the loop
+      // after the second session.
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('Budget exhausted: spend_exhausted');
+      expect(result.iterations).toBe(2);
+
+      const finalState = orchestrator.stateManager.load();
+      expect(finalState?.status).toBe('budget_exhausted');
+      expect(finalState?.iterations.map((iteration: { budgetExceeded?: boolean }) => iteration.budgetExceeded)).toEqual([true, true]);
+      expect(orchestrator.iterationAnalytics.iterations.map((record: { session_budget_exceeded?: boolean }) => record.session_budget_exceeded)).toEqual([true, true]);
+    });
+
     it('should stop when shouldContinue is false', { timeout: 10000 }, async () => {
       const orchestrator = new Orchestrator(testDir);
 
