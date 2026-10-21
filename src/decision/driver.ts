@@ -57,6 +57,7 @@ export {
   buildDecisionOffloadSnapshot,
   decisionOffloadCategory,
   DECISION_OFFLOAD_CHECKPOINT_COVERAGE,
+  DECISION_OFFLOAD_EXECUTABLE_COVERAGE,
   DECISION_OFFLOAD_SNAPSHOT_SCHEMA,
   DECISION_OPPORTUNITY_SCHEMA,
   runDecisionOffloadCheckpoint,

@@ -132,6 +132,53 @@ describe('decision offload checkpoint', () => {
     expect(warnings).toEqual(['ledger failed']);
   });
 
+  it('bounds stalled provider attribution and journal writers without suppressing an answer', async () => {
+    const projectRoot = await root();
+    const ask = vi.fn(async () => answered);
+    const never = new Promise<never>(() => undefined);
+    const result = await runDecisionOffloadCheckpoint(input, options(projectRoot, {
+      ask,
+      resolveProvider: async () => never,
+      appendOpportunity: async () => never,
+      providerTimeoutMs: 5,
+      opportunityTimeoutMs: 5,
+      recordAsk: async () => { throw new Error('fixture ledger failure'); },
+      warn: () => undefined,
+    }));
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ outcome: 'answered', result: answered, attemptRecorded: null, opportunityRecorded: null,
+      opportunity: { provider: 'unknown', ledgerRecorded: null } });
+  });
+
+  it('keeps a completed answer when injected recording callbacks reject', async () => {
+    const projectRoot = await root();
+    const events: DecisionOpportunityRecord[] = [];
+    const result = await runDecisionOffloadCheckpoint(input, options(projectRoot, {
+      ask: async () => answered,
+      recordAsk: async () => { throw new Error('ledger unavailable'); },
+      appendOpportunity: async (event: DecisionOpportunityRecord) => {
+        events.push(event);
+        if (event.phase === 'completed') throw new Error('journal unavailable');
+        return true;
+      },
+      warn: () => undefined,
+    }));
+    expect(result).toMatchObject({ outcome: 'answered', result: answered, attemptRecorded: true, opportunityRecorded: false,
+      opportunity: { ledgerRecorded: null } });
+    expect(events.map(event => event.phase)).toEqual(['started', 'completed']);
+  });
+
+  it('treats an unavailable external artifact root as a best-effort recording failure', async () => {
+    const projectRoot = await root();
+    await writeFile(path.join(projectRoot, '.aiwg-location'), `../${path.basename(projectRoot)}-unavailable/.aiwg\n`);
+    const result = await runDecisionOffloadCheckpoint(input, options(projectRoot, {
+      ask: async () => answered,
+      recordAsk: async () => null,
+      warn: () => undefined,
+    }));
+    expect(result).toMatchObject({ outcome: 'answered', attemptRecorded: false, opportunityRecorded: false });
+  });
+
   it('records usage rejection separately from an attempted execution failure', async () => {
     const projectRoot = await root();
     const events: DecisionOpportunityRecord[] = [];
@@ -265,5 +312,29 @@ describe('decision offload snapshot', () => {
     expect(snapshot.opportunities.organic.eligible).toBe(0);
     expect(snapshot.drift.status).toBe('not-applicable');
     expect(snapshot.drift.reasons).not.toContain('observed-eligible-zero-attempts');
+  });
+
+  it('reports the original low-confidence activity hint, excludes diagnostics, and clears it after an organic call', async () => {
+    const projectRoot = await root();
+    const env = await isolatedEnv(projectRoot);
+    await mkdir(path.join(projectRoot, '.aiwg'), { recursive: true, mode: 0o700 });
+    await writeFile(path.join(projectRoot, '.aiwg', 'activity.log'),
+      '## [2026-10-20 12:00] update | address-issues cycle dispatched worker for review\n');
+    const snapshotOptions = { projectRoot, env, now: new Date('2026-10-20T12:01:00.000Z'), windowHours: 1 };
+    let snapshot = await buildDecisionOffloadSnapshot(snapshotOptions);
+    expect(snapshot.activityHint).toMatchObject({ status: 'advisory', reason: 'orchestration-without-organic-completed-calls',
+      recognizableOrchestrationEvents: 1, eligibleCount: 'unknown', confidence: 'low' });
+
+    await runDecisionOffloadCheckpoint(input, options(projectRoot, { env, id: () => 'diagnostic-1',
+      caller: 'diagnosis:connectivity', category: 'diagnostic', ask: async () => answered }));
+    snapshot = await buildDecisionOffloadSnapshot(snapshotOptions);
+    expect(snapshot.activityHint.status).toBe('advisory');
+    expect(snapshot.calls).toMatchObject({ organic: { completed: 0 }, excluded: { completed: 1 } });
+
+    await runDecisionOffloadCheckpoint(input, options(projectRoot, { env, id: () => 'organic-1',
+      caller: 'address-issues:worker-pick', ask: async () => answered }));
+    snapshot = await buildDecisionOffloadSnapshot(snapshotOptions);
+    expect(snapshot.activityHint).toMatchObject({ status: 'none', reason: null });
+    expect(snapshot.calls.organic.completed).toBe(1);
   });
 });

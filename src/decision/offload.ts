@@ -21,6 +21,7 @@ import { inspectJevCredential } from './jev-credentials.js';
 import {
   ATTRIBUTION_FIELD_PATTERN,
   decisionLedgerHistory,
+  DECISION_LEDGER_RECORD_TIMEOUT_MS,
   recordDecisionAsk,
   resolveDecisionSession,
   type DecisionLedgerRecord,
@@ -34,6 +35,8 @@ const OPPORTUNITY_FILE = 'opportunities.jsonl';
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const MAX_OPPORTUNITY_RECORD_BYTES = 4000;
+export const DECISION_OPPORTUNITY_RECORD_TIMEOUT_MS = DECISION_LEDGER_RECORD_TIMEOUT_MS;
+const TIMED_OUT = Symbol('decision-offload-timeout');
 
 export type DecisionOffloadCategory = 'organic' | 'diagnostic' | 'setup' | 'benchmark' | 'unattributed';
 export type DecisionOpportunityOutcome = 'answered' | 'fallback' | 'skipped' | 'unknown';
@@ -81,12 +84,16 @@ export interface RunDecisionOffloadCheckpointOptions extends Omit<RecordDecision
   ask?: typeof askDecision;
   recordAsk?: typeof recordDecisionAsk;
   appendOpportunity?: (record: DecisionOpportunityRecord, projectRoot: string, warn?: (message: string) => void) => Promise<boolean>;
+  /** Bounds each opportunity append independently; test override, defaults to the ledger's 250ms bound. */
+  opportunityTimeoutMs?: number;
+  /** Bounds provider attribution before the pre-call record; test override, defaults to 250ms. */
+  providerTimeoutMs?: number;
 }
 
 export type DecisionOffloadCheckpointResult =
-  | { outcome: 'answered' | 'fallback'; result: DecisionAskResult; opportunity: DecisionOpportunityRecord; attemptRecorded: boolean; opportunityRecorded: boolean }
-  | { outcome: 'skipped'; result: null; opportunity: DecisionOpportunityRecord; opportunityRecorded: boolean }
-  | { outcome: 'unknown'; result: null; opportunity: DecisionOpportunityRecord; attemptRecorded: boolean; opportunityRecorded: boolean; error: unknown };
+  | { outcome: 'answered' | 'fallback'; result: DecisionAskResult; opportunity: DecisionOpportunityRecord; attemptRecorded: boolean | null; opportunityRecorded: boolean | null }
+  | { outcome: 'skipped'; result: null; opportunity: DecisionOpportunityRecord; opportunityRecorded: boolean | null }
+  | { outcome: 'unknown'; result: null; opportunity: DecisionOpportunityRecord; attemptRecorded: boolean | null; opportunityRecorded: boolean | null; error: unknown };
 
 export interface DecisionOffloadActivationEvidence {
   addon: 'installed' | 'missing' | 'unknown';
@@ -120,6 +127,11 @@ export const DECISION_OFFLOAD_CHECKPOINT_COVERAGE = [
   'subagent-scoping:worker-pick', 'subagent-scoping:failure-triage',
 ].map(caller => ({ caller, coverage: 'instruction-only' as const }));
 
+export const DECISION_OFFLOAD_EXECUTABLE_COVERAGE = [
+  { entrypoint: 'aiwg decision ask', transport: 'cli' as const, coverage: 'shared-contract-generic' as const },
+  { entrypoint: 'decision-ask', transport: 'mcp' as const, coverage: 'shared-contract-generic' as const },
+];
+
 function safeCaller(caller: string): string {
   if (!ATTRIBUTION_FIELD_PATTERN.test(caller)) throw new DecisionAskUsageError('invalid-caller', 'checkpoint caller must be a valid attribution tag');
   return caller;
@@ -135,13 +147,52 @@ export function decisionOffloadCategory(caller: string | null | undefined): Deci
 }
 
 async function providerFor(options: RunDecisionOffloadCheckpointOptions): Promise<string> {
-  try {
+  const work = (async () => {
     const resolve = options.resolveProvider ?? resolveActiveProvider;
     const resolution: ProviderResolution = await resolve({ cwd: options.projectRoot, explicitProvider: options.explicitProvider, env: options.env ?? process.env });
     return resolution.provider ?? 'unknown';
-  } catch {
-    return 'unknown';
+  })().catch(() => 'unknown');
+  const outcome = await bounded(work, options.providerTimeoutMs ?? DECISION_OPPORTUNITY_RECORD_TIMEOUT_MS);
+  return outcome === TIMED_OUT ? 'unknown' : outcome;
+}
+
+async function bounded<T>(work: Promise<T>, timeoutMs: number): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<typeof TIMED_OUT>(resolve => {
+    timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    const outcome = await Promise.race([work, timeout]);
+    if (outcome === TIMED_OUT) work.catch(() => undefined);
+    return outcome;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
+}
+
+async function boundedAppend(
+  append: NonNullable<RunDecisionOffloadCheckpointOptions['appendOpportunity']>,
+  record: DecisionOpportunityRecord,
+  projectRoot: string,
+  timeoutMs: number,
+  warn: (message: string) => void,
+): Promise<boolean | null> {
+  let work: Promise<boolean>;
+  try { work = Promise.resolve(append(record, projectRoot, warn)); }
+  catch (error) {
+    warn(`warning: failed to record decision opportunity: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+  const outcome = await bounded(work.catch(error => {
+    warn(`warning: failed to record decision opportunity: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }), timeoutMs);
+  if (outcome === TIMED_OUT) {
+    warn(`warning: decision opportunity recording exceeded ${timeoutMs}ms; completion unknown`);
+    return null;
+  }
+  return outcome;
 }
 
 function recordFor(
@@ -211,10 +262,10 @@ export async function appendDecisionOpportunity(
     warn(`warning: decision opportunity exceeds the ${MAX_OPPORTUNITY_RECORD_BYTES}-byte size cap and was not written`);
     return false;
   }
-  const directory = projectAiwgWritePath(projectRoot, 'decision');
-  const file = path.join(directory, OPPORTUNITY_FILE);
   let handle;
   try {
+    const directory = projectAiwgWritePath(projectRoot, 'decision');
+    const file = path.join(directory, OPPORTUNITY_FILE);
     await mkdir(directory, { recursive: true, mode: DIR_MODE });
     const dirStat = await lstat(directory);
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink() || (dirStat.mode & 0o077) !== 0) throw new Error('unsafe opportunity directory');
@@ -256,9 +307,14 @@ export async function runDecisionOffloadCheckpoint(
     if (pendingOpportunityWarning) warn(pendingOpportunityWarning);
   };
   const eligibility = options.eligibility ?? { eligible: true };
+  const appendBounded = (record: DecisionOpportunityRecord, appendWarn: (message: string) => void) => boundedAppend(
+    append, record, options.projectRoot,
+    options.opportunityTimeoutMs ?? DECISION_OPPORTUNITY_RECORD_TIMEOUT_MS,
+    appendWarn,
+  );
   if (!eligibility.eligible) {
     const opportunity = recordFor(options, { phase: 'skipped', eligible: false, attempted: false, outcome: 'skipped', reason: eligibility.reason ?? 'other-exclusion', ledgerRecorded: null }, correlationId, provider);
-    return { outcome: 'skipped', result: null, opportunity, opportunityRecorded: await append(opportunity, options.projectRoot, warn) };
+    return { outcome: 'skipped', result: null, opportunity, opportunityRecorded: await appendBounded(opportunity, warn) };
   }
   // Persist the eligible, attempted checkpoint before invoking the backend.
   // If the process dies in the call, the offline snapshot retains an unknown
@@ -267,24 +323,11 @@ export async function runDecisionOffloadCheckpoint(
     phase: 'started', eligible: true, attempted: true, outcome: 'unknown',
     reason: 'attempt-started', ledgerRecorded: null,
   }, correlationId, provider);
-  const attemptRecorded = await append(started, options.projectRoot, queueOpportunityWarning);
+  const attemptRecorded = await appendBounded(started, queueOpportunityWarning);
+  let result: DecisionAskResult;
   try {
     const ask = options.ask ?? askDecision;
-    const result = await ask(input, options.askRuntime ?? { cwd: options.projectRoot, env: options.env ?? process.env });
-    const ledger = await (options.recordAsk ?? recordDecisionAsk)(input, result, {
-      ...options,
-      warn,
-      caller: options.ledgerCaller === undefined ? safeCaller(options.caller) : options.ledgerCaller,
-      id: () => correlationId,
-    });
-    const opportunity = recordFor(options, {
-      phase: 'completed',
-      eligible: true, attempted: result.reason !== 'not-configured', outcome: result.status,
-      reason: result.reason, ledgerRecorded: ledger ? true : null,
-    }, correlationId, provider);
-    const opportunityRecorded = await append(opportunity, options.projectRoot, queueOpportunityWarning);
-    flushOpportunityWarning();
-    return { outcome: result.status, result, opportunity, attemptRecorded, opportunityRecorded };
+    result = await ask(input, options.askRuntime ?? { cwd: options.projectRoot, env: options.env ?? process.env });
   } catch (error) {
     const usage = error instanceof DecisionAskUsageError;
     const opportunity = recordFor(options, {
@@ -292,11 +335,30 @@ export async function runDecisionOffloadCheckpoint(
       eligible: true, attempted: !usage, outcome: usage ? 'skipped' : 'unknown',
       reason: usage ? 'usage-rejected' : 'execution-unknown', ledgerRecorded: false,
     }, correlationId, provider);
-    const opportunityRecorded = await append(opportunity, options.projectRoot, queueOpportunityWarning);
+    const opportunityRecorded = await appendBounded(opportunity, queueOpportunityWarning);
     flushOpportunityWarning();
     if (usage) throw error;
     return { outcome: 'unknown', result: null, opportunity, attemptRecorded, opportunityRecorded, error };
   }
+  let ledger = null;
+  try {
+    ledger = await (options.recordAsk ?? recordDecisionAsk)(input, result, {
+      ...options,
+      warn,
+      caller: options.ledgerCaller === undefined ? safeCaller(options.caller) : options.ledgerCaller,
+      id: () => correlationId,
+    });
+  } catch (error) {
+    warn(`warning: failed to record decision ledger: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const opportunity = recordFor(options, {
+    phase: 'completed',
+    eligible: true, attempted: result.reason !== 'not-configured', outcome: result.status,
+    reason: result.reason, ledgerRecorded: ledger ? true : null,
+  }, correlationId, provider);
+  const opportunityRecorded = await appendBounded(opportunity, queueOpportunityWarning);
+  flushOpportunityWarning();
+  return { outcome: result.status, result, opportunity, attemptRecorded, opportunityRecorded };
 }
 
 /** Collapse append-only started/completed events to one current state per checkpoint. */
@@ -324,6 +386,34 @@ async function readOpportunities(projectRoot: string): Promise<{ records: Decisi
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { records, invalid, status: 'absent' };
     return { records, invalid: invalid + 1, status: 'unreadable' };
   }
+}
+
+const ACTIVITY_LINE_PATTERN = /^##\s+\[(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\]\s+[a-z]+\s+\|\s+(.+?)\s*$/;
+const ORCHESTRATION_ACTIVITY_PATTERN = /\b(?:worker[- ]dispatch|dispatch(?:ed|ing)?\s+(?:a\s+)?worker|address-issues(?:\s+cycle)?|orchestration\s+worker)\b/i;
+
+async function readOrchestrationActivity(projectRoot: string, since: Date) {
+  const root = projectAiwgPath(projectRoot);
+  const candidates = [path.join(root, 'activity.log'), path.join(root, 'activity-log', 'activity.log')];
+  for (const candidate of candidates) {
+    try {
+      let recognizable = 0;
+      let valid = 0;
+      const input = createReadStream(candidate, { encoding: 'utf8' });
+      for await (const line of createInterface({ input, crlfDelay: Infinity })) {
+        const match = ACTIVITY_LINE_PATTERN.exec(line);
+        if (!match) continue;
+        const timestamp = Date.parse(`${match[1]}T${match[2]}:00.000Z`);
+        if (!Number.isFinite(timestamp) || timestamp < since.getTime()) continue;
+        valid += 1;
+        if (ORCHESTRATION_ACTIVITY_PATTERN.test(match[3])) recognizable += 1;
+      }
+      return { status: 'available' as const, source: path.relative(projectRoot, candidate), valid, recognizable };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      return { status: 'unreadable' as const, source: path.relative(projectRoot, candidate), valid: 0, recognizable: 0 };
+    }
+  }
+  return { status: 'absent' as const, source: null, valid: 0, recognizable: 0 };
 }
 
 function filterScope<T extends { timestamp: string; sessionId: string }>(records: T[], sessionId: string | undefined, since: Date): T[] {
@@ -398,9 +488,10 @@ export async function buildDecisionOffloadSnapshot(options: BuildDecisionOffload
   let credential: Awaited<ReturnType<typeof inspectJevCredential>>;
   try { credential = await inspectJevCredential({ cwd: projectRoot, env }); }
   catch { credential = { configured: null, enabled: null, source: 'unknown' }; }
-  const [opportunitiesRead, ledger] = await Promise.all([
+  const [opportunitiesRead, ledger, activity] = await Promise.all([
     readOpportunities(projectRoot),
     decisionLedgerHistory(projectRoot),
+    readOrchestrationActivity(projectRoot, since),
   ]);
   const opportunityEvents = filterScope(opportunitiesRead.records, sessionId, since);
   const opportunities = collapseOpportunities(opportunityEvents);
@@ -421,6 +512,8 @@ export async function buildDecisionOffloadSnapshot(options: BuildDecisionOffload
   const evaluateState = configReadable && enablement
     ? (enablement.enabled ? 'configured-unprobed' : 'disabled') : 'unknown';
   const activation = activationEvidence(options.activationEvidence);
+  const organicCalls = calls.filter(record => decisionOffloadCategory(record.caller) === 'organic');
+  const activityGap = activity.recognizable > 0 && organicCalls.length === 0;
   const driftReasons: string[] = [];
   const attemptedWithoutLedger = [...opportunityIds].filter(id => !callIds.has(id)).length;
   const organicAttemptedWithoutLedger = [...organicOpportunityIds].filter(id => !organicCallIds.has(id)).length;
@@ -458,11 +551,23 @@ export async function buildDecisionOffloadSnapshot(options: BuildDecisionOffload
       } : null,
     },
     activation,
-    coverage: { executable: [], instructionOnly: DECISION_OFFLOAD_CHECKPOINT_COVERAGE, unsupportedObservation: 'unknown' },
+    coverage: { executable: DECISION_OFFLOAD_EXECUTABLE_COVERAGE,
+      instructionOnly: DECISION_OFFLOAD_CHECKPOINT_COVERAGE, unsupportedObservation: 'unknown' },
     opportunities: { organic, excluded: diagnostics, journalEvents: opportunityEvents.length, invalidRecords: opportunitiesRead.invalid,
       journal: opportunitiesRead.status },
-    calls: { organic: completedCalls(calls.filter(record => decisionOffloadCategory(record.caller) === 'organic')),
+    calls: { organic: completedCalls(organicCalls),
       excluded: completedCalls(calls.filter(record => decisionOffloadCategory(record.caller) !== 'organic')), invalidRecords: ledger.skipped },
+    activityHint: {
+      status: activityGap ? 'advisory' : 'none',
+      reason: activityGap ? 'orchestration-without-organic-completed-calls' : null,
+      recognizableOrchestrationEvents: activity.recognizable,
+      eligibleCount: 'unknown',
+      confidence: 'low',
+      scope: 'recent-window',
+      source: activity.source,
+      journal: activity.status,
+      note: 'Generic activity is a low-confidence signal only; it is not a measured eligible-opportunity denominator.',
+    },
     correlation: { matched: [...opportunityIds].filter(id => callIds.has(id)).length,
       attemptedWithoutLedger,
       organicAttemptedWithoutLedger,
