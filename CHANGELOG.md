@@ -60,6 +60,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Stable release promotion uses routine RC validation and exact signed artifacts; quarterly cross-provider harness qualification is optional.
+
 - Keep offline decision-offload reports and rule inventories read-only when
   invoked through the public CLI, including installation and index cache state
   (#2948).

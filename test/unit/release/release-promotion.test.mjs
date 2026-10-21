@@ -25,73 +25,35 @@ afterEach(() => roots.splice(0).forEach(root => fs.rmSync(root, { recursive: tru
 const repoRoot = path.resolve(import.meta.dirname, '../../..');
 
 describe('exact retained RC production promotion gate (#3201)', () => {
-  it('loads only the checked-in disabled policy and preserves explicit identity trust holds', () => {
+  it('loads the checked-in exact-RC policy and authenticated user identity', () => {
     const policy = loadCanonicalPromotionPolicy({ file: path.join(temp(), 'candidate-policy.json') });
     expect(policy.source).toBe(PROMOTION_POLICY);
-    expect(policy.enabled).toBe(false);
-    expect(policy.github_transport_trust).toBeNull();
-    expect(policy.comparison.repetitions).toBe(5);
-    expect(policy.comparison.mode).toBe('utc-calendar-quarter');
-    expect(policy.comparison.runtime_identity).toEqual({
-      allow_unattested_backend: false,
-      providers: { claude: null, codex: null, hermes: null },
-    });
+    expect(policy.enabled).toBe(true);
+    expect(policy.github_transport_trust).toBe('github-authenticated-user-api');
+    expect(policy.allowed_approval_issuer_ids).toEqual([1159087]);
     expect(policy.publication.order).toEqual(['npmjs', 'gitea']);
     expect(Object.isFrozen(policy)).toBe(true);
-    expect(Object.isFrozen(policy.comparison.models)).toBe(true);
     expect(policy.sha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it('has a positive configuration path only through explicit reviewed lower-trust identity policy', () => {
+  it('permits configured routine promotion without provider comparison identities', () => {
     const configured = JSON.parse(fs.readFileSync(path.join(repoRoot, PROMOTION_POLICY), 'utf8'));
     Object.assign(configured, { enabled: true, rc_workflow_id: 73,
       github_api_actor_ids: [77], github_transport_trust: 'github-authenticated-user-api',
-      github_evidence_credential_kind: 'fine-grained-personal-access-token' });
-    Object.assign(configured.comparison, { workflow_id: 74, required_job_name: 'Retain comparisons',
-      required_steps: ['Run comparisons', 'Retain comparison evidence'], seed: 'frozen-production-seed', baseline_version: '2026.10.2',
-      allowed_approval_issuer_ids: [1159087] });
-    configured.comparison.runtime_identity.allow_unattested_backend = true;
-    for (const provider of ['claude', 'codex', 'hermes']) {
-      configured.comparison.runtime_identity.providers[provider] = 'requested-cli-model';
-      configured.comparison.models[provider] = { subject: `${provider}-subject-20261020`, judge: `${provider}-judge-20261020` };
-    }
-    configured.comparison.mode = 'per-release';
+      github_evidence_credential_kind: 'fine-grained-personal-access-token', allowed_approval_issuer_ids: [1159087] });
     expect(assessPromotionPolicyConfiguration(configured)).toEqual({ ready: true, unmet_requirements: [] });
-    configured.comparison.mode = 'utc-calendar-quarter';
-    expect(assessPromotionPolicyConfiguration(configured)).toEqual({ ready: true, unmet_requirements: [] });
-    configured.comparison.mode = 'per-release';
-    configured.comparison.runtime_identity.allow_unattested_backend = false;
-    const held = assessPromotionPolicyConfiguration(configured);
-    expect(held.ready).toBe(false);
-    expect(held.unmet_requirements.join(' ')).toMatch(/backend-unattested/);
+    expect(() => assessPromotionPolicyConfiguration({ ...configured, required_validation_profile: 'quarterly-full-v1' })).toThrow();
+    configured.allowed_approval_issuer_ids = [];
+    expect(assessPromotionPolicyConfiguration(configured).ready).toBe(false);
   });
 
-  it('returns a frozen non-ready decision before token or network access while policy is disabled', async () => {
-    const fetchImpl = vi.fn(() => { throw new Error('network must not run'); });
-    const credentialReads = vi.fn(), originalEnv = process.env;
-    process.env = new Proxy(originalEnv, { get(target, property, receiver) {
-      if (property === 'AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN') { credentialReads(property); throw new Error('credentials must not be read'); }
-      return Reflect.get(target, property, receiver);
-    } });
-    let decision;
-    try {
-      decision = await evaluateReleasePromotion({ rcTag: 'candidate supplied', stableTag: 'candidate supplied',
-        runId: 1, artifactId: 1, reportFiles: [], destination: temp(), fetchImpl });
-    } finally { process.env = originalEnv; }
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(credentialReads).not.toHaveBeenCalled();
-    expect(decision.schema).toBe(PROMOTION_DECISION_SCHEMA);
-    expect(decision.ready_for_publication).toBe(false);
-    expect(decision.production_identity_authenticated).toBe(false);
-    expect(decision.production_identity_policy_satisfied).toBe(false);
-    expect(decision.candidate).toBeNull();
-    expect(decision.packages).toEqual([]);
-    expect(decision.unmet_requirements.join(' ')).toMatch(/policy is disabled/);
-    expect(decision.unmet_requirements.join(' ')).toMatch(/GitHub user API transport trust level/);
-    expect(decision.unmet_requirements.join(' ')).toMatch(/backend-unattested/);
-    expect(decision.unmet_requirements.join(' ')).not.toMatch(/Missing canonical quarterly hermes/);
-    expect(Object.isFrozen(decision)).toBe(true);
-    expect(Object.isFrozen(decision.unmet_requirements)).toBe(true);
+  it('rejects incomplete or disabled policy before credential access', () => {
+    const configured = JSON.parse(fs.readFileSync(path.join(repoRoot, PROMOTION_POLICY), 'utf8'));
+    expect(assessPromotionPolicyConfiguration({ ...configured, enabled: false }).ready).toBe(false);
+    expect(assessPromotionPolicyConfiguration({ ...configured, github_api_actor_ids: [] }).ready).toBe(false);
+    const source = fs.readFileSync(path.join(repoRoot, 'tools/release/release-promotion.mjs'), 'utf8');
+    const start = source.indexOf('export async function evaluateReleasePromotion');
+    expect(source.indexOf('if (activationProblems(policy).length)', start)).toBeLessThan(source.indexOf('process.env.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN', start));
   });
 
   it('does not accept a caller-selected policy option', () => {
@@ -112,10 +74,9 @@ describe('exact retained RC production promotion gate (#3201)', () => {
   });
 
   it.each([
-    ['enabled', policy => { policy.enabled = true; }],
+    ['enabled', policy => { policy.enabled = false; }],
     ['actor', policy => { policy.github_api_actor_ids = [999]; }],
-    ['issuer', policy => { policy.comparison.allowed_approval_issuer_ids = [999]; }],
-    ['model', policy => { policy.comparison.models.codex.subject = 'changed-model'; }],
+    ['issuer', policy => { policy.allowed_approval_issuer_ids = [999]; }],
   ])('rejects a dirty %s policy that differs from the committed policy', (_field, mutate) => {
     const root = temp(), file = path.join(root, PROMOTION_POLICY);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -138,13 +99,13 @@ describe('exact retained RC production promotion gate (#3201)', () => {
       policy: loadCanonicalPromotionPolicy(), packages: [] };
     await expect(publishReleasePromotion({ decision: forged, registryName: 'npmjs', receiptPath,
       spawn(...args) { calls.push(args); return { status: 0, stdout: '{}' }; } })).rejects.toThrow(/in-process ready promotion decision/);
-    const real = await evaluateReleasePromotion();
-    const serialized = JSON.parse(JSON.stringify({ ...real, ready_for_publication: true }));
+    const real = loadCanonicalPromotionPolicy();
+    const serialized = JSON.parse(JSON.stringify(forged));
     await expect(publishReleasePromotion({ decision: serialized, registryName: 'npmjs', receiptPath,
       spawn(...args) { calls.push(args); return { status: 0, stdout: '{}' }; } })).rejects.toThrow(/in-process ready promotion decision/);
     expect(calls).toEqual([]);
     expect(fs.existsSync(receiptPath)).toBe(false);
-    expect(() => { real.ready_for_publication = true; }).toThrow();
+    expect(() => { real.enabled = false; }).toThrow();
   });
 
   it('does not let serialized evidence or comparison receipts become promotion authority', () => {

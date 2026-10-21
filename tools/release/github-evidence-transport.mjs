@@ -64,7 +64,7 @@ export function createGithubEvidenceTransport({ token, approvalIssue, fetchImpl 
     },
     async listApprovals({ repository }) {
       const page = await collection(`${repoPath(repository)}/issues/${approvalIssue}/comments`);
-      const approvals = page.items.filter(item => { try { return ['aiwg-release-comparison-approval/v1', 'aiwg-release-comparison-approval/v2'].includes(JSON.parse(item.body)?.schema); } catch { return false; } });
+      const approvals = page.items.filter(item => { try { return ['aiwg-release-comparison-approval/v1', 'aiwg-release-comparison-approval/v2', 'aiwg-stable-release-approval/v1'].includes(JSON.parse(item.body)?.schema); } catch { return false; } });
       return { items: approvals.map(item => ({ id: item.id, html_url: item.html_url, actor: item.user, created_at: item.created_at, updated_at: item.updated_at, body: item.body })), complete: true, totalCount: approvals.length };
     },
     async downloadArtifact({ repository, artifactId, destination }) {

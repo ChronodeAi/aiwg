@@ -35,7 +35,7 @@
 #      requirement is informational).
 # 3. Tags must be pushed to the GitHub mirror, then the stable workflow must be
 #    dispatched against the signed stable tag with the complete retained-RC,
-#    comparison, and approval evidence inputs. A tag push alone fails closed:
+#    and approval evidence inputs. A tag push alone fails closed:
 #      git push origin main --tags && git push github main --tags
 #    `.aiwg/aiwg.config` `remotes.secondary[github].push_on_release: true`
 #    documents this as the release expectation.
@@ -72,7 +72,7 @@
 #   reduced.
 #
 # To publish:
-# 1. Complete the signed RC validation and trusted comparison workflow.
+# 1. Complete the signed RC validation.
 # 2. Sign the stable tag with the dedicated release key and push both tags.
 # 3. Dispatch this workflow with --ref set to the stable tag and every required
 #    evidence input. It publishes the exact retained RC tarballs, then creates
@@ -104,14 +104,6 @@ on:
         type: string
       rc_artifact_id:
         description: 'Retained-RC artifact ID from that run'
-        required: true
-        type: string
-      comparison_run_id:
-        description: 'Successful trusted current-quarter comparison/validation workflow run ID'
-        required: true
-        type: string
-      comparison_artifact_id:
-        description: 'Current-quarter full-validation and three-provider comparison artifact ID'
         required: true
         type: string
       approval_issue:
@@ -299,25 +291,20 @@ jobs:
           RC_TAG: ${{ github.event.inputs.rc_tag }}
           RC_RUN_ID: ${{ github.event.inputs.rc_run_id }}
           RC_ARTIFACT_ID: ${{ github.event.inputs.rc_artifact_id }}
-          COMPARISON_RUN_ID: ${{ github.event.inputs.comparison_run_id }}
-          COMPARISON_ARTIFACT_ID: ${{ github.event.inputs.comparison_artifact_id }}
           APPROVAL_ISSUE: ${{ github.event.inputs.approval_issue }}
           APPROVAL_SHA256: ${{ github.event.inputs.approval_sha256 }}
         run: |
           set -euo pipefail
           test -n "${AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN:-}" || { echo "Dedicated GitHub user evidence token is required" >&2; exit 1; }
           RC_DIR=$(mktemp -d "$RUNNER_TEMP/aiwg-rc.XXXXXX")
-          CMP_DIR=$(mktemp -d "$RUNNER_TEMP/aiwg-comparison.XXXXXX")
           node tools/release/release-promotion.mjs publish \
             --rc-tag "$RC_TAG" \
             --stable-tag '${{ steps.release_tag.outputs.release_tag }}' \
             --run-id "$RC_RUN_ID" \
             --artifact-id "$RC_ARTIFACT_ID" \
-            --comparison-run-id "$COMPARISON_RUN_ID" \
-            --comparison-artifact-id "$COMPARISON_ARTIFACT_ID" \
             --approval-issue "$APPROVAL_ISSUE" \
             --approval-sha256 "$APPROVAL_SHA256" \
-            --destination "$RC_DIR" --comparison-destination "$CMP_DIR" \
+            --destination "$RC_DIR" \
             --registry npmjs --receipt "$RUNNER_TEMP/npmjs-publication.json" \
             --output "$RUNNER_TEMP/promotion-decision.json"
           node <<'NODE'
@@ -760,13 +747,11 @@ jobs:
           RC_TAG: ${{ github.event.inputs.rc_tag }}
           RC_RUN_ID: ${{ github.event.inputs.rc_run_id }}
           RC_ARTIFACT_ID: ${{ github.event.inputs.rc_artifact_id }}
-          COMPARISON_RUN_ID: ${{ github.event.inputs.comparison_run_id }}
-          COMPARISON_ARTIFACT_ID: ${{ github.event.inputs.comparison_artifact_id }}
           APPROVAL_ISSUE: ${{ github.event.inputs.approval_issue }}
           APPROVAL_SHA256: ${{ github.event.inputs.approval_sha256 }}
         run: |
           set -euo pipefail
-          RECOVERY="gh workflow run npm-publish.yml --repo jmagly/aiwg --ref ${TAG} -f tag_to_publish=${TAG} -f rc_tag=${RC_TAG} -f rc_run_id=${RC_RUN_ID} -f rc_artifact_id=${RC_ARTIFACT_ID} -f comparison_run_id=${COMPARISON_RUN_ID} -f comparison_artifact_id=${COMPARISON_ARTIFACT_ID} -f approval_issue=${APPROVAL_ISSUE} -f approval_sha256=${APPROVAL_SHA256}"
+          RECOVERY="gh workflow run npm-publish.yml --repo jmagly/aiwg --ref ${TAG} -f tag_to_publish=${TAG} -f rc_tag=${RC_TAG} -f rc_run_id=${RC_RUN_ID} -f rc_artifact_id=${RC_ARTIFACT_ID} -f approval_issue=${APPROVAL_ISSUE} -f approval_sha256=${APPROVAL_SHA256}"
           if [ "$PROVENANCE_OUTCOME" = failure ]; then
             MESSAGE="Re-check npm visibility and dist.attestations for aiwg@${VERSION}, @aiwg/cli@${VERSION}, and @aiwg/cockpit@${VERSION}: npm view <package>@${VERSION} dist.attestations --json --prefer-online. Recovery: ${RECOVERY}"
             echo "::warning::${MESSAGE}"

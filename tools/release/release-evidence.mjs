@@ -282,7 +282,7 @@ async function acquireGithubReleaseEvidenceInternal({ client, repository, workfl
     production_identity_authenticated: false, ready_for_publication: false,
     unmet_requirements: unmetRequirements(extractionVerified),
     apiCaller: { id: identity.id, login: identity.login, type: identity.type ?? null },
-    workflow, run: runMetadata, jobs, artifact, workflowSource, approvals,
+    workflow, run: runMetadata, jobs, artifact, workflowSource, approvals, observed_at: identity.server_date ?? null,
     tags, archive: { sha256: archiveSha256, path: path.resolve(download.archivePath), extraction_verified: extractionVerified },
     candidate: { ...verified, manifest_sha256: sha256(manifestPath), package_tarball: rootTarball,
       package_tarball_sha256: verified.manifest.files[rootTarball] } });
@@ -699,8 +699,12 @@ function expectedQuarterlyBinding(receipt) {
     manifest_sha256: receipt.attestation.sha256, validation_profile: receipt.validation.profile,
     validation_sha256: receipt.validation.sha256 };
 }
+function approvalSchema(item) {
+  try { return JSON.parse(item.body)?.schema; } catch { return null; }
+}
 function verifyApproval(evidence, bindings, policy, comparisonEvidence) {
-  const candidates = evidence.approvals.filter(item => policy.allowedApprovalIssuerIds.map(String).includes(String(item.actor?.id)));
+  const expectedSchema = policy.mode === 'utc-calendar-quarter' ? QUARTERLY_RELEASE_APPROVAL_SCHEMA : RELEASE_APPROVAL_SCHEMA;
+  const candidates = evidence.approvals.filter(item => approvalSchema(item) === expectedSchema && policy.allowedApprovalIssuerIds.map(String).includes(String(item.actor?.id)));
   if (candidates.length !== 1) throw new Error('Exactly one approval from an authenticated allowed issuer is required');
   const envelope = candidates[0], payload = approvalPayload(envelope, evidence.repository);
   if ((policy.mode ?? 'per-release') === 'utc-calendar-quarter') {
@@ -744,6 +748,25 @@ function verifyApproval(evidence, bindings, policy, comparisonEvidence) {
   }
   return { id: envelope.id, url: envelope.html_url, body_sha256: hash(envelope.body),
     issuer: { id: envelope.actor.id, login: envelope.actor.login, type: envelope.actor.type ?? null } };
+}
+
+/** Authenticate a stable release approval bound to the exact retained RC. */
+export function verifyStableReleaseApproval({ evidence, allowedIssuerIds, bodySha256, policySha256 } = {}) {
+  if (!evidenceReceipts.has(evidence)) throw new Error('Approval requires an acquired GitHub evidence receipt');
+  if (!Array.isArray(allowedIssuerIds) || !allowedIssuerIds.length || (!SHA256.test(bodySha256 ?? '') || !SHA256.test(policySha256 ?? ''))) throw new Error('Invalid stable release approval policy');
+  const matches = evidence.approvals.filter(item => approvalSchema(item) === 'aiwg-stable-release-approval/v1' && allowedIssuerIds.map(String).includes(String(item.actor?.id)));
+  if (matches.length !== 1) throw new Error('Exactly one approval from an authenticated allowed issuer is required');
+  const envelope = matches[0], payload = approvalPayload(envelope, evidence.repository);
+  const approvedAt = parseTimestamp(envelope.updated_at, 'stable approval');
+  if (approvedAt < parseTimestamp(evidence.run.updated_at, 'RC completion')
+    || approvedAt > parseTimestamp(evidence.observed_at, 'GitHub server')) throw new Error('Stable approval timestamp is outside the authenticated RC observation window');
+  const { stable_tag: _tag, stable_tag_object_sha: _tagObject, ...rcCandidate } = expectedCandidateBinding(evidence, true);
+  if (!exactKeys(payload, ['schema', 'repository', 'decision', 'policy_sha256', 'candidate'])
+    || payload.policy_sha256 !== policySha256 || payload.schema !== 'aiwg-stable-release-approval/v1' || payload.repository !== evidence.repository
+    || payload.decision !== 'approve' || !same(payload.candidate, rcCandidate)
+    || hash(envelope.body) !== bodySha256) throw new Error('Stable approval is not bound to the exact candidate and body');
+  return deepFreeze({ id: envelope.id, url: envelope.html_url, body_sha256: bodySha256,
+    issuer: { id: envelope.actor.id, login: envelope.actor.login, type: envelope.actor.type ?? null } });
 }
 
 /** Verify approval content while taking issuer identity only from acquired API evidence. */

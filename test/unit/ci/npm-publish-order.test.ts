@@ -66,14 +66,26 @@ afterEach(() => {
 });
 
 describe('exact retained-RC publication and advisory registry checks', () => {
+  it('keeps Gitea promotion bound to the six release inputs without comparison IDs', () => {
+    const mirror = parse(readFileSync(join(root, '.gitea/workflows/npm-publish.yml'), 'utf8'));
+    const inputs = mirror.on.workflow_dispatch.inputs;
+    expect(Object.keys(inputs).sort()).toEqual(['tag_to_publish', 'rc_tag', 'rc_run_id', 'rc_artifact_id', 'approval_issue', 'approval_sha256'].sort());
+    for (const value of Object.values(inputs) as Array<{ required: boolean }>) expect(value.required).toBe(true);
+    const jobs = Object.values(mirror.jobs) as Array<{ steps?: Array<{ run?: string }> }>;
+    const scripts = jobs.flatMap(job => job.steps ?? []).map(item => item.run ?? '').join('\n');
+    expect(scripts).toContain('release-promotion.mjs publish');
+    expect(scripts).not.toMatch(/comparison-(run|artifact)-id|comparison-destination/);
+  });
+
   it('requires authenticated dispatch evidence and orders exact publication before release assets', () => {
     const release = index('Create or update GitHub release');
     const promotion = index('Authorize and publish exact retained RC to npmjs.org');
     const preserve = index('Preserve promotion decision and partial receipt');
-    for (const input of ['tag_to_publish', 'rc_tag', 'rc_run_id', 'rc_artifact_id', 'comparison_run_id',
-      'comparison_artifact_id', 'approval_issue', 'approval_sha256']) {
+    for (const input of ['tag_to_publish', 'rc_tag', 'rc_run_id', 'rc_artifact_id', 'approval_issue', 'approval_sha256']) {
       expect(workflow.on.workflow_dispatch.inputs[input].required).toBe(true);
     }
+    expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty('comparison_run_id');
+    expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty('comparison_artifact_id');
     expect(index('Verify signed tag (#1299 / A9 gate)')).toBeLessThan(promotion);
     expect(promotion).toBeLessThan(preserve);
     expect(preserve).toBeLessThan(release);
@@ -86,7 +98,7 @@ describe('exact retained-RC publication and advisory registry checks', () => {
     });
     expect(Object.keys(step('Authorize and publish exact retained RC to npmjs.org').env).sort()).toEqual([
       'AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN', 'APPROVAL_ISSUE', 'APPROVAL_SHA256',
-      'COMPARISON_ARTIFACT_ID', 'COMPARISON_RUN_ID', 'RC_ARTIFACT_ID', 'RC_RUN_ID', 'RC_TAG',
+      'RC_ARTIFACT_ID', 'RC_RUN_ID', 'RC_TAG',
     ].sort());
     expect(step('Authorize and publish exact retained RC to npmjs.org').env).not.toHaveProperty('GITHUB_TOKEN');
     expect(step('Authorize and publish exact retained RC to npmjs.org').run).toContain('--rc-tag "$RC_TAG"');

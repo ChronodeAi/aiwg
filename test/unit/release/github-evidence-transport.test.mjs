@@ -100,12 +100,14 @@ describe('authenticated GitHub release evidence transport', () => {
     const transport = createGithubEvidenceTransport({ token: 'secret', approvalIssue: 3201, fetchImpl: async (url, options) => {
       calls.push({ url, options }); const parsed = new URL(url);
       if (parsed.pathname.endsWith('/jobs')) return json({ total_count: 101, jobs: Array.from({ length: parsed.searchParams.get('page') === '1' ? 100 : 1 }, (_, i) => ({ id: i })) });
-      if (parsed.pathname.endsWith('/comments')) return json([{ id: 1, user: { id: 3, login: 'operator' }, body: '{\"schema\":\"aiwg-release-comparison-approval/v1\"}' }, { id: 2, body: 'Ordinary issue comment' }]);
+      if (parsed.pathname.endsWith('/comments')) return json([{ id: 1, user: { id: 3, login: 'operator' }, body: '{\"schema\":\"aiwg-release-comparison-approval/v1\"}' }, { id: 2, body: 'Ordinary issue comment' }, { id: 4, user: { id: 3, login: 'operator' }, body: '{\"schema\":\"aiwg-stable-release-approval/v1\"}' }]);
       return json({ type: 'file', path: '.github/workflows/release-candidate.yml', encoding: 'base64', content: Buffer.from('workflow').toString('base64') });
     } });
     expect((await transport.listJobs({ repository: 'owner/repo', runId: 11, attempt: 4 })).items).toHaveLength(101);
     expect(calls[0].url).toContain('/runs/11/attempts/4/jobs');
-    expect((await transport.listApprovals({ repository: 'owner/repo' })).items[0].actor.id).toBe(3);
+    const approvals = await transport.listApprovals({ repository: 'owner/repo' });
+    expect(approvals.items[0].actor.id).toBe(3);
+    expect(approvals.items.map(item => item.id)).toEqual([1, 4]);
     expect((await transport.getWorkflowSource({ repository: 'owner/repo', path: '.github/workflows/release-candidate.yml', commit })).content).toBe('workflow');
     expect(calls.at(-1).url).toContain(`ref=${commit}`);
     await expect(transport.getWorkflowSource({ repository: 'owner/repo', path: '.github/workflows/release-candidate.yml', commit: 'main' })).rejects.toThrow();
