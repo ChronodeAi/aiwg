@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findPackageRoot } from '../cli/find-package-root.js';
 import { projectAiwgPath, projectControlPath } from '../config/project-artifacts.js';
 import { getUserStateDir } from '../config/user-state.js';
+import { resolveIndexWorkers } from './index-preparation.js';
 import { collectGraphIndexFiles } from './index-files.js';
 import { collectIndexStatus } from './index-status.js';
 import { getFortemiCoreSyncStatus, syncFortemiCoreIndex } from './fortemi-core-sync.js';
@@ -24,6 +25,7 @@ export interface RefreshOptions {
   workspaces?: string[];
   root?: string | string[];
   full?: boolean;
+  workers?: number;
   only?: 'graphs' | 'sessions' | 'caches' | 'runtime' | 'models' | 'issues';
   dryRun?: boolean;
   lockWaitMs?: number;
@@ -39,6 +41,7 @@ export type RefreshJob = {
   wallMs: number;
   reason?: string;
   error?: string;
+  diagnostics?: string[];
   sessionImport?: BatchImportReceipt;
   sessionImports?: BatchImportReceipt[];
   noManifest?: number;
@@ -308,7 +311,8 @@ async function executeJob(job: RefreshJob, options: RefreshOptions, aliases: str
       return;
     }
     const { buildIndex } = await import('./index-builder.js');
-    await buildIndex(workspace, { graph, force: Boolean(options.full), explicit: false, quiet: true });
+    await buildIndex(workspace, { graph, force: Boolean(options.full), explicit: false, quiet: true, workers: options.workers,
+      onDiagnostic: message => (job.diagnostics ??= []).push(message) });
     const built = readJson<{ builtAt: string }>(path.join(directory, 'metadata.json'));
     if (!built) throw new Error(`graph did not produce metadata: ${graph}`);
     writeJson(markerPath, { fingerprint, builtAt: built.builtAt });
@@ -394,6 +398,7 @@ export async function refreshIndexes(
   options: RefreshOptions = {},
   dependencies: RefreshDependencies = {},
 ): Promise<RefreshReport> {
+  options = { ...options, workers: resolveIndexWorkers(options.workers) };
   const start = Date.now();
   const workspaces = workspacePaths(options);
   const jobs = planWorkspaceRefresh(options, workspaces);
@@ -521,13 +526,14 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
       if (flag === '--full') options.full = true;
       else if (flag === '--dry-run') options.dryRun = true;
       else if (flag === '--json') json = true;
-      else if (['--workspace', '--root', '--only', '--lock-wait-ms', '--max-record-bytes', '--max-source-bytes', '--exclude'].includes(flag)) {
+      else if (['--workspace', '--root', '--only', '--lock-wait-ms', '--max-record-bytes', '--max-source-bytes', '--exclude', '--index-workers'].includes(flag)) {
         const value = args[++i];
         if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
         if (flag === '--workspace') options.workspaces!.push(value);
         else if (flag === '--root') (options.root as string[]).push(value);
         else if (flag === '--max-record-bytes') options.maxRecordBytes = value;
         else if (flag === '--max-source-bytes') options.maxSourceBytes = value;
+        else if (flag === '--index-workers') options.workers = resolveIndexWorkers(value);
         else if (flag === '--exclude') (options.exclude ??= []).push(value);
         else if (flag === '--only') {
           if (value !== 'graphs' && value !== 'sessions' && value !== 'caches'
@@ -541,6 +547,7 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
         }
       } else throw new Error(`unknown refresh option: ${flag}`);
     }
+    options.workers = resolveIndexWorkers(options.workers);
     resolveImportLimits(undefined, { maxRecordBytes: options.maxRecordBytes, maxSourceBytes: options.maxSourceBytes });
     resolveImportExclusions(undefined, options.exclude);
     const report = await refreshIndexes(options);
@@ -549,6 +556,7 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
       console.log(`Index refresh: ${report.status} (${report.mode})${report.reason ? `: ${report.reason}` : ''}`);
       for (const job of report.jobs) console.log(`  ${job.status}: ${job.kind} ${job.scope === 'host' ? '[host]' : job.workspace}${job.graph ? ` [${job.graph}]` : ''}${job.error || job.reason ? `: ${job.error ?? job.reason}` : ''}`);
       for (const job of report.jobs) {
+        for (const diagnostic of job.diagnostics ?? []) console.log(`    preparation: ${diagnostic}`);
         for (const receipt of job.sessionImports ?? (job.sessionImport ? [job.sessionImport] : [])) {
           for (const source of receipt.run.sources) {
             if (source.status === 'excluded') console.log(`    excluded: ${source.sourceId} ${source.exclusion?.kind} ${source.exclusion?.entry}`);

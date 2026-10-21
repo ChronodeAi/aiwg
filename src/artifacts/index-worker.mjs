@@ -1,9 +1,11 @@
 /** Artifact worker uses the exact caller module: source never silently loads stale dist. */
-import { parentPort, workerData } from 'node:worker_threads';
-const module = workerData.moduleUrl.endsWith('.ts')
-  ? await (await import('tsx/esm/api')).tsImport(workerData.moduleUrl, import.meta.url)
-  : await import(workerData.moduleUrl);
-parentPort.on('message', ({ index, job }) => {
-  try { parentPort.postMessage({ index, result: module.prepareIndexArtifact(job) }); }
-  catch (error) { parentPort.postMessage({ index, error: `${job.relativePath}: ${error.message}` }); }
+const moduleUrl = process.argv[2];
+const module = moduleUrl.endsWith('.ts')
+  ? await (await import('tsx/esm/api')).tsImport(moduleUrl, import.meta.url)
+  : await import(moduleUrl);
+process.on('message', ({ index, job }) => {
+  try { process.send({ index, result: module.prepareIndexArtifact(job) }); }
+  catch (error) { process.send({ index, error: `${job.relativePath}: ${error.message}` }); }
 });
+// The parent may itself be interrupted; do not leave orphaned preparation processes.
+process.on('disconnect', () => process.exit(0));
