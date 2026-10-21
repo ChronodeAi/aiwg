@@ -51,6 +51,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- OMP ralph sessions receive `ANTHROPIC_OAUTH_TOKEN` and OMP's auth-broker client
+  variables (`OMP_AUTH_BROKER_URL`, `OMP_AUTH_BROKER_TOKEN`,
+  `OMP_AUTH_BROKER_SNAPSHOT_TTL_MS`, `OMP_AUTH_BROKER_SNAPSHOT_CACHE`,
+  `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE`). Without them an OAuth-authenticated `omp`
+  worker failed with "No API key found for anthropic".
 - The `mc run` cost estimate and its inert-ceiling warning judge each mission by
   the provider it runs on, instead of the project's first configured provider.
 - Credentials are redacted on import before anything is stored or indexed, across

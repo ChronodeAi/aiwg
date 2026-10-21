@@ -72,7 +72,11 @@ Provider auth and config names come from each provider's `sessionEnvAllowlist`
 in `agentic/code/providers/model-capabilities.v1.json`. For example, Codex keeps
 `OPENAI_API_KEY` and `CODEX_HOME`; Claude keeps Anthropic credentials and its
 Bedrock/Vertex configuration. Multi-backend clients (pi, omp, opencode) keep
-credentials for their supported inference backends. Pi's session directory and
+credentials for their supported inference backends. OMP also keeps
+`ANTHROPIC_OAUTH_TOKEN` and its auth-broker client settings
+(`OMP_AUTH_BROKER_URL`, `OMP_AUTH_BROKER_TOKEN`,
+`OMP_AUTH_BROKER_SNAPSHOT_TTL_MS`, `OMP_AUTH_BROKER_SNAPSHOT_CACHE`,
+`OMP_AUTH_BROKER_ACCOUNT_POOL_FILE`). Pi's session directory and
 the exact pi/muse fixture scenario/receipt names are also listed there; there
 is no general `AIWG_*` passthrough. Muse can use its stored login under the
 forwarded home/XDG directories.
