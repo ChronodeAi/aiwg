@@ -60,6 +60,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Avoid costly email-pattern scans on large session records without an at-sign,
+  preserving redaction behavior and existing performance bounds (#3273).
 - Preserve compact decision-offload activation during context regeneration and
   compaction, and clarify bounded worker-routing decisions (#2948).
 - Avoid redundant Pi addon deployment processes while preserving deployed files.
