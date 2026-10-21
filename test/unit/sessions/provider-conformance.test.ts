@@ -252,10 +252,10 @@ describe('eighteen-provider session release conformance', () => {
       expect(steps[positions[i]]['continue-on-error'], required[i]).toBeUndefined();
     }
     const shardJob = workflow.jobs['test-shards'];
-    expect(shardJob.strategy).toEqual({ 'fail-fast': false, matrix: { shard: [1, 2] } });
+    expect(shardJob.strategy).toEqual({ 'fail-fast': false, matrix: { shard: [1, 2, 3, 4] } });
     const shard = shardJob.steps.find((step: { name?: string }) => step.name === 'Run default test shard');
     expect(shard).toMatchObject({
-      run: 'node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test -- --shard=${{ matrix.shard }}/2 --maxWorkers=6',
+      run: 'node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test -- --shard=${{ matrix.shard }}/4 --maxWorkers=4',
     });
     expect(shard.if).toBeUndefined();
     expect(shard['continue-on-error']).toBeUndefined();

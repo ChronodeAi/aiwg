@@ -37,7 +37,9 @@ instruction does not itself invoke a classifier or authorize an action.
 ### Rule 1: Offload bounded decisions first
 
 When the question has a fixed answer shape, call Jev before reasoning it out
-yourself:
+yourself. A bounded choice between the current session and a worker is eligible
+even when it is part of a larger investigation or plan. Offload the bounded
+choice, not the multi-step plan itself; the answer does not authorize an action.
 
 ```bash
 aiwg decision ask --question "<q>" --yes-no --json

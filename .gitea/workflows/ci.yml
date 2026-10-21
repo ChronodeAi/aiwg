@@ -269,18 +269,20 @@ jobs:
         run: npm run test:integration:serve
 
   # Split the default Vitest file set with Vitest's native deterministic shard
-  # assignment. Both required legs retain the production build, optional
+  # assignment. All four required legs retain the production build, optional
   # SQLite backend, provider sandbox capability gate, owned TMPDIR/leak check,
-  # performance environment and the existing 20-minute watchdog.
+  # performance environment and the existing 20-minute watchdog. Four workers
+  # leave headroom for the child CLIs used by deployment-heavy test files on
+  # the smallest qualified runner (8 CPUs / 16 GiB).
   test-shards:
-    name: Default tests (shard ${{ matrix.shard }}/2)
+    name: Default tests (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
 
     steps:
       - name: Checkout code
@@ -323,7 +325,7 @@ jobs:
           AIWG_PERF_BUDGET_VERSION_MS: "300"
           AIWG_PERF_BUDGET_HELP_MS: "750"
           AIWG_PERF_SAMPLE_COUNT: "7"
-        run: node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test -- --shard=${{ matrix.shard }}/2 --maxWorkers=6
+        run: node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test -- --shard=${{ matrix.shard }}/4 --maxWorkers=4
 
   # Full-corpus provider deployments spawn bounded child CLIs and share one
   # immutable source cache. Keep them serial and outside the general worker
@@ -379,10 +381,14 @@ jobs:
         run: node tools/ci/run-with-hang-report.mjs --timeout 25m -- npm run test:d29-slow
 
   packaging:
-    name: Package lifecycle
+    name: Package lifecycle (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
@@ -395,7 +401,7 @@ jobs:
       - name: Enforce package size and dependency budgets (#3075)
         run: npm run check:budgets
       - name: Run isolated packaging lifecycle tests
-        run: npm run test:packaging
+        run: npm run test:packaging -- --shard=${{ matrix.shard }}/4
 
   release-discovery:
     name: Release discovery and installed package

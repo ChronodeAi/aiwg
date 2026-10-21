@@ -6,7 +6,7 @@ import { resolveDecisionEnablement } from '../config/decision-config.js';
 import { projectAiwgPath } from '../config/project-artifacts.js';
 import * as credentials from './jev-credentials.js';
 
-export const DECISION_COMPACT_ANCHOR = 'Decision offload: read `aiwg show rule decision-offload`; at eligible bounded checkpoints use the CLI or MCP ask capability. Answers are advisory; follow the rule’s fallback and authorization boundaries.';
+export const DECISION_COMPACT_ANCHOR = 'Decision offload: before the first eligible bounded choice, including ordinary triage or worker routing, read `aiwg show rule decision-offload` and use the CLI or MCP ask capability. On fallback decide normally. Answers are advisory and do not authorize actions.';
 
 function isInstalledEntry(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;

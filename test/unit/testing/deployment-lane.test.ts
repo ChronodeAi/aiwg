@@ -4,8 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import base from '../../../config/vitest.config.js';
 import deployment from '../../../config/vitest.deployment.config.js';
+import packaging from '../../../config/vitest.packaging.config.js';
 import uatConfig from '../../../config/vitest.uat.config.js';
-import { deploymentFiles } from '../../../config/test-lanes.mjs';
+import { deploymentFiles, packagingFiles } from '../../../config/test-lanes.mjs';
 
 const root = path.resolve(import.meta.dirname, '../../..');
 
@@ -43,13 +44,13 @@ describe('required provider deployment lane', () => {
     );
   });
 
-  it('runs default tests in two required native Vitest shards', () => {
+  it('runs default tests in four required native Vitest shards with bounded workers', () => {
     const workflow = parseYaml(readFileSync(path.join(root, '.gitea/workflows/ci.yml'), 'utf8'));
     const job = workflow.jobs['test-shards'];
-    expect(job.name).toBe('Default tests (shard ${{ matrix.shard }}/2)');
+    expect(job.name).toBe('Default tests (shard ${{ matrix.shard }}/4)');
     expect(job.strategy).toEqual({
       'fail-fast': false,
-      matrix: { shard: [1, 2] },
+      matrix: { shard: [1, 2, 3, 4] },
     });
     expect(job['timeout-minutes']).toBe(30);
 
@@ -60,7 +61,7 @@ describe('required provider deployment lane', () => {
       env?: Record<string, string>;
       'continue-on-error'?: boolean;
     }>;
-    const command = 'node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test -- --shard=${{ matrix.shard }}/2 --maxWorkers=6';
+    const command = 'node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test -- --shard=${{ matrix.shard }}/4 --maxWorkers=4';
     const shard = steps.find(step => step.name === 'Run default test shard');
     expect(shard).toMatchObject({
       run: command,
@@ -88,6 +89,31 @@ describe('required provider deployment lane', () => {
     expect(shardSandbox?.if).toBe(preflightSandbox.if);
     expect(shardSandbox?.run).toBe(preflightSandbox.run);
     expect(workflow.jobs.build.needs).toEqual(expect.arrayContaining(['test', 'test-shards']));
+  });
+
+  it('runs every packaging file in four required native shards without widening its budget', () => {
+    expect(packaging.test.include).toEqual(packagingFiles);
+    for (const file of packagingFiles) expect(base.test.exclude).toContain(file);
+
+    const workflow = parseYaml(readFileSync(path.join(root, '.gitea/workflows/ci.yml'), 'utf8'));
+    const job = workflow.jobs.packaging;
+    expect(job.name).toBe('Package lifecycle (shard ${{ matrix.shard }}/4)');
+    expect(job['timeout-minutes']).toBe(10);
+    expect(job.strategy).toEqual({
+      'fail-fast': false,
+      matrix: { shard: [1, 2, 3, 4] },
+    });
+    const steps = job.steps as Array<{ name?: string; run?: string; if?: string; 'continue-on-error'?: boolean }>;
+    expect(steps.map(step => step.run ?? '')).toEqual(expect.arrayContaining([
+      'npm ci',
+      'npm run build',
+      'npm run check:budgets',
+      'npm run test:packaging -- --shard=${{ matrix.shard }}/4',
+    ]));
+    const run = steps.find(step => step.name === 'Run isolated packaging lifecycle tests');
+    expect(run?.if).toBeUndefined();
+    expect(run?.['continue-on-error']).toBeUndefined();
+    expect(workflow.jobs.build.needs).toContain('packaging');
   });
 
   it('keeps preflight, UAT and serve single and mandatory', () => {

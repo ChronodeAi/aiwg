@@ -42,8 +42,10 @@ describe('Gitea promotion Vault routes', () => {
       const bin = resolve(fixture, 'bin');
       const envFile = resolve(fixture, 'github-env');
       mkdirSync(bin);
-      writeFileSync(resolve(bin, 'curl'), '#!/bin/sh\necho "{}"\n');
+      writeFileSync(resolve(bin, 'curl'), '#!/bin/sh\ncat >/dev/null\necho "{}"\n');
       writeFileSync(resolve(bin, 'jq'), `#!/bin/sh
+# Real jq consumes its input before closing the pipe. Preserve that contract.
+cat >/dev/null
 case "$*" in
   *auth.client_token*) echo fixture-vault-session ;;
   *data.data*) echo fixture-evidence-token ;;

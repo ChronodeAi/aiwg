@@ -62,6 +62,7 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     path.join(repoRoot, 'dist', 'src', 'process', 'bounded-child-process.mjs'),
     path.join(repoRoot, 'dist', 'src', 'process', 'signal-child.mjs'),
     path.join(repoRoot, 'tools', '_resolve-impl.mjs'),
+    path.join(repoRoot, 'tools', 'cli', 'decision-offload-report.mjs'),
     path.join(repoRoot, 'tools', 'cli', 'workspace-status.mjs'),
     path.join(repoRoot, 'tools', 'agents', 'deploy-agents.mjs'),
     path.join(repoRoot, 'tools', 'providers', 'antigravity-transport.mjs'),
@@ -151,6 +152,7 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
   await mkdir(path.join(outputDir, 'tools', 'providers'), { recursive: true });
   await mkdir(path.join(outputDir, 'tools', 'skills'), { recursive: true });
   await cp(path.join(repoRoot, 'tools', '_resolve-impl.mjs'), path.join(outputDir, 'tools', '_resolve-impl.mjs'));
+  await cp(path.join(repoRoot, 'tools', 'cli', 'decision-offload-report.mjs'), path.join(outputDir, 'tools', 'cli', 'decision-offload-report.mjs'));
   await cp(path.join(repoRoot, 'tools', 'cli', 'workspace-status.mjs'), path.join(outputDir, 'tools', 'cli', 'workspace-status.mjs'));
   await cp(path.join(repoRoot, 'tools', 'agents', 'deploy-agents.mjs'), path.join(outputDir, 'tools', 'agents', 'deploy-agents.mjs'));
   await cp(

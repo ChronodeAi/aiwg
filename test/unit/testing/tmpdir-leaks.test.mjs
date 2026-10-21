@@ -106,7 +106,7 @@ describe('default lane private TMPDIR', () => {
 
   it('checks cleanup when the child terminates on a signal', async () => {
     const result = await runChild("process.kill(process.pid, 'SIGTERM')");
-    expect(result).toMatchObject({ code: 1, entries: [] });
+    expect(result).toMatchObject({ code: 143, entries: [] });
   });
 
   it.each([0, 7])('fails on leaks even when the child exits %i', async (exitCode) => {
@@ -114,7 +114,7 @@ describe('default lane private TMPDIR', () => {
       require('node:fs').mkdirSync(require('node:path').join(require('node:os').tmpdir(), 'leaked-fixture'));
       process.exit(${exitCode});
     `);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(exitCode === 0 ? 1 : exitCode);
     expect(result.entries).toHaveLength(1);
     expect(await readdir(join(result.root, result.entries[0]))).toEqual(['leaked-fixture']);
   });
