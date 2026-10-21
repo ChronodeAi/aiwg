@@ -1,6 +1,7 @@
 /** Bounded artifact-local preparation; ordered graph reduction stays in index-builder. */
 import os from 'node:os';
 import { fork, type ChildProcess } from 'node:child_process';
+import { signalChild } from '../process/signal-child.mjs';
 import type { MetadataEntry } from './types.js';
 export interface IndexPreparationJob { fullPath: string; relativePath: string; mtimeMs: number; birthtimeMs: number; sizeBytes: number; existingChecksum?: string }
 export interface IndexPreparationResult { checksum: string; entry?: MetadataEntry }
@@ -100,7 +101,7 @@ export async function runIndexPreparation(jobs: IndexPreparationJob[], serial: (
     });
   } finally {
     stopped = true;
-    for (const worker of workers) if (worker.exitCode === null && worker.signalCode === null) worker.kill('SIGKILL');
+    for (const worker of workers) if (worker.exitCode === null && worker.signalCode === null) signalChild(worker, 'SIGKILL');
     await Promise.all(closed);
   }
   const largeCount = jobs.length - eligible.length;
