@@ -22,7 +22,8 @@ jobs:
     # npm's registry-key rotation. Keep the signature hard gate on the same
     # digest-pinned npm 11 runtime used by the publication workflow.
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
-    # Preserve setup and post-test headroom around the bounded test and UAT steps.
+    # Preserve setup and post-test headroom around the required UAT and serve steps.
+    # The default Vitest corpus runs once across the two required test-shards legs.
     timeout-minutes: 35
 
     steps:
@@ -253,16 +254,6 @@ jobs:
         # recurrence carries its environment evidence. Read-only; never fails.
         run: node tools/ci/runner-headroom.mjs .
 
-      - name: Run tests
-        env:
-          # Shared-runner policy: paired Node baselines, median of 7 samples.
-          AIWG_PERF_BUDGET_VERSION_MS: "300"
-          AIWG_PERF_BUDGET_HELP_MS: "750"
-          AIWG_PERF_SAMPLE_COUNT: "7"
-        # Bound the default suite at 20 minutes with hang diagnostics. UAT has
-        # its own required 3-minute bound; the job also leaves time for serve.
-        run: node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test
-
       - name: Run UAT
         run: node tools/ci/run-with-hang-report.mjs --timeout 3m -- npm run uat
 
@@ -276,6 +267,63 @@ jobs:
           # Allow the serve startup banner up to 30s in docker-in-docker.
           AIWG_SERVE_HTTP_TIMEOUT_MS: "30000"
         run: npm run test:integration:serve
+
+  # Split the default Vitest file set with Vitest's native deterministic shard
+  # assignment. Both required legs retain the production build, optional
+  # SQLite backend, provider sandbox capability gate, owned TMPDIR/leak check,
+  # performance environment and the existing 20-minute watchdog.
+  test-shards:
+    name: Default tests (shard ${{ matrix.shard }}/2)
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run type check
+        run: npm run typecheck
+
+      - name: Build CLI (required by integration tests that spawn bin/aiwg.mjs)
+        run: npm run build:cli
+
+      - name: Require bundle provider sandbox suite where bwrap is available (#2846)
+        if: gitea.event_name == 'push' && gitea.ref == 'refs/heads/main'
+        run: |
+          if ! command -v bwrap >/dev/null 2>&1; then
+            echo "::notice::Skipping provider sandbox lane: bwrap is unavailable"
+            exit 0
+          fi
+          if ! bwrap --unshare-all --unshare-user --disable-userns --die-with-parent --ro-bind / / -- /bin/true; then
+            echo "::notice::Skipping provider sandbox lane: bwrap/user namespaces are unavailable"
+            exit 0
+          fi
+          AIWG_REQUIRE_PROVIDER_SANDBOX=1 nice -n 19 ./node_modules/.bin/vitest run --config config/vitest.config.js --maxWorkers=4 \
+            test/conformance/gates-v1/gates-provider-sandbox.test.ts \
+            test/conformance/gates-v1/gates-provider-isolation.test.ts \
+            test/conformance/gates-v1/gates-bundle-providers.test.ts
+
+      - name: Install SQLite test backend
+        run: npm run features:sqlite
+
+      - name: Record runner headroom (#2553)
+        run: node tools/ci/runner-headroom.mjs .
+
+      - name: Run default test shard
+        env:
+          # Shared-runner policy: paired Node baselines, median of 7 samples.
+          AIWG_PERF_BUDGET_VERSION_MS: "300"
+          AIWG_PERF_BUDGET_HELP_MS: "750"
+          AIWG_PERF_SAMPLE_COUNT: "7"
+        run: node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test -- --shard=${{ matrix.shard }}/2 --maxWorkers=6
 
   # Full-corpus provider deployments spawn bounded child CLIs and share one
   # immutable source cache. Keep them serial and outside the general worker
@@ -369,7 +417,7 @@ jobs:
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
     timeout-minutes: 10
-    needs: [test, deployment, d29-slow, packaging, release-discovery]
+    needs: [test, test-shards, deployment, d29-slow, packaging, release-discovery]
 
     steps:
       - name: Checkout code
