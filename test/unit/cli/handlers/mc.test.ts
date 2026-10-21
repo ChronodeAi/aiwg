@@ -6,7 +6,10 @@
  * @parent #684
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 
 // ── In-memory fs mock ─────────────────────────────────────────
@@ -116,7 +119,14 @@ vi.mock('../../../../src/serve/shared-host-scheduler.js', () => ({
   },
 }));
 
-import { mcHandler, estimateMissionRunCost, SONNET_CACHE_USD } from '../../../../src/cli/handlers/mc.js';
+import {
+  mcHandler,
+  estimateMissionRunCost,
+  SONNET_CACHE_USD,
+  COST_REPORTING_PROVIDERS,
+  RALPH_LOOP_PROVIDERS,
+  ralphLoopProviders,
+} from '../../../../src/cli/handlers/mc.js';
 import { launchExternalRalph } from '../../../../src/cli/handlers/ralph-launcher.js';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -358,6 +368,90 @@ describe('mc dispatch', () => {
     const session = JSON.parse(jsonOutput!);
     expect(session.missions[0].maxTotalTokens).toBe(8000);
     consoleSpy.mockRestore();
+  });
+
+  describe('--provider', () => {
+    const sessionPath = (sessionId: string) => `.aiwg/ralph-external/mc/sessions/${sessionId}/session.json`;
+
+    it.each([
+      ['separate', ['--provider', 'omp']],
+      ['equals', ['--provider=omp']],
+      ['mixed-case', ['--provider', ' OMP ']],
+    ])('persists the provider on the mission using %s syntax', async (_syntax, flag) => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const sessionId = (await mcHandler.execute(makeCtx(['start']))).message!;
+      const result = await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Omp mission', '--completion', 'tests pass', ...flag]));
+      expect(result.exitCode).toBe(0);
+      const saved = JSON.parse(inMemoryFs.store.get(sessionPath(sessionId))!);
+      expect(saved.missions[0]).toMatchObject({ objective: 'Omp mission', provider: 'omp' });
+    });
+
+    it('leaves the provider unset when the flag is omitted (loop default, claude)', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const sessionId = (await mcHandler.execute(makeCtx(['start']))).message!;
+      expect((await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Default mission']))).exitCode).toBe(0);
+      const saved = JSON.parse(inMemoryFs.store.get(sessionPath(sessionId))!);
+      expect(saved.missions[0]).not.toHaveProperty('provider');
+    });
+
+    it.each([
+      ['an unknown name', ['--provider', 'not-a-loop-provider'], "Unknown --provider 'not-a-loop-provider'"],
+      ['a missing value', ['--provider'], '--provider requires a provider name'],
+      ['an empty value', ['--provider='], '--provider requires a provider name'],
+      ['a provider the loop has no adapter for', ['--provider', 'cursor'], "Unknown --provider 'cursor'"],
+    ])('rejects %s without changing session state', async (_case, flag, problem) => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const sessionId = (await mcHandler.execute(makeCtx(['start']))).message!;
+      const before = [...inMemoryFs.store.entries()];
+      const result = await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Bad provider mission', ...flag]));
+      expect(result.exitCode).toBe(1);
+      expect([...inMemoryFs.store.entries()]).toEqual(before);
+      expect(result.message).toContain(problem);
+      expect(result.message).toContain('claude, codex, opencode, factory, pi, omp, deepseek-harness, dsh');
+      const ui = await import('../../../../src/cli/ui.js');
+      expect(ui.error).toHaveBeenCalledWith(result.message);
+    });
+
+    it('rejects muse when AIWG_MUSE_RALPH_ENABLED disables it in the loop', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.stubEnv('AIWG_MUSE_RALPH_ENABLED', '0');
+      try {
+        const sessionId = (await mcHandler.execute(makeCtx(['start']))).message!;
+        const result = await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Muse mission', '--provider', 'muse']));
+        expect(result.exitCode).toBe(1);
+        expect(result.message).toContain("Unknown --provider 'muse'");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('shows the provider in mc status and mc list', async () => {
+      const lines: string[] = [];
+      vi.spyOn(console, 'log').mockImplementation((arg) => { lines.push(String(arg)); });
+      const sessionId = (await mcHandler.execute(makeCtx(['start']))).message!;
+      await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Omp mission', '--provider', 'omp']));
+      await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Default mission']));
+
+      lines.length = 0;
+      await mcHandler.execute(makeCtx(['status', sessionId]));
+      expect(lines.find(line => line.includes('Omp mission'))).toMatch(/\somp\s/);
+      expect(lines.find(line => line.includes('Default mission'))).toMatch(/\sclaude\s/);
+      expect(lines.some(line => line.includes('Provider'))).toBe(true);
+
+      lines.length = 0;
+      await mcHandler.execute(makeCtx(['status', sessionId, '--json']));
+      const status = JSON.parse(lines.find(s => { try { JSON.parse(s); return true; } catch { return false; } })!);
+      expect(status.missions.map((m: { provider?: string }) => m.provider)).toEqual(['omp', undefined]);
+
+      lines.length = 0;
+      await mcHandler.execute(makeCtx(['list', '--json']));
+      const listed = JSON.parse(lines.find(s => { try { JSON.parse(s); return true; } catch { return false; } })!);
+      expect(listed.find((s: { id: string }) => s.id === sessionId).providers).toEqual(['claude', 'omp']);
+
+      lines.length = 0;
+      await mcHandler.execute(makeCtx(['list']));
+      expect(lines.find(line => line.includes(sessionId))).toContain('providers: claude, omp');
+    });
   });
 });
 
@@ -658,6 +752,50 @@ describe('mc run (#1439)', () => {
     consoleSpy.mockRestore();
   });
 
+  it('passes each mission provider to the launcher and omits it when unset', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const sessionId = (await mcHandler.execute(makeCtx(['start']))).message!;
+    await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Omp run', '--completion', 'tests pass', '--provider', 'omp']));
+    await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Default run', '--completion', 'tests pass']));
+
+    const runResult = await mcHandler.execute(makeCtx(['run', sessionId, '--accept-cost']));
+    expect(runResult.exitCode).toBe(0);
+    const launches = vi.mocked(launchExternalRalph).mock.calls.map(([, , options]) => options);
+    expect(launches).toHaveLength(2);
+    expect(launches[0]).toMatchObject({ objective: 'Omp run', provider: 'omp' });
+    expect(launches[1]).toMatchObject({ objective: 'Default run' });
+    expect(launches[1].provider).toBeUndefined();
+  });
+
+  it('lets declared omp ceilings lower the cost gate estimate', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    // The gate refuses (rather than pausing) only in a non-interactive context.
+    const isTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
+    onTestFinished(() => {
+      if (isTTY) Object.defineProperty(process.stdout, 'isTTY', isTTY);
+      else Reflect.deleteProperty(process.stdout, 'isTTY');
+    });
+    const sessionId = (await mcHandler.execute(makeCtx(['start']))).message!;
+    // Uncapped floor: 2 x 10 x $1.60 = $32, far above the $5 gate. The omp
+    // ceilings bound it to $4, so no --accept-cost is needed.
+    for (const objective of ['Omp one', 'Omp two']) {
+      await mcHandler.execute(makeCtx(['dispatch', sessionId, objective, '--completion', 'tests pass', '--provider', 'omp', '--max-total-cost', '2']));
+    }
+    const runResult = await mcHandler.execute(makeCtx(['run', sessionId]));
+    expect(runResult.exitCode).toBe(0);
+    expect(vi.mocked(launchExternalRalph)).toHaveBeenCalledTimes(2);
+
+    // The same ceilings on a provider that reports no spend stay inert.
+    const inertSession = (await mcHandler.execute(makeCtx(['start']))).message!;
+    await mcHandler.execute(makeCtx(['dispatch', inertSession, 'Pi one', '--completion', 'tests pass', '--provider', 'pi', '--max-total-cost', '2']));
+    const refused = await mcHandler.execute(makeCtx(['run', inertSession]));
+    expect(refused.exitCode).toBe(1);
+    const ui = await import('../../../../src/cli/ui.js');
+    expect(ui.warn).toHaveBeenCalledWith(expect.stringContaining('does not report spend (pi)'));
+    expect(vi.mocked(launchExternalRalph)).toHaveBeenCalledTimes(2);
+  });
+
   it('skips missions without --completion criteria (ralph requires one)', async () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const startResult = await mcHandler.execute(makeCtx(['start']));
@@ -709,12 +847,13 @@ describe('mc run (#1439)', () => {
 // ── Cost estimate (#2522) ─────────────────────────────────────
 // The gate previously ignored declared `maxTotalCost` entirely. These cover the
 // three cases the fix must distinguish: no ceilings, ceilings on a provider that
-// reports spend, and ceilings on a provider that does not (#1766).
+// reports spend, and ceilings on a provider that does not (#1766). The provider
+// is each mission's own (`--provider`), defaulting to claude.
 describe('estimateMissionRunCost (#2522)', () => {
-  const mission = (maxIterations: number, maxTotalCost?: number) => ({ maxIterations, maxTotalCost });
+  const mission = (maxIterations: number, maxTotalCost?: number, provider?: string) => ({ maxIterations, maxTotalCost, provider });
 
   it('falls back to the uncapped iteration floor when no ceilings are declared', () => {
-    const estimate = estimateMissionRunCost([mission(10), mission(5)], 'claude');
+    const estimate = estimateMissionRunCost([mission(10), mission(5)]);
     expect(estimate.estimateUsd).toBeCloseTo(15 * SONNET_CACHE_USD, 5);
     expect(estimate.iterationFloorUsd).toBeCloseTo(15 * SONNET_CACHE_USD, 5);
     expect(estimate.declaredCeilingUsd).toBe(0);
@@ -724,50 +863,106 @@ describe('estimateMissionRunCost (#2522)', () => {
 
   it('caps each mission at its declared ceiling when the provider reports spend', () => {
     // Ten missions capped at $1 each: the uncapped floor is 10 x 10 x $1.60 =
-    // $160, while the enforced ceiling total is $10.
+    // $160, while the enforced ceiling total is $10. No --provider means claude.
     const missions = Array.from({ length: 10 }, () => mission(10, 1));
-    const estimate = estimateMissionRunCost(missions, 'claude');
-    expect(estimate.spendObservable).toBe(true);
+    const estimate = estimateMissionRunCost(missions);
+    expect(estimate.cappedProviders).toEqual(['claude']);
     expect(estimate.estimateUsd).toBeCloseTo(10, 5);
     expect(estimate.iterationFloorUsd).toBeCloseTo(160, 5);
     expect(estimate.declaredCeilingUsd).toBeCloseTo(10, 5);
+    expect(estimate.cappedCeilingUsd).toBeCloseTo(10, 5);
     expect(estimate.cappedMissions).toBe(10);
     expect(estimate.inertCeilingMissions).toBe(0);
   });
 
+  it('counts omp ceilings because omp reports spend', () => {
+    expect(COST_REPORTING_PROVIDERS.has('omp')).toBe(true);
+    const missions = Array.from({ length: 10 }, () => mission(10, 1, 'omp'));
+    const estimate = estimateMissionRunCost(missions);
+    expect(estimate.cappedProviders).toEqual(['omp']);
+    expect(estimate.cappedMissions).toBe(10);
+    expect(estimate.estimateUsd).toBeCloseTo(10, 5);
+    expect(estimate.inertCeilingMissions).toBe(0);
+    expect(estimate.inertProviders).toEqual([]);
+  });
+
   it('never caps below the floor when a ceiling exceeds it', () => {
-    const estimate = estimateMissionRunCost([mission(2, 999)], 'claude');
+    const estimate = estimateMissionRunCost([mission(2, 999)]);
     expect(estimate.estimateUsd).toBeCloseTo(2 * SONNET_CACHE_USD, 5);
     expect(estimate.cappedMissions).toBe(1);
   });
 
   it('does not weaken the estimate when spend is unobservable on the provider', () => {
-    const missions = Array.from({ length: 10 }, () => mission(10, 1));
-    const estimate = estimateMissionRunCost(missions, 'codex');
-    expect(estimate.spendObservable).toBe(false);
-    // Inert ceilings must not shrink the warning — the operator has no enforced
+    const missions = Array.from({ length: 10 }, () => mission(10, 1, 'codex'));
+    const estimate = estimateMissionRunCost(missions);
+    expect(estimate.inertProviders).toEqual(['codex']);
+    expect(estimate.cappedProviders).toEqual([]);
+    // Inert ceilings must not shrink the warning: the operator has no enforced
     // protection here, which is exactly when the gate matters most.
     expect(estimate.estimateUsd).toBeCloseTo(160, 5);
     expect(estimate.declaredCeilingUsd).toBeCloseTo(10, 5);
+    expect(estimate.inertCeilingUsd).toBeCloseTo(10, 5);
     expect(estimate.cappedMissions).toBe(0);
     expect(estimate.inertCeilingMissions).toBe(10);
   });
 
+  it('judges each mission by its own provider in a mixed queue', () => {
+    const estimate = estimateMissionRunCost([mission(10, 2, 'omp'), mission(10, 3, 'pi'), mission(10, 4)]);
+    expect(estimate.cappedMissions).toBe(2);
+    expect(estimate.cappedCeilingUsd).toBeCloseTo(6, 5);
+    expect(estimate.cappedProviders).toEqual(['claude', 'omp']);
+    expect(estimate.inertCeilingMissions).toBe(1);
+    expect(estimate.inertCeilingUsd).toBeCloseTo(3, 5);
+    expect(estimate.inertProviders).toEqual(['pi']);
+    expect(estimate.declaredCeilingUsd).toBeCloseTo(9, 5);
+    expect(estimate.estimateUsd).toBeCloseTo(2 + 10 * SONNET_CACHE_USD + 4, 5);
+  });
+
   it('treats an unrecognized provider as unobservable rather than assuming cost reporting', () => {
-    // Any provider outside COST_REPORTING_PROVIDERS, including the fallback
-    // mc uses when no provider is configured. Spelled differently here so the
-    // mission-protocol inventory scanner does not read a provider name as
-    // mission status vocabulary.
-    const estimate = estimateMissionRunCost([mission(10, 1)], 'not-a-configured-provider');
-    expect(estimate.spendObservable).toBe(false);
+    // Any provider outside COST_REPORTING_PROVIDERS. Spelled differently here
+    // so the mission-protocol inventory scanner does not read a provider name
+    // as mission status vocabulary.
+    const estimate = estimateMissionRunCost([mission(10, 1, 'not-a-configured-provider')]);
+    expect(estimate.inertProviders).toEqual(['not-a-configured-provider']);
     expect(estimate.estimateUsd).toBeCloseTo(10 * SONNET_CACHE_USD, 5);
     expect(estimate.inertCeilingMissions).toBe(1);
   });
 
   it('ignores a non-finite declared ceiling instead of poisoning the estimate', () => {
-    const estimate = estimateMissionRunCost([{ maxIterations: 4, maxTotalCost: Number.NaN }], 'claude');
+    const estimate = estimateMissionRunCost([{ maxIterations: 4, maxTotalCost: Number.NaN }]);
     expect(estimate.estimateUsd).toBeCloseTo(4 * SONNET_CACHE_USD, 5);
     expect(estimate.declaredCeilingUsd).toBe(0);
     expect(estimate.cappedMissions).toBe(0);
+  });
+});
+
+// ── Ralph loop provider list ──────────────────────────────────
+// mc validates --provider against a mirror of the loop's runtime registry.
+describe('RALPH_LOOP_PROVIDERS', () => {
+  const registryNames = (env: Record<string, string | undefined>) => {
+    const script = [
+      "const m = await import(process.argv[1]);",
+      'await m.ensureProvidersRegistered();',
+      'console.log(JSON.stringify(m.listProviders().sort()));',
+    ].join('\n');
+    const registry = pathToFileURL(resolve('tools/ralph-external/lib/provider-adapter.mjs')).href;
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script, registry], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { ...process.env, ...env },
+    });
+    expect(child.status, child.stderr).toBe(0);
+    return JSON.parse(child.stdout.trim().split('\n').at(-1)!);
+  };
+
+  it('matches the names the ralph loop registers', () => {
+    expect([...RALPH_LOOP_PROVIDERS].sort()).toEqual(registryNames({ AIWG_MUSE_RALPH_ENABLED: undefined }));
+  });
+
+  it('drops muse exactly when the loop does', () => {
+    const env = { AIWG_MUSE_RALPH_ENABLED: 'off' };
+    expect(ralphLoopProviders(env).sort()).toEqual(registryNames(env));
+    expect(ralphLoopProviders(env)).not.toContain('muse');
+    expect(ralphLoopProviders({})).toContain('muse');
   });
 });

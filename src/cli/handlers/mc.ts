@@ -25,6 +25,30 @@ const MC_ROOT = '.aiwg/ralph-external/mc';
 const SESSIONS_DIR = join(MC_ROOT, 'sessions');
 const CONTROL_ID_RE = /^[a-zA-Z0-9._-]+$/;
 
+/**
+ * Providers the external ralph loop can run a mission on.
+ *
+ * The loop's canonical list is its runtime provider registry: the names that
+ * `registerBuiltinProviders()` in tools/ralph-external/lib/provider-adapter.mjs
+ * registers, which `aiwg ralph --provider` validates against. That registry is
+ * loaded JavaScript, not data, so dispatch validates against this mirror and a
+ * unit test pins the two together. `muse` is optional exactly as in the loop:
+ * AIWG_MUSE_RALPH_ENABLED=0|false|no|off removes it (#230).
+ */
+export const RALPH_LOOP_PROVIDERS: readonly string[] = [
+  'claude', 'codex', 'opencode', 'factory', 'pi', 'omp', 'deepseek-harness', 'dsh', 'muse',
+];
+
+/** Provider the ralph loop runs when a mission names none. */
+export const DEFAULT_MISSION_PROVIDER = 'claude';
+
+/** Providers the ralph loop accepts in this environment. */
+export function ralphLoopProviders(env: NodeJS.ProcessEnv = process.env): string[] {
+  const muse = String(env.AIWG_MUSE_RALPH_ENABLED ?? '').trim().toLowerCase();
+  const museDisabled = ['0', 'false', 'no', 'off'].includes(muse);
+  return RALPH_LOOP_PROVIDERS.filter(name => !(museDisabled && name === 'muse'));
+}
+
 type MissionStatus = 'queued' | 'running' | 'done' | 'failed' | 'aborted' | 'paused';
 type SessionState = 'active' | 'paused' | 'stopped';
 
@@ -47,6 +71,8 @@ interface Mission {
   priority: string;
   mode: MissionMode;
   targetAgent?: string;
+  /** Ralph loop provider (`--provider`); absent means the loop default, claude. */
+  provider?: string;
   lastAction?: string;
   startedAt?: string;
   completedAt?: string;
@@ -279,6 +305,9 @@ Queue a mission onto a session. Does NOT execute — use 'aiwg mc run' to launch
 
   --completion "<criteria>"     Verifiable completion criteria (required for 'mc run')
   --priority <level>            Priority hint (default: normal)
+  --provider <name>             Ralph loop provider (default: claude). One of
+                                claude, codex, opencode, factory, pi, omp,
+                                deepseek-harness, dsh, muse
   --max-iterations N            Ralph iteration cap when launched (default: 10)
   --max-total-tokens N          Hard cumulative token ceiling when observable
   --max-output-tokens N         Hard cumulative output-token ceiling
@@ -303,9 +332,9 @@ without --completion criteria are skipped with a warning.
 
 The estimate is the cumulative iteration floor (missions x max-iterations x
 ~$1.60 cache cost per headless iteration). A mission's --max-total-cost caps its
-share of that estimate only on a provider that reports spend; on a provider that
-reports none the ceiling is inert (#1766), so it is reported but not subtracted.
-See #2522.`,
+share of that estimate only when the mission's provider (--provider, default
+claude) reports spend, as claude and omp do; on a provider that reports none the
+ceiling is inert (#1766), so it is reported but not subtracted. See #2522.`,
 
   status: `Usage: aiwg mc status [<session-id>] [--json]
 
@@ -444,17 +473,32 @@ async function mcDispatch(ctx: HandlerContext): Promise<HandlerResult> {
   const modeRaw = parseFlag(ctx.args, '--mode') || 'direct';
   const mode: MissionMode = modeRaw === 'pty-orchestrator' ? 'pty-orchestrator' : 'direct';
   const targetAgent = parseFlag(ctx.args, '--target-agent');
+  // Present-but-empty must fail like an unknown name, never silently fall back.
+  const providerRaw = parseFlag(ctx.args, '--provider');
+  const provider = ctx.args.some(arg => arg === '--provider' || arg.startsWith('--provider='))
+    ? (providerRaw ?? '').trim().toLowerCase()
+    : undefined;
 
   if (!objective) {
     // #1438: keep this in sync with subcommandUsage.dispatch above so 'mc
     // dispatch' with bad args and 'mc dispatch --help' agree on flags.
-    ui.error('Usage: aiwg mc dispatch <session-id> "<objective>" [--completion "<criteria>"] [--max-iterations N] [--priority <level>] [--mode pty-orchestrator] [--target-agent <agent-id>]');
+    ui.error('Usage: aiwg mc dispatch <session-id> "<objective>" [--completion "<criteria>"] [--max-iterations N] [--priority <level>] [--provider <name>] [--mode pty-orchestrator] [--target-agent <agent-id>]');
     return { exitCode: 1 };
   }
 
   if (invalidFlags.length > 0) {
     ui.error(`Invalid numeric flag value(s): ${invalidFlags.join(', ')}. Budget/quota flags require positive numbers. Mission not dispatched.`);
     return { exitCode: 1 };
+  }
+
+  if (provider !== undefined) {
+    const supported = ralphLoopProviders();
+    if (!supported.includes(provider)) {
+      const problem = provider ? `Unknown --provider '${providerRaw}'` : '--provider requires a provider name';
+      const message = `${problem}. The ralph loop supports: ${supported.join(', ')}. Mission not dispatched.`;
+      ui.error(message);
+      return { exitCode: 1, message };
+    }
   }
 
   if (mode === 'pty-orchestrator' && !targetAgent) {
@@ -519,6 +563,7 @@ async function mcDispatch(ctx: HandlerContext): Promise<HandlerResult> {
     priority,
     mode,
     targetAgent: targetAgent || undefined,
+    provider,
   };
 
   const result = await mutateSession(selected.id, 'dispatch', mission.id, flags.expectedUpdatedAt, flags.requestId, session => {
@@ -536,6 +581,7 @@ async function mcDispatch(ctx: HandlerContext): Promise<HandlerResult> {
       priority,
       mode,
       targetAgent,
+      provider: provider ?? DEFAULT_MISSION_PROVIDER,
       requestId: flags.requestId ?? null,
       lfdBudgets: {
         maxTotalTokens,
@@ -551,7 +597,7 @@ async function mcDispatch(ctx: HandlerContext): Promise<HandlerResult> {
   if (capWarning) ui.warn(capWarning);
   ui.success(`${result.replayed ? 'Replayed dispatch for' : 'Dispatched mission'} ${mission.id}: ${objective}`);
   const modeLabel = mode === 'pty-orchestrator' ? ` | Mode: PTY orchestrator → ${targetAgent}` : '';
-  ui.info(`Priority: ${priority} | Max iterations: ${maxIterations}${modeLabel}`);
+  ui.info(`Priority: ${priority} | Provider: ${provider ?? DEFAULT_MISSION_PROVIDER} | Max iterations: ${maxIterations}${modeLabel}`);
   const lfdLimits = [
     maxTotalTokens ? `total tokens ${maxTotalTokens}` : null,
     maxOutputTokens ? `output tokens ${maxOutputTokens}` : null,
@@ -602,15 +648,20 @@ export const COST_WARNING_THRESHOLD_USD = 5.0;
  * Providers whose headless stream reports spend, so a declared `--max-total-cost`
  * ceiling can actually fire mid-loop.
  *
- * Only `claude` emits cost on its stream-json events, which is what
- * `SessionLauncher._extractUsageStats` reads. Adapters without stream-json
- * (codex, factory, opencode, deepseek) emit no usage events at all — #1766
- * recorded that a spend ceiling on those is inert and never fires. Adapters that
- * do stream JSON but have not been observed carrying cost fields (omp, pi) stay
- * out of this set deliberately: assuming an observability we have not seen would
- * weaken the gate in exactly the case where the operator has least protection.
+ * - `claude`: `total_cost_usd` / `cost_usd` on its stream-json result and
+ *   assistant events, read by `SessionLauncher._extractUsageStats`.
+ * - `omp`: `usage.cost.total` (USD) on each assistant `message_end` event and on
+ *   a billed `cache_warming_end`, read by `OmpAdapter.extractUsage`. The repeats
+ *   of that usage on `turn_end` and `agent_end` are not counted again.
+ *
+ * Adapters without stream-json (codex, factory, opencode, deepseek) emit no
+ * usage events at all; #1766 recorded that a spend ceiling on those is inert and
+ * never fires. `pi` streams JSON but no adapter reads cost from it, so it stays
+ * out of this set deliberately: assuming an observability we have not seen
+ * would weaken the gate in exactly the case where the operator has least
+ * protection.
  */
-export const COST_REPORTING_PROVIDERS: ReadonlySet<string> = new Set(['claude']);
+export const COST_REPORTING_PROVIDERS: ReadonlySet<string> = new Set(['claude', 'omp']);
 
 export interface MissionRunCostEstimate {
   /** Estimated cumulative spend, in USD, used for the warning threshold. */
@@ -621,31 +672,40 @@ export interface MissionRunCostEstimate {
   declaredCeilingUsd: number;
   /** Missions whose declared ceiling was applied to the estimate. */
   cappedMissions: number;
-  /** Missions declaring a ceiling that cannot fire on this provider. */
+  /** Sum of the ceilings declared by `cappedMissions`. */
+  cappedCeilingUsd: number;
+  /** Providers of `cappedMissions`, sorted; each reports spend. */
+  cappedProviders: string[];
+  /** Missions declaring a ceiling that cannot fire on their provider. */
   inertCeilingMissions: number;
-  /** Whether the target provider reports spend. */
-  spendObservable: boolean;
+  /** Sum of the ceilings declared by `inertCeilingMissions`. */
+  inertCeilingUsd: number;
+  /** Providers of `inertCeilingMissions`, sorted; none reports spend. */
+  inertProviders: string[];
 }
 
 /**
  * Estimate cumulative spend for a set of queued missions (#2522).
  *
- * The floor for each mission is `maxIterations × SONNET_CACHE_USD`. A declared
- * `maxTotalCost` bounds that floor **only** when the target provider reports
- * spend — on a provider that reports none, the ceiling is inert (#1766), so
- * subtracting it would make the warning weaker precisely where the operator has
- * no enforced protection. Those ceilings are counted and surfaced instead.
+ * The floor for each mission is `maxIterations x SONNET_CACHE_USD`. A declared
+ * `maxTotalCost` bounds that floor **only** when the mission's own provider
+ * (`--provider`, default claude) reports spend. On a provider that reports
+ * none, the ceiling is inert (#1766), so subtracting it would make the warning
+ * weaker precisely where the operator has no enforced protection. Those
+ * ceilings are counted and surfaced instead.
  */
 export function estimateMissionRunCost(
-  missions: ReadonlyArray<Pick<Mission, 'maxIterations' | 'maxTotalCost'>>,
-  provider: string,
+  missions: ReadonlyArray<Pick<Mission, 'maxIterations' | 'maxTotalCost' | 'provider'>>,
 ): MissionRunCostEstimate {
-  const spendObservable = COST_REPORTING_PROVIDERS.has(provider);
   let estimateUsd = 0;
   let iterationFloorUsd = 0;
   let declaredCeilingUsd = 0;
   let cappedMissions = 0;
+  let cappedCeilingUsd = 0;
+  const cappedProviders = new Set<string>();
   let inertCeilingMissions = 0;
+  let inertCeilingUsd = 0;
+  const inertProviders = new Set<string>();
 
   for (const mission of missions) {
     const floor = mission.maxIterations * SONNET_CACHE_USD;
@@ -658,11 +718,16 @@ export function estimateMissionRunCost(
       continue;
     }
     declaredCeilingUsd += ceiling;
-    if (spendObservable) {
+    const provider = mission.provider ?? DEFAULT_MISSION_PROVIDER;
+    if (COST_REPORTING_PROVIDERS.has(provider)) {
       cappedMissions += 1;
+      cappedCeilingUsd += ceiling;
+      cappedProviders.add(provider);
       estimateUsd += Math.min(floor, ceiling);
     } else {
       inertCeilingMissions += 1;
+      inertCeilingUsd += ceiling;
+      inertProviders.add(provider);
       estimateUsd += floor;
     }
   }
@@ -672,8 +737,11 @@ export function estimateMissionRunCost(
     iterationFloorUsd,
     declaredCeilingUsd,
     cappedMissions,
+    cappedCeilingUsd,
+    cappedProviders: [...cappedProviders].sort(),
     inertCeilingMissions,
-    spendObservable,
+    inertCeilingUsd,
+    inertProviders: [...inertProviders].sort(),
   };
 }
 
@@ -714,18 +782,20 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
   const frameworkRoot = ctx.frameworkRoot;
   const { readAiwgConfig, resolveParallelism } = await import('../../config/aiwg-config.js');
   const cfg = await readAiwgConfig(projectRoot).catch(() => null);
+  // Parallelism caps and admission still key on the configured provider; the
+  // cost gate uses each mission's own provider.
   const provider = cfg?.providers[0] ?? 'unknown';
 
-  const estimate = estimateMissionRunCost(eligible, provider);
+  const estimate = estimateMissionRunCost(eligible);
 
   if (estimate.estimateUsd >= COST_WARNING_THRESHOLD_USD && !acceptCost) {
     ui.blank();
     ui.warn(`Cost estimate: ~$${estimate.estimateUsd.toFixed(2)} (${eligible.length} missions × iteration floors × ~$${SONNET_CACHE_USD.toFixed(2)} cache cost per claude headless iter).`);
     if (estimate.cappedMissions > 0) {
-      ui.warn(`Declared ceilings: $${estimate.declaredCeilingUsd.toFixed(2)} across ${estimate.cappedMissions} mission(s) — counted toward the estimate because ${provider} reports spend.`);
+      ui.warn(`Declared ceilings: $${estimate.cappedCeilingUsd.toFixed(2)} across ${estimate.cappedMissions} mission(s), counted toward the estimate because their provider reports spend (${estimate.cappedProviders.join(', ')}).`);
     }
     if (estimate.inertCeilingMissions > 0) {
-      ui.warn(`${estimate.inertCeilingMissions} mission(s) declare --max-total-cost totalling $${estimate.declaredCeilingUsd.toFixed(2)}, but ${provider} does not report spend — those ceilings cannot fire and are NOT subtracted from this estimate (#1766).`);
+      ui.warn(`${estimate.inertCeilingMissions} mission(s) declare --max-total-cost totalling $${estimate.inertCeilingUsd.toFixed(2)}, but their provider does not report spend (${estimate.inertProviders.join(', ')}). Those ceilings cannot fire and are NOT subtracted from this estimate (#1766).`);
     }
     ui.warn('Actual spend may be lower if missions complete early, higher if model is opus or context grows.');
     if (!process.stdout.isTTY) {
@@ -823,6 +893,8 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
         maxWallClockMinutes: mission.maxWallClockMinutes,
         explorationQuota: mission.explorationQuota,
         budgetStopPolicy: mission.budgetStopPolicy,
+        // Absent means the loop default (claude), exactly as before --provider.
+        provider: mission.provider,
         // Defaults for cycle 1; advanced options can be added per-mission later.
         verbose: false,
       });
@@ -837,6 +909,7 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
         missionId: mission.id,
         loopId: result.loopId,
         pid: result.pid,
+        provider: mission.provider ?? DEFAULT_MISSION_PROVIDER,
       });
 
       ui.success(`Started ${mission.id} → ralph loop ${result.loopId} (PID ${result.pid})`);
@@ -1003,9 +1076,9 @@ async function mcStatus(ctx: HandlerContext): Promise<HandlerResult> {
   // #1441: ui.dim() returns void (it prints) — wrapping in console.log emitted
   // a literal "undefined" between the header and the separator. Use dimText()
   // (returns a string) for inline styling.
-  const header = `  ${'#'.padEnd(4)} ${'Mission'.padEnd(32)} ${'Mode'.padEnd(6)} ${'Status'.padEnd(12)} ${'Loop'.padEnd(8)} ${'Started'.padEnd(8)}`;
+  const header = `  ${'#'.padEnd(4)} ${'Mission'.padEnd(32)} ${'Mode'.padEnd(6)} ${'Provider'.padEnd(10)} ${'Status'.padEnd(12)} ${'Loop'.padEnd(8)} ${'Started'.padEnd(8)}`;
   console.log(ui.dimText(header));
-  ui.rule(68);
+  ui.rule(79);
 
   for (let i = 0; i < session.missions.length; i++) {
     const m = session.missions[i];
@@ -1013,17 +1086,18 @@ async function mcStatus(ctx: HandlerContext): Promise<HandlerResult> {
     const num = String(i + 1).padEnd(4);
     const obj = m.objective.length > 30 ? m.objective.slice(0, 27) + '...' : m.objective.padEnd(32);
     const modeTag = m.mode === 'pty-orchestrator' ? 'PTY'.padEnd(6) : '—'.padEnd(6);
+    const providerTag = (m.provider ?? DEFAULT_MISSION_PROVIDER).padEnd(10);
     const status = `${icon} ${m.status.toUpperCase()}`.padEnd(12);
     const loop = m.status === 'queued' ? '—'.padEnd(8) : `${m.loop}/${m.maxIterations}`.padEnd(8);
     const started = m.startedAt ? new Date(m.startedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) : '—';
-    console.log(`  ${num} ${obj} ${modeTag} ${status} ${loop} ${started}`);
+    console.log(`  ${num} ${obj} ${modeTag} ${providerTag} ${status} ${loop} ${started}`);
     // Show last action for PTY-orchestrated missions
     if (m.mode === 'pty-orchestrator' && m.lastAction && m.status === 'running') {
       console.log(ui.dimText(`       └─ Last: ${m.lastAction}`));
     }
   }
 
-  ui.rule(68);
+  ui.rule(79);
 
   const counts = {
     done: session.missions.filter(m => m.status === 'done').length,
@@ -1192,6 +1266,8 @@ async function mcList(ctx: HandlerContext): Promise<HandlerResult> {
       name: s.name,
       state: s.state,
       missions: s.missions.length,
+      // Distinct ralph loop providers of the session's missions.
+      providers: [...new Set(s.missions.map(m => m.provider ?? DEFAULT_MISSION_PROVIDER))].sort(),
       created: s.createdAt,
       updated: s.updatedAt,
     })), null, 2));
@@ -1211,7 +1287,9 @@ async function mcList(ctx: HandlerContext): Promise<HandlerResult> {
     const stateIcon = s.state === 'active' ? '●' : s.state === 'paused' ? '⏸' : '○';
     const missionCount = s.missions.length;
     const done = s.missions.filter(m => m.status === 'done').length;
-    console.log(`  ${stateIcon} ${s.id}  ${ui.accent(s.name)}  (${done}/${missionCount} done)  [${s.state}]`);
+    const providers = [...new Set(s.missions.map(m => m.provider ?? DEFAULT_MISSION_PROVIDER))].sort();
+    const providerLabel = missionCount > 0 ? `  providers: ${providers.join(', ')}` : '';
+    console.log(`  ${stateIcon} ${s.id}  ${ui.accent(s.name)}  (${done}/${missionCount} done)  [${s.state}]${providerLabel}`);
   }
 
   ui.blank();
@@ -1380,6 +1458,7 @@ function showMcHelp(): void {
     start                         Start a new Mission Control session
     dispatch <id> "<objective>"   Queue a mission on the session (does NOT execute)
                                   [--completion "<criteria>"] [--max-iterations N]
+                                  [--provider <name>] (ralph loop provider, default claude)
                                   [--max-total-tokens N] [--max-output-tokens N]
                                   [--max-tool-calls N] [--max-total-cost USD]
                                   [--max-wall-clock-minutes N] [--exploration-quota N]
@@ -1399,6 +1478,7 @@ function showMcHelp(): void {
     aiwg mc dispatch mc-abc123 "Fix auth" --completion "tests pass"
     aiwg mc dispatch mc-abc123 "Fix auth" --completion "tests pass" --max-total-tokens 5000 --exploration-quota 2
     aiwg mc dispatch mc-abc123 "Refactor users" --completion "npm test passes"
+    aiwg mc dispatch mc-abc123 "Port docs" --completion "docs build" --provider omp --max-total-cost 20
     aiwg mc run mc-abc123                     # launches queued missions
     aiwg mc status mc-abc123                  # syncs progress from ralph loops
     aiwg mc dispatch mc-abc123 "Supervise agent-01" --mode pty-orchestrator --target-agent agent-01 --completion "migration complete"
