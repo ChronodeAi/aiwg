@@ -30,6 +30,7 @@ import {
   loadGlobalGraphConfigs,
   orderedGraphEntries,
 } from './types.js';
+import { resolveIndexWorkers } from './index-preparation.js';
 import { SUPPORTED_VIEWS } from './corpus-views/renderers.js';
 import {
   parseResourceSelector,
@@ -376,6 +377,7 @@ export function printIndexUsage(): void {
   console.log('  Session import defaults: 67108864 bytes per record, 1073741824 bytes (1 GiB) per source; source 0 is unlimited.');
   console.log('  --exclude <id-or-glob> (repeatable): skip session IDs or absolute path globs; adds to sessions.import.exclude and AIWG_SESSIONS_IMPORT_EXCLUDE (comma-separated).');
   console.log('  Import limits: CLI flag > AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES / AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES > workspace config > default.');
+  console.log('  build/refresh --index-workers <n>: preparation processes (0 = serial); flag > AIWG_INDEX_WORKERS > automatic CPU/memory limits.');
   console.log('  sync [--backend fortemi-core] [--graph <name> | --all] [--repo <name>]');
   console.log('       [--privacy private|sanitized|public] [--generated-at <iso>] [--json]');
   console.log('  --graph <name>  Target a specific graph (framework, project, codebase, source, user, or user-defined)');
@@ -553,6 +555,7 @@ async function handleBuild(args: string[]): Promise<void> {
     console.log('Usage: aiwg index build [options]');
     console.log('');
     console.log('Options:');
+    console.log('  --index-workers <n> Preparation processes (0 = serial); overrides AIWG_INDEX_WORKERS');
     console.log('  --force          Full rebuild (ignore checksums, re-index everything)');
     console.log('  --verbose        Show detailed progress during indexing');
     console.log('  --all            Build all known graphs (including user-defined)');
@@ -578,6 +581,15 @@ async function handleBuild(args: string[]): Promise<void> {
     console.log('  aiwg index build --scope documentation/references');
     console.log('  aiwg index build --all');
     console.log('  aiwg index sync --all');
+    return;
+  }
+
+  let workers: number | undefined;
+  try {
+    workers = resolveIndexWorkers(parseFlagValue(args, '--index-workers', 'Error: --index-workers requires a value'));
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
     return;
   }
 
@@ -610,14 +622,14 @@ async function handleBuild(args: string[]): Promise<void> {
     // --graph X: build the JSON graph if X is one; otherwise X may be a
     // research-corpus markdown view, rendered below.
     if (graph in GRAPH_CONFIGS) {
-      await buildIndex(cwd, { force, verbose, scope, includeIgnored, graph, explicit: true });
+      await buildIndex(cwd, { force, verbose, scope, includeIgnored, workers, graph, explicit: true });
       jsonBuilt = true;
       builtGraphs.add(graph);
     }
   } else if (all) {
     // Build all known graphs — user asked for everything, but don't hard-error on missing dirs
     for (const [name] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
-      await buildIndex(cwd, { force, verbose, includeIgnored, graph: name, explicit: false });
+      await buildIndex(cwd, { force, verbose, includeIgnored, workers, graph: name, explicit: false });
       builtGraphs.add(name);
     }
     jsonBuilt = true;
@@ -625,7 +637,7 @@ async function handleBuild(args: string[]): Promise<void> {
     // Default: build graphs with defaultBuild=true; skip gracefully if their dirs don't exist
     for (const [name, config] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
       if (config.defaultBuild) {
-        await buildIndex(cwd, { force, verbose, includeIgnored, scope: name === Object.keys(GRAPH_CONFIGS)[0] ? scope : undefined, graph: name, explicit: false });
+        await buildIndex(cwd, { force, verbose, includeIgnored, workers, scope: name === Object.keys(GRAPH_CONFIGS)[0] ? scope : undefined, graph: name, explicit: false });
         builtGraphs.add(name);
       }
     }

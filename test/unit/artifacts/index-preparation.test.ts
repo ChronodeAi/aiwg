@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { buildIndex, prepareIndexArtifact } from '../../../src/artifacts/index-builder.js';
-import { indexPreparationWorkers, runIndexPreparation, type IndexPreparationJob } from '../../../src/artifacts/index-preparation.js';
+import { indexPreparationWorkers, resolveIndexWorkers, runIndexPreparation, type IndexPreparationJob } from '../../../src/artifacts/index-preparation.js';
 const builderUrl = new URL('../../../src/artifacts/index-builder.ts', import.meta.url).href;
 let root: string;
 const bundle = 'agentic/code/addons/example';
@@ -13,8 +13,12 @@ function read(output: string, file: string) { return JSON.parse(fs.readFileSync(
 function job(file: string): IndexPreparationJob { const stat=fs.statSync(file);return {fullPath:file,relativePath:path.relative(root,file),mtimeMs:stat.mtimeMs,birthtimeMs:stat.birthtimeMs,sizeBytes:stat.size}; }
 beforeEach(() => {
   root=fs.mkdtempSync(path.join(os.tmpdir(),'aiwg-index-preparation-'));
-  for(const key of ['HOME','XDG_DATA_HOME','XDG_CONFIG_HOME','XDG_CACHE_HOME']) vi.stubEnv(key,path.join(root,key));
+  for(const key of ['HOME','XDG_DATA_HOME','XDG_CONFIG_HOME','XDG_CACHE_HOME','XDG_STATE_HOME']) vi.stubEnv(key,path.join(root,key));
   for(const key of ['AIWG_ARTIFACTS_PATH','AIWG_PROJECT_ARTIFACTS_PATH','AIWG_PROJECT_AIWG_DIR']) vi.stubEnv(key,'');
+  vi.stubEnv('AIWG_INDEX_WORKERS', '');
+  vi.spyOn(os, 'availableParallelism').mockReturnValue(16);
+  vi.spyOn(os, 'freemem').mockReturnValue(8 * 1024 ** 3);
+  vi.spyOn(process, 'availableMemory').mockReturnValue(8 * 1024 ** 3);
   put('package.json','{"name":"aiwg","version":"1.0.0"}');
   for(const kind of ['frameworks','addons','extensions']) fs.mkdirSync(path.join(root,'agentic/code',kind),{recursive:true});
   for(let index=0;index<70;index++) put(`${bundle}/docs/doc-${index}.md`,`# Document ${index}\n\n@${bundle}/docs/doc-0.md\n`);
@@ -25,7 +29,7 @@ describe('bounded independent index preparation',()=>{
     const gb=1024**3;
     expect(indexPreparationWorkers(100,8,16,8*gb)).toBe(4);
     expect(indexPreparationWorkers(100,4,3,8*gb)).toBe(2);
-    expect(indexPreparationWorkers(100,4,16,gb)).toBe(2);
+    expect(indexPreparationWorkers(100,4,16,gb)).toBe(0);
     expect(indexPreparationWorkers(100,4,16,512*1024**2)).toBe(0);
     expect(indexPreparationWorkers(20,4,16,8*gb)).toBe(0);
     expect(indexPreparationWorkers(100,4,2,8*gb)).toBe(0);
@@ -37,6 +41,43 @@ describe('bounded independent index preparation',()=>{
     expect(indexPreparationWorkers(1000,undefined,16,8*gb,16*1024**2-1)).toBe(0);
     expect(indexPreparationWorkers(1000,undefined,16,8*gb,16*1024**2)).toBe(4);
     expect(indexPreparationWorkers(64,2,16,8*gb,100)).toBe(2);
+  });
+  it('reserves process overhead as well as the worker heap', () => {
+    expect(indexPreparationWorkers(100, 4, 16, 1024 ** 3)).toBe(0);
+    expect(indexPreparationWorkers(100, 4, 16, 1536 * 1024 ** 2)).toBe(2);
+  });
+  it('resolves flag/API overrides before the environment, including serial zero', () => {
+    vi.stubEnv('AIWG_INDEX_WORKERS', '3');
+    expect(resolveIndexWorkers()).toBe(3);
+    expect(resolveIndexWorkers(0)).toBe(0);
+    expect(resolveIndexWorkers('2')).toBe(2);
+    vi.stubEnv('AIWG_INDEX_WORKERS', 'invalid');
+    expect(resolveIndexWorkers(0)).toBe(0);
+    expect(() => resolveIndexWorkers()).toThrow(/AIWG_INDEX_WORKERS/);
+    for (const value of ['', '-1', '1.5', 'Infinity', '9007199254740992']) {
+      expect(() => resolveIndexWorkers(value)).toThrow(/nonnegative/);
+    }
+  });
+  it('keeps oversized artifacts out of workers while preserving input order', async () => {
+    const jobs = Array.from({length:70}, (_,i) => job(path.join(root,`${bundle}/docs/doc-${i}.md`)));
+    jobs[0].sizeBytes = 32 * 1024 ** 2;
+    const serial = vi.fn(prepareIndexArtifact);
+    const result = await runIndexPreparation(jobs, serial, builderUrl, 2);
+    expect(serial).toHaveBeenCalledWith(jobs[0]);
+    expect(result.results).toEqual(jobs.map(prepareIndexArtifact));
+    expect(result.diagnostics.join(' ')).toMatch(/serial/);
+  });
+  it('recovers an early worker exit serially with an ordered result and diagnostic', async () => {
+    const module = put('early-exit.mjs', `
+      export function prepareIndexArtifact(job) {
+        if (process.send) process.exit(0);
+        return { checksum: job.relativePath };
+      }
+    `);
+    const jobs = Array.from({length:70}, (_,i) => job(path.join(root,`${bundle}/docs/doc-${i}.md`)));
+    const result = await runIndexPreparation(jobs, j => ({checksum:j.relativePath}), new URL('file://' + module).href, 2);
+    expect(result.results.map(r => r.checksum)).toEqual(jobs.map(j => j.relativePath));
+    expect(result.diagnostics.join(' ')).toMatch(/exited.*serial/);
   });
   it('keeps automatic small and lightweight batches on the shared serial extractor',async()=>{
     const base=Array.from({length:70},(_,i)=>job(path.join(root,`${bundle}/docs/doc-${i}.md`)));

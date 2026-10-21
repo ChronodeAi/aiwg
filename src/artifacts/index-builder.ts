@@ -41,13 +41,14 @@ import {
   resolveProjectAiwgDir,
 } from '../config/project-artifacts.js';
 import { normalizeStateTransferProjection } from './state-transfer.js';
-import { runIndexPreparation, type IndexPreparationJob, type IndexPreparationResult } from './index-preparation.js';
+import { resolveIndexWorkers, runIndexPreparation, type IndexPreparationJob, type IndexPreparationResult } from './index-preparation.js';
 import { collectGraphIndexFiles, findArtifactFiles, indexPathFor } from './index-files.js';
 
 export interface BuildOptions {
   force?: boolean;
-  /** Bound independent preparation threads; 0/1 keeps serial extraction. */
+  /** Bound independent preparation processes; 0/1 keeps serial extraction. */
   workers?: number;
+  onDiagnostic?: (message: string) => void;
   quiet?: boolean;
   verbose?: boolean;
   scope?: string;
@@ -1015,6 +1016,7 @@ export async function buildIndex(
   options: BuildOptions = {}
 ): Promise<void> {
   const { force = false, verbose = false, scope, includeIgnored = false, outputDir, graph, explicit = true } = options;
+  const workers = resolveIndexWorkers(options.workers);
   const startTime = Date.now();
   const log = options.quiet ? (..._args: unknown[]) => {} : console.log;
 
@@ -1217,7 +1219,8 @@ export async function buildIndex(
     jobs.push({ fullPath, relativePath, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs, sizeBytes: stat.size,
       ...(!force && existingEntries[relativePath] ? { existingChecksum: existingEntries[relativePath].checksum } : {}) });
   }
-  const preparation = await runIndexPreparation(jobs, prepareIndexArtifact, import.meta.url, options.workers);
+  const preparation = await runIndexPreparation(jobs, prepareIndexArtifact, import.meta.url, workers,
+    options.onDiagnostic ?? (message => console.warn(`Index preparation: ${message}`)));
   const preparedArtifacts = new Map(jobs.map((job, index) => [job.fullPath, preparation.results[index]]));
 
   for (const fullPath of files) {
