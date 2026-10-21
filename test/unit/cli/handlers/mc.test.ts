@@ -752,6 +752,26 @@ describe('mc run (#1439)', () => {
     consoleSpy.mockRestore();
   });
 
+  it.each(['loops', 'archive'])('marks a launched mission done when %s/<loop-id>/session-state.json reports completed', async area => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const sessionId = (await mcHandler.execute(makeCtx(['start']))).message!;
+    await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Synced mission', '--completion', 'tests pass']));
+    expect((await mcHandler.execute(makeCtx(['run', sessionId, '--accept-cost']))).exitCode).toBe(0);
+    const sessionPath = `.aiwg/ralph-external/mc/sessions/${sessionId}/session.json`;
+    const launched = JSON.parse(inMemoryFs.store.get(sessionPath)!).missions[0];
+    expect(launched.status).toBe('running');
+
+    // A running loop writes loops/<id>/; the orchestrator archives it on exit.
+    inMemoryFs.store.set(
+      `/mock/cwd/.aiwg/ralph-external/${area}/${launched.ralphLoopId}/session-state.json`,
+      JSON.stringify({ status: 'completed', currentIteration: 1 }),
+    );
+    expect((await mcHandler.execute(makeCtx(['status', sessionId]))).exitCode).toBe(0);
+    const synced = JSON.parse(inMemoryFs.store.get(sessionPath)!).missions[0];
+    expect(synced).toMatchObject({ status: 'done', loop: 1, admissionState: 'released' });
+    expect(synced.completedAt).toBeDefined();
+  });
+
   it('passes each mission provider to the launcher and omits it when unset', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const sessionId = (await mcHandler.execute(makeCtx(['start']))).message!;

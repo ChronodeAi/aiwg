@@ -968,17 +968,14 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
   );
   for (const mission of session.missions) {
     if (mission.status !== 'running') continue;
-    if (!mission.ralphLoopId) continue;
-    const ralphStatePath = join(
-      projectRoot,
-      '.aiwg',
-      'ralph-external',
-      'loops',
-      mission.ralphLoopId,
-      'session-state.json',
-    );
+    const loopId = mission.ralphLoopId;
+    if (!loopId) continue;
+    // A running loop keeps its state in loops/<id>/; when the loop ends the
+    // orchestrator moves that directory to archive/<id>/.
+    const ralphDir = join(projectRoot, '.aiwg', 'ralph-external');
     try {
-      const raw = await fs.readFile(ralphStatePath, 'utf-8');
+      const raw = await fs.readFile(join(ralphDir, 'loops', loopId, 'session-state.json'), 'utf-8')
+        .catch(() => fs.readFile(join(ralphDir, 'archive', loopId, 'session-state.json'), 'utf-8'));
       const state = JSON.parse(raw);
       const ralphStatus = String(state.status || '').toLowerCase();
       // Map ralph status → mc mission status

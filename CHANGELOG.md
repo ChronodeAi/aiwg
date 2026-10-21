@@ -51,6 +51,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Loops started by `aiwg ralph` and `aiwg mc run` register with the multi-loop
+  state manager again, so `aiwg mc status` marks a finished mission done. The
+  launcher now names loops `ralph-{slug}-{8 hex}` with the same code the state
+  manager uses to validate them (it rejected the old ids and the loop fell back to
+  single-loop state), the state manager adopts the `loops/<id>/` directory the
+  launcher created for its daemon log, and `mc status` also reads the loop state
+  from `archive/<id>/` once the loop has ended.
 - With semantic memory enabled (the default), a verified completing iteration no
   longer fails with "this.learningExtractor.extract is not a function", which
   discarded the completion and ran the loop to its iteration limit. Learnings now

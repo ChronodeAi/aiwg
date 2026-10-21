@@ -137,6 +137,36 @@ describe('ExternalMultiLoopStateManager', () => {
       assert.strictEqual(registry.active_loops[0].loop_id, 'ralph-explicit-loop-deadbeef');
     });
 
+    it('adopts the loop directory the CLI launcher prepared for its daemon log', async () => {
+      const loopId = manager.generateLoopId('Create a file named hello.txt then stop');
+      const loopDir = manager.getLoopDir(loopId);
+      mkdirSync(loopDir, { recursive: true });
+      writeFileSync(join(loopDir, 'daemon-output.log'), 'launcher output\n');
+
+      const { state } = await manager.createLoop({ loopId, objective: 'Create a file named hello.txt then stop', completionCriteria: 'hello.txt exists' });
+
+      assert.strictEqual(state.loopId, loopId);
+      assert.strictEqual(readFileSync(join(loopDir, 'daemon-output.log'), 'utf8'), 'launcher output\n');
+      assert(existsSync(join(loopDir, 'session-state.json')));
+      assert.strictEqual(manager.loadRegistry().active_loops[0].loop_id, loopId);
+    });
+
+    it('still refuses existing loop state or a non-directory at the loop path', async () => {
+      const withState = 'ralph-existing-state-deadbeef';
+      mkdirSync(manager.getLoopDir(withState), { recursive: true });
+      writeFileSync(join(manager.getLoopDir(withState), 'session-state.json'), '{}');
+      await assert.rejects(manager.createLoop({ loopId: withState, objective: 'x', completionCriteria: 'done' }), /already exists/);
+      assert.strictEqual(readFileSync(join(manager.getLoopDir(withState), 'session-state.json'), 'utf8'), '{}');
+
+      const linked = 'ralph-linked-dir-deadbeef';
+      const elsewhere = join(testRoot, 'elsewhere');
+      mkdirSync(elsewhere);
+      symlinkSync(elsewhere, manager.getLoopDir(linked));
+      await assert.rejects(manager.createLoop({ loopId: linked, objective: 'x', completionCriteria: 'done' }), /already exists/);
+      assert(!existsSync(join(elsewhere, 'session-state.json')));
+      assert.deepStrictEqual(manager.loadRegistry().active_loops, []);
+    });
+
     it('should enforce MAX_CONCURRENT_LOOPS', async () => {
       // Create 4 loops
       for (let i = 0; i < 4; i++) {
