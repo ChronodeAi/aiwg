@@ -24,12 +24,12 @@ function localRuleSource(cwd: string, localPath: string): string {
   return source;
 }
 
-export function rulePinState(cwd: string, root: string, configs: PinConfigs = loadRulePinConfigs(cwd), requireInventory = false) {
+export function rulePinState(cwd: string, root: string, configs: PinConfigs = loadRulePinConfigs(cwd), requireInventory = false, cacheSourceDigest = true) {
   const installed = installedRuleCapabilities(configs);
   if (!requireInventory && !configs.project.rules?.always_load?.length && !configs.user.rules?.always_load?.length) {
     return { ...resolveRulePins({ rules: [], configs, installed }), installed, configs, inventory: [] as PinRule[] };
   }
-  const relations = loadRelations(cwd) ?? loadRelations(root, cwd);
+  const relations = loadRelations(cwd, cwd, cacheSourceDigest) ?? loadRelations(root, cwd, cacheSourceDigest);
   const rules: PinRule[] = [];
   const seen = new Set<string>();
   if (relations) for (const [id, rule] of Object.entries(relations.index.rules)) {

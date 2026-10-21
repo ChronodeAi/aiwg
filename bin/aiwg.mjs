@@ -258,7 +258,13 @@ maybeWarnUnbuiltDist();
 
 // Propagate the strict no-write contract through helpers that may resolve
 // installation/channel state before the command context exists.
-if (process.argv.slice(2).includes('--dry-run')) {
+function isReadOnlyReport(args) {
+  return (args[0] === 'rules' && ['inventory', 'list'].includes(args[1]))
+    || (['doctor', '-doctor', '--doctor'].includes(args[0]) && args.includes('--decision-offload'))
+    || (args[0] === 'steward' && args[1] === 'decision-offload');
+}
+const readOnlyReport = isReadOnlyReport(process.argv.slice(2));
+if (process.argv.slice(2).includes('--dry-run') || readOnlyReport) {
   process.env['AIWG_CLI_DRY_RUN'] = '1';
 }
 
@@ -351,8 +357,8 @@ async function runUpdateNotifierBootstrap() {
 
 const cliArgs = process.argv.slice(2);
 const indexRefresh = cliArgs[0] === 'index' && cliArgs[1] === 'refresh';
-if (indexRefresh) {
-  trace('notifier:skip (index refresh)');
+if (indexRefresh || readOnlyReport) {
+  trace(`notifier:skip (${indexRefresh ? 'index refresh' : 'read-only report'})`);
 } else if (isCredentialHandlingCommand(cliArgs)) {
   trace('notifier:skip (credential-handling command)');
 } else {
@@ -462,7 +468,7 @@ async function applyVerbosityFromArgs(args, routerPath) {
       setInvocationId(invocationId);
       // One-shot prune of old JSONL files on startup. Bounded work; safe to
       // call on every invocation because the work is a single directory list.
-      pruneOldLogs();
+      if (!readOnlyReport) pruneOldLogs();
     }
   } catch {
     // If the logger isn't importable yet (fresh clone without dist/), the
@@ -484,6 +490,7 @@ const RECOVERY_SAFE_COMMANDS = new Set([
 const RECOVERY_SAFE_INDEX_SUBCOMMANDS = new Set(['query', 'deps', 'stats']);
 
 function isRecoverySafeCommand(args) {
+  if (isReadOnlyReport(args)) return true;
   const command = args.find((arg) => !arg.startsWith('-'));
   if (!command) return false;
   if (RECOVERY_SAFE_COMMANDS.has(command)) return true;
@@ -534,7 +541,7 @@ async function main() {
       process.exit(1);
     }
     const { assertCanonicalInstallation, formatInstallationDiagnostic } = await import(pathToFileURL(identityPath).href);
-    const readOnlyPreview = args.includes('--dry-run') || indexRefresh;
+    const readOnlyPreview = args.includes('--dry-run') || indexRefresh || readOnlyReport;
     try {
       assertCanonicalInstallation({
         actualRoot: activePackageRoot,
