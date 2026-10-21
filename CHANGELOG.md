@@ -7,7 +7,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.4] - 2026-10-21
+
 ### Added
+
+- Scoped rule inventory and complete body export for workspace, user, installation,
+  and catalog views, with capability, activation, tier, and provider filters (#3382).
+- Governing rules and required fetch checks in capability discovery, with explicit
+  activation metadata and operator pins across provider context delivery (#3292).
+- Retained release-candidate validation and package promotion, with quarterly
+  comparison evidence verification and provider-specific comparison adapters
+  (#3201, #3298). Production promotion requires configured evidence and identities.
 
 - Add offline decision-offload readiness and adoption reports to status, doctor
   and steward, with correlated checkpoint records and generated startup/compact
@@ -49,6 +59,15 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   resource deferral, dry-run planning, and a versioned JSON report (#310, Gitea #3227).
 
 ### Fixed
+
+- Preserve compact decision-offload activation during context regeneration and
+  compaction, and clarify bounded worker-routing decisions (#2948).
+- Avoid redundant Pi addon deployment processes while preserving deployed files.
+- Ship the decision-offload reporting helper in the lightweight CLI package.
+- Partition default and package lifecycle tests into required native shards while
+  preserving coverage, process cleanup checks, and existing time limits.
+- Bound worker cleanup, preserve failure causes, and improve session import memory
+  use and framework-index reuse.
 
 - Key framework indexes, Fortemi caches, fingerprint receipts and graph sidecars by the canonical AIWG package root, so switching installations cannot overwrite another root's capability index; legacy installs rebuild once into their root's directory (#3308).
 - Behavior directive collisions now honor numeric `priority` (default `0`), with later attachment breaking ties; warnings identify the winning and losing behaviors and priorities (#3312).
