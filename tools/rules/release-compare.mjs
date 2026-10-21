@@ -204,11 +204,15 @@ export function validateSubject(result, model, provider) {
       || (typeof tool.success === 'object' && tool.success !== null))) throw new Error('Malformed or unsuccessful subject trace');
   if (result.runtime_receipt) {
     const receipt = result.runtime_receipt;
-    if (provider !== 'codex' || receipt.schema !== 'aiwg-comparison-runtime-observation/v1' || receipt.authenticated !== false
+    const commonInvalid = receipt.schema !== 'aiwg-comparison-runtime-observation/v1' || receipt.authenticated !== false
       || receipt.provider !== provider || receipt.requested_model !== model || receipt.reported_remote_model !== null
       || receipt.reported_remote_backend !== null || typeof result.stdout !== 'string'
       || receipt.transcript_sha256 !== createHash('sha256').update(result.stdout).digest('hex')
-      || receipt.trace_sha256 !== digest(trace)) throw new Error('Invalid unauthenticated runtime observation');
+      || receipt.trace_sha256 !== digest(trace);
+    const hermesInvalid = provider === 'hermes' && (receipt.qualification_authenticated !== false
+      || !['requested_provider', 'requested_effort', 'hermes_version', 'qualification_id', 'qualification_controller', 'qualification_producer'].every(key => typeof receipt[key] === 'string' && receipt[key].length > 0)
+      || !['launcher_sha256', 'hermes_executable_sha256', 'boundary_profile_sha256', 'boundary_receipt_sha256', 'adapter_source_sha256', 'argv_sha256', 'prompt_sha256'].every(key => /^[a-f0-9]{64}$/.test(receipt[key] ?? '')));
+    if (commonInvalid || (provider === 'codex' ? false : provider === 'hermes' ? hermesInvalid : true)) throw new Error('Invalid unauthenticated runtime observation');
   }
   const usage = result.usage ?? null;
   if (usage !== null && (typeof usage !== 'object' || Array.isArray(usage) || Object.values(usage).some(value => !Number.isFinite(value) || value < 0))) throw new Error('Malformed subject usage');

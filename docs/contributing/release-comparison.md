@@ -76,7 +76,44 @@ and invocation digests, fixture identity, transcript and trace hashes in an
 **unauthenticated runtime observation**. The stream does not establish the remote
 backend or actual model, so both remain unknown. Trusted runner attestation must
 bind these observations to an authorized workflow and invocation before production
-promotion. This Codex-only phase does not satisfy the full three-provider criterion.
+promotion. These observations do not satisfy the full three-provider criterion.
+
+A fixture-tested Hermes subject and judge adapter ships at
+`tools/rules/release-compare-hermes.mjs`. It requires the pinned Hermes CLI
+version `0.21.6+387.gdce1e9b`, explicit subject/judge effort, an explicit provider
+other than `auto`, and a pinned external launcher. The launcher must expose the
+ordinary Hermes CLI interface and enforce a separately reviewed boundary with
+read-only workspace access, isolated credentials, denied tool network access,
+owned descendant processes, and JSONL stdout. Set the exact launcher path and
+digest with `AIWG_RELEASE_HERMES_LAUNCHER` and
+`AIWG_RELEASE_HERMES_LAUNCHER_SHA256`. Its private, current-user-owned receipt is
+named and pinned by `AIWG_RELEASE_HERMES_BOUNDARY_RECEIPT` and
+`AIWG_RELEASE_HERMES_BOUNDARY_RECEIPT_SHA256`. The separately configured
+`AIWG_RELEASE_HERMES_EXECUTABLE_SHA256` and
+`AIWG_RELEASE_HERMES_BOUNDARY_PROFILE_SHA256` must match its inner executable and
+profile, and its controller, producer, and qualification IDs must match the
+explicit configuration. The adapter rejects absent or mismatched
+qualification before any inference process can start, strips ambient provider
+credentials, and never acquires credentials itself; only the reviewed launcher
+may inject them.
+
+That receipt is a configuration assertion, not cryptographic attestation. The
+retained runtime receipt therefore records `authenticated: false`,
+`qualification_authenticated: false`, and null remote backend/model identity.
+It binds launcher, Hermes executable, boundary profile, adapter, argv, prompt,
+fixture, transcript, and normalized trace digests so later verification detects
+substitution. Production policy with `allow_unattested_backend: false` still
+rejects it. No reviewed production launcher or qualification receipt is supplied
+by this repository, and no current quarterly Hermes evidence is claimed.
+
+Hermes is invoked with `--format stream-json`. Subject runs expose only the
+`terminal` tool and accept observed, paired, successful calls whose single
+command parses as `aiwg discover ...` or `aiwg show rule|skill|agent|command ...`;
+shell operators, substitutions, pipelines, redirects, and other tools are
+rejected. This trace check is evidence validation, not the execution boundary;
+the qualified launcher must enforce the controls before execution. Hermes has no
+documented zero-tool switch. Judge runs therefore select the least-capability
+`clarify` toolset and invalidate the result if *any* tool event occurs.
 
 Both adapters are explicit Node entry points, supplied with `--subject-runner FILE.mjs` and `--judge-runner FILE.mjs`. The harness executes each with an argument array, sends one JSON request on stdin, and expects one JSON response on stdout. Send diagnostics to stderr. No model is invoked merely by importing this harness. Provider SDK/CLI integrations can use the installed provider's qualified execution profile without adding another model framework here.
 
@@ -92,7 +129,7 @@ The working directory is the fresh deployed project. Return the actual resolved 
 {"model":"SUBJECT_SNAPSHOT","trace":{"text":"{\"action\":\"follow\",\"reason\":\"…\"}","tools":[{"name":"Bash","input":"aiwg show rule delivery-policy","output":"rule body…","success":true}],"completed":true,"failed":false},"usage":{"input_tokens":120,"output_tokens":30}}
 ```
 
-Tool success must reflect observed tool completion, not a claim in the final answer. Usage is optional; every supplied counter must be finite and nonnegative. Claude/Codex adapters can instead return `stdout` with the native JSONL stream; the existing #2936 parser normalizes it. Hermes adapters must normalize observed tool events and authoritative completion using the qualified Hermes integration; plain final text alone cannot prove tool fetches. No fictional Hermes JSONL format is assumed.
+Tool success must reflect observed tool completion, not a claim in the final answer. Usage is optional; every supplied counter must be finite and nonnegative. Claude/Codex adapters can instead return `stdout` with the native JSONL stream; the existing #2936 parser normalizes it. The Hermes adapter normalizes the installed CLI's documented `system`, `text`, `tool_use`, `tool_result`, and terminal `result` JSONL events; plain final text alone cannot prove tool fetches.
 
 The judge receives only the task prompt, the fixed rubric and 0–4 scale, and anonymous `left` and `right` responses with observed tool inputs. It does not receive A/B identities, release labels, execution order, deterministic assertion answers, or the subject model ID. Known fixture paths and version identifiers are scrubbed. Subject execution order and judge presentation order are independently randomized from the recorded seed. The response text is explicitly treated as untrusted evidence.
 
@@ -145,7 +182,8 @@ quarter. Retain the quarterly artifact for at least 120 days. The first such ful
 remains an authorized release activity; offline tests do not satisfy it and no
 current record is asserted here.
 
-The canonical Hermes adapter required by the quarterly source map is not yet
-implemented. Promotion remains disabled until that adapter and a three-provider
-production record are independently qualified; Claude/Codex evidence cannot fill
+The canonical Hermes adapter required by the quarterly source map now has an
+offline fixture-tested implementation. Promotion remains disabled until its
+external boundary and runtime identity are independently qualified and a current
+three-provider production record exists; offline fixture evidence cannot fill
 the Hermes slot.

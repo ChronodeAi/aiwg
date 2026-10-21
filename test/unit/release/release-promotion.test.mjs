@@ -58,7 +58,7 @@ describe('exact retained RC production promotion gate (#3201)', () => {
     configured.comparison.mode = 'per-release';
     expect(assessPromotionPolicyConfiguration(configured)).toEqual({ ready: true, unmet_requirements: [] });
     configured.comparison.mode = 'utc-calendar-quarter';
-    expect(assessPromotionPolicyConfiguration(configured).unmet_requirements.join(' ')).toMatch(/Missing canonical quarterly hermes/);
+    expect(assessPromotionPolicyConfiguration(configured)).toEqual({ ready: true, unmet_requirements: [] });
     configured.comparison.mode = 'per-release';
     configured.comparison.runtime_identity.allow_unattested_backend = false;
     const held = assessPromotionPolicyConfiguration(configured);
@@ -89,7 +89,7 @@ describe('exact retained RC production promotion gate (#3201)', () => {
     expect(decision.unmet_requirements.join(' ')).toMatch(/policy is disabled/);
     expect(decision.unmet_requirements.join(' ')).toMatch(/GitHub user API transport trust level/);
     expect(decision.unmet_requirements.join(' ')).toMatch(/backend-unattested/);
-    expect(decision.unmet_requirements.join(' ')).toMatch(/Missing canonical quarterly hermes/);
+    expect(decision.unmet_requirements.join(' ')).not.toMatch(/Missing canonical quarterly hermes/);
     expect(Object.isFrozen(decision)).toBe(true);
     expect(Object.isFrozen(decision.unmet_requirements)).toBe(true);
   });

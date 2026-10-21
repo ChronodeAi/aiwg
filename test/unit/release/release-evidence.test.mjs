@@ -11,6 +11,7 @@ vi.mock('node:child_process', async importOriginal => {
 });
 import { RC_LANES, RC_STEPS, RC_WORKFLOW, SURFACES, sha256, writeCandidateManifest } from '../../../tools/release/release-candidate.mjs';
 import { evaluateAssertions, parseTrace } from '../../../tools/rules/run-rule-probes.mjs';
+import { buildHermesArgs, parseHermesStream } from '../../../tools/rules/release-compare-hermes.mjs';
 import { DIMENSIONS, comparisonPlan, comparisonReport, loadScenarios } from '../../../tools/rules/release-compare.mjs';
 import { QUARTERLY_RELEASE_APPROVAL_SCHEMA, RELEASE_APPROVAL_SCHEMA, acquireGithubReleaseEvidence,
   acquireGithubProductionComparisonReports, acquireGithubProductionReleaseEvidence, createGithubApiEvidenceClient,
@@ -178,6 +179,40 @@ function addSyntheticCodexReceipts(results, identities, model, judgeModel, adapt
   }
 }
 
+function addSyntheticHermesReceipts(results, identities, model, judgeModel, adapter, plan) {
+  const scenarios = new Map(plan.pairs.map(pair => [pair.scenario.id, pair.scenario]));
+  const makeTrace = (text, requestedModel, tools = []) => {
+    const events = [{ type: 'system', subtype: 'init', model: requestedModel, session_id: 'synthetic', timestamp: 1 }];
+    for (const [index, tool] of tools.entries()) {
+      const id = `tool-${index}`;
+      events.push({ type: 'tool_use', name: 'terminal', input: { command: 'aiwg discover "synthetic evidence"' }, tool_call_id: id, timestamp: 2 },
+        { type: 'tool_result', name: 'terminal', output: JSON.stringify(tool.output ?? tool), duration_ms: 1, is_error: false, tool_call_id: id, timestamp: 3 });
+    }
+    events.push({ type: 'text', text, timestamp: 4 }, { type: 'result', session_id: 'synthetic', exit_code: 0, text,
+      tokens: { input: 1, output: 1, total: 2, cache_read: 0, cache_write: 0 }, duration_ms: 1, timestamp: 5 });
+    const stdout = events.map(JSON.stringify).join('\n');
+    return { stdout, trace: parseHermesStream(stdout, { judge: tools.length === 0 && requestedModel === judgeModel, expectedModel: requestedModel }) };
+  };
+  const receipt = (run, requestedModel, fixtureHash, effort) => ({ schema: 'aiwg-comparison-runtime-observation/v1', authenticated: false,
+    provider: 'hermes', requested_model: requestedModel, requested_provider: 'fixture-provider', requested_effort: effort, hermes_version: '0.21.6+387.gdce1e9b',
+    reported_remote_model: null, reported_remote_backend: null, qualification_authenticated: false,
+    qualification_id: 'synthetic-qualification', qualification_controller: 'synthetic-controller', qualification_producer: 'synthetic-producer',
+    launcher_sha256: 'a'.repeat(64), hermes_executable_sha256: 'b'.repeat(64), boundary_profile_sha256: 'c'.repeat(64),
+    boundary_receipt_sha256: 'd'.repeat(64), adapter_source_sha256: sha256(adapter),
+    argv_sha256: textHash(JSON.stringify(buildHermesArgs({ model: requestedModel, provider: 'fixture-provider', effort, judge: requestedModel === judgeModel }))),
+    prompt_sha256: 'f'.repeat(64), fixture_identity_sha256: fixtureHash, transcript_sha256: textHash(run.stdout), trace_sha256: textHash(JSON.stringify(run.trace)) });
+  for (const pair of results) {
+    for (const side of ['A', 'B']) {
+      const run = pair.runs[side]; Object.assign(run, makeTrace(run.trace.text, model, run.trace.tools));
+      run.assertions = evaluateAssertions(scenarios.get(pair.id).assertions, run.trace); run.passed = run.assertions.length > 0 && run.assertions.every(item => item.pass);
+      run.runtime_receipt = receipt(run, model, textHash(JSON.stringify(identities[side])), 'low');
+    }
+    const j = pair.judgment;
+    const blind = { winner: j.winner === 'tie' ? 'tie' : pair.judge_order[0] === j.winner ? 'left' : 'right', reason: j.reason, scores: { left: j.scores[pair.judge_order[0]], right: j.scores[pair.judge_order[1]] } };
+    Object.assign(j, makeTrace(JSON.stringify(blind), judgeModel)); j.runtime_receipt = receipt(j, judgeModel, null, 'medium');
+  }
+}
+
 function comparisonFixture(candidate, { provider = 'claude', n = 2, regression = false } = {}) {
   const root = temp(), subject = path.join(root, 'synthetic-contract-subject.mjs'), judge = path.join(root, 'synthetic-contract-judge.mjs');
   fs.writeFileSync(subject, 'export default async function subject() {}\n');
@@ -205,6 +240,11 @@ function comparisonFixture(candidate, { provider = 'claude', n = 2, regression =
   if (provider === 'codex') {
     const adapter = path.resolve('tools/rules/release-compare-codex.mjs');
     addSyntheticCodexReceipts(results, identities, model, judgeModel, adapter);
+    return syntheticCodexReport(root, candidate, plan, results, identities, adapter);
+  }
+  if (provider === 'hermes') {
+    const adapter = path.resolve('tools/rules/release-compare-hermes.mjs');
+    addSyntheticHermesReceipts(results, identities, model, judgeModel, adapter, plan);
     return syntheticCodexReport(root, candidate, plan, results, identities, adapter);
   }
   const report = { ...comparisonReport(plan, results, identities), fixture_inputs: { A: 'aiwg@2026.10.2', B: identities.B.spec },
@@ -536,6 +576,7 @@ z.close()`, fixture.directory, fixture.archivePath], { timeout: 30000, killSigna
             scores: { A: scores(4), B: scores(4) } }, judge_error: null };
       });
       if (provider === 'codex') addSyntheticCodexReceipts(results, template.report.fixtures, plan.model, plan.judge_model, template.report.adapters.subject);
+      if (provider === 'hermes') addSyntheticHermesReceipts(results, template.report.fixtures, plan.model, plan.judge_model, template.report.adapters.subject, plan);
       pairs += results.length;
       const report = { ...comparisonReport(plan, results, template.report.fixtures),
         fixture_inputs: template.report.fixture_inputs, bundles: policy.expectedBundles, adapters: template.report.adapters };

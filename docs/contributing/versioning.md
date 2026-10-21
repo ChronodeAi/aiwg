@@ -795,12 +795,16 @@ five-file artifact from the authenticated quarterly-full validation and the thre
 authorized comparisons. This source increment neither schedules model work nor
 claims that such an artifact currently exists.
 
-The canonical Hermes comparison adapter path is reserved as
-`tools/rules/release-compare-hermes.mjs`, but that adapter does not exist in this
-increment. Quarterly activation reports this as an unmet requirement before any
-credential, network acquisition, or publication step. Claude/Codex source
-bindings and offline fixtures cannot substitute for the missing Hermes production
-adapter or three-provider qualification.
+The canonical Hermes comparison adapter is
+`tools/rules/release-compare-hermes.mjs`. Its fixture-tested transport retains
+Hermes JSONL events and pinned launcher/boundary digests, but the boundary receipt
+is explicitly unauthenticated and no production-qualified launcher, receipt, or
+current Hermes comparison record is supplied. A production Hermes comparison
+must satisfy those operational qualifications before inference; the disabled
+promotion policy and absent three-provider artifact continue to hold credential,
+network acquisition, and publication. Claude/Codex source bindings and offline
+fixtures cannot substitute for Hermes production qualification or the required
+three-provider record.
 
 `config/release-promotion-policy.json` is the sole versioned authorization source.
 It is currently `enabled: false` and intentionally omits the workflow IDs, GitHub
