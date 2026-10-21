@@ -174,8 +174,10 @@ export async function discoverWorkspaceHistories(
       ? [resolve(options.grokbotRoot)] : [] },
     {
       provider: 'claude',
-      roots: options.authorizedRoots || !expectedProviders.includes('claude') ? []
-        : await claudeDiscoveryRoots(providerHomes, workspacePaths, workspacePath, registry, exclusions),
+      // Same scope rule as codex: configured providers keep their root grant
+      // even when a narrow discovery does not scan them (#3402).
+      roots: savedRoots || (!expectedProviders.includes('claude') && !providerScope.configuredProviders?.includes('claude'))
+        ? [] : await claudeDiscoveryRoots(providerHomes, workspacePaths, workspacePath, registry, exclusions),
     },
     {
       provider: 'codex',
