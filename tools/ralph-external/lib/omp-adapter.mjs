@@ -218,6 +218,22 @@ export class OmpAdapter extends ProviderAdapter {
   }
 
   /**
+   * An assistant `message_end` that does not stop for a tool call is the final
+   * answer. A `turn_start` or `message_start` begins new work. A terminal
+   * `agent_end` (`isTerminal` not false, or `yielded`; never one that says
+   * `willContinue`) ends the run.
+   * @param {Object} event
+   * @returns {'final-answer'|'resume'|'run-end'|null}
+   */
+  budgetBoundary(event) {
+    const type = event?.type;
+    if (type === 'message_end' && event.message?.role === 'assistant') return event.message.stopReason === 'toolUse' ? null : 'final-answer';
+    if (type === 'turn_start' || type === 'message_start') return 'resume';
+    if (type === 'agent_end' && event.willContinue !== true && (event.isTerminal !== false || event.yielded === true)) return 'run-end';
+    return null;
+  }
+
+  /**
    * Driver-owned argv after the binary for the version-bound direct-shell
    * profile. Model, thinking level and workdir are always explicit (never
    * a CLI default or alias); approval is pinned explicitly to `write` (never

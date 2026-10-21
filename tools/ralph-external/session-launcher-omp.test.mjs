@@ -245,22 +245,39 @@ test('omp: session and analysis args carry the mapped model', () => {
   assert.equal(exact[exact.indexOf('--model') + 1], 'anthropic/claude-sonnet-5');
 });
 
+test('omp: budgetBoundary marks final answers, resumed work and the end of the run', () => {
+  const adapter = new OmpAdapter();
+  assert.equal(adapter.budgetBoundary({ type: 'message_end', message: done }), 'final-answer');
+  assert.equal(adapter.budgetBoundary({ type: 'message_end', message: { ...done, stopReason: 'length' } }), 'final-answer');
+  assert.equal(adapter.budgetBoundary({ type: 'message_end', message: callBash }), null);
+  assert.equal(adapter.budgetBoundary({ type: 'message_end', message: user }), null);
+  assert.equal(adapter.budgetBoundary({ type: 'turn_start' }), 'resume');
+  assert.equal(adapter.budgetBoundary({ type: 'message_start', message: user }), 'resume');
+  assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [], isTerminal: true, yielded: true }), 'run-end');
+  assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [] }), 'run-end');
+  assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [], isTerminal: false, yielded: true }), 'run-end');
+  assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [], isTerminal: false }), null);
+  assert.equal(adapter.budgetBoundary({ type: 'agent_end', messages: [], willContinue: true }), null);
+  for (const type of ['turn_end', 'tool_execution_start', 'cache_warming_end', 'agent_start']) {
+    assert.equal(adapter.budgetBoundary({ type }), null, type);
+  }
+  class PlainAdapter extends ProviderAdapter {}
+  assert.equal(new PlainAdapter().budgetBoundary({ type: 'message_end', message: done }), null);
+});
+
 // ── Live per-session cap ────────────────────────────────────────────────
 
+// Plays a scripted list of steps: { event, split? } writes one JSON line,
+// { sleep } waits. It then exits 0 on its own.
 const FAKE_OMP = `#!${process.execPath}
 import { readFileSync } from 'node:fs';
-const { costs, split, holdMs } = JSON.parse(readFileSync(new URL('./fake-omp.json', import.meta.url), 'utf8'));
+const steps = JSON.parse(readFileSync(new URL('./fake-omp.json', import.meta.url), 'utf8'));
 const write = text => new Promise(resolve => process.stdout.write(text, resolve));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const messages = [];
-await write(JSON.stringify({ type: 'agent_start' }) + '\\n');
-for (const [index, cost] of costs.entries()) {
-  const message = { role: 'assistant', content: [{ type: 'text', text: 'step ' + index }], stopReason: 'stop',
-    usage: { input: 10, output: 5, cacheRead: 100, cacheWrite: 0, totalTokens: 115,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } } };
-  messages.push(message);
-  const line = JSON.stringify({ type: 'message_end', message }) + '\\n';
-  if (split) {
+for (const step of steps) {
+  if (step.sleep) { await sleep(step.sleep); continue; }
+  const line = JSON.stringify(step.event) + '\\n';
+  if (step.split) {
     // Deliver one event in two writes so the reader must buffer a partial line.
     await write(line.slice(0, line.length >> 1));
     await sleep(50);
@@ -268,19 +285,34 @@ for (const [index, cost] of costs.entries()) {
   } else {
     await write(line);
   }
-  await write(JSON.stringify({ type: 'turn_end', message }) + '\\n');
 }
-await sleep(holdMs);
-await write(JSON.stringify({ type: 'agent_end', messages }) + '\\n');
 `;
 
-/** Launch one session against a fake omp that reports `costs` then holds. */
-async function launchFakeOmp(t, { costs, split = false, holdMs, budget, adapter = new OmpAdapter() }) {
+/** An assistant message costing `cost` USD; `toolUse` ends a turn mid-run, `stop` is the final answer. */
+function assistant(index, cost, stopReason) {
+  return { role: 'assistant', content: [{ type: 'text', text: `step ${index}` }], stopReason,
+    usage: { input: 10, output: 5, cacheRead: 100, cacheWrite: 0, totalTokens: 115,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } } };
+}
+
+/** Script a run: each message as turn_start, message_end and its turn_end repeat, then `tail`. */
+function script(messages, tail, { split = false } = {}) {
+  const steps = [{ event: { type: 'agent_start' } }];
+  for (const message of messages) {
+    steps.push({ event: { type: 'turn_start' } }, { event: { type: 'message_end', message }, split }, { event: { type: 'turn_end', message } });
+  }
+  return [...steps, ...tail];
+}
+
+const terminalAgentEnd = messages => ({ event: { type: 'agent_end', messages, isTerminal: true, yielded: true } });
+
+/** Launch one session against a fake omp that plays `steps`. */
+async function launchFakeOmp(t, { steps, budget, adapter = new OmpAdapter() }) {
   const directory = tempDir(t, 'aiwg-omp-cap-');
   const binary = join(directory, 'fake-omp.mjs');
   writeFileSync(binary, FAKE_OMP);
   chmodSync(binary, 0o755);
-  writeFileSync(join(directory, 'fake-omp.json'), JSON.stringify({ costs, split, holdMs }));
+  writeFileSync(join(directory, 'fake-omp.json'), JSON.stringify(steps));
   const previous = process.env.AIWG_OMP_BIN;
   process.env.AIWG_OMP_BIN = binary;
   t.after(() => {
@@ -291,38 +323,98 @@ async function launchFakeOmp(t, { costs, split = false, holdMs, budget, adapter 
   launcher.setProviderAdapter(adapter);
   const exceeded = [];
   launcher.on('budget-exceeded', detail => exceeded.push(detail));
+  const stdoutPath = join(directory, 'stdout.jsonl');
   const started = Date.now();
   const result = await launcher.launch({
     prompt: 'synthetic',
     sessionId: 'synthetic',
     budget,
     workingDir: directory,
-    stdoutPath: join(directory, 'stdout.jsonl'),
+    stdoutPath,
     stderrPath: join(directory, 'stderr.log'),
     outputDir: join(directory, 'output'),
     timeoutMs: 60_000,
   });
-  return { result, exceeded, elapsedMs: Date.now() - started };
+  // A terminated fake may leave a partial last line; keep only whole events.
+  const types = readFileSync(stdoutPath, 'utf8').split('\n').flatMap(line => {
+    try { return [JSON.parse(line).type]; } catch { return []; }
+  });
+  return { result, exceeded, types, elapsedMs: Date.now() - started };
 }
 
-test('live cap: a fake omp over its per-session budget is terminated promptly', { timeout: 30_000 }, async t => {
-  // 0.4 + 0.4 + 0.4 reaches the $1 budget on the third message_end. The fake
-  // would otherwise hold its process open for 30 s.
-  const { result, exceeded, elapsedMs } = await launchFakeOmp(t, { costs: [0.4, 0.4, 0.4], split: true, holdMs: 30_000, budget: 1 });
+test('live cap (b): a tool-use message crossing the budget is terminated promptly', { timeout: 30_000 }, async t => {
+  // 0.4 + 0.4 + 0.4 reaches the $1 budget on the third message_end, which
+  // stops for a tool call. The fake would otherwise hold for 30 s.
+  const messages = [0, 1, 2].map(index => assistant(index, 0.4, 'toolUse'));
+  const { result, exceeded, types, elapsedMs } = await launchFakeOmp(t, {
+    steps: script(messages, [{ sleep: 30_000 }, terminalAgentEnd(messages)], { split: true }),
+    budget: 1,
+  });
   assert.equal(result.budgetExceeded, true);
   assert.equal(result.timedOut, false);
   assert.notEqual(result.exitCode, 0);
   assert.ok(elapsedMs < 15_000, `terminated after ${elapsedMs} ms`);
+  assert.ok(!types.includes('agent_end'));
   assert.equal(exceeded.length, 1);
   assert.ok(Math.abs(exceeded[0].costUsd - 1.2) < 1e-9, `cap fired at $${exceeded[0].costUsd}`);
   assert.equal(exceeded[0].budgetUsd, 1);
+  assert.equal(exceeded[0].deferred, false);
   assert.equal(result.costObserved, true);
   assert.ok(result.costUsd >= 1);
 });
 
+test('live cap (a): a final answer crossing the budget lets the run finish with its own exit code', { timeout: 30_000 }, async t => {
+  const messages = [assistant(0, 0.6, 'toolUse'), assistant(1, 0.6, 'stop')];
+  const { result, exceeded, types, elapsedMs } = await launchFakeOmp(t, {
+    steps: script(messages, [{ sleep: 500 }, terminalAgentEnd(messages)]),
+    budget: 1,
+  });
+  assert.equal(result.budgetExceeded, true);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.exitCode, 0);
+  assert.ok(elapsedMs >= 500, `exited after ${elapsedMs} ms`);
+  assert.equal(types.at(-1), 'agent_end');
+  assert.equal(exceeded.length, 1);
+  assert.ok(Math.abs(exceeded[0].costUsd - 1.2) < 1e-9, `cap reached at $${exceeded[0].costUsd}`);
+  assert.equal(exceeded[0].deferred, true);
+  assert.ok(Math.abs(result.costUsd - 1.2) < 1e-9, `costUsd ${result.costUsd}`);
+});
+
+test('live cap (c): a final answer crossing the budget is terminated when a new turn starts', { timeout: 30_000 }, async t => {
+  const messages = [assistant(0, 0.6, 'toolUse'), assistant(1, 0.6, 'stop')];
+  const { result, exceeded, types, elapsedMs } = await launchFakeOmp(t, {
+    steps: script(messages, [{ sleep: 500 }, { event: { type: 'turn_start' } }, { sleep: 30_000 }, terminalAgentEnd(messages)]),
+    budget: 1,
+  });
+  assert.equal(result.budgetExceeded, true);
+  assert.equal(result.timedOut, false);
+  assert.notEqual(result.exitCode, 0);
+  assert.ok(elapsedMs >= 500 && elapsedMs < 15_000, `terminated after ${elapsedMs} ms`);
+  assert.equal(types.at(-1), 'turn_start');
+  assert.equal(exceeded.length, 1);
+});
+
+test('live cap: a final answer crossing the budget is terminated at the next billed event', { timeout: 30_000 }, async t => {
+  const messages = [assistant(0, 0.6, 'toolUse'), assistant(1, 0.6, 'stop')];
+  const warmed = { type: 'cache_warming_end', phase: 'refresh', provider: 'anthropic', model: 'synthetic', outcome: 'hit',
+    usage: { input: 1, output: 1, cacheRead: 100, cacheWrite: 0, totalTokens: 102, cost: { total: 0.01 } } };
+  const { result, types, elapsedMs } = await launchFakeOmp(t, {
+    steps: script(messages, [{ sleep: 300 }, { event: warmed }, { sleep: 30_000 }, terminalAgentEnd(messages)]),
+    budget: 1,
+  });
+  assert.equal(result.budgetExceeded, true);
+  assert.notEqual(result.exitCode, 0);
+  assert.ok(elapsedMs >= 300 && elapsedMs < 15_000, `terminated after ${elapsedMs} ms`);
+  assert.equal(types.at(-1), 'cache_warming_end');
+});
+
 test('live cap: a fake omp under its per-session budget is not terminated', { timeout: 30_000 }, async t => {
   // turn_end repeats each message's usage; counting it would reach $1.60 here.
-  const { result, exceeded, elapsedMs } = await launchFakeOmp(t, { costs: [0.4, 0.4], holdMs: 300, budget: 1 });
+  const messages = [assistant(0, 0.4, 'toolUse'), assistant(1, 0.4, 'stop')];
+  const { result, exceeded, elapsedMs } = await launchFakeOmp(t, {
+    steps: script(messages, [{ sleep: 300 }, terminalAgentEnd(messages)]),
+    budget: 1,
+  });
   assert.equal(result.budgetExceeded, false);
   assert.equal(result.timedOut, false);
   assert.equal(result.exitCode, 0);
@@ -335,7 +427,12 @@ test('live cap: not armed for a provider with native budget control', { timeout:
   class NativeBudgetOmp extends OmpAdapter {
     getCapabilities() { return { ...super.getCapabilities(), budgetControl: true }; }
   }
-  const { result, exceeded } = await launchFakeOmp(t, { costs: [0.6, 0.6], holdMs: 100, budget: 1, adapter: new NativeBudgetOmp() });
+  const messages = [assistant(0, 0.6, 'toolUse'), assistant(1, 0.6, 'stop')];
+  const { result, exceeded } = await launchFakeOmp(t, {
+    steps: script(messages, [{ sleep: 100 }, terminalAgentEnd(messages)]),
+    budget: 1,
+    adapter: new NativeBudgetOmp(),
+  });
   assert.equal(result.budgetExceeded, false);
   assert.equal(result.exitCode, 0);
   assert.deepEqual(exceeded, []);

@@ -688,6 +688,24 @@ export class ProviderAdapter {
   categorizeEvent(event) { return null; }
 
   /**
+   * Where one parsed stream event sits relative to the launcher's live
+   * per-session spend cap, in this provider's own event grammar:
+   * - `'final-answer'`: the model finished its final answer. If this event's
+   *   cost crosses the budget, the spend is already incurred, so the session
+   *   is left to end on its own.
+   * - `'resume'`: billed work starts again (a new turn or message). A session
+   *   left running after a final-answer crossing is stopped here.
+   * - `'run-end'`: the run ended on its own; such a session is never stopped.
+   *
+   * The base returns `null` for every event: a crossing stops the session at
+   * once, whatever the event.
+   *
+   * @param {Object} event - One parsed JSON stream event
+   * @returns {'final-answer'|'resume'|'run-end'|null}
+   */
+  budgetBoundary(event) { return null; }
+
+  /**
    * Observe execution through the selected profile's framing and grammar.
    * This hook never parses or verifies worker claims: parseWorkerFinal remains
    * the separate strict final contract, and the conductor owns verification.

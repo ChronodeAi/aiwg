@@ -999,10 +999,11 @@ export class Orchestrator {
           console.log(`[External Ralph] Tool calls: ${sessionResult.toolCallCount}, errors: ${sessionResult.errorCount || 0}`);
         }
         if (sessionResult.budgetExceeded) {
-          // The live per-session cap stopped this session. The iteration is
-          // still analyzed and recorded, and the cumulative mission ceilings
-          // are evaluated against it below.
-          console.log(`[External Ralph] Session stopped at the per-iteration budget ($${state.config.budgetPerIteration})`);
+          // The session reached the live per-session cap: it was stopped, or
+          // its final answer crossed the cap and it then ended on its own. The
+          // iteration is still analyzed and recorded, and the cumulative
+          // mission ceilings are evaluated against it below.
+          console.log(`[External Ralph] Session reached the per-iteration budget ($${state.config.budgetPerIteration})`);
         }
 
         // Verbose: show session output tail

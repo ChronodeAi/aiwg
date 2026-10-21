@@ -24,8 +24,8 @@ import { join } from 'path';
  * @property {number} [input_tokens] - Input token count
  * @property {number} [output_tokens] - Output token count
  * @property {number} [tool_calls] - Tool-call count
- * @property {boolean} [session_budget_exceeded] - The live per-session spend cap
- *   stopped this iteration's session. The cumulative ceilings still apply.
+ * @property {boolean} [session_budget_exceeded] - This iteration's session
+ *   reached the live per-session spend cap. The cumulative ceilings still apply.
  * @property {number} execution_time_ms - Execution time in milliseconds
  * @property {string} verification_status - passed|failed|skipped|void
  * @property {string} output_snapshot_path - Path to snapshot

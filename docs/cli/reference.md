@@ -3124,7 +3124,7 @@ aiwg mission-control <subcommand> [options]
 
 A mission's `--max-total-cost` caps its share of that estimate **only** when the mission's own provider (`--provider`, default `claude`) reports spend. On a provider that reports none, the ceiling is inert and never fires (#1766), so it is reported in the warning but deliberately not subtracted: capping the estimate by a ceiling that cannot fire would weaken the gate exactly where the operator has no enforced protection. `claude` and `omp` report spend today.
 
-On `omp`, the loop also caps each session at its per-iteration budget (`aiwg ralph --budget`, default `$5`): OMP has no budget flag, so the launcher reads the session's cost from OMP's JSON events as they arrive and stops the session when it reaches the budget. The cumulative `--max-total-cost` ceiling is still checked after that iteration.
+On `omp`, the loop also caps each session at its per-iteration budget (`aiwg ralph --budget`, default `$5`): OMP has no budget flag, so the launcher reads the session's cost from OMP's JSON events as they arrive and stops the session when it reaches the budget. When the crossing message is the final answer, the session is left to finish and is stopped only if new work follows. The cumulative `--max-total-cost` ceiling is still checked after that iteration.
 
 **Examples:**
 
@@ -3303,7 +3303,7 @@ aiwg ralph "<task-description>"
 - `--max-iterations <n>` - Maximum iterations (default: 5)
 - `--timeout <minutes>` - Per-iteration timeout in minutes (default: 60)
 - `--provider <name>` - CLI provider: `claude` (default), `codex`, `opencode`, `factory`, `pi`, `omp`, `deepseek-harness` (`dsh`), `muse`
-- `--budget <usd>` - Budget per iteration in USD (default: 5.0). `claude` enforces it natively. On `omp`, which has no budget flag, the launcher reads the session's cost from OMP's JSON events as they arrive and stops the session once it reaches the budget. Other providers do not enforce it.
+- `--budget <usd>` - Budget per iteration in USD (default: 5.0). `claude` enforces it natively. On `omp`, which has no budget flag, the launcher reads the session's cost from OMP's JSON events as they arrive and stops the session once it reaches the budget, unless the crossing message is the final answer (then only if new work follows). Other providers do not enforce it.
 - `--gitea-issue` - Create/link Gitea issue for tracking
 - `--mcp-config <json>` - MCP server configuration JSON
 
