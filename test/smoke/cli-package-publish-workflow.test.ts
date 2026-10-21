@@ -6,139 +6,54 @@ import { parse } from 'yaml';
 const ROOT = path.resolve(import.meta.dirname, '../..');
 
 describe('@aiwg/cli release workflow wiring', () => {
-  it('publishes the exact retained CLI tarball to npmjs with provenance and verifies it', () => {
-    const workflow = readFileSync(path.join(ROOT, '.github/workflows/npm-publish.yml'), 'utf8');
-
-    expect(workflow).not.toContain('npm run package:cli');
-    expect(workflow).toContain('release-promotion.mjs publish');
-    expect(workflow).toContain('--registry npmjs');
-    expect(workflow).toContain('aiwg-cli-${VERSION}.tgz');
-    expect(workflow).toContain('verify_attestations @aiwg/cli');
-    expect(workflow).toContain('for attempt in 1 2 3; do');
-    expect(workflow).toContain('--json --prefer-online');
-    expect(workflow).toContain("| jq -r '.dist.attestations // empty' || true");
-    expect(workflow).toContain('Report advisory npm registry checks');
-    expect(workflow).toContain('bash tools/release/verify-npm-dist-tags.sh "$VERSION"');
-    expect(workflow).toContain('[ "$NPM_TAG" = latest ]');
-    expect(workflow).toContain('Verify workflow identity is tag-bound');
-    expect(workflow).toContain(
-      "dispatch npm-publish.yml with --ref '$TAG' and the same complete retained-RC evidence inputs",
-    );
-    expect(workflow).toContain('NPM_TAG=latest');
-    expect(workflow).toContain('npm publication accepts stable versions only');
-    expect(workflow).toContain("github.event_name == 'push' && !contains(github.ref_name, '-')");
-    expect(workflow).toContain('Stable tag pushes cannot supply authenticated retained-RC evidence.');
-    expect(workflow).not.toContain('secrets.NPM_DIST_TAG_TOKEN');
-    expect(workflow).not.toMatch(/^\s+npm dist-tag (?:add|rm) /m);
-    expect(workflow).not.toContain('NPM_TAG=prerelease');
-    expect(workflow).not.toContain('NPM_TAG=nightly');
+  it('builds, retains, and publishes the exact smoke-tested CLI tarball with advisory provenance checks', () => {
+    const workflow = parse(readFileSync(path.join(ROOT, '.github/workflows/npm-publish.yml'), 'utf8'));
+    const steps = workflow.jobs['publish-to-npmjs-org'].steps;
+    const index = (name: string) => steps.findIndex((step: { name?: string }) => step.name === name);
+    const required = ['Verify signed tag (#1299 / A9 gate)', 'Validate and build stable release',
+      'Pack and smoke-test exact npm surfaces', 'Retain smoke-tested tarballs before publication',
+      'Publish smoke-tested stable tarballs to npmjs.org', 'Upload signed release assets to GitHub release',
+      'Verify provenance attestation landed', 'Verify stable dist-tag policy'];
+    for (const name of required) expect(index(name), name).toBeGreaterThanOrEqual(0);
+    for (let i = 1; i < required.length; i++) expect(index(required[i - 1])).toBeLessThan(index(required[i]));
+    expect(steps[index(required[1])].run).toContain('npm run package:cli');
+    expect(steps[index(required[2])].run).toContain('release-candidate.mjs pack');
+    expect(steps[index(required[3])].with.path).toContain('aiwg-cli-${{ steps.version.outputs.version }}.tgz');
+    const publish = steps[index(required[4])];
+    expect(publish.run).toContain('direct-stable-publish.mjs');
+    expect(publish.run).toContain('aiwg-cli-${VERSION}.tgz');
+    expect(publish.if).toBeUndefined();
+    expect(publish['continue-on-error']).toBeUndefined();
+    expect(steps[index(required[6])]['continue-on-error']).toBe(true);
+    expect(steps[index(required[6])].run).toContain('verify_attestations @aiwg/cli');
+    expect(steps[index(required[7])]['continue-on-error']).toBe(true);
+    expect(steps[index(required[7])].run).toContain('verify-npm-dist-tags.sh');
+    expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual(['tag_to_publish']);
   });
 
-  it('publishes and promotes the exact retained package in the Gitea registry', () => {
-    const workflow = readFileSync(path.join(ROOT, '.gitea/workflows/npm-publish.yml'), 'utf8');
-    const parsed = parse(workflow);
-    const workflowHeader = workflow.slice(0, workflow.indexOf('\njobs:'));
-
-    expect(workflow).not.toContain('npm run package:cli');
-    expect(workflowHeader).not.toContain('GT_NPM_TOKEN_VAULT_FIELD');
-    expect(workflow.match(/GT_NPM_TOKEN_VAULT_FIELD: \$\{\{ vars\.GT_NPM_TOKEN_VAULT_FIELD \}\}/g)).toHaveLength(1);
-    expect(workflow).toContain('release-promotion.mjs publish');
-    expect(workflow).toContain('--registry gitea');
-    expect(workflow).toContain('Retire next on Gitea');
-    expect(workflow).toContain('npm dist-tag rm "$PACKAGE" next');
-    expect(workflow).not.toContain('# Stable publishes deliberately omit `--tag`');
-    expect(workflow).toContain("'^v[0-9]+\\.[0-9]+\\.[0-9]+$'");
-    expect(workflow).not.toContain('build-and-publish-prerelease');
-    expect(workflow).not.toContain('--tag next');
-    expect(workflow).not.toContain('--tag prerelease');
-    expect(workflow).not.toContain('NPM_TAG=');
-    expect(workflow).toContain('npm view "aiwg@${VERSION}" dist.tarball --registry=');
-    expect(workflow).toContain('npm view "@aiwg/cli@${VERSION}" dist.tarball --registry=');
-    expect(workflow).toContain('npm view "@aiwg/cockpit@${VERSION}" dist.tarball --registry=');
-    expect(workflow).toContain('tag_to_publish:');
-    expect(workflow).toContain(
-      'AIWG_VERIFY_TAG_REF: refs/tags/${{ steps.release_tag.outputs.release_tag }}',
-    );
-    expect(workflow).toContain('version: ${{ steps.version.outputs.version }}');
-    expect(workflow).toContain('VERSION="${{ needs.build-and-publish.outputs.version }}"');
-    expect(workflow).toContain('AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN');
-    expect(workflow).toContain('Verify workflow identity is tag-bound');
-    expect(workflow).not.toContain('secrets.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN');
-    expect(workflow).not.toContain('GH_MIRROR_TOKEN_VAULT_PATH');
-    expect(workflow).not.toContain('GH_TOKEN');
-    const steps = parsed.jobs['build-and-publish'].steps;
-    const stepIndex = (name: string) => steps.findIndex((step: { name?: string }) => step.name === name);
-    const policyPreflight = steps[stepIndex('Require enabled release promotion policy before credential access')];
-    const npmTokenFetch = steps[stepIndex('Fetch Gitea npm token from vault')];
-    const evidenceTokenFetch = steps[stepIndex('Fetch dedicated GitHub evidence token from vault')];
-    expect(policyPreflight.run).toContain('assessPromotionPolicyConfiguration');
-    expect(policyPreflight.run).toContain('config/release-promotion-policy.json');
-    expect(policyPreflight.env).toBeUndefined();
-    expect(npmTokenFetch.run).toBe('bash ci/vault-fetch.sh --spec ci/vault-fetch.npm-publish.spec');
-    expect(evidenceTokenFetch.run).toBe(
-      'bash ci/vault-fetch.sh --spec ci/vault-fetch.npm-publish-evidence.spec',
-    );
-    expect(evidenceTokenFetch.env).toEqual({
-      RUNNER_TEMP: '${{ runner.temp }}',
-      VAULT_ADDR: '${{ vars.VAULT_ADDR }}',
-      AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_PATH:
-        '${{ vars.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_PATH }}',
-      AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_FIELD:
-        '${{ vars.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_FIELD }}',
-      VAULT_CI_ROLE_ID: '${{ secrets.VAULT_CI_ROLE_ID }}',
-      VAULT_CI_SECRET_ID: '${{ secrets.VAULT_CI_SECRET_ID }}',
-    });
-    expect(stepIndex('Require enabled release promotion policy before credential access')).toBeLessThan(
-      stepIndex('Fetch Gitea npm token from vault'),
-    );
-    expect(stepIndex('Fetch Gitea npm token from vault')).toBeLessThan(
-      stepIndex('Fetch dedicated GitHub evidence token from vault'),
-    );
-    expect(stepIndex('Fetch dedicated GitHub evidence token from vault')).toBeLessThan(
-      stepIndex('Authorize and publish exact retained RC to Gitea npm registry'),
-    );
-    const promotion = parsed.jobs['build-and-publish'].steps.find(
-      (step: { name?: string }) => step.name === 'Authorize and publish exact retained RC to Gitea npm registry',
-    );
-    expect(promotion.env).not.toHaveProperty('AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN');
-    expect(promotion.env).not.toHaveProperty('AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE');
-    expect(promotion.env).not.toHaveProperty('GITHUB_TOKEN');
-    expect(promotion.run).toContain('test ! -L "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE"');
-    expect(promotion.run).toContain('must use mode 0600');
-    expect(promotion.run).toContain(
-      'AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN="$(cat -- "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE")"',
-    );
-    const cleanup = steps[stepIndex('Remove dedicated GitHub evidence credential')];
-    expect(cleanup.if).toBe('always()');
-    expect(cleanup.run).toBe('bash ci/vault-fetch.sh --cleanup');
-    expect(stepIndex('Authorize and publish exact retained RC to Gitea npm registry')).toBeLessThan(
-      stepIndex('Remove dedicated GitHub evidence credential'),
-    );
-    expect(stepIndex('Remove dedicated GitHub evidence credential')).toBeLessThan(
-      stepIndex('Preserve promotion decision and partial receipt'),
-    );
-    for (const laterStep of steps.slice(stepIndex('Remove dedicated GitHub evidence credential') + 1)) {
-      expect(laterStep.env ?? {}).not.toHaveProperty('AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN');
-      expect(laterStep.env ?? {}).not.toHaveProperty('AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE');
-    }
-    expect(promotion.run).toContain('--rc-tag "$RC_TAG"');
-    const preserve = parsed.jobs['build-and-publish'].steps.find(
-      (step: { name?: string }) => step.name === 'Preserve promotion decision and partial receipt',
-    );
-    expect(preserve.if).toBe('always()');
-    expect(preserve.uses).toBe('actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d');
-    expect(preserve.with.path).toContain('${{ runner.temp }}/promotion-decision.json');
-    expect(preserve.with.path).toContain('${{ runner.temp }}/gitea-publication.json');
-    expect(preserve.with['if-no-files-found']).toBe('warn');
-    expect(workflow).toMatch(
-      /verify-install:[\s\S]*?defaults:\s*\n\s*run:\s*\n\s*shell: bash/,
-    );
-    expect(workflow).toContain('npm install --prefix "$ROOT_INSTALL" --no-audit --no-fund "$ROOT_TARBALL"');
-    expect(workflow).toContain('"$CLI_INSTALL/node_modules/.bin/aiwg" help');
-    expect(workflow).toContain('"$COCKPIT_INSTALL/node_modules/.bin/aiwg-cockpit"');
-    expect(workflow).not.toContain(
-      'npm install -g aiwg@${VERSION} --registry=${{ env.GITEA_NPM_REGISTRY }}',
-    );
+  it('manually mirrors the public packages using the Gitea registry and verifies installation', () => {
+    const workflow = parse(readFileSync(path.join(ROOT, '.gitea/workflows/npm-publish.yml'), 'utf8'));
+    const steps = workflow.jobs['build-and-publish'].steps;
+    const index = (name: string) => steps.findIndex((step: { name?: string }) => step.name === name);
+    expect(workflow.on.push).toBeUndefined();
+    expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual(['tag_to_publish']);
+    const names = ['Verify workflow identity is tag-bound', 'Verify signed tag (#1299 / A9 gate)',
+      'Fetch Gitea npm token from vault', 'Fetch public stable tarballs and mirror them',
+      'Preserve publication receipt', 'Retire next on Gitea'];
+    for (const name of names) expect(index(name), name).toBeGreaterThanOrEqual(0);
+    for (let i = 1; i < names.length; i++) expect(index(names[i - 1])).toBeLessThan(index(names[i]));
+    expect(steps[index(names[2])].run).toBe('bash ci/vault-fetch.sh --spec ci/vault-fetch.npm-publish.spec');
+    const mirror = steps[index(names[3])];
+    expect(mirror.run).toContain('npm pack "${PACKAGE}@${VERSION}"');
+    expect(mirror.run).toContain('direct-stable-publish.mjs --mirror');
+    expect(mirror.run).toContain('@aiwg/cli');
+    expect(mirror.run).not.toContain('AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN');
+    expect(steps[index(names[4])].if).toContain('always()');
+    expect(steps[index(names[5])].run).toContain('npm dist-tag rm "$PACKAGE" next');
+    const verify = workflow.jobs['verify-install'].steps.find((step: { name?: string }) => step.name === 'Clean-install Gitea package tarballs');
+    expect(verify.run).toContain('npm view "@aiwg/cli@${VERSION}" dist.tarball --registry=');
+    expect(verify.run).toContain('"$CLI_INSTALL/node_modules/.bin/aiwg" help');
+    expect(verify.run).toContain('"$COCKPIT_INSTALL/node_modules/.bin/aiwg-cockpit"');
   });
 
   it('documents a dependency-safe Gitea mirror install in generated releases', () => {
