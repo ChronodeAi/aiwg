@@ -50,6 +50,23 @@ describe('decision compaction activation', () => {
     expect(disabled).not.toContain(DECISION_COMPACT_ANCHOR);
     expect(disabled).toContain('Keep this note.');
   });
+  it('makes bounded routing salient before the first choice in generated fresh and resumed context', async () => {
+    project(true); fakeSavedOptIn();
+    const fresh = await buildNormalizedAiwgMd(root, '# Operator\n\nKeep this note.\n');
+    for (const generated of [fresh, await buildNormalizedAiwgMd(root, fresh)]) {
+      const section = generated.split('## Compact Instructions')[1]?.split(/\n## /)[0];
+      expect(section).toMatch(/before the first eligible bounded choice/i);
+      expect(section).toMatch(/ordinary triage or worker routing/i);
+      expect(section).toContain('aiwg show rule decision-offload');
+      expect(section).toMatch(/CLI or MCP ask capability/);
+      expect(section).toMatch(/fallback decide normally/i);
+      expect(section).toMatch(/advisory and do not authorize actions/i);
+    }
+    project(true, false);
+    const disabled = await buildNormalizedAiwgMd(root, fresh);
+    expect(disabled).not.toMatch(/before the first eligible bounded choice/i);
+    expect(disabled).toContain('Keep this note.');
+  });
   it('recognizes explicit user-scope addon registration', async () => {
     project(false); fakeSavedOptIn();
     writeFileSync(join(root, 'user-registry.json'), JSON.stringify({ version: '1', installed: { 'decision-engine': { version: '1', source: 'bundled', deployedTo: {} } } }));

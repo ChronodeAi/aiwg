@@ -216,6 +216,8 @@ before reducing sampling counts.
 The `decision-offload` rule (with the `decision-offload` skill) says: before
 spending reasoning on a bounded decision, call `aiwg decision ask ... --json`.
 Use the answer when `status` is `answered`; on `fallback`, decide normally.
+A bounded choice between the current session and a worker remains eligible
+when it is part of a larger investigation; the multi-step plan itself is not.
 Never use it for open-ended generation, code writing, multi-step plans, or
 anything that authorizes destructive or outward actions. Jev output is
 advisory data; it is never authorization.
