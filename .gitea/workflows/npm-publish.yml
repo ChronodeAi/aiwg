@@ -1,69 +1,16 @@
-# npm Package Publishing — Gitea registry only (npmjs.org publishes from GitHub)
-#
-# Publishes exact retained-RC packages to Gitea's bundled npm registry after an
-# evidence-bearing dispatch against a signed stable tag. Stable tag pushes fail
-# closed. Uses CalVer versioning: vYYYY.M.PATCH.
-#
-# npmjs.org is NOT published or verified from here. The public-registry publish
-# (OIDC trusted publishing + provenance) and its verification are owned by
-# .github/workflows/npm-publish.yml. GitHub Actions is the authority for
-# npmjs.org supply-chain distribution and verification; this Gitea workflow
-# owns the Gitea npm registry (local package management) only.
-#
-# REQUIRED TRACKER SECRETS:
-#   VAULT_CI_ROLE_ID, VAULT_CI_SECRET_ID - vault AppRole bootstrap pair.
-#
-# The dedicated read-scoped GitHub authenticated-user API credential for
-# retained-RC/approval evidence is fetched from vault only after the
-# versioned promotion policy passes its offline activation preflight.
-#
-# vault fetch specs:
-#   ci/vault-fetch.npm-publish.spec          -> NODE_AUTH_TOKEN
-#   ci/vault-fetch.npm-publish-evidence.spec -> AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE
-#
-# To publish a new version:
-#   1. Update version in package.json
-#   2. Commit: git commit -am "release: vYYYY.M.PATCH"
-#   3. Tag: tools/release/cut-tag.sh YYYY.M.PATCH
-#   4. Push both signed tags, then dispatch this workflow with --ref set to the
-#      stable tag and every required evidence input.
-#
-# Note:
-# - Gitea release creation is handled by .gitea/workflows/gitea-release.yml
-# - GitHub release creation is handled by .gitea/workflows/github-mirror.yml
-
+# Manual mirror of already-published npmjs stable packages. The signed stable
+# tag identifies the version; public registry SRI and provenance are checked
+# before any Gitea publication. GitHub is the sole npmjs publisher.
 name: Publish to Gitea npm registry
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag_to_publish:
         description: 'Existing signed stable tag (dispatch with --ref set to the same tag)'
         required: true
         type: string
-      rc_tag:
-        description: 'Signed RC tag resolving to the same commit'
-        required: true
-        type: string
-      rc_run_id:
-        description: 'Successful retained-RC workflow run ID'
-        required: true
-        type: string
-      rc_artifact_id:
-        description: 'Retained-RC artifact ID from that run'
-        required: true
-        type: string
-      approval_issue:
-        description: 'GitHub issue containing the authenticated approval receipt'
-        required: true
-        type: string
-      approval_sha256:
-        description: 'SHA-256 of the exact authenticated approval comment body'
-        required: true
-        type: string
+
 concurrency:
   group: npm-publish
   cancel-in-progress: false
@@ -74,8 +21,8 @@ env:
 
 jobs:
   build-and-publish:
-    name: Publish exact retained RC
-    if: ${{ !contains(github.ref, '-') && secrets.VAULT_CI_ROLE_ID != '' && secrets.VAULT_CI_SECRET_ID != '' }}
+    name: Mirror verified public stable packages
+    if: ${{ !contains(github.ref, '-') }}
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 (see ci/digests.txt)
     # Stable publication is the only active npm publication lane.
@@ -89,6 +36,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          fetch-depth: 0
 
       - name: Resolve release tag
         id: release_tag
@@ -96,11 +45,6 @@ jobs:
           INPUT_TAG_TO_PUBLISH: ${{ github.event.inputs.tag_to_publish }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
-            echo "Stable tag pushes cannot supply authenticated retained-RC evidence." >&2
-            echo "Recovery: dispatch this workflow with --ref <stable-tag> and every required evidence input." >&2
-            exit 1
-          fi
           RELEASE_TAG="${INPUT_TAG_TO_PUBLISH:-}"
           if ! echo "$RELEASE_TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Stable release tag must match vYYYY.M.PATCH: ${RELEASE_TAG:-<empty>}"
@@ -123,13 +67,10 @@ jobs:
 
       - name: Fetch tag object for signature verification
         # Force-fetch the annotated tag object before signature verification.
-        env:
-          RC_TAG: ${{ github.event.inputs.rc_tag }}
         run: |
           set -euo pipefail
-          TAG="${{ steps.release_tag.outputs.release_tag }}"
-          git check-ref-format "refs/tags/${RC_TAG}" >/dev/null
-          git fetch origin "+refs/tags/${TAG}:refs/tags/${TAG}" "+refs/tags/${RC_TAG}:refs/tags/${RC_TAG}" --depth=1
+          TAG='${{ steps.release_tag.outputs.release_tag }}'
+          git fetch origin "+refs/tags/${TAG}:refs/tags/${TAG}" --depth=1
 
       - name: Verify signed tag (#1299 / A9 gate)
         # Hard gate: every release tag must verify against a maintainer
@@ -141,7 +82,11 @@ jobs:
         run: bash tools/ci/verify-signed-tag.sh
 
       - name: Checkout release tag
-        run: git checkout --detach "refs/tags/${{ steps.release_tag.outputs.release_tag }}"
+        run: |
+          set -euo pipefail
+          git checkout --detach "refs/tags/${{ steps.release_tag.outputs.release_tag }}"
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
 
       - name: Verify source-bound storage benchmark claims (#2191)
         run: npm run verify:storage-claims
@@ -171,21 +116,6 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
 
-      - name: Require enabled release promotion policy before credential access
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync } from 'node:fs';
-          import { assessPromotionPolicyConfiguration } from './tools/release/release-promotion.mjs';
-
-          const policy = JSON.parse(readFileSync('config/release-promotion-policy.json', 'utf8'));
-          const assessment = assessPromotionPolicyConfiguration(policy);
-          if (!assessment.ready) {
-            console.error('Release promotion policy is not active:');
-            for (const requirement of assessment.unmet_requirements) console.error(`- ${requirement}`);
-            process.exit(1);
-          }
-          NODE
-
       - name: Install vault fetch dependencies
         run: |
           apt-get update
@@ -200,61 +130,24 @@ jobs:
           VAULT_CI_SECRET_ID: ${{ secrets.VAULT_CI_SECRET_ID }}
         run: bash ci/vault-fetch.sh --spec ci/vault-fetch.npm-publish.spec
 
-      - name: Fetch dedicated GitHub evidence token from vault
-        env:
-          RUNNER_TEMP: ${{ runner.temp }}
-          VAULT_ADDR: ${{ vars.VAULT_ADDR }}
-          AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_PATH: ${{ vars.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_PATH }}
-          AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_FIELD: ${{ vars.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_FIELD }}
-          VAULT_CI_ROLE_ID: ${{ secrets.VAULT_CI_ROLE_ID }}
-          VAULT_CI_SECRET_ID: ${{ secrets.VAULT_CI_SECRET_ID }}
-        run: bash ci/vault-fetch.sh --spec ci/vault-fetch.npm-publish-evidence.spec
-
-      - name: Authorize and publish exact retained RC to Gitea npm registry
-        id: promotion
-        env:
-          RC_TAG: ${{ github.event.inputs.rc_tag }}
-          RC_RUN_ID: ${{ github.event.inputs.rc_run_id }}
-          RC_ARTIFACT_ID: ${{ github.event.inputs.rc_artifact_id }}
-          APPROVAL_ISSUE: ${{ github.event.inputs.approval_issue }}
-          APPROVAL_SHA256: ${{ github.event.inputs.approval_sha256 }}
+      - name: Fetch public stable tarballs and mirror them
         run: |
           set -euo pipefail
-          test -n "${AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE:-}" || { echo "Dedicated GitHub evidence token file is required" >&2; exit 1; }
-          test -f "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE" && test ! -L "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE" || { echo "Dedicated GitHub evidence token file is invalid" >&2; exit 1; }
-          test "$(stat -c '%a' "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE")" = 600 || { echo "Dedicated GitHub evidence token file must use mode 0600" >&2; exit 1; }
-          case "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE" in
-            "$RUNNER_TEMP"/vault-AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE.*) ;;
-            *) echo "Dedicated GitHub evidence token file is outside RUNNER_TEMP" >&2; exit 1 ;;
-          esac
-          cat > .npmrc << 'NPMRC'
-          //git.integrolabs.net/api/packages/roctinam/npm/:_authToken=${NODE_AUTH_TOKEN}
-          NPMRC
-          RC_DIR=$(mktemp -d "$RUNNER_TEMP/aiwg-rc.XXXXXX")
-          AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN="$(cat -- "$AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE")" \
-          node tools/release/release-promotion.mjs publish \
-            --rc-tag "$RC_TAG" \
-            --stable-tag '${{ steps.release_tag.outputs.release_tag }}' \
-            --run-id "$RC_RUN_ID" \
-            --artifact-id "$RC_ARTIFACT_ID" \
-            --approval-issue "$APPROVAL_ISSUE" \
-            --approval-sha256 "$APPROVAL_SHA256" \
-            --destination "$RC_DIR" \
-            --registry gitea --receipt "$RUNNER_TEMP/gitea-publication.json" \
-            --output "$RUNNER_TEMP/promotion-decision.json"
+          VERSION='${{ steps.version.outputs.version }}'
+          MIRROR_DIR=$(mktemp -d "$RUNNER_TEMP/stable-mirror.XXXXXX")
+          for PACKAGE in aiwg @aiwg/cli @aiwg/cockpit; do
+            npm pack "${PACKAGE}@${VERSION}" --ignore-scripts --registry https://registry.npmjs.org --pack-destination "$MIRROR_DIR"
+          done
+          printf '%s\n' '//git.integrolabs.net/api/packages/roctinam/npm/:_authToken=${NODE_AUTH_TOKEN}' > "$RUNNER_TEMP/.npmrc"
+          NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc" node tools/release/direct-stable-publish.mjs --mirror --directory "$MIRROR_DIR" --version "$VERSION" --receipt "$RUNNER_TEMP/gitea-publication.json"
 
-      - name: Remove dedicated GitHub evidence credential
-        if: always()
-        run: bash ci/vault-fetch.sh --cleanup
-
-      - name: Preserve promotion decision and partial receipt
+      - name: Preserve publication receipt
         if: always()
         uses: actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d  # v3.2.1-node20 (ci/digests.txt)
         with:
-          name: gitea-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          name: gitea-publication-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/promotion-decision.json
-            ${{ runner.temp }}/gitea-publication.json
+                        ${{ runner.temp }}/gitea-publication.json
           if-no-files-found: warn
           retention-days: 90
 

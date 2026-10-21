@@ -257,7 +257,7 @@ describe('signed RC identity and exact-artifact promotion foundation (#3201)', (
   it('RC workflow retains pinned actions, signed-tag gate and all-success artifact upload; stable publish consumes it', () => {
     const root = repoRoot;
     const workflow = yaml.load(fs.readFileSync(workflowFile, 'utf8'));
-    expect(workflow.on.push.tags).toEqual(['v*-rc.*']); expect(workflow.permissions).toEqual({ contents: 'read' });
+    expect(workflow.on.push).toBeUndefined(); expect(workflow.permissions).toEqual({ contents: 'read' });
     expect(workflow.on.workflow_dispatch.inputs.profile).toMatchObject({ required: true, default: 'routine-release-v1',
       options: ['routine-release-v1', 'quarterly-full-v1'] });
     const steps = workflow.jobs.validate.steps;
@@ -272,11 +272,9 @@ describe('signed RC identity and exact-artifact promotion foundation (#3201)', (
     const upload = steps.find(step => step.name === 'Retain validated release candidate');
     expect(upload.with['if-no-files-found']).toBe('error'); expect(upload.with.name).toContain('github.run_attempt');
     const stable = yaml.load(fs.readFileSync(path.join(root, '.github/workflows/npm-publish.yml'), 'utf8'));
-    const promotion = stable.jobs['publish-to-npmjs-org'].steps.find(step => step.name === 'Authorize and publish exact retained RC to npmjs.org');
-    expect(promotion.run).toContain('release-promotion.mjs publish');
-    expect(promotion.env.RC_TAG).toBe('${{ github.event.inputs.rc_tag }}');
-    expect(promotion.run).toContain('--rc-tag "$RC_TAG"');
-    expect(stable.jobs['publish-to-npmjs-org'].steps.find(step => step.name === 'Run tests')).toBeUndefined();
+    const publication = stable.jobs['publish-to-npmjs-org'].steps.find(step => step.name === 'Publish smoke-tested stable tarballs to npmjs.org');
+    expect(publication.run).toContain('direct-stable-publish.mjs');
+    expect(stable.on.workflow_dispatch.inputs).not.toHaveProperty('rc_tag');
     const profile = steps.find(step => step.name === 'Resolve validation profile');
     expect(profile.run).toContain("if [ \"${{ github.event_name }}\" = push ]");
     expect(profile.run).toContain("PROFILE='routine-release-v1'");
