@@ -78,20 +78,37 @@ async function safeRealpath(path: string, root = false): Promise<string> {
   }
 }
 
+// Newline gaps are bounded and each repetition consumes a line break, keeping
+// indentation scans disjoint even on large malformed records (#3273, #3404).
+const VALUE_GAP = /[ \t]*(?:\r?\n[ \t]*){0,2}/.source;
+const NEXT_LINE_GAP = /[ \t]*(?:\r?\n[ \t]*){1,2}/.source;
+const QUOTED_VALUE = /"(?:\\[^\r\n]|[^"\\\r\n])+"|'(?:\\[^\r\n]|[^'\\\r\n])+'|`(?!`)(?:\\[^\r\n]|[^`\\\r\n])+`(?!`)/.source;
+const GENERATED_VALUE = /(?=[A-Za-z0-9._~+/=-]*[0-9])(?=[A-Za-z0-9._~+/=-]*[A-Za-z])[A-Za-z0-9._~+/=-]{20,}/.source;
+
+function assignmentPattern(key: string, separator: string, sameLineValue: string): RegExp {
+  // Only the next-line branch needs stronger evidence: quoted text or a long
+  // generated value. In particular, YAML lists and Markdown fences are prose.
+  return new RegExp(`\\b${key}[ \\t]*${separator}(?:${NEXT_LINE_GAP}(?:${QUOTED_VALUE}|${GENERATED_VALUE})|[ \\t]*(?:${QUOTED_VALUE}|${sameLineValue}))`, 'gi');
+}
+
 // Ambiguous token components are bounded; whitespace and key blocks use disjoint scans.
 const SECRET_PATTERNS: Array<[string, RegExp]> = [
-  ['bearer-token', /\bBearer[ \t]+[A-Za-z0-9._~+/=-]{12,}/gi],
-  ['authorization', /\bAuthorization[ \t]*:[ \t]*[^\r\n]+/gi],
-  ['cookie', /\b(?:Cookie|Set-Cookie)[ \t]*:[ \t]*[^\r\n]+/gi],
-  ['environment-assignment', /\b(?:AWS_SECRET_ACCESS_KEY|[A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY))[ \t]*=[ \t]*(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s]+)/gi],
-  ['credential', /\b(?:api[_-]?key|token|password|secret)[ \t]*[:=][ \t]*["']?[^\s"',;]{6,}/gi],
+  ['bearer-token', new RegExp(`\\bBearer(?:[ \\t]+|${NEXT_LINE_GAP})(?:${QUOTED_VALUE}|\\\\"[A-Za-z0-9._~+/=-]{12,}\\\\"|[A-Za-z0-9._~+/=-]{12,})`, 'gi')],
+  ['authorization', new RegExp(`\\bAuthorization[ \\t]*:${VALUE_GAP}[^\\s][^\\r\\n]*`, 'gi')],
+  ['cookie', new RegExp(`\\b(?:Cookie|Set-Cookie)[ \\t]*:${VALUE_GAP}[^\\s][^\\r\\n]*`, 'gi')],
+  ['environment-assignment', assignmentPattern(
+    '(?:AWS_SECRET_ACCESS_KEY|[A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY))', '=', /[^\s]+/.source,
+  )],
+  ['credential', assignmentPattern(
+    '(?:api[_-]?key|token|password|secret)', '[:=]', /["'`]?[^\s"'`,;]{6,}/.source,
+  )],
   ['credential', /^[ \t]*password[ \t]+[^\s]+[ \t]*$/gim],
   // Space-separated values only when they look generated (20+ chars, letters and digits), so prose stays.
-  ['credential', /\b(?:api[_-]?key|token|secret)[ \t]+(?=[A-Za-z0-9._~+/=-]*[0-9])(?=[A-Za-z0-9._~+/=-]*[A-Za-z])[A-Za-z0-9._~+/=-]{20,}/gi],
+  ['credential', new RegExp(`\\b(?:api[_-]?key|token|secret)[ \\t]+${GENERATED_VALUE}`, 'gi')],
   ['provider-token', /\b(?:sk-(?:ant-|proj-)?|[sr]k_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|xai-|npm_|hf_|xox[baprs]-|AKIA|AIza)[A-Za-z0-9._~+/=-]{8,}/g],
   ['provider-token', /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+/g],
   ['connection-string', /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s]+/gi],
-  ['credential-url', /\bhttps?:\/\/[^/\s:@]+:[^/\s@]+@[^\s]+/gi],
+  ['credential-url', new RegExp(`\\bhttps?://${VALUE_GAP}[^/\\s:@]+:${VALUE_GAP}(?:${QUOTED_VALUE}|[^/\\s@]+)@${VALUE_GAP}[^\\s"'\x60<>\\\\]+`, 'gi')],
   ['fixture-credential', /\bredaction-canary-[A-Za-z0-9_-]+\b/gi],
   ['email', /\b[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,63}\b/gi],
 ];
