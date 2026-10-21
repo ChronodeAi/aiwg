@@ -140,6 +140,27 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
   // ============================================================
   // rule-list / rule-show  (#1320)
   // ============================================================
+  server.registerTool('rule-inventory', {
+    title: 'Inventory configured AIWG rules',
+    description: 'Inspect scoped rule configuration and activation without asserting native session loading. Mirrors aiwg rules inventory --json.',
+    inputSchema: {
+      scope: z.enum(['workspace', 'user', 'installation', 'catalog']).default('workspace'),
+      capability: z.string().optional(), activation: z.string().optional(),
+      tier: z.string().optional(), provider: z.string().optional(), bodies: z.boolean().default(false),
+    },
+    annotations: { readOnlyHint: true },
+  }, async ({ scope, capability, activation, tier, provider, bodies }) => {
+    try {
+      const args = ['rules', 'inventory', '--scope', scope ?? 'workspace', '--json'];
+      for (const [flag, value] of [['--capability', capability], ['--activation', activation], ['--tier', tier], ['--provider', provider]]) {
+        if (value) args.push(flag, value);
+      }
+      if (bodies) args.push('--bodies');
+      const { stdout, code, stderr } = await runAiwgCli(args);
+      if (code !== 0) return mcpError(`rule-inventory failed: ${stderr || stdout}`);
+      return mcpJson(stdout);
+    } catch (err) { return mcpError(`rule-inventory: ${err.message}`); }
+  });
   server.registerTool('rule-list', {
     title: 'List AIWG Rules',
     description: 'Enumerate AIWG enforcement rules (e.g. skill-discovery, no-attribution, anti-laziness, citation-policy). Top-7 CRITICAL/HIGH rules are inlined into Hermes AGENTS.md priming (skill-discovery added #1347); this tool reaches the rest.',

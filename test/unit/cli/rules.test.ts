@@ -33,6 +33,54 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }); });
 describe('rules command', () => {
   it('is registered in the handler registry', () => expect(buildHandlerMap().get('rules')).toBe(rulesHandler));
+  it('inventories installed local rules with composed filters, pin provenance and complete bodies without writes', async () => {
+    const config = JSON.parse(readFileSync(configFile(), 'utf8'));
+    config.rules = { always_load: [{ rules: ['fixture-bound'] }] };
+    writeFileSync(configFile(), JSON.stringify(config));
+    const before = readFileSync(configFile(), 'utf8');
+    const result = await run(['inventory', '--capability', 'fixture', '--activation', 'kernel', '--tier', 'critical', '--bodies', '--json']);
+    expect(result.exitCode, result.message).toBe(0);
+    const report = JSON.parse(result.message!);
+    const bound = report.rules.find((rule: any) => rule.name === 'fixture-bound');
+    expect(bound.canonical_activation).toBe('bound');
+    expect(bound.effective_activation).toBe('kernel');
+    expect(bound.pin_reasons[0].source).toBe('project');
+    expect(bound.bound_to.skills).toContain('fixture-skill');
+    expect(bound.summary).toBe('Follow the fixture bound policy.');
+    expect(bound.content).toBe(readFileSync(join(root, 'bundle/rules/fixture-bound.md'), 'utf8'));
+    expect(bound.delivery).toBe('unknown');
+    expect(bound.session_loaded).toBe('unknown');
+    expect(readFileSync(configFile(), 'utf8')).toBe(before);
+    const compact = await run(['list', '--capability', 'addon:fixture', '--activation', 'kernel']);
+    expect(compact.message).toContain('Follow the fixture bound policy.');
+    expect(compact.message).not.toContain('pin_reasons');
+  });
+  it('distinguishes user configuration from workspace and treats catalog availability as unconfigured', async () => {
+    const user = JSON.parse((await run(['list', '--scope', 'user', '--json'])).message!);
+    expect(user.rules).toEqual([]);
+    const workspace = JSON.parse((await run(['list', '--scope', 'workspace', '--json'])).message!);
+    expect(workspace.rules.some((rule: any) => rule.capability === 'fixture')).toBe(true);
+    const catalog = JSON.parse((await run(['list', '--scope', 'catalog', '--capability', 'aiwg-utils', '--json'])).message!);
+    expect(catalog.rules.length).toBeGreaterThan(0);
+    expect(catalog.rules.every((rule: any) => !rule.configured && rule.effective_activation === null)).toBe(true);
+    expect((await run(['list', '--scope', 'unknown'])).exitCode).toBe(1);
+  });
+  it('rejects invalid filters and returns an explicit empty result', async () => {
+    expect((await run(['inventory', '--activation', 'bogus'])).exitCode).toBe(1);
+    expect((await run(['inventory', '--tier', 'bogus'])).exitCode).toBe(1);
+    const result = await run(['inventory', '--capability', 'not-installed', '--json']);
+    expect(JSON.parse(result.message!).rules).toEqual([]);
+  });
+  it('filters providers using recorded capability deployment without claiming rule delivery', async () => {
+    const config = JSON.parse(readFileSync(configFile(), 'utf8'));
+    config.installed.fixture.deployedTo = { codex: { skills: 1 } };
+    writeFileSync(configFile(), JSON.stringify(config));
+    const report = JSON.parse((await run(['inventory', '--provider', 'codex', '--json'])).message!);
+    expect(report.rules.length).toBe(5);
+    expect(report.rules[0].configured_providers).toEqual(['codex']);
+    expect(report.rules[0].delivery).toBe('unknown');
+    expect(JSON.parse((await run(['inventory', '--provider', 'claude', '--json'])).message!).rules).toEqual([]);
+  });
   it.each([
     [['pin', 'fixture-bound'], { rules: ['fixture-bound'] }],
     [['pin', '--tier', 'critical'], { enforcement: ['critical'] }],

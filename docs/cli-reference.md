@@ -15,6 +15,27 @@ artifacts. General users should follow
 
 ## `aiwg rules` — operator rule pins
 
+Inspect configured rules without changing deployment:
+
+```bash
+aiwg rules inventory --scope workspace --json
+aiwg rules list --capability aiwg-utils --bodies
+aiwg rules inventory --scope catalog --activation bound --tier critical,high
+```
+
+`workspace` means the current repository/workspace and its user configuration;
+it does not scan other repositories. `user` selects user configuration and the
+user installation registry; `installation` lists configured capabilities and
+`catalog` also includes available, unconfigured installation sources. Capability,
+activation, tier, and provider filters compose. Provider filtering uses recorded
+deployment configuration, not proof that the provider loaded a rule. Each row
+separates canonical and effective activation, pin reasons, binding metadata,
+and delivery/session-load evidence. Unknown delivery or loading stays unknown.
+`--bodies` includes complete source content and fails if indexed installed bodies
+are missing. The MCP `rule-inventory` tool exposes the same operation.
+The inventory does not deploy or change configuration; generic CLI hooks and
+opt-in command logging retain their existing settings.
+
 Pin full rule bodies to every request without editing canonical activation:
 
 ```bash
