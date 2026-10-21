@@ -7,6 +7,33 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.5] - 2026-10-21
+
+### Added
+
+- `aiwg sessions import-discovered --carry-forward <old-catalog>` rebuilds a
+  session catalog from current sources plus the history kept in the previous
+  catalog. Old rows are opened read-only and re-imported through the current
+  redaction policy, with per-provider carry-forward counts in the receipt (#3403).
+- `--index-workers` and `AIWG_INDEX_WORKERS` set the index preparation pool size;
+  `0` prepares serially (#3405).
+
+### Fixed
+
+- Session discovery now uses the providers configured in `.aiwg/aiwg.config`.
+  Refresh keeps previously granted roots and warns when configured and recorded
+  scope differ, so a narrow manifest no longer drops whole providers on rebuild.
+  A legacy manifest without root grants needs one explicit `aiwg sessions discover`
+  (#3402).
+- Session import redaction now catches credential values on the line after the
+  separator (`password:` then the value, `TOKEN=` then the value), including
+  indented and backtick forms, across credential, environment, bearer,
+  authorization, cookie and credential-URL patterns (#3404).
+- `aiwg index refresh` no longer aborts on a heap-exhausted preparation worker.
+  Preparation runs in child processes, files over 1 MiB are prepared serially, and
+  a failed pool is reaped and its unfinished work retried serially (#3405).
+- Claude session discovery reaches workspace subfolders and worktrees (#3403).
+
 ## [2026.10.4] - 2026-10-21
 
 ### Added
