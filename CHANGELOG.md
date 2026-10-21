@@ -60,6 +60,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Keep offline decision-offload reports and rule inventories read-only when
+  invoked through the public CLI, including installation and index cache state
+  (#2948).
+
 - Avoid costly email-pattern scans on large session records without an at-sign,
   preserving redaction behavior and existing performance bounds (#3273).
 - Preserve compact decision-offload activation during context regeneration and
