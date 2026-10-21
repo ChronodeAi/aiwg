@@ -1,0 +1,271 @@
+# Manual, quarterly-only producer for the five-file promotion evidence artifact.
+# This workflow never publishes packages or changes release policy.
+name: Produce quarterly cross-provider comparison
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_version:
+        description: 'Published AIWG baseline version (CalVer, without aiwg@)'
+        required: true
+        type: string
+      seed:
+        description: 'Frozen comparison seed approved for this quarter'
+        required: true
+        type: string
+      claude_model:
+        description: 'Exact dated Claude subject model snapshot'
+        required: true
+        type: string
+      claude_judge_model:
+        description: 'Distinct exact dated Claude judge model snapshot'
+        required: true
+        type: string
+      codex_model:
+        description: 'Pinned Codex subject model identifier'
+        required: true
+        type: string
+      codex_judge_model:
+        description: 'Distinct pinned Codex judge model identifier'
+        required: true
+        type: string
+      hermes_model:
+        description: 'Pinned Hermes subject model identifier'
+        required: true
+        type: string
+      hermes_judge_model:
+        description: 'Distinct pinned Hermes judge model identifier'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: quarterly-comparison-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+  AIWG_SYNC_LONG_TIMEOUT_MS: '3600000'
+  AIWG_PERF_BUDGET_VERSION_MS: '300'
+  AIWG_PERF_BUDGET_HELP_MS: '750'
+  AIWG_PERF_SAMPLE_COUNT: '7'
+  QUARTERLY_SHARD_COUNT: '16'
+
+jobs:
+  validate:
+    name: Quarterly full validation
+    runs-on: [self-hosted, linux, x64, aiwg-quarterly-comparison]
+    timeout-minutes: 360
+    steps:
+      - name: Checkout tested source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 0
+
+      - name: Require exact main dispatch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Install mandatory SQLite session test backend
+        run: |
+          npm run features:sqlite
+          node -e "require('better-sqlite3')"
+
+      - name: Run quarterly full validation
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/quarterly-validation"
+          node tools/release/release-candidate.mjs validate \
+            --profile quarterly-full-v1 \
+            --output "$RUNNER_TEMP/quarterly-validation/validation.json"
+
+      - name: Pack exact tested root package
+        run: |
+          set -euo pipefail
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/quarterly-validation" > "$RUNNER_TEMP/quarterly-pack.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const packed = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/quarterly-pack.json', 'utf8'));
+          const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+          const expected = `aiwg-${version}.tgz`;
+          if (packed.length !== 1 || packed[0].name !== 'aiwg' || packed[0].version !== version || packed[0].filename !== expected
+            || !fs.statSync(path.join(process.env.RUNNER_TEMP, 'quarterly-validation', expected)).isFile()) process.exit(1);
+          NODE
+
+      - name: Retain quarterly validation input
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: quarterly-validation-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quarterly-validation/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  compare:
+    name: Compare ${{ matrix.provider }} shard ${{ matrix.shard }}
+    needs: validate
+    runs-on: [self-hosted, linux, x64, aiwg-quarterly-comparison]
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        provider: [claude, codex, hermes]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    steps:
+      - name: Checkout tested source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 0
+
+      - name: Require exact main dispatch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Download exact validation input
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: quarterly-validation-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quarterly-validation
+
+      - name: Run comparison shard
+        env:
+          PROVIDER: ${{ matrix.provider }}
+          SHARD: ${{ matrix.shard }}
+          BASELINE_VERSION: ${{ inputs.baseline_version }}
+          SEED: ${{ inputs.seed }}
+          CLAUDE_MODEL: ${{ inputs.claude_model }}
+          CLAUDE_JUDGE_MODEL: ${{ inputs.claude_judge_model }}
+          CODEX_MODEL: ${{ inputs.codex_model }}
+          CODEX_JUDGE_MODEL: ${{ inputs.codex_judge_model }}
+          HERMES_MODEL: ${{ inputs.hermes_model }}
+          HERMES_JUDGE_MODEL: ${{ inputs.hermes_judge_model }}
+        run: |
+          set -euo pipefail
+          case "$PROVIDER" in
+            claude) MODEL="$CLAUDE_MODEL"; JUDGE_MODEL="$CLAUDE_JUDGE_MODEL" ;;
+            codex) MODEL="$CODEX_MODEL"; JUDGE_MODEL="$CODEX_JUDGE_MODEL" ;;
+            hermes) MODEL="$HERMES_MODEL"; JUDGE_MODEL="$HERMES_JUDGE_MODEL" ;;
+            *) exit 1 ;;
+          esac
+          VERSION=$(node -p "require('./package.json').version")
+          CANDIDATE="$RUNNER_TEMP/quarterly-validation/aiwg-${VERSION}.tgz"
+          mkdir -p "$RUNNER_TEMP/quarterly-shard"
+          printf -v SHARD_FILE '%s-%02d.json' "$PROVIDER" "$SHARD"
+          node tools/release/quarterly-comparison-producer.mjs shard \
+            --output "$RUNNER_TEMP/quarterly-shard/$SHARD_FILE" \
+            --provider "$PROVIDER" --shard-index "$SHARD" --shard-count "$QUARTERLY_SHARD_COUNT" \
+            --baseline "$BASELINE_VERSION" --candidate "$CANDIDATE" --seed "$SEED" \
+            --claude-model "$CLAUDE_MODEL" --claude-judge-model "$CLAUDE_JUDGE_MODEL" \
+            --codex-model "$CODEX_MODEL" --codex-judge-model "$CODEX_JUDGE_MODEL" \
+            --hermes-model "$HERMES_MODEL" --hermes-judge-model "$HERMES_JUDGE_MODEL"
+
+      - name: Retain comparison shard
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: quarterly-shard-${{ matrix.provider }}-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quarterly-shard/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  retain:
+    name: Retain comparisons
+    needs: [validate, compare]
+    runs-on: [self-hosted, linux, x64, aiwg-quarterly-comparison]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout tested source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 0
+
+      - name: Require exact main dispatch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.x'
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Download exact validation input
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: quarterly-validation-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quarterly-validation
+
+      - name: Download every comparison shard
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: quarterly-shard-*-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quarterly-shards
+          merge-multiple: true
+
+      - name: Assemble and verify comparisons
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASELINE_VERSION: ${{ inputs.baseline_version }}
+          SEED: ${{ inputs.seed }}
+          CLAUDE_MODEL: ${{ inputs.claude_model }}
+          CLAUDE_JUDGE_MODEL: ${{ inputs.claude_judge_model }}
+          CODEX_MODEL: ${{ inputs.codex_model }}
+          CODEX_JUDGE_MODEL: ${{ inputs.codex_judge_model }}
+          HERMES_MODEL: ${{ inputs.hermes_model }}
+          HERMES_JUDGE_MODEL: ${{ inputs.hermes_judge_model }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p "$RUNNER_TEMP/quarterly-final-parent"
+          node tools/release/quarterly-comparison-producer.mjs assemble \
+            --output "$RUNNER_TEMP/quarterly-final-parent/evidence" \
+            --validation "$RUNNER_TEMP/quarterly-validation/validation.json" \
+            --candidate "$RUNNER_TEMP/quarterly-validation/aiwg-${VERSION}.tgz" \
+            --shards "$RUNNER_TEMP/quarterly-shards" --shard-count "$QUARTERLY_SHARD_COUNT" \
+            --baseline "$BASELINE_VERSION" --seed "$SEED" \
+            --claude-model "$CLAUDE_MODEL" --claude-judge-model "$CLAUDE_JUDGE_MODEL" \
+            --codex-model "$CODEX_MODEL" --codex-judge-model "$CODEX_JUDGE_MODEL" \
+            --hermes-model "$HERMES_MODEL" --hermes-judge-model "$HERMES_JUDGE_MODEL"
+
+      - name: Retain comparison evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: quarterly-comparison-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quarterly-final-parent/evidence/
+          if-no-files-found: error
+          retention-days: 120
+          compression-level: 6

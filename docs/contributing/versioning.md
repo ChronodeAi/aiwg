@@ -790,10 +790,14 @@ its ancestor and that the documented final comparison commit is the exact
 candidate. Artifact retention expiry is independent of quarter validity; missing
 or expired evidence fails closed. Retain the quarterly artifact for at least 120
 days so a record produced near the quarter boundary remains available throughout
-the longest calendar quarter. A trusted producer must assemble this exact
-five-file artifact from the authenticated quarterly-full validation and the three
-authorized comparisons. This source increment neither schedules model work nor
-claims that such an artifact currently exists.
+the longest calendar quarter. The dispatch-only producer in
+`.github/workflows/release-comparison.yml` assembles this exact five-file
+artifact from its authenticated quarterly-full validation and three authorized,
+complete comparison shard sets. It runs only on the dedicated qualified runner
+pool, retains the final artifact for 120 days, and neither tags nor publishes a
+release. Adding the producer does not schedule model work or claim that a
+workflow run, qualified three-provider boundary, or accepted quarterly artifact
+currently exists.
 
 The canonical Hermes comparison adapter is
 `tools/rules/release-compare-hermes.mjs`. Its fixture-tested transport retains
