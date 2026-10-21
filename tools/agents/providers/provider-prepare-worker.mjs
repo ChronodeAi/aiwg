@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { main as deployProvider, parseArgs } from '../deploy-agents.mjs';
+import { retainPreparationChannel } from './provider-prepare-channel.mjs';
 import {
   importRuleDeploymentInputPool,
   disposeRuleDeploymentInputPool,
@@ -31,6 +32,7 @@ function publish(message) {
 }
 
 process.once('message', async request => {
+  retainPreparationChannel();
   if (!validRequest(request)) {
     await publish({ version: 1, type: 'error', capability: request?.capability || '', jobId: request?.jobId || '', error: { message: 'Invalid provider preparation request' } });
     try { process.disconnect(); } catch {}

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
+import { retainPreparationChannel } from '../../../tools/agents/providers/provider-prepare-channel.mjs';
 
 let order;
 process.once('SIGTERM', () => {
@@ -11,6 +12,7 @@ process.once('SIGTERM', () => {
 });
 
 process.once('message', request => {
+  if (request.args.includes('--unref-delay')) retainPreparationChannel();
   order = request.order;
   const delay = Number(request.args.find(value => value.startsWith('--delay='))?.slice(8) || 0);
   const linger = Number(request.args.find(value => value.startsWith('--linger='))?.slice(9) || 0);
@@ -47,5 +49,6 @@ process.once('message', request => {
     }, exit);
   };
   const deadline = Date.now() + 10_000;
-  setTimeout(run, delay);
+  const timer = setTimeout(run, delay);
+  if (request.args.includes('--unref-delay') || request.args.includes('--unref-delay-unheld')) timer.unref();
 });

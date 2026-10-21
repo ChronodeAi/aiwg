@@ -48,6 +48,19 @@ function harness() {
 }
 
 describe('provider prepare subprocess coordinator', () => {
+  it('keeps a worker alive until an unref-only asynchronous preparation sends its reply', async () => {
+    const h = harness();
+    await expect(prepareProviderDeployments({ srcRoot: h.root,
+      jobs: [{ order: 0, provider: 'fixture', target: h.root, args: ['--unref-delay-unheld', '--delay=100'] }],
+      workerPath, workerEnv: { AIWG_COORDINATOR_TRACE: h.trace }, transaction: h.transaction }))
+      .rejects.toThrow(/worker exited 0/);
+    const session = await prepareProviderDeployments({ srcRoot: h.root,
+      jobs: [{ order: 0, provider: 'fixture', target: h.root, args: ['--unref-delay', '--delay=100'] }],
+      workerPath, workerEnv: { AIWG_COORDINATOR_TRACE: h.trace }, transaction: h.transaction });
+    try { expect(await session.commit(0)).toEqual({ order: 0 }); }
+    finally { await session.dispose(); }
+  });
+
   it('matches serial provider projection bytes and directory membership', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-provider-parity-test-')); roots.push(root);
     const source = path.join(root, 'source');
