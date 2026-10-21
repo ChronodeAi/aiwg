@@ -192,6 +192,7 @@ Options:
                    Imports for other workspaces stay in the selected catalog;
                    use --db to read that catalog from another directory
   --expected-providers <ids>  Explicit scope for this invocation; refresh re-reads workspace config
+  --carry-forward <catalog>  Rebuild from sources plus re-redacted stored history (import-discovered)
   --manifest <path>  Override the discovery manifest path
   --provider-home <path>  Override the provider home root (testing/portable homes)
   --codex-root <path>  Authorize a shared Codex sessions/export root (repeatable)
@@ -1573,6 +1574,18 @@ async function importDiscovered(
       EXIT.contract,
     );
   }
+  const carryPath = args.values.has('--carry-forward')
+    ? resolve(ctx.cwd, args.values.get('--carry-forward')!) : undefined;
+  if (carryPath) {
+    const sourceStat = statSync(carryPath);
+    const target = databasePath(ctx, args);
+    if (existsSync(target)) {
+      const targetStat = statSync(target);
+      if (sourceStat.dev === targetStat.dev && sourceStat.ino === targetStat.ino) {
+        throw new CliError('INVALID_ARGUMENT', 'carry-forward requires a separate destination catalog', EXIT.usage);
+      }
+    }
+  }
   const expected = requestedProviders(args);
   const warnings = providerScopeWarnings(config?.providers ?? [], manifest.preflight?.expectedProviders ?? [], manifest.preflight?.scopeWarnings);
   if (expected && JSON.stringify(expected) !== JSON.stringify(manifest.preflight?.expectedProviders)) {
@@ -1598,6 +1611,7 @@ async function importDiscovered(
       receipt: previewDiscoveryImport(manifest, existing, new Date(), exclude),
       confirmationRequired: !isDryRun(ctx, args),
       wouldPersist: false,
+      ...(carryPath ? { carryForward: redactSourceLocator(carryPath) } : {}),
     });
   }
 
@@ -1615,12 +1629,15 @@ async function importDiscovered(
     },
   );
   try {
-    const repository = openRepository(ctx, args);
+    const previous = carryPath ? new SessionRepository(carryPath, { readonly: true }) : undefined;
+    let repository: SessionRepository | undefined;
     try {
+      repository = openRepository(ctx, args);
       const interruptedRuns = repository.interruptRunningBatchImports();
       const receipt = await importDiscoveryManifest({
         manifest,
         repository,
+        carryForward: previous,
         limits,
         exclude,
         signal: ctx.signal,
@@ -1639,7 +1656,8 @@ async function importDiscovered(
         },
       });
     } finally {
-      repository.close();
+      repository?.close();
+      previous?.close();
     }
   } finally {
     await lease.release();
@@ -2003,7 +2021,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     '--entity', '--sensitivity', '--extraction-state', '--page-size', '--max-documents',
     '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
     '--consumer', '--actor-class', '--reason-code', '--dependent-action', '--basis',
-    '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--grokbot-root', '--lock-wait-ms', '--min-coverage', '--gap',
+    '--carry-forward', '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--grokbot-root', '--lock-wait-ms', '--min-coverage', '--gap',
     '--inactivity-threshold', '--expected-providers', '--exclude', '--max-record-bytes', '--max-source-bytes',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',

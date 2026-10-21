@@ -1,5 +1,5 @@
 import type { SourceExclusion } from './import-exclusions.js';
-import type { SessionCoveragePreflight, SessionRejectionDetail, SessionRuntimeIdentity } from './contracts.js';
+import type { SessionCoveragePreflight, SessionRejectionDetail, SessionRuntimeIdentity, SessionProviderId } from './contracts.js';
 import { reconcileCoveragePreflight } from './coverage-preflight.js';
 import type { DiscoveryProviderReport } from './workspace-discovery.js';
 
@@ -30,6 +30,15 @@ export interface BatchSourceDisposition {
   updatedAt: string;
 }
 
+export interface CarryForwardCounts {
+  byProvider: Partial<Record<SessionProviderId, {
+    reimported: number;
+    carried: number;
+    droppedAsDuplicate: number;
+    excluded: number;
+  }>>;
+}
+
 export interface BatchImportRun {
   schemaVersion: '1.0.0' | typeof BATCH_IMPORT_VERSION;
   runId: string;
@@ -41,6 +50,7 @@ export interface BatchImportRun {
   updatedAt: string;
   completedAt: string | null;
   interruptedAt?: string;
+  carryForward?: CarryForwardCounts;
   preflight?: SessionCoveragePreflight;
   discoveryRuntime?: SessionRuntimeIdentity;
   providers: DiscoveryProviderReport[];
