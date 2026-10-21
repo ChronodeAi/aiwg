@@ -71,16 +71,17 @@ describe('version launcher entrypoint', () => {
   });
 
   it.each([
-    { args: ['index', 'refresh'], credential: false, calls: 0, phase: 'notifier:skip (index refresh)' },
-    { args: ['mcp', 'profile', 'login'], credential: true, calls: 0, phase: 'notifier:skip (credential-handling command)' },
-    { args: ['version'], credential: false, calls: 1, phase: 'notifier:bootstrap-complete' },
-  ])('dispatches notifier for $args without launcher identity bindings', async ({ args, credential, calls, phase }) => {
+    { args: ['index', 'refresh'], credential: false, readOnly: false, calls: 0, phase: 'notifier:skip (index refresh)' },
+    { args: ['mcp', 'profile', 'login'], credential: true, readOnly: false, calls: 0, phase: 'notifier:skip (credential-handling command)' },
+    { args: ['version'], credential: false, readOnly: false, calls: 1, phase: 'notifier:bootstrap-complete' },
+    { args: ['rules', 'inventory'], credential: false, readOnly: true, calls: 0, phase: 'notifier:skip (read-only report)' },
+  ])('dispatches notifier for $args without launcher identity bindings', async ({ args, credential, readOnly, calls, phase }) => {
     const notifier = vi.fn();
     const trace = vi.fn();
     const begin = source.indexOf('const cliArgs = process.argv.slice(2);');
     const end = source.indexOf('if (maybeHandleFastVersion(cliArgs))', begin);
     await runInNewContext(`(async () => { ${source.slice(begin, end)} })()`, {
-      process: { argv: ['node', 'aiwg', ...args] }, trace,
+      process: { argv: ['node', 'aiwg', ...args] }, trace, readOnlyReport: readOnly,
       isCredentialHandlingCommand: () => credential,
       runUpdateNotifierBootstrap: notifier,
     }, { timeout: 1000 });
