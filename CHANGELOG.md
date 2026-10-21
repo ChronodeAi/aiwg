@@ -9,6 +9,20 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- `aiwg mc dispatch --provider <name>` runs a mission on any provider the ralph
+  loop supports (`claude` by default; unknown names are refused). The provider is
+  stored on the mission, shown by `mc status` and `mc list`, and passed to the
+  loop by `mc run`. OMP missions now report usage and spend: the loop counts each
+  assistant `message_end` once (not its `turn_end`/`agent_end` repeats) plus billed
+  `cache_warming_end` events, and counts `tool_execution_start` as a tool call, so
+  `--max-total-cost`, token, tool-call and wall-clock ceilings apply on `omp` as on
+  `claude`. OMP has no budget flag, so the launcher stops an OMP session itself
+  once the cost reported on its JSON events reaches the per-iteration `--budget`.
+  A final answer (stop reason `stop`) that crosses the budget is not killed: that
+  spend is already incurred, so the session finishes with its own exit code unless
+  new work starts (a new turn or message, compaction, a retry, a billed event, or
+  a non-terminal `agent_end`).
+
 - Add configurable multi-pass Jev decision validation with escalation, bounded
   concurrency and a shared timeout; CLI/MCP sampling overrides, aggregate JSON,
   ledger agreement telemetry and hit rates grouped by pass policy/escalation.
@@ -41,6 +55,42 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Loops started by `aiwg ralph` and `aiwg mc run` register with the multi-loop
+  state manager again, so `aiwg mc status` sees how each loop ended. The
+  launcher now names loops `ralph-{slug}-{8 hex}` with the same code the state
+  manager uses to validate them (it rejected the old ids and the loop fell back to
+  single-loop state), the state manager adopts the `loops/<id>/` directory the
+  launcher created for its daemon log, and `mc status` also reads the loop state
+  from `archive/<id>/` once the loop has ended.
+- `aiwg mc status` ends a mission for every way its loop can end: `done` on
+  completion; `failed` with the error `ralph loop ended: <status>` when the loop
+  stops at its iteration limit (`limit_reached`), a budget ceiling
+  (`budget_exhausted`) or a quality plateau, or archives any other state; and
+  `paused` when it was interrupted. Each of these releases the mission's
+  admission lease; only a mission whose loop is still running renews it.
+- With semantic memory enabled (the default), a verified completing iteration no
+  longer fails with "this.learningExtractor.extract is not a function", which
+  discarded the completion and ran the loop to its iteration limit. Learnings now
+  go through `MemoryPromotion.processPipeline` (extract, validate, promote) and the
+  loop logs the pipeline counts.
+- On OMP, the ralph loop's Claude tier names (`haiku`, `sonnet`, `opus`, matched
+  exactly and in any case) become OMP role selectors (`@smol`, `@default`,
+  `@slow`) that the operator configures under `modelRoles` in OMP's `config.yml`.
+  OMP resolved the bare names to retired models (`sonnet` and `opus` answered 404),
+  so every loop analysis call failed and fell back to pattern matching. Exact ids,
+  `provider/id`, `@role` and `:thinking` values pass through unchanged.
+- With PID control enabled (the default), the ralph loop no longer fails every
+  iteration after the first with "this.metricsCollector.computePIDMetrics is not
+  a function". The orchestrator initializes its `PIDController` and records the
+  controller's decision on each iteration as advisory `controlSignals`; the
+  decision never stops or pauses the loop.
+- OMP ralph sessions receive `ANTHROPIC_OAUTH_TOKEN` and OMP's auth-broker client
+  variables (`OMP_AUTH_BROKER_URL`, `OMP_AUTH_BROKER_TOKEN`,
+  `OMP_AUTH_BROKER_SNAPSHOT_TTL_MS`, `OMP_AUTH_BROKER_SNAPSHOT_CACHE`,
+  `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE`). Without them an OAuth-authenticated `omp`
+  worker failed with "No API key found for anthropic".
+- The `mc run` cost estimate and its inert-ceiling warning judge each mission by
+  the provider it runs on, instead of the project's first configured provider.
 - Credentials are redacted on import before anything is stored or indexed, across
   every catalog sink (events, sessions, sources, extensions, FTS, analytics, receipts,
   checkpoints, diagnostics, candidates, audit and export plans). Detection now also

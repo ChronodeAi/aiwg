@@ -252,6 +252,24 @@ export function isMuseRalphEnabled() {
  */
 
 /**
+ * Token and spend accounting read from one stream event. Counters are zero
+ * when the matching field is absent; the `has*` flags record whether the
+ * provider reported the field at all, so "observed 0" stays distinct from
+ * "cannot observe" (#1766).
+ *
+ * @typedef {Object} StreamUsage
+ * @property {number} inputTokens
+ * @property {number} outputTokens
+ * @property {number} cacheCreationInputTokens
+ * @property {number} cacheReadInputTokens
+ * @property {number} totalTokens
+ * @property {number} costUsd - Spend in USD
+ * @property {boolean} hasTokenField - Any token field was a finite number
+ * @property {boolean} hasCostField - A cost field was a finite number
+ * @property {boolean} hasUsage - `hasTokenField || hasCostField`
+ */
+
+/**
  * Base class for provider adapters.
  * Subclasses must override all methods that throw NotImplementedError.
  */
@@ -633,6 +651,61 @@ export class ProviderAdapter {
 
   /** JSONL written to stdin before bounded process termination, when supported. */
   getAbortInput() { return null; }
+
+  /**
+   * Read token and spend accounting from one parsed stream event using this
+   * provider's own event grammar.
+   *
+   * The base returns `null`: the launcher then applies its generic usage
+   * logic (`SessionLauncher._extractUsageStats`) unchanged. An override
+   * returns a {@link StreamUsage} for EVERY event, with zero counters and
+   * `hasUsage: false` for events that carry no accounting, so a provider that
+   * repeats one message's usage on several events can count it exactly once.
+   * Overriding this hook also arms the launcher's live per-session spend cap
+   * when the provider has no native budget control.
+   *
+   * @param {Object} event - One parsed JSON stream event
+   * @returns {StreamUsage|null}
+   */
+  extractUsage(event) { return null; }
+
+  /**
+   * Whether this adapter overrides {@link extractUsage} with its own grammar.
+   * @returns {boolean}
+   */
+  reportsStreamUsage() { return this.extractUsage !== ProviderAdapter.prototype.extractUsage; }
+
+  /**
+   * Categorize one parsed stream event as `tool_call`, `error`, `completion`
+   * or another event type, using this provider's own event grammar.
+   *
+   * The base returns `null`: the launcher then applies its generic
+   * categorization (`SessionLauncher._categorizeStreamEvent`) unchanged.
+   *
+   * @param {Object} event - One parsed JSON stream event
+   * @returns {string|null}
+   */
+  categorizeEvent(event) { return null; }
+
+  /**
+   * Where one parsed stream event sits relative to the launcher's live
+   * per-session spend cap, in this provider's own event grammar:
+   * - `'final-answer'`: the model finished its final answer and nothing else is
+   *   billed for it. If this event's cost crosses the budget, the spend is
+   *   already incurred, so the session is left to end on its own.
+   * - `'resume'`: billed work may start again (a new turn or message,
+   *   maintenance such as compaction or a retry, or a run end the provider
+   *   will resume from). A session left running after a final-answer crossing
+   *   is stopped here.
+   * - `'run-end'`: the run definitely ended; such a session is never stopped.
+   *
+   * The base returns `null` for every event: a crossing stops the session at
+   * once, whatever the event.
+   *
+   * @param {Object} event - One parsed JSON stream event
+   * @returns {'final-answer'|'resume'|'run-end'|null}
+   */
+  budgetBoundary(event) { return null; }
 
   /**
    * Observe execution through the selected profile's framing and grammar.

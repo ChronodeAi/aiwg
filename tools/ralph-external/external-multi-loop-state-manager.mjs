@@ -28,6 +28,10 @@ import {
 } from 'fs';
 import { join, dirname } from 'path';
 import { randomUUID } from 'crypto';
+import { importImpl } from '../_resolve-impl.mjs';
+
+// The CLI launcher names loops with the same implementation (#3062 importImpl).
+const { RALPH_LOOP_ID_PATTERN, generateRalphLoopId } = await importImpl(import.meta.url, 'ralph/loop-id.mjs');
 
 /**
  * @typedef {Object} LoopConfiguration
@@ -74,7 +78,6 @@ const MAX_CONCURRENT_LOOPS = 4; // REF-086, REF-088
 const LOCK_LEASE_MS = 30000; // 30 second lease
 const LOCK_RETRY_MS = 100;
 const MAX_LOCK_ATTEMPTS = 300; // 30 seconds total wait
-const LOOP_ID_PATTERN = /^ralph-[a-z0-9]+(?:-[a-z0-9]+)*-[a-f0-9]{8}$/;
 const LOOP_PRIORITIES = new Set(['low', 'medium', 'high', 'critical']);
 const LOOP_STATUSES = new Set(['running', 'paused', 'waiting', 'completing', 'completed', 'aborted', 'failed', 'limit_reached', 'budget_exhausted', 'plateau', 'interrupted']);
 
@@ -117,14 +120,7 @@ export class ExternalMultiLoopStateManager {
    * @returns {string} Loop ID
    */
   generateLoopId(task) {
-    const slug = task
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 30)
-      .replace(/-+$/g, '') || 'task';
-    const shortUuid = randomUUID().split('-')[0]; // First 8 chars
-    return `ralph-${slug}-${shortUuid}`;
+    return generateRalphLoopId(task);
   }
 
   /**
@@ -316,7 +312,20 @@ export class ExternalMultiLoopStateManager {
 
       const loopId = config.loopId || this.generateLoopId(config.objective);
       const loopDir = join(this.loopsDir, loopId);
-      if (registry.active_loops.some(loop => loop.loop_id === loopId) || existsSync(loopDir)) {
+      const statePath = join(loopDir, 'session-state.json');
+      // The CLI launcher creates loops/<id>/ for its daemon-output.log before
+      // the loop process starts, so a plain directory is adopted. A registered
+      // id, existing loop state, or anything other than a real directory at that
+      // path (including a symlink) is a conflict.
+      let existing = null;
+      try {
+        existing = lstatSync(loopDir);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+      if (registry.active_loops.some(loop => loop.loop_id === loopId)
+        || (existing && !existing.isDirectory())
+        || existsSync(statePath)) {
         throw new Error(`Loop already exists: ${loopId}`);
       }
       mkdirSync(loopDir, { recursive: true });
@@ -361,7 +370,6 @@ export class ExternalMultiLoopStateManager {
       };
 
       // Save loop state
-      const statePath = join(loopDir, 'session-state.json');
       writeFileSync(statePath, JSON.stringify(state, null, 2));
 
       // Register in registry
@@ -721,7 +729,7 @@ export class ExternalMultiLoopStateManager {
   }
 
   validateLoopId(loopId) {
-    if (typeof loopId !== 'string' || !LOOP_ID_PATTERN.test(loopId)) {
+    if (typeof loopId !== 'string' || !RALPH_LOOP_ID_PATTERN.test(loopId)) {
       throw new TypeError('loopId must match ralph-{slug}-{8 lowercase hex characters}');
     }
   }

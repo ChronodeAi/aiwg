@@ -113,6 +113,10 @@ $defs:
         type: [number, "null"]
       tool_calls:
         type: number
+      # true = this iteration's session reached the live per-session spend cap;
+      # the cumulative budget ceilings are still evaluated after it
+      session_budget_exceeded:
+        type: boolean
       execution_time_ms:
         type: number
       verification_status:

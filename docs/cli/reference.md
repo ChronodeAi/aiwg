@@ -3110,6 +3110,7 @@ aiwg mission-control <subcommand> [options]
 
 - `--completion "<criteria>"` - Verifiable completion criteria (required for `mc run`)
 - `--priority <level>` - Priority hint (default: normal)
+- `--provider <name>` - Ralph loop provider for the mission: `claude` (default), `codex`, `opencode`, `factory`, `pi`, `omp`, `deepseek-harness` (`dsh`), `muse`. Unknown names are refused and nothing is dispatched. Omitting it keeps the loop default, `claude`. `mc status` and `mc list` show each mission's provider.
 - `--max-iterations <n>` - Ralph iteration cap when launched (default: 10)
 - `--max-total-tokens <n>` / `--max-output-tokens <n>` / `--max-tool-calls <n>` - Hard cumulative usage ceilings (when observable)
 - `--max-total-cost <usd>` - Hard cumulative spend ceiling (when observable)
@@ -3121,7 +3122,9 @@ aiwg mission-control <subcommand> [options]
 
 **`mc run` cost gate** (#1450, #2522). Before launching, `mc run` estimates cumulative spend as the iteration floor — `missions x --max-iterations x ~$1.60` cache cost per headless iteration. At or above `$5` it warns, and in a non-TTY context it refuses unless `--accept-cost` is passed.
 
-A mission's `--max-total-cost` caps its share of that estimate **only** when the target provider reports spend. On a provider that reports none, the ceiling is inert and never fires (#1766), so it is reported in the warning but deliberately not subtracted — capping the estimate by a ceiling that cannot fire would weaken the gate exactly where the operator has no enforced protection. Today `claude` is the only provider counted as reporting spend.
+A mission's `--max-total-cost` caps its share of that estimate **only** when the mission's own provider (`--provider`, default `claude`) reports spend. On a provider that reports none, the ceiling is inert and never fires (#1766), so it is reported in the warning but deliberately not subtracted: capping the estimate by a ceiling that cannot fire would weaken the gate exactly where the operator has no enforced protection. `claude` and `omp` report spend today.
+
+On `omp`, the loop also caps each session at its per-iteration budget (`aiwg ralph --budget`, default `$5`): OMP has no budget flag, so the launcher reads the session's cost from OMP's JSON events as they arrive and stops the session when it reaches the budget. When the crossing message is the final answer (stop reason `stop`), the session is left to finish and is stopped only if new work follows (a new turn, compaction, a retry, a billed event or a non-terminal `agent_end`). The cumulative `--max-total-cost` ceiling is still checked after that iteration.
 
 **Examples:**
 
@@ -3136,6 +3139,10 @@ aiwg mc dispatch mc-abc123 "Add pagination" --completion "paginated responses"
 # Dispatch with LFD ceilings (wall-clock is the provider-independent hard stop)
 aiwg mc dispatch mc-abc123 "Refactor auth" --completion "tests pass" \
   --max-wall-clock-minutes 30 --max-total-cost 5 --exploration-quota 3
+
+# Run a mission on omp; its spend ceiling fires because omp reports cost
+aiwg mc dispatch mc-abc123 "Port docs" --completion "docs build" \
+  --provider omp --max-total-cost 20 --max-tool-calls 200
 
 # Monitor
 aiwg mc status mc-abc123
@@ -3295,8 +3302,8 @@ aiwg ralph "<task-description>"
 - `--completion "<criteria>"` - Success criteria (e.g., "npm test passes")
 - `--max-iterations <n>` - Maximum iterations (default: 5)
 - `--timeout <minutes>` - Per-iteration timeout in minutes (default: 60)
-- `--provider <name>` - CLI provider: `claude` (default), `codex`, `opencode`, `factory`
-- `--budget <usd>` - Budget per iteration in USD (default: 5.0)
+- `--provider <name>` - CLI provider: `claude` (default), `codex`, `opencode`, `factory`, `pi`, `omp`, `deepseek-harness` (`dsh`), `muse`
+- `--budget <usd>` - Budget per iteration in USD (default: 5.0). `claude` enforces it natively. On `omp`, which has no budget flag, the launcher reads the session's cost from OMP's JSON events as they arrive and stops the session once it reaches the budget, unless the crossing message is the final answer with stop reason `stop` (then only if new work follows). Other providers do not enforce it.
 - `--gitea-issue` - Create/link Gitea issue for tracking
 - `--mcp-config <json>` - MCP server configuration JSON
 

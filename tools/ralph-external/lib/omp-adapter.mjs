@@ -87,6 +87,36 @@ export const OMP_DIRECT_APPROVAL_MODES = Object.freeze(['write']);
 /** Brief transport for the direct profile: piped stdin, never argv. */
 export const OMP_DIRECT_STDIN = 'brief-text';
 
+/** Loop tier names to OMP role selectors (`modelRoles` in OMP's config.yml). */
+const OMP_TIER_ROLES = Object.freeze({ haiku: '@smol', sonnet: '@default', opus: '@slow' });
+
+const finiteNumber = value => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+
+/** Map one OMP `Usage` record (`input`, `output`, `cacheRead`, `cacheWrite`,
+ * `totalTokens`, `cost.total`) to the launcher's usage counters. */
+function ompUsage(usage) {
+  const record = usage && typeof usage === 'object' ? usage : {};
+  const input = finiteNumber(record.input);
+  const output = finiteNumber(record.output);
+  const cacheRead = finiteNumber(record.cacheRead);
+  const cacheWrite = finiteNumber(record.cacheWrite);
+  const total = finiteNumber(record.totalTokens);
+  const cost = record.cost && typeof record.cost === 'object' ? finiteNumber(record.cost.total) : undefined;
+  const hasTokenField = [input, output, cacheRead, cacheWrite, total].some(value => value !== undefined);
+  const hasCostField = cost !== undefined;
+  return {
+    inputTokens: input ?? 0,
+    outputTokens: output ?? 0,
+    cacheCreationInputTokens: cacheWrite ?? 0,
+    cacheReadInputTokens: cacheRead ?? 0,
+    totalTokens: total ?? (input ?? 0) + (output ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0),
+    costUsd: cost ?? 0,
+    hasTokenField,
+    hasCostField,
+    hasUsage: hasTokenField || hasCostField,
+  };
+}
+
 /** Oh My Pi's native flags/events intentionally differ from Pi. */
 export class OmpAdapter extends ProviderAdapter {
   createHealthObserver(options = {}) {
@@ -151,11 +181,62 @@ export class OmpAdapter extends ProviderAdapter {
     if (options.noExtensions) args.push('--no-extensions');
     if (options.tools) { if (options.tools.length) args.push('--tools', options.tools.join(',')); else args.push('--no-tools'); }
     if (options.systemPrompt) args.push('--append-system-prompt', options.systemPrompt);
-    for (const [option, capability] of [['budget', 'budgetControl'], ['maxTurns', 'maxTurns'], ['mcpConfig', 'mcpConfig']]) if (options[option]) this.warnUnsupported(capability, option);
+    // `budget` has no OMP flag, but is not unsupported: SessionLauncher enforces
+    // it live from the cost this adapter's extractUsage() reads.
+    for (const [option, capability] of [['maxTurns', 'maxTurns'], ['mcpConfig', 'mcpConfig']]) if (options[option]) this.warnUnsupported(capability, option);
     args.push('--', options.prompt);
     return args;
   }
   buildAnalysisArgs(options) { return this.buildSessionArgs(options); }
+
+  /**
+   * Usage from OMP `--mode json` events. Each assistant message's usage appears
+   * on its `message_end`, again on `turn_end` and once more inside
+   * `agent_end.messages[]`, so only the assistant `message_end` counts. A
+   * billed prompt-cache refresh reports its own usage on `cache_warming_end`,
+   * which no `message_end` carries. Every other event contributes nothing.
+   * Cost is `usage.cost.total`, in USD.
+   * @param {Object} event
+   * @returns {import('./provider-adapter.mjs').StreamUsage}
+   */
+  extractUsage(event) {
+    if (event?.type === 'message_end' && event.message?.role === 'assistant') return ompUsage(event.message.usage);
+    if (event?.type === 'cache_warming_end') return ompUsage(event.usage);
+    return ompUsage(null);
+  }
+
+  /**
+   * @param {Object} event
+   * @returns {string}
+   */
+  categorizeEvent(event) {
+    const type = event?.type;
+    if (type === 'tool_execution_start') return 'tool_call';
+    if ((type === 'tool_execution_end' && event.isError === true) || type === 'error' || type === 'rpc_frame_error') return 'error';
+    if (type === 'message_end' && event.message?.role === 'assistant') return 'completion';
+    return typeof type === 'string' && type ? type : 'unknown';
+  }
+
+  /**
+   * Only an assistant `message_end` with stopReason `stop` is the final
+   * answer. Any other stop reason (`length`, `error`, ...) can trigger OMP's
+   * compaction or retry maintenance, a further model call, so a crossing there
+   * stops at once (null), as does a `toolUse` stop. New work begins with
+   * `turn_start`, `message_start`, `auto_compaction_start` or
+   * `auto_retry_start`. An `agent_end` ends the run only when it is terminal
+   * (`isTerminal` not false, and not `willContinue`): OMP resumes a session
+   * after a non-terminal end, even a `yielded` one, for queued input or
+   * background work, so that end is new work too.
+   * @param {Object} event
+   * @returns {'final-answer'|'resume'|'run-end'|null}
+   */
+  budgetBoundary(event) {
+    const type = event?.type;
+    if (type === 'message_end' && event.message?.role === 'assistant') return event.message.stopReason === 'stop' ? 'final-answer' : null;
+    if (type === 'turn_start' || type === 'message_start' || type === 'auto_compaction_start' || type === 'auto_retry_start') return 'resume';
+    if (type === 'agent_end') return event.willContinue !== true && event.isTerminal !== false ? 'run-end' : 'resume';
+    return null;
+  }
 
   /**
    * Driver-owned argv after the binary for the version-bound direct-shell
@@ -201,7 +282,19 @@ export class OmpAdapter extends ProviderAdapter {
       '--model', model, '--thinking', effort, '--cwd', cwd, '--approval-mode', approval];
   }
 
-  mapModel(model) { return model; }
+  /**
+   * The loop asks for Claude CLI tier names (`haiku`, `sonnet`, `opus`), which
+   * OMP would resolve fuzzily to retired models. An exact tier name, in any
+   * case, maps to the OMP role selector the operator configures under
+   * `modelRoles` in OMP's config.yml. Every other value passes through
+   * unchanged: exact ids, `provider/id`, `@role`, and `:thinking` suffixes.
+   * @param {string} model
+   * @returns {string}
+   */
+  mapModel(model) {
+    const tier = typeof model === 'string' ? model.toLowerCase() : '';
+    return Object.hasOwn(OMP_TIER_ROLES, tier) ? OMP_TIER_ROLES[tier] : model;
+  }
   getEnvOverrides() { return { CI: 'true', NO_COLOR: '1' }; }
   // JSON print mode has no stdin abort protocol; runner terminates its process.
   getAbortInput() { return null; }

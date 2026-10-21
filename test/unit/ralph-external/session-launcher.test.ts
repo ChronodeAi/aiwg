@@ -95,6 +95,23 @@ describe('SessionLauncher', () => {
         .toMatchObject({ Path: 'override', CODEX_HOME: '/fixture/codex', EXPLICIT_CONFIG: 'set' });
       expect(buildSessionEnvironment('unknown-provider', {}, { OPENAI_API_KEY: 'denied' })).toEqual({});
     });
+
+    it('passes OMP OAuth and auth-broker client names and still drops unrelated secrets', () => {
+      const ompAuth = {
+        ANTHROPIC_OAUTH_TOKEN: 'synthetic-oauth',
+        OMP_AUTH_BROKER_URL: 'https://broker.invalid',
+        OMP_AUTH_BROKER_TOKEN: 'synthetic-broker',
+        OMP_AUTH_BROKER_SNAPSHOT_TTL_MS: '60000',
+        OMP_AUTH_BROKER_SNAPSHOT_CACHE: '/fixture/omp-snapshot',
+        OMP_AUTH_BROKER_ACCOUNT_POOL_FILE: '/fixture/omp-pool.json',
+      };
+      const environment = {
+        ...ompAuth, PATH: '/fixture/bin',
+        GITHUB_TOKEN: 'synthetic-github', AIWG_GITEA_TOKEN: 'synthetic-gitea', OMP_UNLISTED: 'denied',
+      };
+      expect(buildSessionEnvironment('omp', { CI: 'true', NO_COLOR: '1' }, environment))
+        .toEqual({ ...ompAuth, PATH: '/fixture/bin', CI: 'true', NO_COLOR: '1' });
+    });
   });
 
   describe('legacy version probes', () => {

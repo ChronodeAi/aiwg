@@ -44,7 +44,6 @@ import { RecoveryEngine } from './recovery-engine.mjs';
 // ========== EPIC #26 COMPONENTS ==========
 // PID Control Layer (#23)
 import { PIDController } from './pid-controller.mjs';
-import { GainScheduler } from './gain-scheduler.mjs';
 import { MetricsCollector } from './metrics-collector.mjs';
 import { ControlAlarms } from './control-alarms.mjs';
 
@@ -143,7 +142,6 @@ export class Orchestrator {
     // ========== EPIC #26 COMPONENTS ==========
     // PID Control Layer
     this.pidController = null;
-    this.gainScheduler = null;
     this.metricsCollector = null;
     this.controlAlarms = null;
 
@@ -415,13 +413,13 @@ export class Orchestrator {
 
     // PID Control Layer
     if (state.config.enablePIDControl) {
+      // Iteration metrics for the overseer. The PID controller keeps its own
+      // collector, gain scheduler and alarms.
       this.metricsCollector = new MetricsCollector({
         windowSize: 5,
         integralDecay: 0.9,
         noiseThreshold: 0.05,
       });
-
-      this.gainScheduler = new GainScheduler();
 
       this.pidController = new PIDController({
         kp: 0.5,  // Initial proportional gain
@@ -429,6 +427,13 @@ export class Orchestrator {
         kd: 0.3,  // Initial derivative gain
         outputMin: 0,
         outputMax: 1,
+      });
+      // process() refuses to run before initialize(). On resume the controller
+      // is rebuilt here and starts a fresh metrics window.
+      this.pidController.initialize({
+        objective: state.objective,
+        completionCriteria: state.completionCriteria,
+        maxIterations: state.maxIterations,
       });
 
       this.controlAlarms = new ControlAlarms({
@@ -739,27 +744,16 @@ export class Orchestrator {
             || `Re-run the completion check (${state.completionCriteria}); an unchanged result signals the approach is exhausted.`,
         };
 
-        // PID Controller: Compute control signals
+        // PID Controller: advisory control decision from the previous iteration.
+        // It is recorded on the iteration and handed to the prompt generator;
+        // it never stops or pauses the loop.
         let controlSignals = null;
-        if (this.pidController && this.metricsCollector && state.currentIteration > 1) {
-          // Extract metrics from last iteration
-          const metrics = this.metricsCollector.extractIterationMetrics(lastIteration);
-          const pidMetrics = this.metricsCollector.computePIDMetrics(metrics);
-
-          // Adjust gains based on situation
-          if (this.gainScheduler && assessment) {
-            const adjustedGains = this.gainScheduler.adjustGains({
-              phase: assessment.phase || 'normal',
-              volatility: pidMetrics.derivative,
-              errorMagnitude: pidMetrics.proportional,
-            });
-            this.pidController.updateGains(adjustedGains);
-          }
-
-          // Compute control output
-          controlSignals = this.pidController.compute(pidMetrics.proportional);
-
-          console.log(`[External Ralph] PID control: P=${pidMetrics.proportional.toFixed(3)}, output=${controlSignals.output.toFixed(3)}`);
+        if (this.pidController && state.currentIteration > 1) {
+          controlSignals = this.pidController.process(lastIteration, {
+            currentIteration: state.currentIteration,
+            maxIterations: state.maxIterations,
+          });
+          console.log(`[External Ralph] PID control: action=${controlSignals.action}, urgency=${controlSignals.urgency}`);
         }
 
         // ValidationAgent: Pre-iteration validation
@@ -1004,6 +998,13 @@ export class Orchestrator {
         if (sessionResult.toolCallCount) {
           console.log(`[External Ralph] Tool calls: ${sessionResult.toolCallCount}, errors: ${sessionResult.errorCount || 0}`);
         }
+        if (sessionResult.budgetExceeded) {
+          // The session reached the live per-session cap: it was stopped, or
+          // its final answer crossed the cap and it then ended on its own. The
+          // iteration is still analyzed and recorded, and the cumulative
+          // mission ceilings are evaluated against it below.
+          console.log(`[External Ralph] Session reached the per-iteration budget ($${state.config.budgetPerIteration})`);
+        }
 
         // Verbose: show session output tail
         if (this._verbose && outputPaths.stdout) {
@@ -1158,6 +1159,7 @@ export class Orchestrator {
           totalTokens: sessionResult.totalTokens,
           costUsd: sessionResult.costUsd,
           errorCount: sessionResult.errorCount,
+          budgetExceeded: sessionResult.budgetExceeded === true,
           // Epic #26 data
           assessment,
           strategy,
@@ -1247,6 +1249,7 @@ export class Orchestrator {
             input_tokens: tokenUsageObserved ? (sessionResult.inputTokens || 0) : null,
             output_tokens: tokenUsageObserved ? (sessionResult.outputTokens || 0) : null,
             tool_calls: sessionResult.toolCallCount || 0,
+            session_budget_exceeded: sessionResult.budgetExceeded === true,
             token_cost_usd: costObserved ? (sessionResult.costUsd || 0) : null,
             execution_time_ms: duration,
             verification_status: verificationStatus,
@@ -1330,22 +1333,19 @@ export class Orchestrator {
           });
         }
 
-        // LearningExtractor & MemoryPromotion
+        // LearningExtractor & MemoryPromotion: extract learnings from the loop
+        // so far, stage and validate them, then promote the validated ones.
         if (this.learningExtractor && this.memoryPromotion && verificationPassed) {
           console.log('[External Ralph] Extracting and promoting learnings...');
-          const learnings = await this.learningExtractor.extract({
-            iteration: state.currentIteration,
-            analysis,
-            strategy,
+          const pipeline = this.memoryPromotion.processPipeline({
+            loopId: state.loopId,
+            objective: state.objective,
+            // The extractor's iteration and complexity estimates read this.
+            currentIteration: state.currentIteration,
+            iterations: state.iterations,
             outcome: 'success',
           });
-
-          if (learnings.length > 0) {
-            await this.memoryPromotion.promote({
-              learnings,
-              source: `loop-${state.loopId}-iteration-${state.currentIteration}`,
-            });
-          }
+          console.log(`[External Ralph] Learnings: extracted=${pipeline.extracted}, validated=${pipeline.validated}, rejected=${pipeline.rejected}, promoted=${pipeline.promoted}, skipped=${pipeline.skipped}`);
         }
 
         // ========== CHECK EARLY STOPPING ==========

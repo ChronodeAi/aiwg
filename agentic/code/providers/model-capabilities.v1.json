@@ -1655,6 +1655,7 @@
       "sessionEnvAllowlist": [
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
+        "ANTHROPIC_OAUTH_TOKEN",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
         "OPENROUTER_API_KEY",
@@ -1663,7 +1664,12 @@
         "XAI_API_KEY",
         "DEEPSEEK_API_KEY",
         "PI_CONFIG_DIR",
-        "PI_CODING_AGENT_DIR"
+        "PI_CODING_AGENT_DIR",
+        "OMP_AUTH_BROKER_URL",
+        "OMP_AUTH_BROKER_TOKEN",
+        "OMP_AUTH_BROKER_SNAPSHOT_TTL_MS",
+        "OMP_AUTH_BROKER_SNAPSHOT_CACHE",
+        "OMP_AUTH_BROKER_ACCOUNT_POOL_FILE"
       ],
       "agent": "native",
       "skill": "inherited",

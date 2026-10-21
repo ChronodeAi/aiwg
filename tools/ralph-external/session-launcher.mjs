@@ -1858,7 +1858,10 @@ async function captureOneWorkerBaseline(owner, ctx) {
  * @property {string} prompt - The prompt to send
  * @property {string} sessionId - Session UUID for tracking
  * @property {string} [model='claude-sonnet-5'] - Pinned model variant (see #1450)
- * @property {number} [budget] - Budget per iteration in USD
+ * @property {number} [budget] - Budget per iteration in USD. Claude enforces it
+ *   natively; an adapter without budget control that reads cost from its stream
+ *   (extractUsage) is stopped live once this session's cost reaches it, unless
+ *   the crossing message is the final answer (then only if work resumes).
  * @property {number} [maxTurns] - Maximum number of turns (requires Claude CLI support)
  * @property {boolean} [verbose=false] - Enable verbose output
  * @property {string} [systemPrompt] - System prompt to append
@@ -1879,6 +1882,10 @@ async function captureOneWorkerBaseline(owner, ctx) {
  * @property {string} [parsedEventsPath] - Path to parsed stream events (if available)
  * @property {number} duration - Duration in milliseconds
  * @property {boolean} timedOut - Whether session timed out
+ * @property {boolean} budgetExceeded - Whether this session's reported cost
+ *   reached the live per-session spend cap (`budget`, for adapters reading cost
+ *   from their stream). The session was stopped unless the crossing message was
+ *   its final answer and it then ended on its own.
  * @property {string} stdoutBuffer - Last portion of stdout
  * @property {number} [toolCallCount] - Number of tool calls detected
  * @property {number} [errorCount] - Number of errors detected
@@ -4034,20 +4041,110 @@ export class SessionLauncher extends EventEmitter {
       };
       this.pendingEscalationTimers = escalationTimers;
 
+      // Bounded graceful abort, then TERM, then KILL. Shared by the timeout and
+      // the live spend cap below; the first caller wins.
+      let terminationRequested = false;
+      const requestTermination = () => {
+        if (terminationRequested) return;
+        terminationRequested = true;
+        if (abortInput && child.stdin?.writable) child.stdin.write(abortInput);
+        const terminateDelay = abortInput ? 2000 : 0;
+        armEscalation(() => terminate('SIGTERM'), terminateDelay);
+        // Force kill after bounded graceful-abort and termination windows.
+        armEscalation(() => {
+          if (child.exitCode === null && child.signalCode === null) {
+            terminate('SIGKILL');
+          }
+        }, terminateDelay + 5000);
+      };
+
       if (options.timeoutMs) {
         timeoutId = setTimeout(() => {
           timedOut = true;
           this.emit('timeout');
-          if (abortInput && child.stdin?.writable) child.stdin.write(abortInput);
-          const terminateDelay = abortInput ? 2000 : 0;
-          armEscalation(() => terminate('SIGTERM'), terminateDelay);
-          // Force kill after bounded graceful-abort and termination windows.
-          armEscalation(() => {
-            if (child.exitCode === null && child.signalCode === null) {
-              terminate('SIGKILL');
-            }
-          }, terminateDelay + 5000);
+          requestTermination();
         }, options.timeoutMs);
+      }
+
+      // Live per-session spend cap. A provider without native budget control
+      // whose adapter reads cost from its own stream (extractUsage) is stopped
+      // as soon as this session's reported cost reaches options.budget, rather
+      // than only after the session ends. Complete stdout lines are parsed as
+      // they arrive; a partial line waits for the rest of its bytes.
+      //
+      // When the crossing event is the model's final answer (budgetBoundary
+      // 'final-answer'), that spend is already incurred and stopping would only
+      // turn a finished run into a killed one. The session is then left to end
+      // on its own and stopped only if billed work resumes: a 'resume' event
+      // or another cost-bearing event. A 'run-end' event before that means the
+      // run finished, so it is never stopped.
+      let budgetExceeded = false;
+      const sessionBudgetUsd = Number(options.budget);
+      if (this.providerAdapter?.reportsStreamUsage?.() === true
+        && !this.providerAdapter.hasCapability('budgetControl')
+        && Number.isFinite(sessionBudgetUsd) && sessionBudgetUsd > 0) {
+        const usageAdapter = this.providerAdapter;
+        const usageDecoder = new StringDecoder('utf8');
+        const maxUsageLineChars = 64 * 1024 * 1024;
+        const partialLine = [];
+        let partialLineChars = 0;
+        let overlongLine = false;
+        let sessionCostUsd = 0;
+        let watching = true;
+        let stopIfWorkResumes = false;
+        const stopSession = () => {
+          watching = false;
+          // The cap, not the clock, ended this session.
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+          requestTermination();
+        };
+        const readUsageLine = (line) => {
+          if (!line.trim()) return;
+          let event;
+          try { event = JSON.parse(line); } catch { return; }
+          const usage = usageAdapter.extractUsage(event);
+          const boundary = usageAdapter.budgetBoundary?.(event) ?? null;
+          if (usage?.hasCostField) sessionCostUsd += usage.costUsd;
+          if (stopIfWorkResumes) {
+            if (boundary === 'run-end') watching = false;
+            else if (boundary === 'resume' || usage?.hasCostField) stopSession();
+            return;
+          }
+          if (!usage?.hasCostField || sessionCostUsd < sessionBudgetUsd) return;
+          budgetExceeded = true;
+          const deferred = boundary === 'final-answer';
+          this.emit('budget-exceeded', { costUsd: sessionCostUsd, budgetUsd: sessionBudgetUsd, deferred });
+          if (deferred) stopIfWorkResumes = true;
+          else stopSession();
+        };
+        child.stdout.on('data', (chunk) => {
+          if (!watching) return;
+          const text = usageDecoder.write(chunk);
+          let start = 0;
+          for (let newline = text.indexOf('\n'); newline !== -1 && watching; newline = text.indexOf('\n', start)) {
+            const tail = text.slice(start, newline);
+            start = newline + 1;
+            const line = overlongLine ? '' : partialLine.length ? partialLine.join('') + tail : tail;
+            partialLine.length = 0;
+            partialLineChars = 0;
+            overlongLine = false;
+            readUsageLine(line);
+          }
+          if (!watching || start >= text.length || overlongLine) return;
+          const rest = text.slice(start);
+          partialLineChars += rest.length;
+          // A line this long is not an accounting event; drop it, keep memory bounded.
+          if (partialLineChars > maxUsageLineChars) {
+            overlongLine = true;
+            partialLine.length = 0;
+            partialLineChars = 0;
+          } else {
+            partialLine.push(rest);
+          }
+        });
       }
 
       // Handle process completion
@@ -4080,6 +4177,7 @@ export class SessionLauncher extends EventEmitter {
             stderrPath: options.stderrPath,
             duration,
             timedOut,
+            budgetExceeded,
             stdoutBuffer,
           };
 
@@ -4246,13 +4344,15 @@ export class SessionLauncher extends EventEmitter {
       // Parse stream-json events (each line is a JSON object)
       const events = [];
       const lines = content.split('\n').filter(line => line.trim());
+      // Provider grammar hooks; a null answer means the generic logic applies.
+      const adapter = this.providerAdapter;
 
       for (const line of lines) {
         try {
           const event = JSON.parse(line);
 
           // Categorize event
-          const eventType = this._categorizeStreamEvent(event);
+          const eventType = adapter?.categorizeEvent?.(event) ?? this._categorizeStreamEvent(event);
 
           const structuredEvent = {
             type: eventType,
@@ -4272,7 +4372,7 @@ export class SessionLauncher extends EventEmitter {
             stats.completionCount++;
           }
 
-          const usage = this._extractUsageStats(event);
+          const usage = adapter?.extractUsage?.(event) ?? this._extractUsageStats(event);
           if (usage.hasTokenField) {
             stats.tokenFieldSeen = true;
           }

@@ -596,6 +596,40 @@ test('load() restores analytics from JSON', () => {
     assert.strictEqual(timeAnalytics.checkBudgetLimits().trigger, 'wall_clock_exhausted');
   });
 
+  test('records a session stopped by the per-session cap and still checks cumulative ceilings', () => {
+    setup();
+    const analytics = new IterationAnalytics('test-loop-011d', 'Capped session task', {
+      storagePath: TEST_DIR,
+      budgetLimits: { spend_usd: 6, tool_calls: 10 },
+    });
+    const capped = {
+      quality_score: 40,
+      tokens_used: 1000,
+      tool_calls: 2,
+      token_cost_usd: 5.1,
+      execution_time_ms: 1000,
+      verification_status: 'failed',
+      output_snapshot_path: null,
+      session_budget_exceeded: true,
+    };
+
+    const first = analytics.recordIteration({ ...capped, iteration_number: 1 });
+    assert.strictEqual(first.session_budget_exceeded, true);
+    assert.strictEqual(analytics.checkBudgetLimits().exhausted, false);
+
+    analytics.recordIteration({ ...capped, iteration_number: 2 });
+    const decision = analytics.checkBudgetLimits();
+    assert.strictEqual(decision.exhausted, true);
+    assert.strictEqual(decision.trigger, 'spend_exhausted');
+
+    const uncapped = analytics.recordIteration({ ...validMetrics, iteration_number: 3 });
+    assert.strictEqual(uncapped.session_budget_exceeded, false);
+    assert.throws(
+      () => analytics.recordIteration({ ...validMetrics, iteration_number: 4, session_budget_exceeded: 'yes' }),
+      /session_budget_exceeded must be boolean/,
+    );
+  });
+
   test('checkExplorationQuota() requires structural variant after flat cycles', () => {
     setup();
     const analytics = new IterationAnalytics(

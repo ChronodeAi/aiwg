@@ -32,6 +32,7 @@ import {
 import { getProviderConfig } from '../agent-spawn.js';
 import { AiwgError, EXIT_CODES } from '../errors.js';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
+import { generateRalphLoopId } from '../../ralph/loop-id.mjs';
 
 /**
  * Options for launching an external agent loop
@@ -120,19 +121,6 @@ export function getRegistryDir(projectRoot: string): string {
  */
 export function getRegistryPath(projectRoot: string): string {
   return join(getRegistryDir(projectRoot), 'registry.json');
-}
-
-/**
- * Generate a unique loop ID
- */
-export function generateLoopId(objective: string): string {
-  const slug = objective
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 30);
-  const shortId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  return `ralph-${slug}-${shortId}`;
 }
 
 /**
@@ -281,7 +269,9 @@ export async function launchExternalRalph(
   // surprising. Tell the operator what's running and how to lift the cap.
   await assertRalphParallelismCap(projectRoot);
 
-  const loopId = options.loopId || generateLoopId(options.objective);
+  // The loop's multi-loop state manager accepts only this id shape; any other
+  // id drops the loop to single-loop state that mc status never reads.
+  const loopId = options.loopId || generateRalphLoopId(options.objective);
   const loopDir = join(registryDir, 'loops', loopId);
   mkdirSync(loopDir, { recursive: true });
 
