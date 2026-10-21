@@ -17,9 +17,13 @@ import { sourceRules } from '../unit/providers/rule-source-expectations.js';
 import { execFileSync, spawnSync } from 'child_process';
 // @ts-expect-error — .mjs provider module without type declarations
 import {
+  getAddonSkillDirs,
   listOnDemandRuleFiles,
   onDemandRuleNames,
 } from '../../tools/agents/providers/base.mjs';
+// @ts-expect-error — .mjs deployment module without type declarations
+import { collectMirrorSkillDirs } from '../../tools/agents/deploy-agents.mjs';
+import { addonPath, getAllAddons } from '../../src/cli/handlers/use.js';
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -397,6 +401,16 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
       const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-pi-user-home-'));
       const agentDir = path.join(homeDir, 'custom-pi-agent');
       try {
+        const rootAddonSkills = getAddonSkillDirs(REPO_ROOT).map((entry: string) => path.resolve(entry)).sort();
+        const directAddonSkills = (await getAllAddons(REPO_ROOT))
+          .flatMap(addon => collectMirrorSkillDirs(addonPath(REPO_ROOT, addon), 'sdlc', 'pi'))
+          .map((entry: string) => path.resolve(entry))
+          .sort();
+        expect(directAddonSkills).toEqual(rootAddonSkills);
+        const rootMirrorSkills = collectMirrorSkillDirs(REPO_ROOT, 'sdlc', 'pi')
+          .map((entry: string) => path.resolve(entry));
+        expect(rootMirrorSkills.slice(-rootAddonSkills.length).sort()).toEqual(rootAddonSkills);
+
         const result = runAiwgWithEnv(
           ['use', 'sdlc', '--provider', 'pi', '--target', projectDir, '--scope', 'user'],
           projectDir,
@@ -405,6 +419,21 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
         expect(result.exitCode, `Pi user-scope deployment failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
         expect(existsSync(path.join(agentDir, 'skills', 'sdlc-quickref', 'SKILL.md'))).toBe(true);
         expect(existsSync(path.join(agentDir, 'prompts', 'address-issues.md'))).toBe(true);
+        const projectStatus = await fs.readFile(path.join(agentDir, 'prompts', 'project-status.md'), 'utf8');
+        expect(projectStatus).toContain('Cross-framework project status aggregator');
+        const sdlcAccelerate = await fs.readFile(path.join(agentDir, 'prompts', 'sdlc-accelerate.md'), 'utf8');
+        // The final standard-command mirror intentionally applies the selected
+        // framework after native skills. Preserve that existing winner while
+        // collecting addon-only wrappers such as project-status in one pass.
+        expect(sdlcAccelerate).toContain('You are an SDLC Pipeline Orchestrator');
+        expect(sdlcAccelerate).not.toContain('Weeks of SDLC ceremony compressed into hours');
+        const promptManifest = JSON.parse(await fs.readFile(path.join(agentDir, 'prompts', '.aiwg-manifest.json'), 'utf8'));
+        expect(promptManifest.managed['project-status.md']).toMatchObject({
+          source: 'bundled',
+          kind: 'skill-command',
+        });
+        expect(promptManifest.managed['project-status.md'].version).not.toBe('unknown');
+        expect(promptManifest.managed['sdlc-accelerate.md'].version).not.toBe('unknown');
         expect(existsSync(path.join(homeDir, '.agents', 'skills', 'sdlc-quickref', 'SKILL.md'))).toBe(false);
       } finally {
         rmSync(homeDir, { recursive: true, force: true });

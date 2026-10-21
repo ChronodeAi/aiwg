@@ -191,7 +191,7 @@ function uniquePaths(paths) {
   return [...new Set(paths.filter(Boolean))];
 }
 
-function collectMirrorSkillDirs(srcRoot, mode) {
+export function collectMirrorSkillDirs(srcRoot, mode, providerName) {
   const dirs = [];
 
   const directSkillsDir = path.join(srcRoot, 'skills');
@@ -210,7 +210,14 @@ function collectMirrorSkillDirs(srcRoot, mode) {
     });
     dirs.push(...artifacts.skills);
 
-    if (mode === 'all') {
+    // Pi's provider collector already deploys all eligible addon skills for
+    // every root framework mode. Mirror the command-shaped addon skills in
+    // that same root pass so `aiwg use` does not need to repeat the entire
+    // deployment once per addon merely to produce these wrappers. Keep addon
+    // skills after framework skills: this preserves the existing per-addon
+    // winner when a framework and addon expose the same command name.
+    if (mode === 'all'
+      || (providerName === 'pi' && ['general', 'sdlc', 'both'].includes(mode))) {
       dirs.push(...getAddonSkillDirs(srcRoot));
     }
   }
@@ -296,7 +303,7 @@ function mirrorSkillsAsCommands(provider, target, srcRoot, opts) {
   const targetDir = resolveCommandMirrorDir(provider, target);
   if (!targetDir) return 0;
 
-  const skillDirs = collectMirrorSkillDirs(srcRoot, opts.mode)
+  const skillDirs = collectMirrorSkillDirs(srcRoot, opts.mode, provider.name)
     .filter((dir) => shouldMirrorCommandSkill(provider.name, path.basename(dir)));
 
   if (skillDirs.length === 0) return 0;

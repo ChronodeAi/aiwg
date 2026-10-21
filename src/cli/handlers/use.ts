@@ -492,6 +492,23 @@ export function addonPath(frameworkRoot: string, name: string): string {
 }
 
 /**
+ * Whether the provider's root deployment already collects every eligible
+ * addon for this mode. The caller still registers addon CLI contributions;
+ * this only suppresses redundant deploy-agents subprocesses.
+ */
+export function mainDeploymentIncludesAddons(
+  provider: string,
+  selectedMode: string,
+  providerDeployArgs: string[],
+): boolean {
+  return (((provider === 'claude' || provider === 'pi')
+    && ['general', 'sdlc', 'both', 'all'].includes(selectedMode))
+    || (provider === 'codex' && selectedMode === 'all'))
+    && !providerDeployArgs.some(arg => arg === '--source' || arg.startsWith('--source='))
+    && providerDeployArgs.filter(arg => arg === '--mode').length === 1;
+}
+
+/**
  * Resolve a selected addon's required addon dependencies in deterministic
  * dependency-first order. Optional dependencies remain descriptive and are
  * never activated implicitly.
@@ -4024,10 +4041,7 @@ export class UseHandler implements CommandHandler {
       // helper includes addons only in all mode; other modes retain their pass.
       // CLI contribution registration below still runs for every addon.
       const selectedMode = MODE_MAP[framework as Framework];
-      const mainIncludesAddons = ((provider === 'claude' && ['general', 'sdlc', 'both', 'all'].includes(selectedMode))
-        || (provider === 'codex' && selectedMode === 'all'))
-        && !providerDeployArgs.some(arg => arg === '--source' || arg.startsWith('--source='))
-        && providerDeployArgs.filter(arg => arg === '--mode').length === 1;
+      const mainIncludesAddons = mainDeploymentIncludesAddons(provider, selectedMode, providerDeployArgs);
       for (const addon of allAddons) {
         if (verbose) {
           console.log('');

@@ -26,6 +26,7 @@ import {
   deployOpenHumanHarnessAgents,
   parseOpenHumanHarnessAgentSelector,
   resolveOpenHumanHarnessAgentSelectors,
+  mainDeploymentIncludesAddons,
 } from '../../../../src/cli/handlers/use.js';
 
 // ---------------------------------------------------------------------------
@@ -97,6 +98,31 @@ describe('nextStepsFor()', () => {
   it('uses Codex skill syntax for framework fallbacks and its openai alias', () => {
     expect(nextStepsFor('marketing', 'codex').join('\n')).toContain('$aiwg-regenerate');
     expect(nextStepsFor('sdlc', 'openai').join('\n')).toContain('$aiwg-regenerate');
+  });
+});
+
+describe('mainDeploymentIncludesAddons()', () => {
+  it('recognizes Pi root modes whose provider collector includes every addon', () => {
+    for (const mode of ['general', 'sdlc', 'both', 'all']) {
+      expect(mainDeploymentIncludesAddons('pi', mode, ['--mode', mode, '--provider', 'pi'])).toBe(true);
+    }
+  });
+
+  it('keeps explicit addon sources and non-collector modes on the addon deployment path', () => {
+    expect(mainDeploymentIncludesAddons('pi', 'sdlc', [
+      '--mode', 'sdlc', '--provider', 'pi', '--source', '/tmp/addon',
+    ])).toBe(false);
+    expect(mainDeploymentIncludesAddons('pi', 'research', ['--mode', 'research', '--provider', 'pi'])).toBe(false);
+    expect(mainDeploymentIncludesAddons('pi', 'sdlc', [
+      '--mode', 'sdlc', '--mode', 'all', '--provider', 'pi',
+    ])).toBe(false);
+  });
+
+  it('preserves the existing Claude and Codex collector boundaries', () => {
+    expect(mainDeploymentIncludesAddons('claude', 'sdlc', ['--mode', 'sdlc'])).toBe(true);
+    expect(mainDeploymentIncludesAddons('codex', 'all', ['--mode', 'all'])).toBe(true);
+    expect(mainDeploymentIncludesAddons('codex', 'sdlc', ['--mode', 'sdlc'])).toBe(false);
+    expect(mainDeploymentIncludesAddons('hermes', 'all', ['--mode', 'all'])).toBe(false);
   });
 });
 
