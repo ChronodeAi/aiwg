@@ -51,6 +51,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- On OMP, the ralph loop's Claude tier names (`haiku`, `sonnet`, `opus`, matched
+  exactly and in any case) become OMP role selectors (`@smol`, `@default`,
+  `@slow`) that the operator configures under `modelRoles` in OMP's `config.yml`.
+  OMP resolved the bare names to retired models (`sonnet` and `opus` answered 404),
+  so every loop analysis call failed and fell back to pattern matching. Exact ids,
+  `provider/id`, `@role` and `:thinking` values pass through unchanged.
 - With PID control enabled (the default), the ralph loop no longer fails every
   iteration after the first with "this.metricsCollector.computePIDMetrics is not
   a function". The orchestrator initializes its `PIDController` and records the

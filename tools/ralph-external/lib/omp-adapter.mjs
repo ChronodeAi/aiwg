@@ -87,6 +87,9 @@ export const OMP_DIRECT_APPROVAL_MODES = Object.freeze(['write']);
 /** Brief transport for the direct profile: piped stdin, never argv. */
 export const OMP_DIRECT_STDIN = 'brief-text';
 
+/** Loop tier names to OMP role selectors (`modelRoles` in OMP's config.yml). */
+const OMP_TIER_ROLES = Object.freeze({ haiku: '@smol', sonnet: '@default', opus: '@slow' });
+
 const finiteNumber = value => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 
 /** Map one OMP `Usage` record (`input`, `output`, `cacheRead`, `cacheWrite`,
@@ -258,7 +261,19 @@ export class OmpAdapter extends ProviderAdapter {
       '--model', model, '--thinking', effort, '--cwd', cwd, '--approval-mode', approval];
   }
 
-  mapModel(model) { return model; }
+  /**
+   * The loop asks for Claude CLI tier names (`haiku`, `sonnet`, `opus`), which
+   * OMP would resolve fuzzily to retired models. An exact tier name, in any
+   * case, maps to the OMP role selector the operator configures under
+   * `modelRoles` in OMP's config.yml. Every other value passes through
+   * unchanged: exact ids, `provider/id`, `@role`, and `:thinking` suffixes.
+   * @param {string} model
+   * @returns {string}
+   */
+  mapModel(model) {
+    const tier = typeof model === 'string' ? model.toLowerCase() : '';
+    return Object.hasOwn(OMP_TIER_ROLES, tier) ? OMP_TIER_ROLES[tier] : model;
+  }
   getEnvOverrides() { return { CI: 'true', NO_COLOR: '1' }; }
   // JSON print mode has no stdin abort protocol; runner terminates its process.
   getAbortInput() { return null; }

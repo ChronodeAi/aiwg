@@ -220,6 +220,31 @@ test('omp: buildSessionArgs no longer warns that budget is unsupported', t => {
   assert.equal(args.includes('5'), false);
 });
 
+test('omp: mapModel turns loop tier names into OMP roles and passes everything else through', () => {
+  const adapter = new OmpAdapter();
+  for (const [tier, role] of [['haiku', '@smol'], ['sonnet', '@default'], ['opus', '@slow']]) {
+    assert.equal(adapter.mapModel(tier), role, tier);
+    assert.equal(adapter.mapModel(tier.toUpperCase()), role, tier.toUpperCase());
+    assert.equal(adapter.mapModel(tier[0].toUpperCase() + tier.slice(1)), role);
+  }
+  for (const model of [
+    'claude-sonnet-5', 'anthropic/claude-opus-5-5', '@slow', '@task', 'sonnet:high', 'opus:xhigh',
+    ' sonnet', 'sonnet-4', 'claude-haiku', 'constructor', 'toString', '',
+  ]) {
+    assert.equal(adapter.mapModel(model), model, JSON.stringify(model));
+  }
+});
+
+test('omp: session and analysis args carry the mapped model', () => {
+  const adapter = new OmpAdapter();
+  const analysis = adapter.buildAnalysisArgs({ prompt: 'synthetic', model: 'sonnet' });
+  assert.equal(analysis[analysis.indexOf('--model') + 1], '@default');
+  const session = adapter.buildSessionArgs({ prompt: 'synthetic', model: 'Opus' });
+  assert.equal(session[session.indexOf('--model') + 1], '@slow');
+  const exact = adapter.buildSessionArgs({ prompt: 'synthetic', model: 'anthropic/claude-sonnet-5' });
+  assert.equal(exact[exact.indexOf('--model') + 1], 'anthropic/claude-sonnet-5');
+});
+
 // ── Live per-session cap ────────────────────────────────────────────────
 
 const FAKE_OMP = `#!${process.execPath}

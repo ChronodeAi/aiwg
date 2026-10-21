@@ -142,6 +142,12 @@ spend unobservable and the spend ceilings inert. OMP sends a single event
 larger than 1 MiB as `rpc_chunk` frames, and the loop does not reassemble those
 for accounting.
 
+The loop names models by Claude tier. On OMP, an exact `haiku`, `sonnet` or
+`opus` (in any case) becomes the role selector `@smol`, `@default` or `@slow`,
+and the operator configures those roles under `modelRoles` in OMP's
+`config.yml`. Any other model value, such as an exact id, `provider/id`, an
+`@role` or a `:thinking` suffix, is passed to `--model` unchanged.
+
 A model listing failure is not an empty successful catalog. Check the selected
 profile, configured backend credentials, binary version, and diagnostic stderr.
 `aiwg runtime-info --providers --provider omp --json` reports the executable,
