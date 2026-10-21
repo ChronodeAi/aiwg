@@ -22,6 +22,7 @@ import {
   sha256,
   stableEventId,
   stableSessionId,
+  importDiscoveryManifest,
   type BatchImportRun,
   type ProviderRecord,
   type MemoryDestinationPlan,
@@ -84,6 +85,109 @@ const records: ProviderRecord[] = [
 ];
 
 describeWithSqlite('transactional session repository and importer', () => {
+  it('carries catalog-only events through redaction, rebuilding FTS and analytics and excluding Lane B', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-carry-gate-'));
+    const oldPath = join(root, 'old.sqlite');
+    const newPath = join(root, 'new.sqlite');
+    const previous = new SessionRepository(oldPath);
+    const repository = new SessionRepository(newPath);
+    const Database = requireFeaturePackage('better-sqlite3') as new (path: string) => any;
+    const raw = new Database(oldPath);
+    const canary = ['redaction', 'canary', 'carried'].join('-');
+    try {
+      await new IncrementalSessionImporter(previous).import({ source,
+        selectedSource: { provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+          sourceId: source.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+        adapter: adapter(['retained-a', 'retained-b', 'retained-c', 'lane-b'].map((id, index) => ({
+          nativeSessionId: id, nativeEventId: `event-${index}`, sequence: index,
+          kind: 'tool-call', role: 'assistant', toolName: 'safe-tool',
+          text: 'safe catalog history', rawReference: { locatorClass: 'fixture' },
+        }))), workspaceId: 'workspace-1', policyVersion: '1.0.0' });
+      // Emulate an old policy: inject secrets after all current write gates.
+      for (const row of raw.prepare('SELECT event_id, data FROM session_events').all()) {
+        const event = JSON.parse(row.data);
+        event.searchableText = `safe catalog history ${canary} ${syntheticSecrets[0][1]}`;
+        event.toolName = canary;
+        event.extensions['native.generic'] = { nested: { [canary]: canary } };
+        raw.prepare('UPDATE session_events SET data=? WHERE event_id=?').run(JSON.stringify(event), row.event_id);
+      }
+      raw.prepare('UPDATE session_event_fts SET searchable_text=?').run(`fts-only-${canary}`);
+      raw.prepare('UPDATE session_analytics_facts SET data=?, tool_name=?').run(JSON.stringify({ poison: canary }), canary);
+      raw.prepare("UPDATE session_sources SET data=json_set(data, '$.providerProfile', ?)").run(canary);
+      const manifest = { schemaVersion: '1.0.0' as const, manifestId: sha256('empty'),
+        workspaceId: 'workspace-1', workspacePath: root, createdAt: '2026-10-21T00:00:00.000Z',
+        providers: [], sources: [] };
+      for (let iteration = 0; iteration < 2; iteration++) {
+        const receipt = await importDiscoveryManifest({ manifest, repository, carryForward: previous, exclude: ['lane-b'] });
+        expect(receipt.carryForward?.byProvider.generic).toEqual({
+          reimported: 0, carried: 3, excluded: 1, droppedAsDuplicate: 0,
+        });
+        expect(repository.listSessions({ workspaceId: 'workspace-1', limit: 20 }).items
+          .map(session => session.nativeSessionId).sort()).toEqual(['retained-a', 'retained-b', 'retained-c']);
+        const result = repository.search({ query: 'history', workspaceId: 'workspace-1', controlEvents: 'include', limit: 20 });
+        expect(result.items).toHaveLength(3);
+        expect(JSON.stringify(result)).not.toContain(canary);
+        const analytics = repository.analyticsSummary({ workspaceId: 'workspace-1' });
+        expect(analytics.totals.toolCalls).toBe(3);
+        expect(JSON.stringify(analytics)).not.toContain(canary);
+      }
+      const target = new Database(newPath);
+      try {
+        for (const { name } of target.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()) {
+          const rows = target.prepare(`SELECT * FROM "${String(name).replaceAll('"', '""')}"`).all();
+          for (const row of rows) for (const value of Object.values(row)) {
+            const serialized = Buffer.isBuffer(value) ? value.toString('utf8') : String(value);
+            expect(serialized).not.toContain(canary);
+            expect(serialized).not.toContain(syntheticSecrets[0][1]);
+            expect(serialized).not.toContain('fts-only-');
+          }
+        }
+      } finally { target.close(); }
+    } finally { raw.close(); previous.close(); repository.close(); }
+  });
+
+  it('rekeys legacy Codex replay rows to the child and drops cross-source duplicate IDs', async () => {
+    const previous = new SessionRepository();
+    const repository = new SessionRepository();
+    const codexSource = { ...source, provider: 'codex' as const, extensions: { 'native.codex': {} } };
+    const lineage = { forkedFromId: 'parent', subagentHistoryStartOrdinal: 3 };
+    const childRecords: ProviderRecord[] = [
+      { ...records[1], nativeSessionId: 'child', nativeEventId: 'child', sequence: 0,
+        extensions: { rolloutType: 'session_meta', unknownFields: { forked_from_id: lineage.forkedFromId,
+          subagent_history_start_ordinal: lineage.subagentHistoryStartOrdinal } } },
+      { ...records[1], nativeSessionId: 'parent', nativeEventId: 'parent', sequence: 1,
+        extensions: { rolloutType: 'session_meta', unknownFields: { forked_from_id: 'ancestor' } } },
+      { ...records[1], nativeSessionId: 'parent', nativeEventId: 'replay', sequence: 2,
+        extensions: { rolloutType: 'response_item', inheritedFromId: 'parent', replayed: true } },
+      { ...records[1], nativeSessionId: 'child', nativeEventId: 'after', sequence: 3,
+        extensions: { rolloutType: 'turn_context' } },
+    ];
+    try {
+      for (const [sourceId, input] of [['legacy-rollout', childRecords], ['duplicate-rollout', childRecords]] as const) {
+        await new IncrementalSessionImporter(previous).import({ source: { ...codexSource, sourceId },
+          selectedSource: { provider: 'codex', locator: '<fixture>', locatorClass: 'synthetic-fixture', sourceId,
+            authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+          adapter: { ...adapter([...input]), provider: 'codex' }, workspaceId: 'workspace-1', policyVersion: '1.0.0' });
+      }
+      const manifest = { schemaVersion: '1.0.0' as const, manifestId: sha256('legacy'),
+        workspaceId: 'workspace-1', workspacePath: '/synthetic', createdAt: '2026-10-21T00:00:00.000Z',
+        providers: [], sources: [] };
+      for (let iteration = 0; iteration < 2; iteration++) {
+        const receipt = await importDiscoveryManifest({ manifest, repository, carryForward: previous });
+        expect(receipt.carryForward?.byProvider.codex).toEqual({
+          reimported: 0, carried: 1, excluded: 0, droppedAsDuplicate: 3,
+        });
+        const sessions = repository.listSessions({ workspaceId: 'workspace-1', limit: 20 });
+        expect(sessions.items.map(session => session.nativeSessionId)).toEqual(['child']);
+        expect(sessions.items[0].extensions['native.codex']).toMatchObject({ lineage });
+        const events = repository.listEvents(sessions.items[0].sessionId);
+        expect(events).toHaveLength(4);
+        expect(events.every(event => event.sessionId === sessions.items[0].sessionId)).toBe(true);
+        expect(events[2].extensions['native.codex']).toMatchObject({ replayed: true, inheritedFromId: 'parent' });
+      }
+    } finally { previous.close(); repository.close(); }
+  });
+
   it('keeps synthetic credentials out of every catalog table, derived index, receipt and export', async () => {
     const root = await mkdtemp(join(tmpdir(), 'session-redaction-gate-'));
     const path = join(root, 'catalog.sqlite');

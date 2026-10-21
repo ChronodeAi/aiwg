@@ -138,3 +138,9 @@ bounded evidence. `session-harvest` previews extraction and carries reviewed
 candidate versions through memory promotion. See the
 [exploration recipes](https://git.integrolabs.net/roctinam/aiwg/src/branch/main/agentic/code/addons/aiwg-utils/skills/session-explore/references/recipes.md)
 for acquisition, comparison, investigation, maintenance and handoff examples.
+
+When rebuilding a catalog, retain its saved discovery manifest and use
+`aiwg sessions import-discovered --workspace "$PWD" --manifest <saved-manifest> --carry-forward <old-catalog> --db <new-catalog> --confirm`.
+This rereads available sources and re-redacts history stored only in the old
+catalog. Keep the old copy until receipt counts, rejected sources, and redaction
+checks are reviewed. See [the rebuild procedure](../sessions/cli.md).

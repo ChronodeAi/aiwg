@@ -155,9 +155,8 @@ export async function discoverWorkspaceHistories(
       ? [resolve(options.grokbotRoot)] : [] },
     {
       provider: 'claude',
-      roots: providerHomes.flatMap((providerHome) => workspacePaths.map(
-        (workspace) => join(providerHome, '.claude', 'projects', claudeProjectKey(workspace)),
-      )),
+      roots: options.authorizedRoots || !expectedProviders.includes('claude') ? []
+        : await claudeDiscoveryRoots(providerHomes, workspacePaths, workspacePath, registry, exclusions),
     },
     {
       provider: 'codex',
@@ -310,8 +309,11 @@ export async function discoverWorkspaceHistories(
         (root) => locator === root || locator.startsWith(`${root}/`),
       );
       if (!authorizedRoot) continue;
-      if (entry.provider === 'claude'
-        && !await claudeSourceMatchesWorkspace(locator, workspacePath)) continue;
+      if (entry.provider === 'claude') {
+        const exactProject = workspacePaths.some(path => basename(authorizedRoot) === claudeProjectKey(path));
+        workspaceMatch = await claudeSourceWorkspaceMatch(locator, workspacePath, exactProject);
+        if (!workspaceMatch) continue;
+      }
       const fingerprint = await fingerprintSourceFile({
         selectedPath: locator,
         allowedRoots: [authorizedRoot],
@@ -661,10 +663,43 @@ async function canonicalPath(path: string): Promise<string> {
   return realpath(resolve(path));
 }
 
-async function claudeSourceMatchesWorkspace(
+/** Claude keys are lossy: use transcript cwd, never decode hyphens into paths. */
+async function claudeDiscoveryRoots(
+  homes: string[], paths: string[], workspace: string,
+  registry: SessionSourceAdapterRegistry, exclusions: string[],
+): Promise<string[]> {
+  const roots = homes.flatMap(home => paths.map(path =>
+    join(home, '.claude', 'projects', claudeProjectKey(path))));
+  const adapter = registry.get('claude');
+  for (const home of homes) {
+    const projects = join(home, '.claude', 'projects');
+    let entries;
+    try { entries = await readdir(projects, { withFileTypes: true }); }
+    catch (error) {
+      if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) continue;
+      throw error;
+    }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!entry.isDirectory()) continue;
+      const root = join(projects, entry.name);
+      if (roots.includes(root)) continue;
+      for await (const descriptor of adapter.discover({ workspaceId: workspace, allowedRoots: [root] })) {
+        if (matchImportExclusion(descriptor, exclusions)) continue;
+        if (await claudeSourceWorkspaceMatch(descriptor.locator, workspace, false)) {
+          roots.push(root);
+          break;
+        }
+      }
+    }
+  }
+  return [...new Set(roots)];
+}
+
+async function claudeSourceWorkspaceMatch(
   locator: string,
   workspacePath: string,
-): Promise<boolean> {
+  exactProject: boolean,
+): Promise<WorkspaceMatchKind | null> {
   let count = 0;
   for await (const { line } of streamJsonLines(locator, { end: 1024 * 1024 - 1 })) {
     if (++count > 50) break;
@@ -676,14 +711,10 @@ async function claudeSourceMatchesWorkspace(
     }
     const cwd = asObject(value).cwd;
     if (typeof cwd !== 'string' || cwd.length === 0) continue;
-    try {
-      return await canonicalPath(cwd) === workspacePath;
-    } catch {
-      return resolve(cwd) === workspacePath;
-    }
+    return matchSessionWorkspace(cwd, workspacePath);
   }
-  // Older transcripts without cwd still use the selected project folder.
-  return true;
+  // Only exact project keys can establish ownership without cwd.
+  return exactProject ? 'exact' : null;
 }
 
 export function claudeProjectKey(path: string): string {

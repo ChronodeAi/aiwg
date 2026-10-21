@@ -267,10 +267,10 @@ export interface SessionAnalyticsSummary {
 export class SessionRepository {
   private readonly db: SqliteDatabase;
 
-  constructor(path = ':memory:') {
-    let Database: new (path: string) => SqliteDatabase;
+  constructor(path = ':memory:', options: { readonly?: boolean } = {}) {
+    let Database: new (path: string, options?: { readonly: boolean; fileMustExist: boolean }) => SqliteDatabase;
     try {
-      Database = requireFeaturePackage('better-sqlite3') as new (path: string) => SqliteDatabase;
+      Database = requireFeaturePackage('better-sqlite3') as new (path: string, options?: { readonly: boolean; fileMustExist: boolean }) => SqliteDatabase;
     } catch (cause) {
       throw new Error(
         'session SQLite catalog is unavailable because better-sqlite3 could not be loaded; ' +
@@ -279,7 +279,8 @@ export class SessionRepository {
         { cause },
       );
     }
-    this.db = new Database(path);
+    this.db = new Database(path, options.readonly ? { readonly: true, fileMustExist: true } : undefined);
+    if (options.readonly) return;
     this.db.pragma('foreign_keys = ON');
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('busy_timeout = 5000');
