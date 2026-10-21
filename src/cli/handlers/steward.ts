@@ -262,6 +262,7 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
   aiwg steward — Provider capability awareness and command routing
 
   Usage:
+    aiwg steward decision-offload [--json]         Offline advisory readiness and adoption report
     aiwg steward capabilities --provider <name>   Capabilities for a specific provider
     aiwg steward capabilities --feature <name>    Provider support matrix for a feature
     aiwg steward capabilities --all               Full matrix (all providers x features)
@@ -287,6 +288,16 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
     provider-compiled role/tier policy, and cheap-first defaults unless policy
     or human rationale escalates.
 `);
+    return;
+  }
+
+  if (subcommand === 'decision-offload') {
+    const unknown = args.slice(1).filter(arg => arg !== '--json');
+    if (unknown.length) throw new AiwgError({ code: 'ERR_USAGE_UNKNOWN_ARGUMENT',
+      message: `Unknown decision-offload argument: ${unknown[0]}`, exitCode: EXIT_CODES.USAGE });
+    const { buildDecisionOffloadSnapshot } = await import('../../decision/offload.js');
+    const decisionOffload = await buildDecisionOffloadSnapshot({ projectRoot: ctx?.cwd ?? process.cwd(), frameworkRoot: ctx?.frameworkRoot });
+    console.log(JSON.stringify(args.includes('--json') ? { decisionOffload } : decisionOffload, null, 2));
     return;
   }
 

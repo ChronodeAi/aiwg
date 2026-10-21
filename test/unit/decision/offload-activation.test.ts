@@ -94,4 +94,65 @@ describe('decision compaction activation', () => {
     expect(state.shouldAnchor).toBe(false);
     expect(state.nativeActivation).toBe('not-claimed');
   });
+  it('reports corrupt installation evidence as unknown instead of missing', async () => {
+    writeFileSync(join(root, '.aiwg/aiwg.config'), '{bad json');
+    let state = await inspectDecisionOffloadActivation({ cwd: root });
+    expect(state.installed).toBeNull();
+    expect(state.shouldAnchor).toBe(false);
+
+    rmSync(join(root, '.aiwg/aiwg.config'));
+    writeFileSync(join(root, 'user-registry.json'), '{bad json');
+    state = await inspectDecisionOffloadActivation({ cwd: root });
+    expect(state.installed).toBeNull();
+  });
+  it('rejects malformed project and user installation markers as unknown', async () => {
+    fakeSavedOptIn();
+    writeFileSync(join(root, '.aiwg/aiwg.config'), JSON.stringify({ installed: { 'decision-engine': null } }));
+    let state = await inspectDecisionOffloadActivation({ cwd: root });
+    expect(state).toMatchObject({ installed: null, askEnabled: null, shouldAnchor: false });
+
+    project(false);
+    writeFileSync(join(root, 'user-registry.json'), JSON.stringify({ version: '1', installed: {
+      'decision-engine': { version: '1', source: 'bundled', deployedTo: [] },
+    } }));
+    state = await inspectDecisionOffloadActivation({ cwd: root });
+    expect(state).toMatchObject({ installed: null, askEnabled: null, shouldAnchor: false });
+  });
+  it('lets positive evidence in either scope establish installation despite the other scope being unreadable', async () => {
+    writeFileSync(join(root, '.aiwg/aiwg.config'), '{bad json');
+    writeFileSync(join(root, 'user-registry.json'), JSON.stringify({ version: '1', installed: {
+      'decision-engine': { version: '1', source: 'bundled', deployedTo: {} },
+    } }));
+    expect((await inspectDecisionOffloadActivation({ cwd: root })).installed).toBe(true);
+
+    project(true);
+    writeFileSync(join(root, 'user-registry.json'), '{bad json');
+    expect((await inspectDecisionOffloadActivation({ cwd: root })).installed).toBe(true);
+  });
+  it('recognizes an external addon marker despite unrelated invalid configuration, while local config takes precedence', async () => {
+    const external = join(root, 'external');
+    mkdirSync(external);
+    writeFileSync(join(root, '.aiwg-location'), external);
+    writeFileSync(join(external, 'aiwg.config'), JSON.stringify({
+      installed: { 'decision-engine': { version: '1', source: 'bundled', deployedTo: {} } },
+      sessions: { codex_roots: 'invalid' },
+    }));
+    expect((await inspectDecisionOffloadActivation({ cwd: root })).installed).toBe(true);
+
+    project(false);
+    expect((await inspectDecisionOffloadActivation({ cwd: root })).installed).toBe(false);
+    writeFileSync(join(root, '.aiwg/aiwg.config'), '{bad json');
+    expect((await inspectDecisionOffloadActivation({ cwd: root })).installed).toBeNull();
+  });
+  it('distinguishes missing startup/source files from unreadable paths', async () => {
+    project(true);
+    let state = await inspectDecisionOffloadActivation({ cwd: root, frameworkRoot: join(root, 'framework') });
+    expect(state).toMatchObject({ ruleSourcePresent: false, startupAnchorPresent: false });
+
+    mkdirSync(join(root, 'AIWG.md'));
+    mkdirSync(join(root, 'framework/agentic/code/addons/decision-engine'), { recursive: true });
+    writeFileSync(join(root, 'framework/agentic/code/addons/decision-engine/rules'), 'not a directory');
+    state = await inspectDecisionOffloadActivation({ cwd: root, frameworkRoot: join(root, 'framework') });
+    expect(state).toMatchObject({ ruleSourcePresent: null, startupAnchorPresent: null });
+  });
 });

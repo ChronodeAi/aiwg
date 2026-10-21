@@ -9,6 +9,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Add offline decision-offload readiness and adoption reports to status, doctor
+  and steward, with correlated checkpoint records and generated startup/compact
+  instructions for explicitly enabled installations (#2948).
+
 - Opt-in decision ask agreement acceptance (`min_agreement`, confidence floor
   default 0.55), answer-rule telemetry, early stopping when neither rule can
   succeed, accurate escalation reporting, and tokens per answered decision in

@@ -15,6 +15,7 @@ import {
   type DecisionOpportunityRecord,
 } from '../../../src/decision/offload.js';
 import { writeJevCredentialFile } from '../../../src/decision/jev-credentials.js';
+import { DECISION_COMPACT_ANCHOR } from '../../../src/decision/offload-activation.js';
 
 const input: DecisionAskInput = { question: 'Proceed?', mode: { kind: 'yes-no' } };
 const answered: DecisionAskResult = {
@@ -242,7 +243,17 @@ describe('decision offload snapshot', () => {
     expect(snapshot.opportunities).toMatchObject({ journalEvents: 2, organic: { observed: 1, attempted: 1, answered: 1 } });
     expect(snapshot.calls.organic).toMatchObject({ completed: 1, answered: 1, fallback: 0 });
     expect(snapshot.correlation).toEqual({ matched: 1, attemptedWithoutLedger: 0, organicAttemptedWithoutLedger: 0, ledgerWithoutOpportunity: 0 });
-    expect(snapshot.drift.status).toBe('ok');
+    expect(snapshot.drift.status).toBe('advisory');
+    expect(snapshot.drift.reasons).toContain('missing-activation-anchor');
+    await writeFile(path.join(projectRoot, '.aiwg', 'aiwg.config'), JSON.stringify({
+      installed: { 'decision-engine': { version: '1', source: 'bundled', deployedTo: {} } },
+    }));
+    await writeFile(path.join(projectRoot, 'AIWG.md'), `## Compact Instructions\n\n${DECISION_COMPACT_ANCHOR}\n`);
+    const anchored = await buildDecisionOffloadSnapshot({ projectRoot, sessionId: 'session-1', env,
+      now: new Date('2026-10-20T12:01:00.000Z') });
+    expect(anchored.activation).toMatchObject({ addon: 'installed', startupAnchor: 'present',
+      ruleDelivery: 'unknown', nativeActivation: 'not-claimed' });
+    expect(anchored.drift.status).toBe('ok');
   });
 
   it('reports an observed organic opportunity with zero attempts as advisory, never healthy', async () => {
@@ -345,14 +356,26 @@ describe('decision offload snapshot', () => {
 
   it('reports the original low-confidence activity hint, excludes diagnostics, and clears it after an organic call', async () => {
     const projectRoot = await root();
-    const env = await isolatedEnv(projectRoot);
+    let env = await configureAsk(projectRoot, true);
     await mkdir(path.join(projectRoot, '.aiwg'), { recursive: true, mode: 0o700 });
     await writeFile(path.join(projectRoot, '.aiwg', 'activity.log'),
       '## [2026-10-20 12:00] update | address-issues cycle dispatched worker for review\n');
-    const snapshotOptions = { projectRoot, env, now: new Date('2026-10-20T12:01:00.000Z'), windowHours: 1 };
-    let snapshot = await buildDecisionOffloadSnapshot(snapshotOptions);
+    const base = { projectRoot, now: new Date('2026-10-20T12:01:00.000Z'), windowHours: 1 };
+
+    let snapshot = await buildDecisionOffloadSnapshot({ ...base, env, activationEvidence: { addon: 'missing' } });
+    expect(snapshot.activityHint).toMatchObject({ status: 'none', reason: null, suppressionReason: 'addon-missing' });
+    snapshot = await buildDecisionOffloadSnapshot({ ...base, env, activationEvidence: { addon: 'unknown' } });
+    expect(snapshot.activityHint).toMatchObject({ status: 'none', reason: null, suppressionReason: 'activation-unknown' });
+
+    env = await configureAsk(projectRoot, false);
+    snapshot = await buildDecisionOffloadSnapshot({ ...base, env, activationEvidence: { addon: 'installed' } });
+    expect(snapshot.activityHint).toMatchObject({ status: 'none', reason: null, suppressionReason: 'ask-disabled-or-unconfigured' });
+
+    env = await configureAsk(projectRoot, true);
+    const snapshotOptions = { ...base, env, activationEvidence: { addon: 'installed' as const } };
+    snapshot = await buildDecisionOffloadSnapshot(snapshotOptions);
     expect(snapshot.activityHint).toMatchObject({ status: 'advisory', reason: 'orchestration-without-organic-completed-calls',
-      recognizableOrchestrationEvents: 1, eligibleCount: 'unknown', confidence: 'low' });
+      suppressionReason: null, recognizableOrchestrationEvents: 1, eligibleCount: 'unknown', confidence: 'low' });
 
     await runDecisionOffloadCheckpoint(input, options(projectRoot, { env, id: () => 'diagnostic-1',
       caller: 'diagnosis:connectivity', category: 'diagnostic', ask: async () => answered }));

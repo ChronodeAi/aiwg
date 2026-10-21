@@ -18,6 +18,7 @@ import { readAiwgConfig } from '../config/aiwg-config.js';
 import { resolveActiveProvider, type ProviderResolution } from '../cli/provider-resolution.js';
 import { askDecision, DecisionAskUsageError, type DecisionAskInput, type DecisionAskResult, type DecisionAskRuntimeOptions } from './ask.js';
 import { inspectJevCredential } from './jev-credentials.js';
+import { inspectDecisionOffloadActivation } from './offload-activation.js';
 import {
   ATTRIBUTION_FIELD_PATTERN,
   decisionLedgerHistory,
@@ -96,6 +97,7 @@ export type DecisionOffloadCheckpointResult =
   | { outcome: 'unknown'; result: null; opportunity: DecisionOpportunityRecord; attemptRecorded: boolean | null; opportunityRecorded: boolean | null; error: unknown };
 
 export interface DecisionOffloadActivationEvidence {
+  ruleSourceAvailable?: boolean | null;
   addon: 'installed' | 'missing' | 'unknown';
   ruleDelivery: 'present' | 'missing' | 'unknown';
   startupAnchor: 'present' | 'missing' | 'unknown';
@@ -452,7 +454,7 @@ function opportunityCounts(records: DecisionOpportunityRecord[]) {
 }
 
 function activationEvidence(input: Partial<DecisionOffloadActivationEvidence> | undefined): DecisionOffloadActivationEvidence {
-  return { addon: input?.addon ?? 'unknown', ruleDelivery: input?.ruleDelivery ?? 'unknown',
+  return { ...(input?.ruleSourceAvailable !== undefined ? { ruleSourceAvailable: input.ruleSourceAvailable } : {}), addon: input?.addon ?? 'unknown', ruleDelivery: input?.ruleDelivery ?? 'unknown',
     startupAnchor: input?.startupAnchor ?? 'unknown', nativeActivation: input?.nativeActivation ?? 'not-claimed',
     ...(input?.source ? { source: input.source } : {}) };
 }
@@ -513,9 +515,31 @@ export async function buildDecisionOffloadSnapshot(options: BuildDecisionOffload
     ? null : credential.configured && credential.enabled;
   const evaluateState = configReadable && enablement
     ? (enablement.enabled ? 'configured-unprobed' : 'disabled') : 'unknown';
-  const activation = activationEvidence(options.activationEvidence);
+  let inspectedActivation: Partial<DecisionOffloadActivationEvidence> | undefined;
+  if (!options.activationEvidence) {
+    try {
+      const inspected = await inspectDecisionOffloadActivation({ cwd: projectRoot, frameworkRoot: options.frameworkRoot, env });
+      inspectedActivation = {
+        addon: inspected.installed === true ? 'installed' : inspected.installed === false ? 'missing' : 'unknown',
+        ruleSourceAvailable: inspected.ruleSourcePresent,
+        ruleDelivery: inspected.ruleDelivery,
+        startupAnchor: inspected.startupAnchorPresent === true ? 'present'
+          : inspected.startupAnchorPresent === false ? 'missing' : 'unknown',
+        nativeActivation: inspected.nativeActivation,
+        source: 'local-configuration-and-startup-pointer; source availability is not delivery',
+      };
+    } catch { /* unavailable inspection remains unknown, never a loading claim */ }
+  }
+  const activation = activationEvidence(options.activationEvidence ?? inspectedActivation);
   const organicCalls = calls.filter(record => decisionOffloadCategory(record.caller) === 'organic');
-  const activityGap = activity.recognizable > 0 && organicCalls.length === 0;
+  const activityCandidate = activity.recognizable > 0 && organicCalls.length === 0;
+  const activitySuppressionReason = !activityCandidate ? null
+    : activation.addon === 'unknown' ? 'activation-unknown'
+      : activation.addon === 'missing' ? 'addon-missing'
+        : askConfigured === null ? 'ask-readiness-unknown'
+          : askConfigured === false ? 'ask-disabled-or-unconfigured'
+            : null;
+  const activityGap = activityCandidate && activitySuppressionReason === null;
   const driftReasons: string[] = [];
   const attemptedWithoutLedger = [...opportunityIds].filter(id => !callIds.has(id)).length;
   const organicAttemptedWithoutLedger = [...organicOpportunityIds].filter(id => !organicCallIds.has(id)).length;
@@ -524,6 +548,7 @@ export async function buildDecisionOffloadSnapshot(options: BuildDecisionOffload
   if (organicAttemptedWithoutLedger > 0) driftReasons.push('attempted-without-completed-ledger');
   if (organic.usageRejected > 0) driftReasons.push('usage-rejection');
   if (activation.addon === 'missing') driftReasons.push('missing-addon');
+  else if (activation.addon === 'unknown') driftReasons.push('activation-evidence-unknown');
   if (activation.ruleDelivery === 'missing') driftReasons.push('missing-rule-delivery');
   if (activation.startupAnchor === 'missing') driftReasons.push('missing-activation-anchor');
   if (askConfigured === false) driftReasons.push('disabled-or-unconfigured');
@@ -534,7 +559,8 @@ export async function buildDecisionOffloadSnapshot(options: BuildDecisionOffload
     else if (rate < thresholds.minimumAttemptRate) driftReasons.push('observed-eligible-low-attempt-rate');
   }
   if (organic.fallback >= thresholds.repeatedFallbacks) driftReasons.push('repeated-fallback');
-  const unknown = !configReadable || askConfigured === null || opportunitiesRead.status === 'unreadable' || opportunitiesRead.invalid > 0
+  const unknown = !configReadable || askConfigured === null || activation.addon === 'unknown' || activation.startupAnchor === 'unknown'
+    || opportunitiesRead.status === 'unreadable' || opportunitiesRead.invalid > 0
     || organic.unknown > 0 || organic.ledgerRecordingUnknown > 0 || ledger.skipped > 0 || organicAttemptedWithoutLedger > 0;
   const driftStatus = unknown ? 'unknown' : organic.eligible === 0 ? 'not-applicable' : driftReasons.length ? 'advisory' : 'ok';
   return {
@@ -562,6 +588,7 @@ export async function buildDecisionOffloadSnapshot(options: BuildDecisionOffload
     activityHint: {
       status: activityGap ? 'advisory' : 'none',
       reason: activityGap ? 'orchestration-without-organic-completed-calls' : null,
+      suppressionReason: activitySuppressionReason,
       recognizableOrchestrationEvents: activity.recognizable,
       eligibleCount: 'unknown',
       confidence: 'low',

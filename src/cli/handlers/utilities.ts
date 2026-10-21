@@ -545,9 +545,10 @@ Options:
   --yes                 Confirm worker qualification without a terminal
   --dry-run             With --probe-workers, preview qualification without writes
   --cli NAME            Limit worker probes/qualification to one configured CLI
+  --decision-offload    Show offline advisory decision readiness and adoption report
   --probe-workers       Run bounded worker CLI version probes (default: config-only, no subprocess)
   --project-local       Include project-local artifact diagnostics
-  --json                Emit machine-readable output (with --probe-workers: one worker-probe record per CLI; with --deployment: deployment verification)
+  --json                Emit machine-readable output (with --probe-workers: one worker-probe record per CLI; with --deployment: deployment verification; with --decision-offload: offline snapshot)
   --verbose, -v         Include verbose diagnostics
   --help, -h            Show this help
 `;
@@ -581,7 +582,7 @@ export const doctorHandler: CommandHandler = {
     const valueFlags = ['--provider', '--bundle', '--scope', '--context-baseline', '--context-budget-tokens', '--cli'];
     const knownFlags = new Set([
       ...valueFlags, '--all-providers', '--probe-workers', '--qualify', '--yes', '--dry-run', '--no-budget-check', '--strict-context', '--json',
-      '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
+      '--decision-offload', '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
     ]);
     const hasSwitch = (name: string): boolean => hasPositionalOrSwitch(ctx.args, name, valueFlags);
     const values = new Map<string, string | undefined>();
@@ -598,11 +599,14 @@ export const doctorHandler: CommandHandler = {
           throw new Error(`Unknown flag: ${name}`);
         }
       }
+      if (hasSwitch('--decision-offload') && (hasSwitch('--probe-workers') || hasSwitch('--deployment') || hasSwitch('--user') || values.get('--scope') !== undefined)) {
+        throw new Error('--decision-offload is a separate offline mode; do not combine it with worker, deployment or user-scope checks');
+      }
       if (['--qualify', '--cli', '--yes', '--dry-run'].some(flag => hasSwitch(flag) || values.get(flag)) && !hasSwitch('--probe-workers')) {
         throw new Error('--qualify, --cli, --yes and --dry-run require --probe-workers');
       }
-      if (hasSwitch('--json') && !hasSwitch('--probe-workers') && !hasSwitch('--deployment')) {
-        throw new Error('--json requires --probe-workers or --deployment');
+      if (hasSwitch('--json') && !hasSwitch('--probe-workers') && !hasSwitch('--deployment') && !hasSwitch('--decision-offload')) {
+        throw new Error('--json requires --probe-workers or --deployment or --decision-offload');
       }
     } catch (error) {
       return { exitCode: 2, message: `${error instanceof Error ? error.message : String(error)}. See 'aiwg doctor --help'.` };
@@ -643,7 +647,7 @@ export const doctorHandler: CommandHandler = {
       return await runUserScopeDoctor(hasSwitch('--verbose') || hasSwitch('-v'));
     }
 
-    const frameworkRoot = await getFrameworkRoot();
+    const frameworkRoot = hasSwitch('--decision-offload') ? ctx.frameworkRoot : await getFrameworkRoot();
     const runner = createScriptRunner(frameworkRoot);
 
     // Run core doctor diagnostics
@@ -652,7 +656,7 @@ export const doctorHandler: CommandHandler = {
     // printed exactly one JSON document (or a usage error) on its own
     // stdio — every section below writes human-readable text, so returning
     // here keeps stdout to the JSON document alone.
-    if (hasSwitch('--json') || hasSwitch('--qualify') || hasSwitch('--cli') || hasSwitch('--dry-run') || result.exitCode === 2) return result;
+    if (hasSwitch('--decision-offload') || hasSwitch('--json') || hasSwitch('--qualify') || hasSwitch('--cli') || hasSwitch('--dry-run') || result.exitCode === 2) return result;
     let agentSkillsFailure = false;
 
     try {

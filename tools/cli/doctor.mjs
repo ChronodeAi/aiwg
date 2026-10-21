@@ -4,6 +4,7 @@
  * Checks installation health and diagnoses common issues
  */
 
+import { collectDecisionOffloadReport, formatDecisionOffloadReport } from './decision-offload-report.mjs';
 import fs from 'fs/promises';
 import { existsSync } from 'fs';
 import os from 'os';
@@ -102,7 +103,9 @@ const { auditProjectArtifactHealth } = await importImpl(
 
 // AIWG_ROOT: env override > channel-manager resolved path > legacy edge path
 // getFrameworkRoot() resolves correctly for npm global installs, edge, and dev channels.
-const AIWG_ROOT = process.env.AIWG_ROOT || await getFrameworkRoot();
+const AIWG_ROOT = process.env.AIWG_ROOT || await getFrameworkRoot({
+  createIfMissing: !process.argv.includes('--decision-offload'),
+});
 
 // Installation identity drift, when present, is published by bin/aiwg.mjs for
 // read-only commands that keep running against a stale canonical install
@@ -185,7 +188,7 @@ const DOCTOR_VALUE_FLAGS = ['--provider', '--bundle', '--scope', '--context-base
 const DOCTOR_KNOWN_FLAGS = new Set([
   ...DOCTOR_VALUE_FLAGS,
   '--all-providers', '--probe-workers', '--qualify', '--yes', '--dry-run', '--no-budget-check', '--strict-context', '--json',
-  '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
+  '--decision-offload', '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
 ]);
 
 // Refuse the first unknown `--flag` before the `--` terminator, skipping
@@ -242,13 +245,16 @@ function parseDoctorArgs(argv) {
   out.yes = hasDoctorFlagSwitch(argv, '--yes', DOCTOR_VALUE_FLAGS);
   out.dryRun = hasDoctorFlagSwitch(argv, '--dry-run', DOCTOR_VALUE_FLAGS);
   out.json = hasDoctorFlagSwitch(argv, '--json', DOCTOR_VALUE_FLAGS);
+  out.decisionOffload = hasDoctorFlagSwitch(argv, '--decision-offload', DOCTOR_VALUE_FLAGS);
   out.noBudgetCheck = hasDoctorFlagSwitch(argv, '--no-budget-check', DOCTOR_VALUE_FLAGS);
   out.strictContext = hasDoctorFlagSwitch(argv, '--strict-context', DOCTOR_VALUE_FLAGS);
   assertNoUnknownDoctorFlags(argv);
-  // --json only shapes the worker-probe report; without --probe-workers
-  // there is nothing machine-readable to emit.
-  if (out.json && !out.probeWorkers) {
-    throw new Error('Unknown flag combination: --json requires --probe-workers. See \'aiwg doctor --help\'.');
+  // JSON is available for worker probes or the explicit offline offload report.
+  if (out.json && !out.probeWorkers && !out.decisionOffload) {
+    throw new Error('Unknown flag combination: --json requires --probe-workers or --decision-offload. See \'aiwg doctor --help\'.');
+  }
+  if (out.decisionOffload && (out.probeWorkers || hasDoctorFlagSwitch(argv, '--deployment', DOCTOR_VALUE_FLAGS) || hasDoctorFlagSwitch(argv, '--user', DOCTOR_VALUE_FLAGS) || requireDoctorFlagValue(argv, { rejectEmpty: true, precedence: 'last' }, '--scope') !== undefined)) {
+    throw new Error('--decision-offload is a separate offline mode; do not combine it with worker, deployment or user-scope checks');
   }
   if ((out.qualify || out.cli || out.dryRun || out.yes) && !out.probeWorkers) {
     throw new Error('--qualify, --cli, --yes and --dry-run require --probe-workers');
@@ -742,6 +748,7 @@ async function runWorkerProbeJson(projectDir, options = {}) {
   const workers = section.installFindings.map(toWorkerProbeRecord);
   const payload = {
     probeWorkers: true,
+    decisionOffload: await collectDecisionOffloadReport(projectDir),
     workerDispatch,
     workersConfigured: section.workersConfigured,
     workers,
@@ -877,7 +884,7 @@ const BRAND_HEX = '#818CF8';
 
 export async function runDoctor() {
   // Usage errors (unknown flags, valueless value flags, --json without
-  // --probe-workers) exit 2 here, before any check, spawn, or write.
+  // --probe-workers/--decision-offload) exit 2 here, before any check, spawn, or write.
   const options = parseDoctorArgsOrExit(process.argv.slice(2));
   const {
     provider: providerArg,
@@ -889,6 +896,13 @@ export async function runDoctor() {
     contextBaseline,
     contextBudgetTokens,
   } = options;
+
+  if (options.decisionOffload) {
+    const decisionOffload = await collectDecisionOffloadReport(process.cwd());
+    if (jsonMode) console.log(JSON.stringify({ decisionOffload }, null, 2));
+    else for (const line of formatDecisionOffloadReport(decisionOffload)) console.log(line);
+    return;
+  }
 
   // Machine-readable worker probes: exactly one JSON document on stdout
   // and nothing else — the full diagnostic run (and its footer) is skipped.
@@ -2754,6 +2768,9 @@ export async function runDoctor() {
     for (const rule of pins.rules) check('Rule pin', 'info', `${rule.name}: pinned kernel (canonical ${rule.canonical_activation}; ${rule.matches.map(match => match.source).join(', ')})`);
     for (const warning of pins.warnings) check('Rule pins', 'warn', warning);
   } catch (error) { check('Rule pins', 'warn', error.message); }
+
+  const decisionOffload = await collectDecisionOffloadReport(process.cwd());
+  for (const line of formatDecisionOffloadReport(decisionOffload)) check('Decision offload', 'info', line);
 
   // Print results
   console.log('');
