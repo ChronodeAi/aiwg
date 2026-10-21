@@ -1,12 +1,9 @@
-# Signed RC validation and immutable artifact retention. RC tag pushes use the
-# bounded routine profile. A maintainer may dispatch the same signed RC tag with
-# the quarterly-full profile; this workflow never schedules model comparisons.
+# Historical, manual-only signed RC validation and immutable artifact retention.
+# A maintainer may select the routine or quarterly profile; this workflow never
+# schedules model comparisons and is not a stable-publication gate.
 name: Validate release candidate
 
 on:
-  push:
-    tags:
-      - 'v*-rc.*'
   workflow_dispatch:
     inputs:
       profile:

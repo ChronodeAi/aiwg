@@ -65,65 +65,41 @@ afterEach(() => {
   for (const directory of temporaryRoots.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-describe('exact retained-RC publication and advisory registry checks', () => {
-  it('keeps Gitea promotion bound to the six release inputs without comparison IDs', () => {
+describe('direct stable publication and advisory registry checks', () => {
+  it('keeps the Gitea mirror manual, tag-bound and ordered after npmjs identity', () => {
     const mirror = parse(readFileSync(join(root, '.gitea/workflows/npm-publish.yml'), 'utf8'));
-    const inputs = mirror.on.workflow_dispatch.inputs;
-    expect(Object.keys(inputs).sort()).toEqual(['tag_to_publish', 'rc_tag', 'rc_run_id', 'rc_artifact_id', 'approval_issue', 'approval_sha256'].sort());
-    for (const value of Object.values(inputs) as Array<{ required: boolean }>) expect(value.required).toBe(true);
-    const jobs = Object.values(mirror.jobs) as Array<{ steps?: Array<{ run?: string }> }>;
-    const scripts = jobs.flatMap(job => job.steps ?? []).map(item => item.run ?? '').join('\n');
-    expect(scripts).toContain('release-promotion.mjs publish');
-    expect(scripts).not.toMatch(/comparison-(run|artifact)-id|comparison-destination/);
+    expect(mirror.on.push).toBeUndefined();
+    expect(Object.keys(mirror.on.workflow_dispatch.inputs)).toEqual(['tag_to_publish']);
+    const steps = mirror.jobs['build-and-publish'].steps;
+    const position = (name: string) => steps.findIndex((item: {name:string}) => item.name === name);
+    expect(position('Verify signed tag (#1299 / A9 gate)')).toBeLessThan(position('Fetch public stable tarballs and mirror them'));
+    const script = steps[position('Fetch public stable tarballs and mirror them')].run;
+    expect(script).toContain('registry.npmjs.org');
+    expect(script).toContain('direct-stable-publish.mjs --mirror');
+    expect(script).not.toContain('release-promotion.mjs');
   });
 
-  it('requires authenticated dispatch evidence and orders exact publication before release assets', () => {
-    const release = index('Create or update GitHub release');
-    const promotion = index('Authorize and publish exact retained RC to npmjs.org');
-    const preserve = index('Preserve promotion decision and partial receipt');
-    for (const input of ['tag_to_publish', 'rc_tag', 'rc_run_id', 'rc_artifact_id', 'approval_issue', 'approval_sha256']) {
-      expect(workflow.on.workflow_dispatch.inputs[input].required).toBe(true);
-    }
-    expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty('comparison_run_id');
-    expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty('comparison_artifact_id');
-    expect(index('Verify signed tag (#1299 / A9 gate)')).toBeLessThan(promotion);
-    expect(promotion).toBeLessThan(preserve);
-    expect(preserve).toBeLessThan(release);
-    expect(step('Authorize and publish exact retained RC to npmjs.org').run).toContain('release-promotion.mjs publish');
-    expect(step('Authorize and publish exact retained RC to npmjs.org').run).toContain('--registry npmjs');
-    expect(step('Authorize and publish exact retained RC to npmjs.org').env).toMatchObject({
-      AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN: '${{ secrets.AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN }}',
-      RC_TAG: '${{ github.event.inputs.rc_tag }}',
-      APPROVAL_SHA256: '${{ github.event.inputs.approval_sha256 }}',
-    });
-    expect(Object.keys(step('Authorize and publish exact retained RC to npmjs.org').env).sort()).toEqual([
-      'AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN', 'APPROVAL_ISSUE', 'APPROVAL_SHA256',
-      'RC_ARTIFACT_ID', 'RC_RUN_ID', 'RC_TAG',
-    ].sort());
-    expect(step('Authorize and publish exact retained RC to npmjs.org').env).not.toHaveProperty('GITHUB_TOKEN');
-    expect(step('Authorize and publish exact retained RC to npmjs.org').run).toContain('--rc-tag "$RC_TAG"');
-    const retained = step('Preserve promotion decision and partial receipt');
-    expect(retained.if).toBe('${{ always() }}');
-    expect(retained.uses).toBe('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
-    expect(retained.with.path).toContain('${{ runner.temp }}/promotion-decision.json');
-    expect(retained.with.path).toContain('${{ runner.temp }}/npmjs-publication.json');
-    expect(retained.with['if-no-files-found']).toBe('warn');
-    for (const removed of ['Run tests', 'Build TypeScript', 'Pack local release tarball',
-      'Publish Cockpit to npmjs.org (OIDC + provenance)']) expect(index(removed)).toBe(-1);
-    const ordered = [
-      'Authorize and publish exact retained RC to npmjs.org', 'Preserve promotion decision and partial receipt',
-      'Create or update GitHub release',
-      'Generate tarball + cosign sign + manifest', 'Use retained CycloneDX SBOM',
-      'Sign SBOM with cosign (keyless)', 'Prepare installer and checksum manifest',
+  it('validates, packs and publishes exact stable tarballs before release assets', () => {
+    expect(workflow.on.push.tags).toEqual(['v*']);
+    expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual(['tag_to_publish']);
+    const ordered = ['Verify signed tag (#1299 / A9 gate)', 'Checkout release tag',
+      'Validate and build stable release', 'Pack and smoke-test exact npm surfaces',
+      'Generate CycloneDX SBOM', 'Preserve exact installer', 'Retain smoke-tested tarballs before publication', 'Publish smoke-tested stable tarballs to npmjs.org',
+      'Preserve publication receipt', 'Create or update GitHub release', 'Generate tarball + cosign sign + manifest',
+      'Use generated CycloneDX SBOM', 'Sign SBOM with cosign (keyless)', 'Prepare installer and checksum manifest',
       'Upload signed release assets to GitHub release', 'Verification summary',
-      'Verify provenance attestation landed', 'Verify stable dist-tag policy',
-      'Report advisory npm registry checks',
-    ];
-    for (let i = 1; i < ordered.length; i++) expect(index(ordered[i - 1])).toBeLessThan(index(ordered[i]));
-    expect(step('Generate tarball + cosign sign + manifest').run).not.toMatch(/^\s*npm (view|pack)/m);
-    expect(step('Use retained CycloneDX SBOM').run).not.toContain('syft');
-    expect(step('Upload signed release assets to GitHub release').run).not.toContain('gh release create');
-    expect(step('Upload signed release assets to GitHub release').run).toContain('--clobber');
+      'Verify provenance attestation landed', 'Verify stable dist-tag policy', 'Report advisory npm registry checks'];
+    for (const name of ordered) expect(index(name), name).toBeGreaterThanOrEqual(0);
+    for (let i=1; i<ordered.length; i++) expect(index(ordered[i-1])).toBeLessThan(index(ordered[i]));
+    expect(step('Retain smoke-tested tarballs before publication').with.path.trim().split('\n').map((line: string) => line.trim())).toEqual([
+      '${{ runner.temp }}/stable-package/aiwg-${{ steps.version.outputs.version }}.tgz',
+      '${{ runner.temp }}/stable-package/aiwg-cli-${{ steps.version.outputs.version }}.tgz',
+      '${{ runner.temp }}/stable-package/aiwg-cockpit-${{ steps.version.outputs.version }}.tgz',
+      '${{ runner.temp }}/stable-package/installed-smoke.json',
+    ]);
+    expect(step('Checkout release tag').run).toContain('git merge-base --is-ancestor');
+    expect(step('Publish smoke-tested stable tarballs to npmjs.org').run).toContain('direct-stable-publish.mjs');
+    expect(step('Publish smoke-tested stable tarballs to npmjs.org').if).toBeUndefined();
     expect(step('Upload signed release assets to GitHub release').run).toContain('aiwg-cli-${VERSION}.tgz');
     expect(step('Upload signed release assets to GitHub release').run).toContain('aiwg-cockpit-${VERSION}.tgz');
     expect(workflow.jobs['socket-post-publish'].needs).toBe('publish-to-npmjs-org');
@@ -196,11 +172,11 @@ describe('exact retained-RC publication and advisory registry checks', () => {
     expect(summary.match(/gh workflow run npm-publish.yml --repo jmagly\/aiwg --ref v2026.10.3/g)).toHaveLength(2);
   });
 
-  it('keeps the exact promotion gate blocking and sole publication entry point', () => {
-    const promotion = step('Authorize and publish exact retained RC to npmjs.org');
-    expect(promotion['continue-on-error']).toBeUndefined();
-    expect(promotion.if).toBeUndefined();
-    expect(promotion.run.match(/release-promotion\.mjs publish/g)).toHaveLength(1);
+  it('keeps direct publication blocking and the sole npmjs publication entry point', () => {
+    const publication = step('Publish smoke-tested stable tarballs to npmjs.org');
+    expect(publication['continue-on-error']).toBeUndefined();
+    expect(publication.if).toBeUndefined();
+    expect(publication.run.match(/direct-stable-publish\.mjs/g)).toHaveLength(1);
     expect(JSON.stringify(workflow)).not.toMatch(/npm publish (?:\.\/|"aiwg)/);
   });
 });

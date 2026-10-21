@@ -15,9 +15,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   and catalog views, with capability, activation, tier, and provider filters (#3382).
 - Governing rules and required fetch checks in capability discovery, with explicit
   activation metadata and operator pins across provider context delivery (#3292).
-- Retained release-candidate validation and package promotion, with quarterly
-  comparison evidence verification and provider-specific comparison adapters
-  (#3201, #3298). Production promotion requires configured evidence and identities.
+- Optional release qualification and provider-specific comparison adapters
+  (#3201, #3298), alongside direct signed-tag stable publication.
 
 - Add offline decision-offload readiness and adoption reports to status, doctor
   and steward, with correlated checkpoint records and generated startup/compact
@@ -62,7 +61,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 - Provider deployment preparation keeps worker IPC alive until asynchronous preparation returns its result.
 
-- Stable release promotion uses routine RC validation and exact signed artifacts; quarterly cross-provider harness qualification is optional.
+- Stable releases publish smoke-tested packages directly from a signed stable tag;
+  quarterly cross-provider harness qualification is optional and does not gate publication.
 
 - Keep offline decision-offload reports and rule inventories read-only when
   invoked through the public CLI, including installation and index cache state

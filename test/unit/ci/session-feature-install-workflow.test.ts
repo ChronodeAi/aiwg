@@ -33,13 +33,10 @@ describe('session SQLite feature release gate', () => {
     expect(steps.indexOf(installs[0])).toBeLessThan(steps.indexOf(gates[0]));
   });
 
-  it('runs packed-install smoke in the retained RC and makes stable workflows consume that evidence', () => {
-    expect(rcWorkflow).toContain('release-candidate.mjs validate');
-    expect(rcValidator).toContain("'test:sessions:feature-install'");
-    expect(githubWorkflow).not.toContain('npm run test:sessions:feature-install');
-    expect(giteaWorkflow).not.toContain('npm run test:sessions:feature-install');
-    expect(githubWorkflow).toContain('release-promotion.mjs publish');
-    expect(giteaWorkflow).toContain('release-promotion.mjs publish');
+  it('runs packed-install smoke in the direct stable workflow before publication', () => {
+    expect(githubWorkflow).toContain('npm run test:sessions:feature-install');
+    expect(githubWorkflow.indexOf('npm run test:sessions:feature-install')).toBeLessThan(githubWorkflow.indexOf('direct-stable-publish.mjs'));
+    expect(giteaWorkflow).toContain('direct-stable-publish.mjs --mirror');
   });
 
   it('exercises the documented feature installer and an empty session catalog', () => {
