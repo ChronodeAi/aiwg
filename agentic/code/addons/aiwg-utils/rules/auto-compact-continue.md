@@ -188,6 +188,10 @@ When a session resumes from compaction (prior turns summarized, or reading a pri
 5. **Skip the "failed approaches" set** — do not retry them.
 6. **Resume from "Next action."**
 
+When the decision-engine addon is installed and decision ask is enabled,
+re-read `aiwg show rule decision-offload` before the next eligible bounded
+checkpoint. A classifier answer remains advisory and is not authorization.
+
 The progress file is the bridge between sessions (REF-909).
 
 **Recovery when violated**: if you just asked "should I continue?", reframe ("Continuing — checkpointing, proceeding to <next step>") and continue without waiting for confirmation.
