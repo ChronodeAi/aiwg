@@ -167,8 +167,9 @@ The JSON retains full normalized transcripts, optional native stdout, assertion 
 
 Exit 0 means all planned pairs completed with no measured regression or invalid
 result; exit 1 holds the gate. A small selected smoke run can exit 0 without
-constituting quarterly validation. The trusted producer combines the three final
-reports with the exact `quarterly-full-v1` `validation.json` and a
+constituting quarterly validation. The dispatch-only GitHub producer at
+`.github/workflows/release-comparison.yml` combines the three final reports with
+the exact `quarterly-full-v1` `validation.json` and a
 `quarterly-attestation.json` that binds the tested commit, workflow/run/attempt,
 UTC-quarter interval, package identity, all four payload digests, and canonical
 repository-relative adapter/runtime/parser source identities. Consumer checkouts
@@ -178,7 +179,34 @@ attestation completion time is the producer's validation completion within the
 successful run; it is not the run's later final `updated_at`. Stable promotion
 authenticates the run, artifact, current quarter, digests, full profile, and
 tested-commit ancestry. Artifact expiry still fails closed even inside the
-quarter. Retain the quarterly artifact for at least 120 days. The first such full comparison against 2026.10.3 and regression triage
+quarter. Retain the quarterly artifact for at least 120 days.
+
+The producer runs only by `workflow_dispatch` at the exact `main` commit on the
+dedicated `self-hosted,linux,x64,aiwg-quarterly-comparison` runner pool. The
+operator supplies the reviewed baseline, frozen seed, and distinct subject and
+judge model IDs for all three providers. Its validation job runs the exact
+43-lane `quarterly-full-v1` profile and packs that tested source. A 48-job matrix
+then partitions each provider's canonical plan across 16 shards. The final
+`Retain comparisons` job rejects missing or duplicate cases, source drift,
+fixture drift, invalid runtime observations, or mismatched authenticated run
+metadata before atomically creating an artifact containing only
+`quarterly-attestation.json`, `validation.json`, `claude.json`, `codex.json`,
+and `hermes.json`. Measured regressions remain in the authenticated reports;
+the later candidate-specific approval must disposition each exact regression
+before promotion. The retained job's required successful steps are `Assemble
+and verify comparisons` and `Retain comparison evidence`.
+
+The workflow does not provision provider credentials, qualify execution
+boundaries, approve policy, tag a release, or publish packages. The dedicated
+runner pool must already have independently qualified provider launchers and
+receipts. Its built-in GitHub token is scoped to reading its own authenticated
+run metadata and artifact inputs; the final comparison artifact is retained for
+120 days. Intermediate validation and shard artifacts expire after 14 days.
+Dispatching the workflow therefore remains an authorized operational activity,
+not a substitute for provider qualification or release approval. No workflow
+run or accepted quarterly record is asserted by adding this producer.
+
+The first such full comparison against 2026.10.3 and regression triage
 remains an authorized release activity; offline tests do not satisfy it and no
 current record is asserted here.
 
