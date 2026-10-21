@@ -41,6 +41,7 @@
     "dist/src/resources/web-release.d.ts",
     "dist/src/dataset/**/*.d.ts",
     "tools/_resolve-impl.mjs",
+    "tools/cli/decision-offload-report.mjs",
     "tools/cli/workspace-status.mjs",
     "tools/ralph-external/session-launcher.mjs",
     "tools/ralph-external/process-monitor.mjs",

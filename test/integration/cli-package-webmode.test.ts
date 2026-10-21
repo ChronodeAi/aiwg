@@ -323,6 +323,7 @@ describe('@aiwg/cli packaged web distribution', () => {
     )).toBe(true);
     const allowedToolPrefixes = [
       'tools/_resolve-impl.mjs',
+      'tools/cli/decision-offload-report.mjs',
       'tools/cli/workspace-status.mjs',
       'tools/ralph-external/session-launcher.mjs',
       'tools/ralph-external/process-monitor.mjs',
@@ -372,6 +373,7 @@ describe('@aiwg/cli packaged web distribution', () => {
     expect(paths).toContain('dist/src/models/model-catalog.v1.json');
     expect(paths).toContain('agentic/code/providers/model-catalog.v1.json');
     expect(paths).toContain('tools/_resolve-impl.mjs');
+    expect(paths).toContain('tools/cli/decision-offload-report.mjs');
     expect(paths).toContain('tools/cli/workspace-status.mjs');
     expect(paths).toContain('tools/agents/deploy-agents.mjs');
     expect(paths).toContain('tools/agents/providers/antigravity.mjs');
@@ -398,6 +400,13 @@ describe('@aiwg/cli packaged web distribution', () => {
     expect(result.code, result.stderr).toBe(0);
     expect(result.stderr).toBe('');
     expect(JSON.parse(result.stdout)).toMatchObject({
+      decisionOffload: {
+        schema: 'aiwg-decision-offload-snapshot/v1',
+        readiness: {
+          ask: { probed: false },
+          evaluate: { probed: false },
+        },
+      },
       workspace: {
         exists: false,
       },
