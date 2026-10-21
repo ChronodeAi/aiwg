@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -12,6 +13,11 @@ import { fixtureJson, fixtureRoot } from '../conformance/mission-v1/worker-contr
 import { workerInputSchema } from '../fixtures/ralph-worker-protocol.mjs';
 
 const exec = promisify(execFile);
+async function fileDigest(filename: string) {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(filename)) hash.update(chunk);
+  return hash.digest('hex');
+}
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) {
@@ -101,6 +107,19 @@ describe('T-OG-14 published package installed adapter paths', () => {
     // use only public package dependencies; no model service or account store.
     const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-worker-package-'));
     roots.push(root);
+    // The hosted runner's Node permissions are outside the fixture's control.
+    // Qualify an owned copy with the same bytes, never the runner executable.
+    const fixtureNode = path.join(root, 'node');
+    const unsafeNode = path.join(root, 'node-unsafe');
+    await copyFile(process.execPath, fixtureNode);
+    await copyFile(process.execPath, unsafeNode);
+    await chmod(fixtureNode, 0o500);
+    await chmod(unsafeNode, 0o775);
+    const expectedNodeDigest = await fileDigest(process.execPath);
+    expect(await fileDigest(fixtureNode)).toBe(expectedNodeDigest);
+    expect(await fileDigest(unsafeNode)).toBe(expectedNodeDigest);
+    expect((await stat(fixtureNode)).mode & 0o777).toBe(0o500);
+    expect((await stat(unsafeNode)).mode & 0o777).toBe(0o775);
     const stage = path.join(root, 'stage');
     const source = target === 'aiwg' ? process.cwd() : stage;
     if (target === '@aiwg/cli') await buildCliPackage({ outputDir: stage });
@@ -174,7 +193,7 @@ describe('T-OG-14 published package installed adapter paths', () => {
     mcpProfile.transport = 'mcp';
     const { arguments: _arguments, timeoutSeconds: _timeout, ...binding } = mcpInvocation.mcp;
     mcpProfile.mcp = { ...binding, cancel: 'uncertain' };
-    Object.assign(request, { invocation, profileAdapter, mcpInvocation, mcpAdapter, schemas });
+    Object.assign(request, { invocation, profileAdapter, mcpInvocation, mcpAdapter, schemas, fixtureNode, unsafeNode });
     await writeFile(path.join(root, 'request.json'), JSON.stringify(request));
     await writeFile(path.join(installed, 'probe.mjs'), `
 import { readFileSync } from 'node:fs';
@@ -185,7 +204,7 @@ if (typeof SessionLauncher !== 'function' || typeof registerWorkerInvokeToolset 
 import { loadProviderModelCapabilities, resolveWorkerInstallation, requiredWorkerControls } from './dist/src/models/provider-policy.js';
 import { qualificationDigest } from './dist/src/models/qualification-digest.mjs';
 import { ProviderAdapter, createProvider, ensureProvidersRegistered, listProviders, workerNegativeFixtureDigest, workerNegativeFixtureSuite } from './tools/ralph-external/lib/provider-adapter.mjs';
-const { metadata, invocation, profileAdapter, mcpInvocation, mcpAdapter, schemas, ...trusted } = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+const { metadata, invocation, profileAdapter, mcpInvocation, mcpAdapter, schemas, fixtureNode, unsafeNode, ...trusted } = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const registry = { ...loadProviderModelCapabilities(), workerAdapters: { fixture: metadata } };
 await ensureProvidersRegistered({ registry, ...trusted });
 const adapter = createProvider(metadata.id);
@@ -209,17 +228,23 @@ async function prepareQualified(value, metadata) {
   Object.assign(value, { cwd, briefPath: path.join(cwd, 'brief'), stdoutPath: path.join(cwd, 'stdout'),
     stderrPath: path.join(cwd, 'stderr'), finalPath: path.join(cwd, 'final') });
   if (value.transport === 'shell') {
-    Object.assign(value, { argv: [process.execPath, ...driver.buildWorkerArgs(value)], stdin: 'closed', envNames: ['AIWG_FAKE_WORKER_CONFIG'] });
+    Object.assign(value, { argv: [fixtureNode, ...driver.buildWorkerArgs(value)], stdin: 'closed', envNames: ['AIWG_FAKE_WORKER_CONFIG'] });
   } else value.mcp.arguments.workspace = cwd;
   const profile = metadata.invocationProfiles[value.selected.profileRef];
   const qualification = { ...selectionEvidence, adapter: metadata, cliVersion: '1.0.0', requiredControls: ['model'],
     now: Date.parse('2026-10-07T00:00:00Z'), platform: 'linux',
     ...(value.transport === 'mcp' ? { mcp: profile.mcp, mcpSchemas: schemas } : {}) };
   const installation = { ...qualification, ...trusted, modules: trusted.modules.map(entry => ({ ...entry, adapterIds: ['claude'] })),
-    profile: value.selected.profileRef, executable: process.execPath, cwd, runtimeFiles: [fixtureCli, path.join(path.dirname(fixtureCli), 'ralph-worker-protocol.mjs')],
+    profile: value.selected.profileRef, executable: fixtureNode, cwd, runtimeFiles: [fixtureCli, path.join(path.dirname(fixtureCli), 'ralph-worker-protocol.mjs')],
     accountScope: 'fixture-only', effectiveConfigDigest: qualificationDigest({}), environment: { AIWG_FAKE_WORKER_CONFIG: process.env.AIWG_FAKE_WORKER_CONFIG },
     effort: value.selected.effort.value,
     ...(value.transport === 'mcp' ? { mcpServerDigest: qualificationDigest(profile.mcp) } : {}) };
+  try {
+    await driver.inspectWorkerInstallation({ ...installation, executable: unsafeNode });
+    throw new Error('Unsafe executable unexpectedly accepted');
+  } catch (error) {
+    if (error.message !== 'Untrusted binary permissions') throw error;
+  }
   const scope = await driver.inspectWorkerInstallation(installation);
   installation.evidence = { scopeDigest: scope.scopeDigest, fixtureDigest: await workerNegativeFixtureDigest(),
     verifiedAt: '2026-10-07T00:00:00Z', evidenceRef: 'fixture:installed-negative-suite',
