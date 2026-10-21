@@ -28,7 +28,7 @@ export function sessionRefreshAvailable(): boolean {
   }
 }
 
-/** Refresh an existing catalog without inferring or granting provider access. */
+/** Refresh current configured scope within saved provider root grants. */
 export async function refreshSessionCatalog(
   workspace: string,
   full: boolean,
@@ -67,8 +67,7 @@ export async function refreshSessionCatalog(
       const manifest = await discoverWorkspaceHistories({
         workspace: canonicalWorkspace,
         workspaceAliases: [workspace, ...workspaceAliases],
-        expectedProviders: providers,
-        authorizedRoots,
+        refreshFrom: { ...previous, authorizedRoots },
         registry: createSessionAdapterRegistry(limits),
         exclude,
         knownSources: previous.sources,
