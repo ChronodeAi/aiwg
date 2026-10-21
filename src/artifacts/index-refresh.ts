@@ -408,6 +408,13 @@ export async function refreshIndexes(
     totals: { jobs: jobs.length, ok: 0, skipped: 0, deferred: 0, errors: 0, noManifest: 0, excluded: 0, wallMs: 0 },
   };
   const finish = () => {
+    for (const job of jobs) {
+      for (const receipt of job.sessionImports ?? (job.sessionImport ? [job.sessionImport] : [])) {
+        for (const warning of receipt.run.preflight?.scopeWarnings ?? []) {
+          report.messages.push(`WARNING ${job.workspace}: ${warning.message}`);
+        }
+      }
+    }
     for (const job of jobs.filter(job => job.noManifest)) {
       const command = `aiwg sessions discover --workspace '${job.workspace!.replace(/'/g, "'\\''")}'`;
       report.messages.push(`Session refresh skipped for ${job.workspace}: no authorized discovery manifest. Run \`${command}\` or configure sessions.discovery_manifests in .aiwg/aiwg.config.`);

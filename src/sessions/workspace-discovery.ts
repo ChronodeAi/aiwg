@@ -7,8 +7,8 @@ import { inspectMuseNativeWorkspace, type MuseWorkspaceInspection } from './adap
 import { readOmpSessionHeader } from './adapters/omp.js';
 import { grokbotConversationIdFromLocator } from './adapters/grokbot-locator.js';
 import { resolveOmpPaths } from '../providers/omp-paths.mjs';
+import { readAiwgConfig } from '../config/aiwg-config.js';
 import {
-  SESSION_PROVIDER_IDS,
   SessionCoveragePreflightSchema,
   SessionContractError,
   type SessionCoveragePreflight,
@@ -20,7 +20,7 @@ import {
 } from './contracts.js';
 import { redactSourceLocator, type SessionSourceAdapterRegistry } from './discovery.js';
 import { createSessionAdapterRegistry } from './adapter-registry.js';
-import { coveragePreflight, expectedSessionProviders } from './coverage-preflight.js';
+import { coveragePreflight, providerScopeWarnings, resolveSessionProviderScope } from './coverage-preflight.js';
 import { fingerprintSourceFile, streamJsonLines } from './readers.js';
 import { matchSessionWorkspace, type WorkspaceMatchKind } from './workspace-matching.js';
 import { matchImportExclusion, nativeSessionIdFromLocator, resolveImportExclusions, type SourceExclusion } from './import-exclusions.js';
@@ -90,6 +90,8 @@ export interface DiscoverWorkspaceOptions {
   workspace: string;
   exclude?: string[];
   knownSources?: readonly DiscoveryManifestSource[];
+  /** Re-derive maintenance scope from config while retaining saved root grants. */
+  refreshFrom?: SessionDiscoveryManifest;
   /** Logical paths to the same canonical workspace, used for provider project keys. */
   workspaceAliases?: readonly string[];
   expectedProviders?: readonly string[];
@@ -123,9 +125,26 @@ export async function discoverWorkspaceHistories(
 ): Promise<SessionDiscoveryManifest> {
   const registry = options.registry ?? createSessionAdapterRegistry();
   const exclusions = resolveImportExclusions(undefined, options.exclude);
-  const expectedProviders = expectedSessionProviders(options.expectedProviders ?? SESSION_PROVIDER_IDS);
   const supportedProviders = new Set(registry.list().map((adapter) => adapter.provider));
   const workspacePath = await canonicalPath(options.workspace);
+  const config = await readAiwgConfig(workspacePath);
+  const configuredProviders = config?.providers ?? [];
+  const explicitlyRootedProviders = [
+    ...(options.codexRoot || options.codexRoots?.length || config?.sessions?.codex_roots?.length ? ['codex'] : []),
+    ...(options.ompRoot ? ['omp'] : []),
+    ...(options.museRoot ? ['muse'] : []),
+    ...(options.dshRoot ? ['deepseek-harness'] : []),
+    ...(options.grokbotRoot ? ['grokbot'] : []),
+  ];
+  const savedRoots = options.authorizedRoots ?? options.refreshFrom?.authorizedRoots;
+  const authorizedProviders = options.refreshFrom
+    ? Object.keys(savedRoots ?? {}).filter(provider => savedRoots?.[provider as SessionProviderId]?.length)
+    : configuredProviders.length ? explicitlyRootedProviders : undefined;
+  const providerScope = resolveSessionProviderScope(configuredProviders, options.expectedProviders, authorizedProviders);
+  if (options.refreshFrom) {
+    providerScope.scopeWarnings = providerScopeWarnings(configuredProviders, options.refreshFrom.preflight?.expectedProviders ?? []);
+  }
+  const { expectedProviders } = providerScope;
   const workspaceId = workspacePath;
   const workspacePaths = [...new Set([workspacePath, resolve(options.workspace),
     ...(options.workspaceAliases ?? []).map((alias) => resolve(alias))])];
@@ -161,8 +180,12 @@ export async function discoverWorkspaceHistories(
     },
     {
       provider: 'codex',
-      roots: options.authorizedRoots || !expectedProviders.includes('codex')
-        ? [] : await codexDiscoveryRoots(options),
+      roots: savedRoots || (!expectedProviders.includes('codex') && !providerScope.configuredProviders?.includes('codex')
+        && !explicitlyRootedProviders.includes('codex'))
+        ? [] : await codexDiscoveryRoots({ ...options, codexRoots: [
+          ...(config?.sessions?.codex_roots ?? []).map(root => resolve(workspacePath, root)),
+          ...(options.codexRoots ?? []),
+        ] }),
     },
     {
       provider: 'cursor',
@@ -198,20 +221,29 @@ export async function discoverWorkspaceHistories(
     },
   ];
 
-  const authorizedRoots: Partial<Record<SessionProviderId, string[]>> = { ...options.authorizedRoots };
+  const authorizedRoots: Partial<Record<SessionProviderId, string[]>> = { ...savedRoots };
   const reports = new Map<string, DiscoveryProviderReport>();
   const candidates: DiscoveryManifestSource[] = [];
   const seen = new Set<string>();
   for (const entry of discoverable) {
+    // A hand-run narrow scope must not discard explicit root grants, including
+    // configured providers under an authorized home. Do not scan their histories.
+    if (!savedRoots && !expectedProviders.includes(entry.provider)
+      && (explicitlyRootedProviders.includes(entry.provider)
+        || (providerScope.configuredProviders?.includes(entry.provider) && options.providerHome))) {
+      const roots: string[] = [];
+      for (const root of entry.roots) if (await pathExists(root)) roots.push(await canonicalPath(root));
+      authorizedRoots[entry.provider] = [...new Set(roots)];
+    }
     if (!expectedProviders.includes(entry.provider) || !supportedProviders.has(entry.provider)) continue;
     const adapter = registry.get(entry.provider);
     if (adapter.disposition === 'unsupported' || !adapter.supportedOperations.includes('discover')) continue;
     const availableRoots: string[] = [];
     const rootCounts = new Map<string, NonNullable<DiscoveryProviderReport['rootCounts']>[number]>();
-    for (const root of options.authorizedRoots ? options.authorizedRoots[entry.provider] ?? [] : entry.roots) {
+    for (const root of savedRoots ? savedRoots[entry.provider] ?? [] : entry.roots) {
       if (await pathExists(root)) {
         const canonical = await canonicalPath(root);
-        if (options.authorizedRoots && canonical !== root) {
+        if (savedRoots && canonical !== root) {
           throw new SessionContractError('INVALID_ARGUMENT', 'previously authorized provider root changed; rediscover with explicit authorization');
         }
         if (!availableRoots.includes(canonical)) {
@@ -407,7 +439,7 @@ export async function discoverWorkspaceHistories(
   const sources = candidates.sort(compareSources);
   const providers = [...reports.values()].sort((a, b) => a.provider.localeCompare(b.provider));
   const preflight = coveragePreflight({
-    expectedProviders, expectedProviderBasis: options.expectedProviders ? 'explicit' : 'declared-default',
+    ...providerScope,
     registry, runtime: options.runtime, reports: providers,
   });
   const identity = {

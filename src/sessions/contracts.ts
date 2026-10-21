@@ -26,9 +26,19 @@ export const SessionRuntimeIdentitySchema = z.object({
   diagnostics: z.array(z.string()),
 });
 export type SessionRuntimeIdentity = z.infer<typeof SessionRuntimeIdentitySchema>;
+export const SessionProviderScopeWarningSchema = z.object({
+  code: z.literal('CONFIGURED_PROVIDERS_OUTSIDE_SCOPE'),
+  configuredProviders: z.array(ExpectedSessionProviderSchema),
+  expectedProviders: z.array(ExpectedSessionProviderSchema),
+  missingProviders: z.array(ExpectedSessionProviderSchema),
+  message: z.string(),
+});
+export type SessionProviderScopeWarning = z.infer<typeof SessionProviderScopeWarningSchema>;
 export const SessionCoveragePreflightSchema = z.object({
   expectedProviders: z.array(ExpectedSessionProviderSchema).min(1),
-  expectedProviderBasis: z.enum(['explicit', 'declared-default', 'legacy']),
+  expectedProviderBasis: z.enum(['explicit', 'workspace-config', 'declared-default', 'legacy']),
+  configuredProviders: z.array(ExpectedSessionProviderSchema).optional(),
+  scopeWarnings: z.array(SessionProviderScopeWarningSchema).optional(),
   supportedProviders: z.array(ExpectedSessionProviderSchema),
   runtime: SessionRuntimeIdentitySchema,
   status: z.enum(['partial', 'complete']),

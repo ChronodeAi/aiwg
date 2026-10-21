@@ -169,6 +169,7 @@ describe('index refresh CLI routing', () => {
   });
 
   itWithSqlite('reports repeated exclusion flags and counts in refresh JSON and text', async () => {
+    fs.writeFileSync(path.join(root, '.aiwg/aiwg.config'), JSON.stringify({ providers: ['codex'] }));
     const providerRoot = path.join(root, 'authorized');
     fs.mkdirSync(providerRoot);
     for (const id of ['first', 'second']) fs.writeFileSync(path.join(providerRoot, `${id}.jsonl`), JSON.stringify({

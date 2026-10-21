@@ -13,6 +13,7 @@ import {
 import { claudeProjectKey } from '../../../src/sessions/workspace-discovery.js';
 import { listProviderDefinitions } from '../../../src/providers/provider-definitions.js';
 import { itWithSqlite } from '../../helpers/sqlite.js';
+import { resolveSessionProviderScope } from '../../../src/sessions/coverage-preflight.js';
 
 const runtime: SessionRuntimeIdentity = {
   packageName: 'aiwg', version: '2026.10.1', packageRoot: '/synthetic/npm/aiwg',
@@ -47,6 +48,44 @@ function checked(provider: string) {
 }
 
 describe('provider/runtime coverage preflight', () => {
+  it('combines current config with authorized providers and keeps explicit scope local to one invocation', () => {
+    expect(resolveSessionProviderScope(['codex', 'claude'], undefined, ['grokbot'])).toMatchObject({
+      expectedProviders: ['claude', 'codex', 'grokbot'], expectedProviderBasis: 'workspace-config',
+    });
+    expect(resolveSessionProviderScope(['codex', 'claude'], ['grokbot'])).toMatchObject({
+      expectedProviders: ['grokbot'], expectedProviderBasis: 'explicit',
+      scopeWarnings: [expect.objectContaining({ missingProviders: ['claude', 'codex'] })],
+    });
+    expect(resolveSessionProviderScope(['windsurf', 'future-provider'], undefined, ['dsh'])).toMatchObject({
+      expectedProviders: ['deepseek-harness', 'devin-desktop', 'future-provider'],
+    });
+  });
+
+  it('invalidates stale explicit scope when workspace config changes between discoveries', async () => {
+    const root = await workspace();
+    await mkdir(join(root, '.aiwg'));
+    const config = join(root, '.aiwg/aiwg.config');
+    await writeFile(config, JSON.stringify({ providers: ['grokbot'] }));
+    const options = { workspace: root, runtime, authorizedRoots: { grokbot: [root] } };
+    const previous = await discoverWorkspaceHistories({ ...options, expectedProviders: ['grokbot'] });
+    await writeFile(config, JSON.stringify({ providers: ['codex', 'claude'] }));
+    const refreshed = await discoverWorkspaceHistories({ ...options, refreshFrom: previous });
+    expect(refreshed.preflight).toMatchObject({
+      expectedProviders: ['claude', 'codex', 'grokbot'], expectedProviderBasis: 'workspace-config',
+      configuredProviders: ['claude', 'codex'],
+      scopeWarnings: [expect.objectContaining({ missingProviders: ['claude', 'codex'] })],
+    });
+    expect(refreshed.authorizedRoots).toEqual({ grokbot: [root] });
+    expect(refreshed.preflight?.ledger.find(entry => entry.provider === 'codex')?.disposition).toBe('authorization-required');
+    const file = join(root, 'manifest.json');
+    await writeDiscoveryManifest(file, refreshed);
+    expect(await readDiscoveryManifest(file)).toEqual(refreshed);
+    await writeFile(config, JSON.stringify({ providers: ['muse'] }));
+    const next = await discoverWorkspaceHistories({ ...options, refreshFrom: refreshed });
+    expect(next.preflight?.expectedProviders).toEqual(['grokbot', 'muse']);
+    expect(next.preflight?.scopeWarnings?.[0].missingProviders).toEqual(['muse']);
+  });
+
   it('keeps the canonical provider contract in parity with instantiated adapters', () => {
     const adapters = createSessionAdapterRegistry().list();
     expect(adapters.map((adapter) => adapter.provider)).toEqual([...SESSION_PROVIDER_IDS].sort());
@@ -120,10 +159,11 @@ describe('provider/runtime coverage preflight', () => {
     expect(reconcileCoveragePreflight(manifest.preflight!, []).status).toBe('partial');
   });
 
-  it('requires explicit scope, acquired sources and a compatible runtime for completion', () => {
+  it('requires explicit or configured scope, acquired sources and a compatible runtime for completion', () => {
     const options = { expectedProviders: ['claude'], reports: [checked('claude')], runtime };
     const preflight = coveragePreflight(options);
     expect(reconcileCoveragePreflight(preflight, [accepted('claude')]).status).toBe('complete');
+    expect(reconcileCoveragePreflight({ ...preflight, expectedProviderBasis: 'workspace-config' }, [accepted('claude')]).status).toBe('complete');
     expect(reconcileCoveragePreflight(preflight, [{ ...accepted('claude'), eventsAccepted: 0 }]).status).toBe('partial');
     expect(reconcileCoveragePreflight({ ...preflight, expectedProviderBasis: 'declared-default' }, [accepted('claude')]).status).toBe('partial');
     for (const installationState of ['mismatch', 'stale', 'unknown'] as const) {

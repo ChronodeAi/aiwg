@@ -89,6 +89,8 @@ export async function importDiscoveryManifest(
   }
   run.schemaVersion = BATCH_IMPORT_VERSION;
   run.preflight = coveragePreflight({
+    configuredProviders: options.manifest.preflight?.configuredProviders,
+    scopeWarnings: options.manifest.preflight?.scopeWarnings,
     expectedProviders: options.manifest.preflight?.expectedProviders,
     expectedProviderBasis: options.manifest.preflight?.expectedProviderBasis ?? 'legacy',
     runtime: options.runtime ?? sessionRuntimeIdentity(),
@@ -252,6 +254,8 @@ export function previewDiscoveryImport(
       return disposition;
     }),
     preflight: coveragePreflight({
+      configuredProviders: manifest.preflight?.configuredProviders,
+      scopeWarnings: manifest.preflight?.scopeWarnings,
       expectedProviders: manifest.preflight?.expectedProviders,
       expectedProviderBasis: manifest.preflight?.expectedProviderBasis ?? 'legacy',
       reports: manifest.providers,
