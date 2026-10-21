@@ -241,7 +241,6 @@ describe('eighteen-provider session release conformance', () => {
     const steps = testJob.steps as Array<{ run?: string; if?: string; 'continue-on-error'?: boolean }>;
     const required = [
       'npm run test:sessions:sqlite',
-      'node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test',
       'node tools/ci/run-with-hang-report.mjs --timeout 3m -- npm run uat',
       'npm run test:integration:serve',
     ];
@@ -252,8 +251,16 @@ describe('eighteen-provider session release conformance', () => {
       expect(steps[positions[i]].if, required[i]).toBeUndefined();
       expect(steps[positions[i]]['continue-on-error'], required[i]).toBeUndefined();
     }
+    const shardJob = workflow.jobs['test-shards'];
+    expect(shardJob.strategy).toEqual({ 'fail-fast': false, matrix: { shard: [1, 2] } });
+    const shard = shardJob.steps.find((step: { name?: string }) => step.name === 'Run default test shard');
+    expect(shard).toMatchObject({
+      run: 'node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test -- --shard=${{ matrix.shard }}/2 --maxWorkers=6',
+    });
+    expect(shard.if).toBeUndefined();
+    expect(shard['continue-on-error']).toBeUndefined();
     expect(workflow.jobs.build.name).toBe('Build');
-    expect(workflow.jobs.build.needs).toContain('test');
+    expect(workflow.jobs.build.needs).toEqual(expect.arrayContaining(['test', 'test-shards']));
   });
 });
 
