@@ -313,6 +313,22 @@ jobs:
           set -euo pipefail
           cp tools/install/install.sh "${RUNNER_TEMP}/stable-package/install.sh"
           bash "${RUNNER_TEMP}/stable-package/install.sh" --dry-run
+          VERSION='${{ steps.version.outputs.version }}'
+          for file in "aiwg-${VERSION}.tgz" "aiwg-cli-${VERSION}.tgz" "aiwg-cockpit-${VERSION}.tgz" installed-smoke.json; do
+            test -s "${RUNNER_TEMP}/stable-package/$file"
+          done
+
+      - name: Retain smoke-tested tarballs before publication
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stable-packages-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/stable-package/aiwg-${{ steps.version.outputs.version }}.tgz
+            ${{ runner.temp }}/stable-package/aiwg-cli-${{ steps.version.outputs.version }}.tgz
+            ${{ runner.temp }}/stable-package/aiwg-cockpit-${{ steps.version.outputs.version }}.tgz
+            ${{ runner.temp }}/stable-package/installed-smoke.json
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Publish smoke-tested stable tarballs to npmjs.org
         run: |

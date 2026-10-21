@@ -84,13 +84,19 @@ describe('direct stable publication and advisory registry checks', () => {
     expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual(['tag_to_publish']);
     const ordered = ['Verify signed tag (#1299 / A9 gate)', 'Checkout release tag',
       'Validate and build stable release', 'Pack and smoke-test exact npm surfaces',
-      'Generate CycloneDX SBOM', 'Preserve exact installer', 'Publish smoke-tested stable tarballs to npmjs.org',
+      'Generate CycloneDX SBOM', 'Preserve exact installer', 'Retain smoke-tested tarballs before publication', 'Publish smoke-tested stable tarballs to npmjs.org',
       'Preserve publication receipt', 'Create or update GitHub release', 'Generate tarball + cosign sign + manifest',
       'Use generated CycloneDX SBOM', 'Sign SBOM with cosign (keyless)', 'Prepare installer and checksum manifest',
       'Upload signed release assets to GitHub release', 'Verification summary',
       'Verify provenance attestation landed', 'Verify stable dist-tag policy', 'Report advisory npm registry checks'];
     for (const name of ordered) expect(index(name), name).toBeGreaterThanOrEqual(0);
     for (let i=1; i<ordered.length; i++) expect(index(ordered[i-1])).toBeLessThan(index(ordered[i]));
+    expect(step('Retain smoke-tested tarballs before publication').with.path.trim().split('\n').map((line: string) => line.trim())).toEqual([
+      '${{ runner.temp }}/stable-package/aiwg-${{ steps.version.outputs.version }}.tgz',
+      '${{ runner.temp }}/stable-package/aiwg-cli-${{ steps.version.outputs.version }}.tgz',
+      '${{ runner.temp }}/stable-package/aiwg-cockpit-${{ steps.version.outputs.version }}.tgz',
+      '${{ runner.temp }}/stable-package/installed-smoke.json',
+    ]);
     expect(step('Checkout release tag').run).toContain('git merge-base --is-ancestor');
     expect(step('Publish smoke-tested stable tarballs to npmjs.org').run).toContain('direct-stable-publish.mjs');
     expect(step('Publish smoke-tested stable tarballs to npmjs.org').if).toBeUndefined();

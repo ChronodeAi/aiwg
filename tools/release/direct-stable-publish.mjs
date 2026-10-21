@@ -39,19 +39,29 @@ export async function publish({ directory, version, receipt, spawn = boundedSpaw
       const conflict = /(?:EPUBLISHCONFLICT|cannot publish over the previously published versions|package version already exists|\b409\b)/i.test(output);
       if (result.error || (result.status !== 0 && !conflict)) throw new Error(`Publish failed for ${item.name}`);
       let metadata;
-      for (let attempt = 0; attempt < 5; attempt++) {
+      for (let attempt = 0; attempt < (conflict ? 5 : 1); attempt++) {
         const view = npm(['view', `${item.name}@${version}`, '--json', '--registry', 'https://registry.npmjs.org']);
-        if (!view.error && view.status === 0) { metadata = JSON.parse(view.stdout); break; }
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        if (!view.error && view.status === 0) { try { metadata = JSON.parse(view.stdout); } catch {} if (metadata) break; }
+        if (conflict && attempt < 4) await new Promise(resolve => setTimeout(resolve, 3000));
       }
-      const identity = verifyRegistryPackageIdentity({ file: item.file, packageName: item.name, version, metadata });
-      const attestations = metadata?.dist?.attestations;
-      if (typeof attestations?.url !== 'string' || !attestations.url || attestations?.provenance?.predicateType !== 'https://slsa.dev/provenance/v1') throw new Error(`Missing npm provenance for ${item.name}`);
+      // A confirmed publish may take time to become visible. An observed
+      // identity mismatch remains fatal; a conflict must prove the whole identity.
+      let identity = { package: item.name, version, sha256: item.sha256 };
+      if ((metadata?.name && metadata.name !== item.name) || (metadata?.version && metadata.version !== version)) throw new Error(`Registry package identity mismatch for ${item.name}@${version}`);
+      const bytes = fs.readFileSync(item.file);
+      if ((metadata?.dist?.shasum && metadata.dist.shasum !== createHash('sha1').update(bytes).digest('hex')) ||
+          (metadata?.dist?.integrity && metadata.dist.integrity !== `sha512-${createHash('sha512').update(bytes).digest('base64')}`)) {
+        throw new Error(`Registry package identity mismatch for ${item.name}@${version}`);
+      }
+      if ((metadata?.name && metadata?.version && metadata?.dist?.shasum && metadata?.dist?.integrity) || conflict) {
+        identity = verifyRegistryPackageIdentity({ file: item.file, packageName: item.name, version, metadata });
+      }
       validateInputs(directory, version);
-      const tags = npm(['view', item.name, 'dist-tags', '--json', '--registry', 'https://registry.npmjs.org']);
-      const tagValues = !tags.error && tags.status === 0 ? JSON.parse(tags.stdout) : {};
-      if (tagValues.latest !== version || Object.hasOwn(tagValues, 'next')) throw new Error(`Stable tag policy mismatch for ${item.name}`);
-      record.packages.push({ ...identity, attestations, disposition: result.status === 0 ? 'published' : 'already-published' }); save();
+      const attestations = metadata?.dist?.attestations ?? null;
+      const provenance = typeof attestations?.url === 'string' && attestations.url && attestations?.provenance?.predicateType === 'https://slsa.dev/provenance/v1' ? 'observed' : 'pending';
+      const registryIdentity = metadata?.name && metadata?.version && metadata?.dist?.shasum && metadata?.dist?.integrity ? 'verified' : 'pending';
+      if (registryIdentity === 'pending' || provenance === 'pending') console.warn(`::warning::Registry identity or provenance pending for ${item.name}@${version}; post-asset checks will retry.`);
+      record.packages.push({ ...identity, attestations, registry_identity: registryIdentity, provenance, disposition: result.status === 0 ? 'published' : 'already-published' }); save();
     }
     record.complete = true; save(); return record;
   } finally { fs.closeSync(fd); }

@@ -279,8 +279,8 @@ npm view @aiwg/cli version
 ```
 
 The GitHub trusted-publishing workflow publishes `aiwg`, `@aiwg/cockpit`, and
-`@aiwg/cli` at the same CalVer. It verifies each requested dist-tag and each
-package's provenance attestation before completing.
+`@aiwg/cli` at the same CalVer. After uploading release assets it checks each
+stable dist-tag and provenance attestation; visibility delays are advisory.
 
 For stable releases, OIDC sets `latest` during publication. The workflow does
 not create, advance, or maintain an npm `next` dist-tag. `next` is retired from
@@ -598,9 +598,11 @@ independently prove CI status. A signed stable tag on main starts the GitHub
 publication workflow. The workflow
 verifies the tag and main ancestry, builds and tests the release, packs and
 smoke-installs all three packages, then publishes those exact tarballs to npmjs
-using OIDC and provenance. Registry identity and provenance must match each
-published tarball, including recovery from an existing-version conflict. The
-workflow retains a partial receipt, signs the release assets and SBOM, and runs
+using OIDC and provenance. An observed registry identity mismatch fails the
+release, and recovery from an existing-version conflict requires an exact
+identity match. Registry visibility, provenance and dist-tag checks are
+advisory after the release assets are uploaded. The workflow retains the exact
+smoke-tested packages before publishing and a partial receipt, signs the release assets and SBOM, and runs
 the post-publication Socket audit. The release candidate and cross-provider
 comparison workflows remain optional diagnostics and are not publication gates.
 The historical RC promotion policy and helpers do not authorize this direct path.
