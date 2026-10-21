@@ -2,7 +2,7 @@
 /** Run a Vitest lane in an owned TMPDIR and check it even when tests fail. */
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readdirSync, rmSync, rmdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { constants as osConstants, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_ALLOWED_ENTRIES, findLeakedEntries } from './check-tmpdir-leaks.mjs';
@@ -39,7 +39,13 @@ export async function runDefaultLane(args = [], { command = process.execPath, ru
     process.on('SIGTERM', onTerminate);
     code = await new Promise((resolve, reject) => {
       child.once('error', reject);
-      child.once('exit', (status) => resolve(status ?? 1));
+      child.once('exit', (status, signal) => {
+        if (!signal) return resolve(status ?? 1);
+        const signalNumber = osConstants.signals[signal];
+        const signalCode = 128 + (Number.isSafeInteger(signalNumber) ? signalNumber : 0);
+        console.error(`Default lane child terminated by ${signal} (exit ${signalCode}).`);
+        resolve(signalCode);
+      });
     });
   } finally {
     process.off('SIGINT', onInterrupt);
@@ -54,7 +60,10 @@ export async function runDefaultLane(args = [], { command = process.execPath, ru
     }
     if (leaked.length) {
       console.error(`TMPDIR leak gate: ${leaked.length} entries left in ${directory}:\n${leaked.join('\n')}`);
-      code = 1;
+      // Keep an abnormal child status observable. The non-empty TMPDIR still
+      // fails a previously successful run, while a signal or test failure
+      // retains its more useful status for the outer hang reporter.
+      if (code === 0) code = 1;
     } else {
       rmdirSync(directory);
       console.log('TMPDIR leak gate: 0 entries left behind.');
