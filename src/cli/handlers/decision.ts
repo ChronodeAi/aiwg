@@ -1,7 +1,6 @@
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import {
   ATTRIBUTION_FIELD_PATTERN,
-  askDecision,
   DecisionAskUsageError,
   decisionCapabilities,
   DecisionLedgerSinceError,
@@ -14,7 +13,7 @@ import {
   materializeSyntheticClassificationSetup,
   parseDecisionLedgerSince,
   readDecisionContextFile,
-  recordDecisionAsk,
+  runDecisionOffloadCheckpoint,
   runOfflinePattern,
   setupJev,
   showPattern,
@@ -169,19 +168,19 @@ async function decisionAsk(ctx: HandlerContext): Promise<HandlerResult> {
     ...(args.includes('--threshold') ? { threshold: parseNumber(takeOption(args, '--threshold'), '--threshold') } : {}),
     ...(args.includes('--timeout-ms') ? { timeoutMs: parseNumber(takeOption(args, '--timeout-ms'), '--timeout-ms') } : {}),
   };
-  const result = await askDecision(input, { cwd: ctx.cwd, env: process.env });
-  // Best-effort and bounded (recordDecisionAsk never throws and never hangs past its own
-  // deadline): a ledger failure, timeout, or attribution-detection error can never change
-  // `result` or the exit code decided below (review r1 findings 3 and 4).
-  await recordDecisionAsk(input, result, {
+  const invocation = await runDecisionOffloadCheckpoint(input, {
     transport: 'cli',
     projectRoot: ctx.cwd,
     env: process.env,
     explicitProvider: takeOption(args, '--provider'),
     explicitSessionId,
-    caller: caller ?? null,
+    caller: caller ?? 'decision-cli:ask',
+    ledgerCaller: caller ?? null,
+    category: caller ? undefined : 'unattributed',
     recordText: args.includes('--record-text'),
   });
+  if (!invocation.result) throw invocation.outcome === 'unknown' ? invocation.error : new Error('Decision ask was skipped');
+  const result = invocation.result;
   if (args.includes('--json')) return jsonResult(result);
   if (result.status === 'fallback') return { exitCode: 0, message: `FALLBACK to LLM: ${result.reason}`, rawOutput: true };
   return { exitCode: 0, message: `${String(result.answer)} (confidence ${result.confidence?.toFixed(2) ?? 'unknown'}, ${result.model ?? 'unknown-model'})`, rawOutput: true };

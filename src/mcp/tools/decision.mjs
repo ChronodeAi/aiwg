@@ -221,21 +221,18 @@ export function registerDecisionToolset(server) {
       ...(passes === undefined ? {} : { passes }),
       ...(escalation_passes === undefined ? {} : { escalationPasses: escalation_passes }),
     };
-    const result = await driverModule.askDecision(input, opts);
-    // Every decision-ask call records through the same ledger function the CLI
-    // `ask` handler uses, tagged with this tool's transport (#2946). Attribution
-    // resolution and the write both happen inside recordDecisionAsk's own
-    // bounded, never-throwing step (review r1 findings 3 and 4): a provider-
-    // detection failure, a slow/failed write, or an invalid caller tag can
-    // never replace `result` with an error or hold up this tool call.
     const sanitizedCaller = typeof caller === 'string' && driverModule.ATTRIBUTION_FIELD_PATTERN.test(caller) ? caller : null;
-    await driverModule.recordDecisionAsk(input, result, {
+    const invocation = await driverModule.runDecisionOffloadCheckpoint(input, {
       transport: 'mcp',
       projectRoot: opts.cwd,
       env: opts.env,
-      caller: sanitizedCaller,
+      caller: sanitizedCaller ?? 'decision-mcp:ask',
+      ledgerCaller: sanitizedCaller,
+      category: sanitizedCaller ? undefined : 'unattributed',
+      askRuntime: opts,
     });
-    return result;
+    if (!invocation.result) throw invocation.error ?? new Error('Decision ask was skipped');
+    return invocation.result;
   }, ASK);
 
   registerJsonTool(server, 'decision-setup-synthetic-classification', {
