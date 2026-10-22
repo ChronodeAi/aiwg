@@ -594,6 +594,67 @@ describe('atomic admission under concurrency (#2892 M1)', () => {
 // cancelled, never completed.
 // ---------------------------------------------------------------------------
 describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
+  it.each(['drop', 'late'] as const)('traces pending MCP %s after request-only cancel without replay or status mutation', async scenario => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.json');
+    const final = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    const request = { operation: 'run', request_id: `chaos-${scenario}`, role: 'coding' as const,
+      task: 'implementation', group: 'workers', brief, workdir: work, final_output: final, transport: 'mcp' as const };
+    await buildStructuredBrief(f, request);
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const tools = new Map<string, any>();
+    let release!: (value: any) => void;
+    let entered!: () => void;
+    const pending = new Promise<any>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const stop = vi.fn(async () => ({ delivered: true, termination: 'uncertain' }));
+    const callWorker = vi.fn(async (_binding: any, _server: any, options: any) => {
+      options.registerControl({ stop });
+      entered();
+      return pending;
+    });
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, registry, workerWorktreesRoot: work, scopedBreaker: null,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      callMcpWorker: callWorker, now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const run = call(request);
+    const trace: string[] = [];
+    try {
+      await Promise.race([started, run.then(() => { throw new Error('Worker did not reach pending call'); })]);
+      const [entry] = registry.values();
+      const status = async () => JSON.parse((await call({ operation: 'status', invocation_id: entry.invocationId })).content[0].text);
+      const before = JSON.stringify(registry.values());
+      trace.push((await status()).status);
+      expect(JSON.stringify(registry.values())).toBe(before);
+      expect(registry.canStart()).toBe(false);
+      const cancelled = JSON.parse((await call({ operation: 'cancel', invocation_id: entry.invocationId })).content[0].text);
+      trace.push(cancelled.cancelDelivered ? 'cancel-delivered' : 'cancel-missing');
+      expect(cancelled.termination).not.toBe('confirmed');
+      expect(registry.canStart()).toBe(false);
+      expect(stop).toHaveBeenCalledOnce();
+      const partial = path.join(work, 'partial.txt'); await writeFile(partial, 'synthetic partial\n');
+      release(scenario === 'drop' ? { outcome: 'disconnected', termination: 'uncertain' }
+        : { outcome: 'responded', response: { content: [{ type: 'text', text: JSON.stringify({ version: 1,
+          status: 'completed', summary: 'synthetic', claims: [], artifacts: [], checks: [], limitations: [] }) }] } });
+      const terminal = JSON.parse((await run).content[0].text);
+      trace.push(terminal.status);
+      expect(trace).toEqual(['running', 'cancel-delivered', scenario === 'drop' ? 'uncertain' : 'cancelled']);
+      expect(await readFile(partial, 'utf8')).toBe('synthetic partial\n');
+      const replay = await call(request);
+      expect(replay.isError).toBe(true);
+      expect(replay.content[0].text).toMatch(/capacity is reserved|request_id was already used/);
+      expect(callWorker).toHaveBeenCalledOnce();
+      if (scenario === 'drop') expect(registry.canStart()).toBe(false);
+    } finally {
+      release({ outcome: 'disconnected', termination: 'uncertain' });
+      await run;
+    }
+  });
+
   it('an uncertain shell run stays LIVE — a second run is refused, not admitted, until disposed', async () => {
     const root = await tempRoot();
     const work = path.join(root, 'work'); await mkdir(work);
