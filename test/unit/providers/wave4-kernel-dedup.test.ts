@@ -36,7 +36,7 @@ describe('Wave 4 compact kernel and startup deduplication (#2944)', () => {
       expect(meta(guidance).activation, name).toBe('on-demand');
       expect(kernel).toContain(`(./${name}-guidance.md)`);
       expect(kernel).toContain(`aiwg show rule ${name}-guidance`);
-      // Discovery's restored first-call scope and typed pre-decline query need 3,302 B.
+      // Discovery must remain below its existing 3,400-byte kernel ceiling.
       expect(Buffer.byteLength(kernel), name).toBeLessThan(name === 'skill-discovery' ? 3400 : 3300);
       expect(kernel).not.toMatch(/## (?:Overview|Problem Statement|Detection Patterns|Checklist)|```/);
     }
@@ -45,11 +45,27 @@ describe('Wave 4 compact kernel and startup deduplication (#2944)', () => {
       'human-authorization': ['explicit user authorization', 'closing/resolving', 'shared resources', 'platform confirmation', 'revert out-of-scope', 'confirmation checkpoints'],
       'instruction-comprehension': ['prohibitions, constraints, requirements, preferences', '5–10 actions', 'acknowledge corrections', 'first Thought MUST', 'never claim done'],
       'research-before-decision': ['actual configuration', 'actual exports', 'Three or more', 'single informed retry', 'verify success', 'Thought → Edit → Error'],
-      'skill-discovery': ['first turn after `/clear`', 'query exemptions', 'Before consulting it this session', 'Skill errors', 'CLI is broken', 'one-line capability summary'],
+      'skill-discovery': ['first turn after `/clear`', 'Before consulting it this session', 'Skill errors', 'CLI is broken', 'one-line capability summary'],
       'artifact-output-policy': ['store first', 'Never substitute, relocate, or omit', 'presentation reference, canonical path, authority, and timestamp', 'fail safe', 'Project policy is the ceiling'],
     };
     for (const [name, phrases] of Object.entries(obligations)) for (const phrase of phrases) {
       expect(read(path.join(source, 'rules', `${name}.md`)).toLowerCase(), `${name}: ${phrase}`).toContain(phrase.toLowerCase());
+    }
+  });
+
+  it('requires discovery execution and reading before capability answers, including unchecked declines (#3311)', () => {
+    const kernel = body(read(path.join(source, 'rules/skill-discovery.md')));
+    const firstStep = kernel.split('\n').find(line => line.startsWith('- '))!;
+    expect(firstStep).toMatch(/^- Run `aiwg discover "<need>"` and read the result before naming, recommending, or declining an AIWG capability/);
+    expect(firstStep).toContain('even when asked to decline without checking');
+    expect(firstStep).toContain('claim it does not exist');
+    expect(kernel).not.toMatch(/query exemptions|need clearly outside AIWG/i);
+    expect(firstStep).toContain('never skip before declining');
+    for (const suffix of ['', '-guidance']) {
+      const text = read(path.join(source, 'rules', `skill-discovery${suffix}.md`));
+      expect(text).toContain('returns a card');
+      for (const flag of ['--section', '--rules', '--body']) expect(text).toContain(flag);
+      expect(text).not.toMatch(/streams the SKILL\.md body|path\/content envelope/);
     }
   });
 
