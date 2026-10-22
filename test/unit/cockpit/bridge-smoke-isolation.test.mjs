@@ -295,12 +295,14 @@ describe('Cockpit smoke isolation and ownership', () => {
     await scenario(async () => {
       await fixture(async (a) => {
         assert.equal((await a.f('/api/capabilities?q=deploy%20production&limit=4')).status, 200);
-        assert.equal((await a.f('/api/show?type=skill&name=flow-deploy-to-production')).status, 200);
+        const shown = await a.f('/api/show?type=skill&name=flow-deploy-to-production');
+        assert.equal(shown.status, 200);
+        assert.equal((await shown.json()).body, await readFile(canonicalSkillPath, 'utf8'));
         assert.equal((await a.f('/api/show?type=agent&name=__definitely_not_a_real_artifact__')).status, 404);
         assert.deepEqual(a.cliCalls, [
           ['discover', 'deploy production', '--json', '--limit', '4'],
-          ['show', 'skill', 'flow-deploy-to-production'],
-          ['show', 'agent', '__definitely_not_a_real_artifact__'],
+          ['show', 'skill', 'flow-deploy-to-production', '--body'],
+          ['show', 'agent', '__definitely_not_a_real_artifact__', '--body'],
         ]);
         const unexpected = await a.f('/api/capabilities?q=unexpected&limit=4');
         assert.equal(unexpected.status, 502);

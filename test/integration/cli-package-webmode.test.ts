@@ -507,7 +507,15 @@ describe('@aiwg/cli packaged web distribution', () => {
       'show', 'skill', payload.results[0].id,
     ]);
     expect(shown.code, shown.stderr).toBe(0);
-    expect(Buffer.from(shown.stdout)).toEqual(TEST_SKILL_BODY);
+    expect(shown.stdout).toContain('# skill: web-regression');
+    expect(shown.stdout).toContain('## Outline');
+    expect(shown.stdout).toContain('## Drill in');
+    expect(shown.stdout).toContain('--body');
+    expect(shown.stdout).not.toContain('Downloaded exactly from the signed release fixture.');
+
+    const body = await runCli(['show', 'skill', payload.results[0].id, '--body']);
+    expect(body.code, body.stderr).toBe(0);
+    expect(Buffer.from(body.stdout)).toEqual(TEST_SKILL_BODY);
   });
 
   it('routes signed web discovery through the installed public API', async () => {

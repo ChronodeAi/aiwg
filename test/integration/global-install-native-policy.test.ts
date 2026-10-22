@@ -293,7 +293,11 @@ describe('global install native lifecycle-script policy', () => {
 
     const shown = await runInstalledCli(['show', 'skill', 'aiwg-status']);
     expectCliSuccess(shown);
-    expect(shown.stdout).toContain('name: aiwg-status');
+    expect(shown.stdout).toContain('# skill: aiwg-status');
+    expect(shown.stdout).toContain('## Outline');
+    expect(shown.stdout).toContain('## Drill in');
+    expect(shown.stdout).toContain('--body');
+    expect(shown.stdout).not.toContain('name: aiwg-status');
     expect(existsSync(path.join(project, '.claude'))).toBe(false);
     expect(existsSync(path.join(project, '.agents'))).toBe(false);
   }, 30_000);
@@ -343,7 +347,7 @@ describe('global install native lifecycle-script policy', () => {
     const id = payload.results[0].id as string;
 
     const shown = await runInstalledCli([
-      'show', 'skill', id,
+      'show', 'skill', id, '--body',
       '--resource-source', 'web',
       '--aiwg-version', TEST_VERSION,
     ]);
@@ -353,7 +357,7 @@ describe('global install native lifecycle-script policy', () => {
 
     const requestsBeforeOffline = fixture.requestPaths.length;
     const offline = await runInstalledCli([
-      'show', 'skill', id,
+      'show', 'skill', id, '--body',
       '--resource-source', 'web',
       '--aiwg-version', TEST_VERSION,
       '--offline',
