@@ -338,7 +338,13 @@ write bits from its own current-user-owned `AIWG_CONFIG` directory: the TTY
 confirmation and `--dry-run` list `chmod go-w`, and `--yes` applies it. A directory
 owned by another user is refused with its path.
 
-`--brief`, `--workdir`, and `--final-output` require absolute paths. The brief may
+`--task` is required: use `inventory`, `implementation`, `architecture`, `review`,
+or a class configured in `defaults.workerSelection.taskClasses`. Missing task
+arguments are rejected before configuration is loaded.
+
+`--brief`, `--workdir`, and `--final-output` require absolute paths. Relative
+paths produce a diagnostic naming the flag and its `/request` field; they are
+not resolved against the current directory or workdir. The brief may
 be outside the workdir, but must remain inside the installation's qualified
 worker-writable roots; paths through symlinks are rejected.
 The workdir must match the workspace used during qualification. A different
