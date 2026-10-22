@@ -310,12 +310,14 @@ aiwg doctor --probe-workers --qualify --dry-run --json
 Without a terminal, omitting `--yes` fails without recording approval. `--dry-run`
 previews the records without writing them or asking for confirmation. `--cli`
 limits both probing and qualification to that configured CLI. JSON mode emits a
-single document, including the qualification results.
+single document, including the qualification results and an
+`qualification.accountScopeNotice` explaining the account approval limitation.
 
 Approval trusts the installed CLI and bundled argument renderer for direct shell
 operation. It records no live inference, backend identity, or negative sandbox
 test result. Existing host inspection binds the executable bytes/version,
-installed driver files, workspace, account scope, environment and worker policy.
+installed driver files, workspace, configured account scope label, environment
+and worker policy.
 The existing private `worker-installations.json` under `AIWG_CONFIG` (normally
 `~/.config/aiwg`) also stores the existing model observation records with only the
 configured models and roles qualified. Resolution revalidates the installation
@@ -329,6 +331,26 @@ A failed build prevents qualification and reports `WORKER_DIRECT_INVOCATION_BLOC
 with `ready: false`; `inRange` still describes the version probe. Subsequent probes
 repeat these checks for recorded installations. These checks do not replace the
 resolver's policy and concrete request-path checks.
+
+Account approval is per configured `parallelism.clis.<cli>.accountScope` label
+only (default: `local-account`), not the native CLI's authenticated account.
+Qualification does not read credential files or fingerprint tokens. Logging out
+and signing into a different account under the same `HOME`/`CODEX_HOME` and label
+does not invalidate existing installation or model/role approvals. The new
+account may have different quota and data-use terms. After switching accounts,
+set a distinct, non-secret label, refresh model discovery, and requalify before
+dispatching:
+
+```bash
+aiwg config set --project parallelism.clis.codex.accountScope local-codex-account-2
+aiwg models refresh
+aiwg doctor --probe-workers --qualify --yes --cli codex
+```
+
+Use the configured CLI id in place of `codex`. Changing the label blocks use of
+the previous approvals until fresh discovery and qualification are recorded.
+Doctor includes this limitation in its confirmation question and qualification
+results, including `--dry-run` and `--json` output.
 
 Qualification rejects group/other-writable installed package paths. With a
 shared-group umask such as `002`, secure the package first with

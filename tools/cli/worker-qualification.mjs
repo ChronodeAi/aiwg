@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline/promises';
 import { importImpl } from '../_resolve-impl.mjs';
 
 const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+const accountScopeNotice = 'Account approval is bound only to the configured accountScope label (default: local-account), not the native CLI login. Account switches are not detected. After switching accounts, change parallelism.clis.<cli>.accountScope, refresh model discovery, and requalify before dispatch.';
 
 async function executablePath(executable) {
   if (path.isAbsolute(executable)) return fs.realpath(executable);
@@ -138,16 +139,16 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
     models: Object.values(config.parallelism.groups ?? {}).flatMap(group => group.members)
       .filter(member => member.cli === row.cli && member.enabled !== false)
       .map(member => ({ model: member.model, roles: member.roles })) }));
-  if (!ready.length) return { status: 'failed', targets, results: [], message: 'No configured worker CLIs probed ready; no qualification was recorded.' };
+  if (!ready.length) return { status: 'failed', accountScopeNotice, targets, results: [], message: 'No configured worker CLIs probed ready; no qualification was recorded.' };
   const storeChanges = await host.prepareWorkerInstallationStore({ workerWritableRoots: [projectDir] });
   if (!dryRun && !yes) {
     const terminal = createInterface({ input: process.stdin, output: process.stderr });
     try {
-      const answer = await terminal.question(`Record installation and configured model/role approval for ${JSON.stringify(targets)} and apply store changes ${JSON.stringify(storeChanges)}? This trusts the local CLI; no live model or sandbox attestation is performed. [y/N]: `);
-      if (!/^y(es)?$/i.test(answer.trim())) return { status: 'declined', targets, storeChanges, results: [] };
+      const answer = await terminal.question(`Record installation and configured model/role approval for ${JSON.stringify(targets)} and apply store changes ${JSON.stringify(storeChanges)}? This trusts the local CLI; no live model or sandbox attestation is performed. ${accountScopeNotice} [y/N]: `);
+      if (!/^y(es)?$/i.test(answer.trim())) return { status: 'declined', accountScopeNotice, targets, storeChanges, results: [] };
     } finally { terminal.close(); }
   }
-  if (dryRun) return { status: 'dry-run', targets, storeChanges, results: [] };
+  if (dryRun) return { status: 'dry-run', accountScopeNotice, targets, storeChanges, results: [] };
   await host.prepareWorkerInstallationStore({ workerWritableRoots: [projectDir], apply: true });
   const results = [];
   for (const row of ready) {
@@ -237,5 +238,5 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
     } catch (error) { results.push({ cli: row.cli, status: 'failed', message: error.message }); }
   }
   return { status: !ready.length || results.some(result => result.status === 'failed') ? 'failed'
-    : results.some(result => result.warning) ? 'partial' : 'recorded', targets, storeChanges, results };
+    : results.some(result => result.warning) ? 'partial' : 'recorded', accountScopeNotice, targets, storeChanges, results };
 }
