@@ -1767,10 +1767,26 @@ async function handleDiscover(args: string[]): Promise<void> {
  * Companion to `discover`: where discover ranks candidates, show returns
  * a metadata card with section/body drill-ins so consumers don't need to navigate the filesystem.
  */
+const SHOW_FLAGS = new Set(['--json', '--first', '--bound-rule-bodies', '--graph', '--backend', '--resource-source',
+  '--aiwg-version', '--offline', '--body', '--section', '--rules', '--with-rule-bodies', '--resources', '--resource',
+  '--help']);
+
+// Section headings can themselves start with `--` (e.g. "--max-iterations (default: 10)"), and the card
+// tells agents to pass them verbatim. Only a missing value or another show flag counts as "no value".
 function showFlagValue(flags: string[], index: number): string {
   const value = flags[index + 1];
-  if (!value || value.startsWith('--')) throw new Error(`${flags[index]} requires a value`);
+  if (!value || SHOW_FLAGS.has(value.split('=')[0])) throw new Error(`${flags[index]} requires a value`);
   return value;
+}
+
+/** Values for a repeatable value flag, accepting both `--flag value` and `--flag=value`. */
+function showFlagValues(flags: string[], name: string): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < flags.length; i++) {
+    if (flags[i] === name) values.push(showFlagValue(flags, i));
+    else if (flags[i].startsWith(`${name}=`)) values.push(flags[i].slice(name.length + 1));
+  }
+  return values;
 }
 
 async function handleShow(args: string[]): Promise<void> {
@@ -1880,11 +1896,11 @@ async function handleShow(args: string[]): Promise<void> {
     name,
     boundRuleBodies: flags.includes('--bound-rule-bodies'),
     body: flags.includes('--body'),
-    sections: flags.flatMap((flag, i) => flag === '--section' ? [showFlagValue(flags, i)] : []),
+    sections: showFlagValues(flags, '--section'),
     rules: flags.includes('--rules'),
     withRuleBodies: flags.includes('--with-rule-bodies'),
     resources: flags.includes('--resources'),
-    resource: flags.includes('--resource') ? showFlagValue(flags, flags.indexOf('--resource')) : undefined,
+    resource: showFlagValues(flags, '--resource')[0],
     typeFilter: type ? [type] : undefined,
     json,
     first,

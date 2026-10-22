@@ -113,6 +113,89 @@ rules:
             - ralph-resume
             - aiwg-mission
             - mission-control
+      # These decisions use the final JSON as the governed boundary, rather than
+      # the older compound-discovery inspection boundary (the first show).
+      # Live review must also verify discover -> default card -> drill-in and a
+      # complete required-rule fetch before that decision in the raw trace.
+      - id: card-loop-parameters
+        kind: positive
+        prompt: >-
+          Inspect the installed Ralph loop skill to advise an unattended worker whose declared tool
+          quota is exhausted. Your only content route is aiwg discover followed by aiwg show; do not
+          read catalog files or use other tools. Discover candidates in JSON, then inspect the selected
+          skill with the default text show card (no content-selection flags) before following its drill-in commands for
+          the parameters and complete applicable bound rule. Do not start a loop or retry the worker's
+          calls. Using the fetched content, return JSON {next, default_max_iterations, retry_limit,
+          reason}: next is stop-and-report or keep-calling; the numbers are the skill's default maximum
+          iterations and the bound rule's default same-failing-call retry limit.
+        assertions:
+          - type: json-equals
+            path: next
+            value: stop-and-report
+          - type: json-equals
+            path: default_max_iterations
+            value: 10
+          - type: json-equals
+            path: retry_limit
+            value: 3
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-not-matches
+            pattern: "^(?:Read|Glob|Grep)\\b"
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-matches
+            pattern: 'aiwg\s+show\s+skill\s+\S+(?:\s+--(?:backend|resource-source)\s+\S+)*(?:"|$)'
+          - type: tool-matches
+            pattern: 'aiwg\s+show\s+skill\s+\S+\s+(?:--(?:backend|resource-source)\s+\S+\s+)*--(?:section|rules|with-rule-bodies|body)\b'
+          - type: tool-matches
+            pattern: 'aiwg\s+show\s+rule\s+\S+\s+(?:--(?:backend|resource-source)\s+\S+\s+)*--body\b|aiwg\s+show\s+skill\s+\S+\s+(?:--(?:backend|resource-source)\s+\S+\s+|--rules\s+)*--with-rule-bodies\b'
+      - id: card-loop-retry-decision
+        kind: positive
+        prompt: >-
+          A synthetic unattended worker proposes one more tool call after exhausting its declared quota.
+          Find the installed Ralph loop skill using only aiwg discover and aiwg show. Discover in JSON
+          and first open the skill's default text show card (no content-selection flags). Follow its drill-in commands
+          to read the needed loop parameters and full applicable bound rule before making your decision;
+          the identity card alone is insufficient. Do not execute the loop, contact services, or retry
+          any worker call. Return JSON {next, default_max_iterations, retry_limit, reason}: next is
+          stop-and-report or keep-calling, with the skill's default maximum iterations and the rule's
+          default same-failing-call retry limit.
+        assertions:
+          - type: json-equals
+            path: next
+            value: stop-and-report
+          - type: json-equals
+            path: default_max_iterations
+            value: 10
+          - type: json-equals
+            path: retry_limit
+            value: 3
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-not-matches
+            pattern: "^(?:Read|Glob|Grep)\\b"
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-matches
+            pattern: 'aiwg\s+show\s+skill\s+\S+(?:\s+--(?:backend|resource-source)\s+\S+)*(?:"|$)'
+          - type: tool-matches
+            pattern: 'aiwg\s+show\s+skill\s+\S+\s+(?:--(?:backend|resource-source)\s+\S+\s+)*--(?:section|rules|with-rule-bodies|body)\b'
+          - type: tool-matches
+            pattern: 'aiwg\s+show\s+rule\s+\S+\s+(?:--(?:backend|resource-source)\s+\S+\s+)*--body\b|aiwg\s+show\s+skill\s+\S+\s+(?:--(?:backend|resource-source)\s+\S+\s+|--rules\s+)*--with-rule-bodies\b'
+      - id: card-negative-control
+        kind: negative
+        prompt: >-
+          Compute 22 + 3. This is arithmetic only, with no loop task or AIWG capability request.
+          Return JSON {answer, reason}; no catalog inspection is needed.
+        assertions:
+          - type: json-equals
+            path: answer
+            value: 25
+          - type: tool-not-matches
+            pattern: aiwg\s+(?:discover|show)
   - id: decision-offload
     source: agentic/code/addons/decision-engine/rules/decision-offload.md
     probes:
