@@ -26,6 +26,7 @@ import type { AiwgConfig } from './aiwg-config.js';
 import { UserConfig } from './user-config.js';
 import { AiwgError, EXIT_CODES } from '../cli/errors.js';
 import { isInteractive } from '../cli/env.js';
+import { splitParams } from '../cli/agent-spawn.js';
 import { exitCodeForSpawnResult } from '../cli/child-process-result.js';
 import { projectControlPath, resolveProjectAiwgDir } from './project-artifacts.js';
 
@@ -804,14 +805,16 @@ async function handleEdit(config: UserConfig, args: string[] = []): Promise<void
   // Ensure the config file exists before opening
   await config.ensureDir();
 
-  const { execSync } = await import('child_process');
+  const { execFileSync } = await import('child_process');
   try {
+    const [executable, ...editorArgs] = splitParams(editor);
+    if (!executable) throw new Error('Editor command is empty');
     // sync-spawn: interactive editor-launch — launches $EDITOR/$VISUAL on the
     // config file; the user interacts with it directly (see tools/testing/
     // sync-spawn-allowlist.json). Reached only when isInteractive() is true
     // (#3062) — the no-terminal path above refuses before spawning anything.
     // Not a candidate for a bounded timeout.
-    execSync(`${editor} "${configPath}"`, { stdio: 'inherit' });
+    execFileSync(executable, [...editorArgs, configPath], { stdio: 'inherit', shell: false });
   } catch (err) {
     throw new AiwgError({
       code: 'ERR_EDITOR_FAILED',

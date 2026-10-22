@@ -148,8 +148,8 @@ describe('Cockpit bridge UI security', () => {
 // Feed the actual HTTP handler without opening a listening socket. The fetch
 // seam records every outbound request, including redirect and bearer options.
 const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), { status });
-const request = (bridge, path, { method = 'GET', body } = {}) => new Promise((resolve) => {
-  const req = { method, async *[Symbol.asyncIterator]() { if (body !== undefined) yield Buffer.from(JSON.stringify(body)); }, url: path, socket: { encrypted: false }, headers: { host: '127.0.0.1:8140', authorization: `Bearer ${bridge.cockpitToken}` } };
+const request = (bridge, path, { method = 'GET', body, headers = {} } = {}) => new Promise((resolve) => {
+  const req = { method, async *[Symbol.asyncIterator]() { if (body !== undefined) yield Buffer.from(JSON.stringify(body)); }, url: path, socket: { encrypted: false }, headers: { host: '127.0.0.1:8140', authorization: `Bearer ${bridge.cockpitToken}`, ...headers } };
   let status;
   const responseHeaders = new Headers();
   bridge.emit('request', req, {
@@ -162,6 +162,37 @@ const request = (bridge, path, { method = 'GET', body } = {}) => new Promise((re
 const executorUrl = 'http://127.0.0.1:8122';
 
 describe('Cockpit bridge outbound security', () => {
+  it('refuses request-supplied executor origins in headers, query, body and AgentCards', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const hostile = 'http://untrusted.example';
+    const outbound = vi.spyOn(globalThis, 'fetch').mockImplementation(async (target) => {
+      if (target.pathname === '/admin/instances') return jsonResponse({ instances: [{ id: 'instance', state: 'running', runtime: 'host' }] });
+      if (target.pathname === '/api/v2/admin/instances') return jsonResponse({ id: 'created' }, 201);
+      if (target.pathname.endsWith('/.well-known/agent-card.json')) return jsonResponse({ protocolVersion: '0.3.0', url: `${hostile}/agents/instance`, executorOrigin: hostile });
+      if (target.pathname === '/agents/instance/v1/tasks') return jsonResponse({ tasks: [] });
+      return jsonResponse({ error: 'not_found' }, 404);
+    });
+    const directory = await mkdtemp(join(tmpdir(), 'aiwg-request-origin-'));
+    try {
+      const bridge = createBridge({ executorUrl, allowMockExecutor: true, executorTokenFile: '', a2aProtocolPolicy: '0.3', auditDir: directory });
+      const query = new URLSearchParams({ executorOrigin: hostile, executorUrl: hostile });
+      const headers = { 'x-executor-origin': hostile, 'x-executor-url': hostile, 'x-forwarded-host': 'untrusted.example' };
+      const response = await request(bridge, `/api/running?${query}`, { headers });
+      expect(response.status).toBe(200);
+      const created = await request(bridge, `/api/instances?${query}`, {
+        method: 'POST', headers,
+        body: { runtime: 'docker', name: 'synthetic', executorOrigin: hostile, executorUrl: hostile, EXECUTOR_URL: hostile },
+      });
+      expect(created.status).toBe(201);
+      expect(outbound.mock.calls.length).toBeGreaterThan(0);
+      expect(outbound.mock.calls.every(([target]) => target.origin === executorUrl)).toBe(true);
+      expect(outbound.mock.calls.some(([target]) => target.pathname === '/agents/instance/v1/tasks')).toBe(true);
+      const post = outbound.mock.calls.find(([, init]) => init.method === 'POST');
+      expect(post[0].href).toBe(`${executorUrl}/api/v2/admin/instances`);
+      expect(JSON.parse(post[1].body)).toMatchObject({ executorOrigin: hostile });
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
   it('allows the configured origin and rejects other hosts, ports, schemes and URL credentials before sending', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const outbound = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse({ ok: true }));

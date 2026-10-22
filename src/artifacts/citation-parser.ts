@@ -97,7 +97,14 @@ function isNonCitation(value: string): boolean {
 function isNonCitationContext(value: string): boolean {
   // Candidate-specific audit prose does not disavow the surrounding tables.
   // Keep whole-table declarations separate from notes about particular REFs.
-  const text = value.replace(/<!--[\s\S]*?-->/g, '').toLowerCase().replace(/[`*_]/g, '').split('\n')
+  // Removing a comment can join its neighbours into another comment opener.
+  // Each pass shortens the string; include unterminated comments as well.
+  let previous: string;
+  do {
+    previous = value;
+    value = value.replace(/<!--[\s\S]*?(?:-->|$)/g, '');
+  } while (value !== previous);
+  const text = value.toLowerCase().replace(/[`*_]/g, '').split('\n')
     .filter(line => !/\b(?:search results|external .*?candidates?|historical records)\b/.test(line))
     .filter(line => !/(?:ref-\d+|prof-[pofg]-)/.test(line)
       || /\b(?:rows|tables?|relationships?|connections?) (?:below|are|only)\b/.test(line))

@@ -649,6 +649,14 @@ The connections below are topical within the REF-001 cluster, not citation edges
         .toEqual(['REF-002', 'REF-003']);
     });
 
+    it.each(['<!<!---->--no formal citations-->', '<!<!---->--\nno formal citations\n-->', '<!<!---->--no formal citations', '<!<!<!---->---->--no formal citations-->'])(
+      'strips comments until delimiters cannot be reconstructed: %s', comment => {
+        const content = `---\nref: REF-001\n---\n## Outgoing\n${comment}\n\n| REF |\n|---|\n| REF-002 |`;
+        // An unterminated comment owns the remainder of its context as well.
+        expect(parseCitationSidecar(content)?.cites).toEqual(['REF-002']);
+      },
+    );
+
     it('keeps a verified bibliography when audit prose explains why other candidates were rejected', () => {
       // Minimal REF-2572 shape: its audit note says a .bib-only entry is not a
       // citation. That statement does not disavow the verified table below it.
