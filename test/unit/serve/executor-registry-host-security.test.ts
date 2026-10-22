@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { lstatSync } from 'fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -177,10 +177,38 @@ describe('host executor registration security', () => {
     expect(memory.read().hostRegistrationRevoked).toBe(true);
   });
 
+  it('keeps ordinary registration working when the shared identity directory is not private', () => {
+    const shared = join(root, 'lax');
+    mkdirSync(shared, { mode: 0o755 }); chmodSync(shared, 0o755);
+    const sharedPath = join(shared, 'executor-identities.json');
+    vi.stubEnv('AIWG_EXECUTOR_IDENTITY_STORE', sharedPath);
+    const service = new ExecutorRegistry(sharedPath); registries.push(service);
+    const ordinary = { ...executor, executor_id: 'b1b2c3d4-e5f6-7890-abcd-ef1234567890' };
+    const first = service.register(ordinary);
+    if ('status' in first) throw new Error(first.error);
+    const restarted = new ExecutorRegistry(sharedPath); registries.push(restarted);
+    expect(restarted.authenticate(ordinary.executor_id, first.token)).toBe(true);
+    expect(restarted.register({ ...ordinary, version: '2' }, first.token)).not.toHaveProperty('status');
+    expect(restarted.deregister(ordinary.executor_id)).toBe(true);
+    // A host-bound record in an unprotected file is never trusted: that id fails closed.
+    writeFileSync(sharedPath, JSON.stringify([{ executorId: executor.executor_id, token, lastSeenAt: '2026-10-22T12:00:00Z',
+      hostAdmission: { authorityRef: 'host:synthetic', path: join(root, 'host.json'), version: '1', workerWritableRoots: [], revisionSupport: 1 } }]));
+    const untrusted = new ExecutorRegistry(sharedPath); registries.push(untrusted);
+    expect(untrusted.authenticate(executor.executor_id, token)).toBe(false);
+    expect(untrusted.register({ ...executor, version: '2' }, token)).toEqual({ error: 'Unauthorized', status: 401 });
+    // An unparseable shared file may hide host admission: registration fails closed without mutation.
+    writeFileSync(sharedPath, '{not json');
+    const corrupt = new ExecutorRegistry(sharedPath); registries.push(corrupt);
+    expect(corrupt.register({ ...ordinary, executor_id: 'c1b2c3d4-e5f6-7890-abcd-ef1234567890' })).toEqual({ error: 'Unauthorized', status: 401 });
+    expect(readFileSync(sharedPath, 'utf8')).toBe('{not json');
+    expect(store.read().hostRegistrationRevoked).not.toBe(true);
+  });
+
   it('rejects a symlinked host registration file', () => {
     const target = join(root, 'registration-target.json');
     renameSync(hostPath, target); symlinkSync(target, hostPath);
-    expect(() => registry.register(executor, token)).toThrow(/private bounded regular file/);
+    expect(registry.register(executor, token)).toEqual({ error: 'Unauthorized', status: 401 });
+    expect(store.read().hostRegistrationRevoked).not.toBe(true);
   });
 
   it('rejects a symlink swapped in after the registration lstat check', () => {
@@ -190,7 +218,7 @@ describe('host executor registration security', () => {
       if (path === hostPath) { renameSync(hostPath, target); symlinkSync(target, hostPath); }
       return stat;
     });
-    expect(() => registry.register(executor, token)).toThrow(/ELOOP|symbolic link/);
+    expect(registry.register(executor, token)).toEqual({ error: 'Unauthorized', status: 401 });
     expect(store.read().hostRegistrationRevoked).not.toBe(true);
   });
 
@@ -200,7 +228,7 @@ describe('host executor registration security', () => {
       if (path === hostPath) chmodSync(hostPath, 0o644);
       return stat;
     });
-    expect(() => registry.register(executor, token)).toThrow(/private bounded regular file/);
+    expect(registry.register(executor, token)).toEqual({ error: 'Unauthorized', status: 401 });
     expect(store.read().hostRegistrationRevoked).not.toBe(true);
   });
 });

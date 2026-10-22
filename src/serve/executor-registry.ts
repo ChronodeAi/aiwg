@@ -481,7 +481,9 @@ export class ExecutorRegistry extends EventEmitter {
 
   private revokeHostAdmissionAuthority(executorId: string): void {
     const installed = [...this.admissionAuthorities.values()].filter(entry => entry.executorId === executorId);
-    const stored = this.loadHostIdentities().get(executorId)?.hostAdmission;
+    const view = this.hostView();
+    if (!view.trusted && view.untrustedHostBound.has(executorId)) throw new Error('host registration store is not protected');
+    const stored = view.identities.get(executorId)?.hostAdmission;
     if (stored && !installed.length) {
       const store = new FileAdmissionStore(stored.path);
       store.protectHostAuthority(stored.workerWritableRoots);
@@ -508,6 +510,30 @@ export class ExecutorRegistry extends EventEmitter {
     return loadExecutorIdentityStore(this.hostIdentityStorePath, true);
   }
 
+  /**
+   * Host view for ordinary registry operations. When the shared identity file is
+   * not a protected host store (e.g. a 0755 ~/.config/aiwg holding only ordinary
+   * executors), ordinary IDs keep working; IDs that claim host admission in it
+   * are reported as untrusted so callers fail closed for them only. Untrusted
+   * content is never used for tokens, paths or metadata.
+   */
+  private hostView(): { trusted: boolean; identities: Map<string, ExecutorIdentityRecord>; untrustedHostBound: Set<string> } {
+    try { return { trusted: true, identities: this.loadHostIdentities(), untrustedHostBound: new Set() }; } catch {
+      const untrustedHostBound = new Set<string>();
+      try {
+        const data = JSON.parse(readFileSync(this.hostIdentityStorePath, 'utf-8'));
+        if (Array.isArray(data)) for (const record of data) {
+          if (record && typeof record.executorId === 'string' && record.hostAdmission) untrustedHostBound.add(record.executorId);
+        }
+      } catch { untrustedHostBound.add('*'); }
+      return { trusted: false, identities: new Map(), untrustedHostBound };
+    }
+  }
+
+  private isUntrustedHostBound(view: { untrustedHostBound: Set<string> }, executorId: string): boolean {
+    return view.untrustedHostBound.has(executorId) || view.untrustedHostBound.has('*');
+  }
+
   // ---- Registration ----
 
   /**
@@ -529,9 +555,11 @@ export class ExecutorRegistry extends EventEmitter {
     // Check for existing token in identity store (re-register reclaims it)
     const existing = this.executors.get(executorId);
     const storedIdentity = this.identityStore.get(executorId);
-    const hostRecord = this.loadHostIdentities().get(executorId);
+    const view = this.hostView();
+    const hostRecord = view.identities.get(executorId);
     const hostAdmission = hostRecord?.hostAdmission;
     const installedAuthority = [...this.admissionAuthorities.values()].find(binding => binding.executorId === executorId);
+    if (!view.trusted && (installedAuthority || this.isUntrustedHostBound(view, executorId))) return { error: 'Unauthorized', status: 401 };
     // Host-bound IDs authenticate only against the live executor or the protected
     // host record, never the environment/project-selectable identity store.
     const hostToken = this.executors.get(executorId)?.token ?? hostRecord?.token;
@@ -581,9 +609,20 @@ export class ExecutorRegistry extends EventEmitter {
     const identityPath = resolveExecutorIdentityStorePath();
     if (identityPath === this.hostIdentityStorePath) {
       mkdirSync(dirname(this.hostIdentityStorePath), { recursive: true, mode: 0o700 });
-      const identities = this.loadHostIdentities();
-      for (const [id, identity] of this.identityStore) identities.set(id, { ...identities.get(id), ...identity });
-      saveExecutorIdentityStore(identities, this.hostIdentityStorePath, true);
+      const persisted = this.hostView();
+      if (persisted.trusted) {
+        const identities = persisted.identities;
+        for (const [id, identity] of this.identityStore) identities.set(id, { ...identities.get(id), ...identity });
+        try { saveExecutorIdentityStore(identities, this.hostIdentityStorePath, true); } catch (error) {
+          // A pre-existing non-private directory may still hold ordinary identities;
+          // only a store that carries host admission must be protected.
+          if ([...identities.values()].some(record => record.hostAdmission)) throw error;
+          saveExecutorIdentityStore(this.identityStore, identityPath);
+        }
+      } else if (!persisted.untrustedHostBound.size) {
+        // No host admission lives here: keep the legacy ordinary identity store.
+        saveExecutorIdentityStore(this.identityStore, identityPath);
+      } else throw new Error('host registration store is not protected');
     } else saveExecutorIdentityStore(this.identityStore, identityPath);
 
     // Emit event (for dashboard SSE, etc.)
@@ -623,8 +662,10 @@ export class ExecutorRegistry extends EventEmitter {
     if (executor) return executor.token === token;
     // A host-bound ID authenticates only against the protected host record,
     // never the environment/project-selectable identity store (#2923 review).
-    let hostRecord: ExecutorIdentityRecord | undefined;
-    try { hostRecord = this.loadHostIdentities().get(executorId); } catch { return false; } // unreadable host store fails closed
+    const view = this.hostView();
+    if (!view.trusted && this.isUntrustedHostBound(view, executorId)) return false; // unverifiable host-bound id fails closed
+    if (!view.trusted && [...this.admissionAuthorities.values()].some(entry => entry.executorId === executorId)) return false;
+    const hostRecord = view.identities.get(executorId);
     if (hostRecord?.hostAdmission || [...this.admissionAuthorities.values()].some(entry => entry.executorId === executorId)) {
       return !!token && hostRecord?.token === token;
     }
