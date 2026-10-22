@@ -48,6 +48,78 @@ async function installedDriver(packageRoot, adapter) {
   return { modules, runtimeFiles: [...runtimeFiles] };
 }
 
+/** Exercise the installed renderer with synthetic input; no files or workers are created. */
+export async function checkWorkerInvocationBuilds({ projectDir, config, policy, cli, driver, observations }) {
+  const { buildWorkerInvocationTransport, resolveWorkerEffectiveHealth, workerInvocationDiagnostic,
+    WorkerInvocationCheckError } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+  const { workerModelKey } = await importImpl(import.meta.url, 'models/provider-policy.js');
+  const checks = [];
+  const workdir = await fs.realpath(projectDir);
+  const adapter = driver.qualification.adapter;
+  const profileRef = driver.qualification.installation.profile;
+  for (const [groupId, group] of Object.entries(config.parallelism.groups ?? {})) {
+    for (const member of group.members) {
+      if (member.cli !== cli || member.enabled === false || config.parallelism.clis?.[cli]?.enabled === false) continue;
+      const row = observations?.models.find(row => row.id === member.model);
+      if (!row?.worker) continue; // Missing observations are reported separately by qualification.
+      for (const role of member.roles) {
+        const effort = row.worker.effortSupport === 'not-applicable' ? null : policy?.roleGuidance?.[role]?.initialEffort ?? null;
+        const check = { cli, group: groupId, member: member.id, role, model: member.model, effort, workdir, status: 'passed', diagnostics: [] };
+        try {
+          if (workdir !== await fs.realpath(driver.qualification.installation.cwd)) {
+            throw new WorkerInvocationCheckError('OG_CONFIG_REFERENCE', 'qualified_workspace_mismatch');
+          }
+          const selected = { group: groupId, member: member.id, cli, model: row.apiModelId, inferenceProvider: row.llmProvider,
+            family: row.worker.family, effort: { support: effort === null ? 'not-applicable' : 'explicit', value: effort },
+            profileRef, qualificationDigest: adapter.qualification.fixtureDigest };
+          const limits = { tokens: 50000, costUsd: null, wallSeconds: 900, maxAttempts: 3 };
+          const health = resolveWorkerEffectiveHealth(config.parallelism.health, { role, effort,
+            modelKey: workerModelKey(row.llmProvider, row.apiModelId), profileRef, wallSeconds: limits.wallSeconds,
+            stepEnforcement: config.parallelism.health?.requireStepCap
+              ? adapter.invocationProfiles[profileRef].controls.stepCap.support : 'unavailable' });
+          await buildWorkerInvocationTransport(driver, { selected, permissions: group.execution ?? {}, cwd: workdir,
+            briefPath: path.join(workdir, '.worker-probe', 'brief.txt'), brief: 'Check worker invocation.',
+            finalPath: path.join(workdir, '.worker-probe', 'result.json'), limits, health });
+        } catch (error) {
+          check.status = 'blocked';
+          check.diagnostics.push(workerInvocationDiagnostic(error, '/invocation/buildInvocation', 'OG_ADAPTER_UNQUALIFIED'));
+        }
+        checks.push(check);
+      }
+    }
+  }
+  return checks;
+}
+
+/** Recheck existing approval through the same installation owner as models resolve. */
+export async function checkRecordedWorkerInvocationBuilds({ projectDir, config, registry, workers }) {
+  const host = await importImpl(import.meta.url, 'models/worker-installation.mjs');
+  const { ConfigLoader } = await importImpl(import.meta.url, 'models/config-loader.js');
+  const { workerInvocationDiagnostic } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+  const { WorkerPolicyError } = await importImpl(import.meta.url, 'models/provider-policy.js');
+  const policy = (await new ConfigLoader(projectDir).load(config.parallelism)).defaults.workerSelection;
+  // No approval yet: the version-only finding remains an installation result.
+  const store = path.join(process.env.AIWG_CONFIG || path.join(homedir(), '.config/aiwg'), 'worker-installations.json');
+  if (!await fs.access(store).then(() => true, () => false)) return [];
+  try {
+    const loaded = await host.loadRecordedWorkerInstallations({ registry, cwd: projectDir, policy, parallelism: config.parallelism });
+    const checks = [];
+    for (const worker of workers.filter(worker => worker.ready)) {
+      if (!loaded.drivers[worker.cli]) {
+        checks.push({ cli: worker.cli, workdir: projectDir, status: 'blocked', diagnostics: [workerInvocationDiagnostic(
+          new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', 'Trusted installation qualification is required'), `/parallelism/clis/${worker.cli}`)] });
+        continue;
+      }
+      checks.push(...await checkWorkerInvocationBuilds({ projectDir, config, policy, cli: worker.cli,
+        driver: loaded.drivers[worker.cli], observations: loaded.observations[worker.cli] }));
+    }
+    return checks;
+  } catch (error) {
+    return workers.filter(worker => worker.ready).map(worker => ({ cli: worker.cli, workdir: projectDir, status: 'blocked',
+      diagnostics: [workerInvocationDiagnostic(error, '/parallelism/clis', 'OG_ADAPTER_UNQUALIFIED')] }));
+  }
+}
+
 export async function qualifyProbedWorkers({ projectDir, packageRoot, config, registry, section,
   yes = false, dryRun = false }) {
   const host = await importImpl(import.meta.url, 'models/worker-installation.mjs');
@@ -142,13 +214,25 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
         verifiedAt, evidenceRef: WORKER_OPERATOR_APPROVAL };
       const qualified = await host.qualifyWorkerInstallation(driver, installation);
       if (qualified.status !== 'ENABLED') throw new Error(qualified.reason);
+      const invocationChecks = await checkWorkerInvocationBuilds({ projectDir, config, policy, cli: row.cli,
+        observations: { models: approvedModels }, driver: {
+          qualification: { adapter, installation },
+          buildInvocation: async input => ({ argv: [executable, ...driver.buildWorkerArgs(input,
+            adapter.invocationProfiles[profile], input.permissions)], stdin: adapter.invocation.stdin,
+          envNames: Object.keys(installation.environment),
+          ...(typeof driver.buildWorkerArtifacts === 'function' ? { artifacts: driver.buildWorkerArtifacts(input) } : {}) }),
+        } });
+      if (invocationChecks.some(check => check.status === 'blocked')) {
+        results.push({ cli: row.cli, status: 'failed', invocationChecks });
+        continue;
+      }
       const result = await host.recordWorkerInstallation(driver, { cli: row.cli, installation,
         binding: { cliVersion: row.installedVersion, profile, accountScope,
           endpointFingerprint: `local-cli:${row.cli}`, identityEvidence: 'runtime-configured' },
         modelObservations: { provider: adapter.provider, source: 'native', observedAt: observed?.observedAt ?? verifiedAt,
           runtimeVersion: row.installedVersion, accountScope: 'local-account', accountBinding: accountScope, models: approvedModels } });
       if (result.status !== 'ENABLED') throw new Error(result.reason);
-      results.push({ cli: row.cli, status: 'qualified', models: approvedModels.map(model => model.id),
+      results.push({ cli: row.cli, status: 'qualified', models: approvedModels.map(model => model.id), invocationChecks,
         ...(missing.length ? { warning: `No exact current model observations for ${missing.join(', ')}. Refresh model discovery before qualifying again.` } : {}) });
     } catch (error) { results.push({ cli: row.cli, status: 'failed', message: error.message }); }
   }

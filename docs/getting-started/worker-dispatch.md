@@ -322,6 +322,14 @@ configured models and roles qualified. Resolution revalidates the installation
 before using those approvals. After a binary, driver, version, workspace or policy
 change, rerun the qualify action.
 
+Doctor checks each observed configured member/role with a synthetic brief through
+the same nonlaunching invocation builder and native argument checks as resolution.
+JSON output includes `invocationChecks` with the model, effort and workdir checked.
+A failed build prevents qualification and reports `WORKER_DIRECT_INVOCATION_BLOCKED`
+with `ready: false`; `inRange` still describes the version probe. Subsequent probes
+repeat these checks for recorded installations. These checks do not replace the
+resolver's policy and concrete request-path checks.
+
 Qualification rejects group/other-writable installed package paths. With a
 shared-group umask such as `002`, secure the package first with
 `chmod -R go-w <packageRoot>`; the error names the offending path. It never
@@ -333,6 +341,12 @@ owned by another user is refused with its path.
 `--brief`, `--workdir`, and `--final-output` require absolute paths. The brief may
 be outside the workdir, but must remain inside the installation's qualified
 worker-writable roots; paths through symlinks are rejected.
+The workdir must match the workspace used during qualification. A different
+worktree reports `qualified_workspace_mismatch` at `/request/workdir`; qualify
+from that worktree before resolving there. Build and preparation failures include
+fixed `reason` identifiers (`invocation_build_failed`, `native_argv_invalid`, or
+`invocation_prepare_failed`) and pointers to the failing invocation stage, in both
+JSON plans and shell-mode refusals. Internal error text remains redacted.
 
 Qualification preserves observed catalog facts and discovery timestamps. Doctor
 uses the existing read-only Codex/Muse catalog discovery or previously discovered

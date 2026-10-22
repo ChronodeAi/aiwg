@@ -163,7 +163,7 @@ export async function qualifyWorkerInstallation(instance, options) {
 }
 
 export async function prepareInstalledWorkerInvocation(instance, invocation, qualification) {
-  const { prepareWorkerInvocation, WorkerPathScopeError } = await import('../serve/worker-invocation.js');
+  const { prepareWorkerInvocation, WorkerPathScopeError, WorkerInvocationCheckError } = await import('../serve/worker-invocation.js');
   const { requiredWorkerControls, WorkerPolicyError, isOperatorQualifiedWorkerAdapter } = await import('./provider-policy.js');
   if (!isOperatorQualifiedWorkerAdapter(qualification.adapter)) qualification = { ...qualification, requiredControls: requiredWorkerControls({
     ...qualification, effort: invocation.selected.effort.value }) };
@@ -187,7 +187,7 @@ export async function prepareInstalledWorkerInvocation(instance, invocation, qua
       throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Worker installation qualification changed');
     }
     if (await realpath(result.cwd) !== scope.cwd) {
-      throw new WorkerPolicyError('OG_CONFIG_REFERENCE', 'Worker cwd differs from the qualified workspace');
+      throw new WorkerInvocationCheckError('OG_CONFIG_REFERENCE', 'qualified_workspace_mismatch');
     }
     for (const key of ['briefPath', 'stdoutPath', 'stderrPath', 'finalPath']) {
       const target = await canonicalFuturePath(result[key]);

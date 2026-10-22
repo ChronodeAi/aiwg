@@ -274,6 +274,39 @@ export interface WorkerInvocationDriver {
   }): Promise<Pick<WorkerResolvedInvocation, 'argv' | 'stdin' | 'envNames' | 'mcp' | 'artifacts'>>;
 }
 
+const invocationChecks = {
+  invocation_build_failed: { pointer: '/invocation/buildInvocation',
+    message: 'Worker adapter could not build the invocation; check the selected model, effort, permissions and request paths.' },
+  native_argv_invalid: { pointer: '/invocation/argv',
+    message: 'Worker adapter arguments do not preserve the requested native controls; review the installed driver and qualify again.' },
+  invocation_prepare_failed: { pointer: '/invocation/prepareWorkerInvocation',
+    message: 'Worker invocation preparation failed; check installation evidence, policy, paths and environment, then qualify again.' },
+  qualified_workspace_mismatch: { pointer: '/request/workdir',
+    message: 'Worker workdir differs from the qualified workspace. Use the qualified workspace or run aiwg doctor --probe-workers --qualify from the requested workdir.' },
+} satisfies Record<NonNullable<WorkerPolicyDiagnostic['reason']>, { pointer: string; message: string }>;
+
+/** Only fixed check identifiers, never adapter/filesystem error text, cross this boundary. */
+export class WorkerInvocationCheckError extends WorkerPolicyError {
+  constructor(code: WorkerPolicyDiagnostic['code'], public readonly reason: keyof typeof invocationChecks) {
+    super(code, invocationChecks[reason].message);
+  }
+}
+
+/** Nonlaunching build and native-control check shared by resolution and doctor. */
+export async function buildWorkerInvocationTransport(driver: Pick<WorkerInvocationDriver, 'qualification' | 'buildInvocation'>,
+  input: Parameters<WorkerInvocationDriver['buildInvocation']>[0]): ReturnType<WorkerInvocationDriver['buildInvocation']> {
+  let transport: Awaited<ReturnType<WorkerInvocationDriver['buildInvocation']>>;
+  try { transport = await driver.buildInvocation(input); }
+  catch (error) {
+    throw new WorkerInvocationCheckError(error instanceof WorkerPolicyError ? error.code : 'OG_ADAPTER_UNQUALIFIED', 'invocation_build_failed');
+  }
+  if (driver.qualification.adapter.invocationProfiles?.[input.selected.profileRef]?.transport === 'shell') {
+    try { assertOperatorWorkerNativeArgv(driver.qualification.adapter, transport.argv!, input.selected, input.permissions); }
+    catch { throw new WorkerInvocationCheckError('OG_ADAPTER_UNQUALIFIED', 'native_argv_invalid'); }
+  }
+  return transport;
+}
+
 export interface WorkerCommandRequest {
   role: 'efficiency' | 'coding' | 'reasoning';
   task: string;
@@ -500,16 +533,17 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
     }
     const controls = isOperatorQualifiedWorkerAdapter(adapter) ? (healthConfig?.requireStepCap ? ['stepCap'] : []) : requiredWorkerControls({ policy: plan.policy, permissions: tuple.permissions, effort: tuple.effort,
       requiredControls: healthConfig?.requireStepCap ? ['stepCap'] : [] });
-    pointer = `/parallelism/clis/${tuple.cli}/invocationProfile`;
+    pointer = '/parallelism/health';
     failureCode = 'OG_ADAPTER_UNQUALIFIED';
     const healthInput = { role: request.role, effort: tuple.effort,
       modelKey: tuple.modelKey, profileRef: tuple.profile, wallSeconds: limits.wallSeconds,
       transportSeconds: adapter.invocation.kind === 'http' ? adapter.invocation.timeoutSeconds : undefined,
       stepEnforcement: controls.includes('stepCap') ? profile.controls.stepCap.support as 'native' | 'external' : 'unavailable' as const };
     let effectiveHealth = resolveWorkerEffectiveHealth(healthConfig, healthInput);
-    const transport = await driver.buildInvocation({ selected: structuredClone(selected), permissions: structuredClone(tuple.permissions),
+    const transport = await buildWorkerInvocationTransport(driver, { selected: structuredClone(selected), permissions: structuredClone(tuple.permissions),
       cwd: request.workdir, briefPath: request.brief, brief: bytes?.toString('utf8') ?? '', finalPath, limits: structuredClone(limits),
       health: structuredClone(effectiveHealth) });
+    pointer = '/invocation/buildInvocation';
     if (transport.stdin === 'adapter-frame' && typeof driver.buildWorkerStdinFrame !== 'function') throw new Error('Installed adapter stdin framer is required');
     if (transport.mcp?.timeoutSeconds !== undefined) effectiveHealth = resolveWorkerEffectiveHealth(healthConfig,
       { ...healthInput, transportSeconds: Math.min(healthInput.transportSeconds ?? Infinity, transport.mcp.timeoutSeconds) });
@@ -530,13 +564,21 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       policy: plan.policy, permissions: tuple.permissions, role: request.role, modelObservation: observation,
       expectedDigests: { policyDigest, catalogDigest: plan.digests.catalogDigest, profileDigest: plan.digests.profileDigest, briefDigest },
       requiredControls: controls };
-    const prepared = await (driver.prepareWorkerInvocation
-      ? driver.prepareWorkerInvocation(structuredClone(invocation), invocationQualification)
-      : prepareWorkerInvocation(invocation, invocationQualification));
+    let prepared: WorkerResolvedInvocation;
+    pointer = '/invocation/prepareWorkerInvocation';
+    try {
+      prepared = await (driver.prepareWorkerInvocation
+        ? driver.prepareWorkerInvocation(structuredClone(invocation), invocationQualification)
+        : prepareWorkerInvocation(invocation, invocationQualification));
+    } catch (error) {
+      if (error instanceof WorkerPathScopeError || error instanceof WorkerInvocationCheckError) throw error;
+      throw new WorkerInvocationCheckError(error instanceof WorkerPolicyError ? error.code : 'OG_ADAPTER_UNQUALIFIED', 'invocation_prepare_failed');
+    }
     if (workerConfigDigest({ ...prepared, shellCommand: invocation.shellCommand }) !== workerConfigDigest(invocation)) {
       throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Installation preparation changed the resolved invocation');
     }
     if (tuple.transport === 'mcp' && profile.installationQualification) {
+      pointer = '/invocation/mcp';
       const installation = qualification.installation;
       if (!installation?.mcpServerDigest || !driver.mcpRegistry?.assertWorkerQualified) {
         throw new Error('MCP installation registration recheck is required');
@@ -577,6 +619,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
 export function workerInvocationDiagnostic(error: unknown, pointer: string,
   fallback: WorkerPolicyDiagnostic['code'] = 'OG_CONFIG_REFERENCE'): WorkerPolicyDiagnostic {
   if (error instanceof WorkerPathScopeError) return { code: error.code, pointer: error.pointer, message: error.message };
+  if (error instanceof WorkerInvocationCheckError) return { code: error.code, reason: error.reason, ...invocationChecks[error.reason] };
   const code = error instanceof WorkerPolicyError ? error.code : fallback;
   const messages: Record<WorkerPolicyDiagnostic['code'], string> = {
     OG_CONFIG_REFERENCE: 'Invalid request or configuration reference; check the paths and settings.',
