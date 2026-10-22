@@ -26,6 +26,7 @@ import { claudeProjectKey } from '../../../src/sessions/workspace-discovery.js';
 import { resolveImportLimits } from '../../../src/sessions/import-limits.js';
 import * as readers from '../../../src/sessions/readers.js';
 import { IncrementalSessionImporter } from '../../../src/sessions/importer.js';
+import { refreshSessionCatalog } from '../../../src/sessions/refresh.js';
 
 const roots: string[] = [];
 
@@ -491,6 +492,63 @@ describe('workspace session discovery and batch import', () => {
     await expect(readDiscoveryManifest(path)).rejects.toThrow('identity does not match');
   });
 
+  it.each(['codexRoot', 'codexRoots', 'config'] as const)(
+    'adds %s roots to provider-home authorized Codex defaults', async (origin) => {
+      const fixture = await providerFixture();
+      const explicit = join(fixture.workspace, 'exported');
+      const roleRoot = join(fixture.providerHome, '.codex/roles-runtime/full/.codex/sessions');
+      const runtimeHome = join(fixture.root, 'runtime-codex');
+      await writeCodexRollout(explicit, fixture.workspace, 'explicit');
+      await writeCodexRollout(roleRoot, fixture.workspace, 'role');
+      await writeCodexRollout(join(runtimeHome, 'sessions'), fixture.workspace, 'runtime');
+      vi.stubEnv('CODEX_HOME', runtimeHome);
+      if (origin === 'config') {
+        await mkdir(join(fixture.workspace, '.aiwg'));
+        await writeFile(join(fixture.workspace, '.aiwg/aiwg.config'), JSON.stringify({
+          sessions: { codex_roots: ['exported'] },
+        }));
+      }
+      const manifest = await discoverWorkspaceHistories({
+        workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders: ['codex'],
+        ...(origin === 'codexRoot' ? { codexRoot: explicit }
+          : origin === 'codexRoots' ? { codexRoots: [explicit] } : {}),
+      });
+      expect(manifest.authorizedRoots?.codex).toEqual([
+        explicit, join(fixture.providerHome, '.codex/sessions'), join(runtimeHome, 'sessions'), roleRoot,
+      ]);
+      expect(manifest.sources).toHaveLength(4);
+      expect(manifest.sources.map(source => source.authorizedRoot).sort())
+        .toEqual([...manifest.authorizedRoots!.codex!].sort());
+    },
+  );
+
+  it.each(['codexRoot', 'codexRoots', 'config'] as const)(
+    'limits %s discovery to explicit Codex roots without provider-home authorization', async (origin) => {
+      const fixture = await providerFixture();
+      const explicit = join(fixture.workspace, 'exported');
+      const roleHome = join(fixture.providerHome, '.codex/roles-runtime/full/.codex');
+      await writeCodexRollout(explicit, fixture.workspace, 'explicit');
+      await writeCodexRollout(join(roleHome, 'sessions'), fixture.workspace, 'role');
+      vi.stubEnv('CODEX_HOME', roleHome);
+      if (origin === 'config') {
+        await mkdir(join(fixture.workspace, '.aiwg'));
+        await writeFile(join(fixture.workspace, '.aiwg/aiwg.config'), JSON.stringify({
+          sessions: { codex_roots: ['exported'] },
+        }));
+      }
+      const manifest = await discoverWorkspaceHistories({
+        workspace: fixture.workspace, operatorHome: fixture.providerHome, expectedProviders: ['codex'],
+        ...(origin === 'codexRoot' ? { codexRoot: explicit }
+          : origin === 'codexRoots' ? { codexRoots: [explicit] } : {}),
+      });
+      expect(manifest.authorizedRoots?.codex).toEqual([explicit]);
+      expect(manifest.sources.map(source => source.authorizedRoot)).toEqual([explicit]);
+      expect(manifest.providers[0].rootCounts).toEqual([
+        { ...rootIdentity(explicit), status: 'checked', sourceCount: 1, duplicateCount: 0 },
+      ]);
+    },
+  );
+
   it('keeps automatic Codex roots behind provider-home authorization', async () => {
     const fixture = await providerFixture();
     vi.stubEnv('CODEX_HOME', join(fixture.providerHome, '.codex'));
@@ -548,11 +606,12 @@ describe('workspace session discovery and batch import', () => {
       workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders: ['codex'],
       codexRoots: [first, second, alias, first],
     });
-    expect(manifest.sources).toHaveLength(2);
-    expect(manifest.authorizedRoots?.codex).toEqual([first, second]);
+    expect(manifest.sources).toHaveLength(3);
+    expect(manifest.authorizedRoots?.codex).toEqual([first, second, join(fixture.providerHome, '.codex/sessions')]);
     expect(manifest.providers[0].rootCounts).toEqual([
       { ...rootIdentity(first), status: 'checked', sourceCount: 1, duplicateCount: 0 },
       { ...rootIdentity(second), status: 'checked', sourceCount: 1, duplicateCount: 1 },
+      { ...rootIdentity(join(fixture.providerHome, '.codex/sessions')), status: 'checked', sourceCount: 1, duplicateCount: 0 },
     ]);
   });
 
@@ -591,6 +650,40 @@ describe('workspace session discovery and batch import', () => {
     expect((await discoverWorkspaceHistories({
       workspace: fixture.workspace, expectedProviders: ['codex'], authorizedRoots: {},
     })).sources).toEqual([]);
+  });
+
+  itWithSqlite('refreshes previously saved Codex role roots without adding new roots', async () => {
+    const fixture = await providerFixture();
+    const roleRoot = join(fixture.providerHome, '.codex/roles-runtime/saved/.codex/sessions');
+    await mkdir(roleRoot, { recursive: true });
+    await writeMatchingSession('codex', roleRoot, 'saved-role', fixture.workspace);
+    const initial = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders: ['codex'],
+    });
+    const manifestPath = join(fixture.workspace, '.aiwg/sessions/discovery-manifest.json');
+    await writeDiscoveryManifest(manifestPath, initial);
+    await writeMatchingSession('codex', roleRoot, 'later-role', fixture.workspace);
+    const newRoot = join(fixture.providerHome, '.codex/roles-runtime/new/.codex/sessions');
+    await mkdir(newRoot, { recursive: true });
+    await writeMatchingSession('codex', newRoot, 'new-role', fixture.workspace);
+    const runtimeHome = join(fixture.root, 'runtime-codex');
+    await mkdir(join(runtimeHome, 'sessions'), { recursive: true });
+    await writeMatchingSession('codex', join(runtimeHome, 'sessions'), 'runtime', fixture.workspace);
+    vi.stubEnv('CODEX_HOME', runtimeHome);
+
+    await refreshSessionCatalog(fixture.workspace, false, 0);
+    const refreshed = await readDiscoveryManifest(manifestPath);
+    expect(refreshed.authorizedRoots).toEqual(initial.authorizedRoots);
+    expect(refreshed.sources).toHaveLength(3);
+    expect(refreshed.sources.filter(source => source.authorizedRoot === roleRoot)
+      .map(source => source.nativeSessionId).sort()).toEqual(['later-role', 'saved-role']);
+    const repository = new SessionRepository(join(fixture.workspace, '.aiwg/sessions/catalog.sqlite'));
+    try {
+      const sessions = repository.listSessions({ workspaceId: fixture.workspace, limit: 10 });
+      expect(sessions.total).toBe(3);
+      expect(sessions.items.map(session => session.nativeSessionId))
+        .toEqual(expect.arrayContaining(['saved-role', 'later-role']));
+    } finally { repository.close(); }
   });
 
   itWithSqlite.each(['inspect', 'stream'] as const)(

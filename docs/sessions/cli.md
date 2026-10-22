@@ -165,12 +165,14 @@ or configure `sessions.codex_roots` in the workspace's `.aiwg/aiwg.config`:
 ```
 
 Configured paths resolve relative to the workspace; CLI paths resolve relative
-to the current directory. Both lists are combined. When neither list supplies
-roots, `--provider-home <home>` authorizes discovery of `<home>/.codex/sessions`,
+to the current directory. Both lists are combined and add to any defaults
+separately authorized by `--provider-home <home>`: `<home>/.codex/sessions`,
 `<home>/.codex/roles-runtime/*/.codex/sessions`, and `$CODEX_HOME/sessions` when
 set. Without explicit roots or provider-home authorization, Codex remains
-`SHARED_ROOT_AUTHORIZATION_REQUIRED`. Explicit lists restrict scanning to those
-roots. Maintenance refreshes scan only the roots saved in the manifest.
+`SHARED_ROOT_AUTHORIZATION_REQUIRED`. Without `--provider-home`, only explicit
+roots are scanned. Maintenance refreshes scan only the roots saved in the
+manifest, including previously authorized role roots; new role roots and changes
+to `$CODEX_HOME` require a new authorized discovery.
 
 Canonical root aliases are scanned once. Matching Codex rollouts are deduplicated
 by their `session_meta` ID (falling back to the filename UUID, then content digest).
