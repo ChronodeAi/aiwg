@@ -1227,6 +1227,21 @@ async function handleExport(args: string[]): Promise<void> {
   }
 }
 
+function warnSyncTextQuality(manifest: import('./fortemi-core-sync.js').FortemiCoreSyncManifest): void {
+  const quality = manifest.text_quality;
+  if (!quality?.degenerate) return;
+  const config = GRAPH_CONFIGS[manifest.graph];
+  const source = config
+    ? ` Source: ${config.scanDirs.join(', ')} (nodeStrategy: ${config.nodeStrategy ?? 'default'}).`
+    : '';
+  if (manifest.item_count === 0) {
+    console.warn(`Warning: graph '${manifest.graph}' contains no indexed items; this graph cannot return results.${source}`);
+    return;
+  }
+  const percent = Math.round(quality.short_text_count / manifest.item_count * 100);
+  console.warn(`Warning: graph '${manifest.graph}': ${quality.short_text_count}/${manifest.item_count} items (${percent}%) have <${quality.short_text_threshold_chars} chars of indexed text; ${quality.filename_title_count} have a filename as title. This graph may return poor results. Check source content and extracted text sidecars.${source}`);
+}
+
 /**
  * Handle 'index sync' command
  */
@@ -1296,6 +1311,7 @@ async function handleSync(args: string[]): Promise<void> {
       console.log(`Fortemi Core sync: ${manifests.length} graph(s) succeeded, ${failures.length} failed`);
       for (const manifest of manifests) {
         console.log(`  ${manifest.graph}: ${manifest.status}, ${manifest.item_count} item(s) → ${manifest.export_path}`);
+        warnSyncTextQuality(manifest);
       }
       for (const failure of failures) {
         console.error(`  ${failure.graph}: failed — ${failure.error}`);
@@ -1311,6 +1327,7 @@ async function handleSync(args: string[]): Promise<void> {
       return;
     }
     console.log(`Fortemi Core ${manifest.status}: ${manifest.item_count} item(s) → ${manifest.export_path}`);
+    warnSyncTextQuality(manifest);
   } catch (err) {
     console.error('Error: ' + (err instanceof Error ? err.message : String(err)));
     process.exit(1);
