@@ -111,6 +111,17 @@ describe('host executor registration security', () => {
     expect(service.register(executor, token)).not.toHaveProperty('status');
   });
 
+  it('authenticates a host-bound id after restart only against the protected host record', () => {
+    writeFileSync(overridePath, JSON.stringify([{ executorId: executor.executor_id, token: 'synthetic-planted-token',
+      lastSeenAt: '2026-10-22T12:00:00Z' }]));
+    const service = fresh();
+    // The authenticated deregister route gates on authenticate(); a planted token must not pass it.
+    expect(service.authenticate(executor.executor_id, 'synthetic-planted-token')).toBe(false);
+    expect(service.authenticate(executor.executor_id, '')).toBe(false);
+    expect(service.authenticate(executor.executor_id, token)).toBe(true);
+    expect(store.read().hostRegistrationRevoked).not.toBe(true);
+  });
+
   it('creates a private shared identity store while preserving ordinary re-registration', () => {
     const sharedPath = join(root, 'shared', 'executor-identities.json');
     vi.stubEnv('AIWG_EXECUTOR_IDENTITY_STORE', sharedPath);
