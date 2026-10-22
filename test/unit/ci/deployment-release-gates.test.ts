@@ -25,13 +25,16 @@ describe('required provider deployment release gates', () => {
     expect(job['timeout-minutes']).toBeGreaterThanOrEqual(18);
   });
   it('retains the same required lane in plugin tag validation', () => {
-    const job = load('.gitea/workflows/build-plugins.yml').jobs.validate;
-    const steps = job.steps, tests = steps.findIndex((step: { name: string }) => step.name === 'Run tests');
+    const jobs = load('.gitea/workflows/build-plugins.yml').jobs;
+    const job = jobs.deployment;
+    const steps = job.steps;
     const lane = steps.findIndex((step: { name: string }) => step.name === 'Run provider deployment integration lane');
-    expect(lane).toBeGreaterThan(tests);
+    expect(lane).toBeGreaterThan(steps.findIndex((step: { run?: string }) => step.run === 'npm run build:cli'));
     expect(steps[lane]).toMatchObject({ run: command });
     expect(steps[lane]['continue-on-error']).toBeUndefined();
     expect(steps[lane].if).toBeUndefined();
-    expect(job['timeout-minutes']).toBeGreaterThan(28);
+    expect(job['timeout-minutes']).toBe(25);
+    expect(job.needs).toBe('build');
+    expect(jobs.validate.needs).toContain('deployment');
   });
 });

@@ -116,14 +116,17 @@ jobs:
           echo ""
           echo "**Note**: npm publishing happens via GitHub Actions."
 
-  validate:
-    name: Validate Build
+  test-shards:
+    name: Validate tests (shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 (see ci/digests.txt)
     needs: build
-    # Healthy runs finish in 3-5 min. Without a bound, a non-terminating test
-    # handle pins the runner indefinitely (a hang held one for 3h on 2026-09-12).
+    # Each native shard keeps the existing 10-minute command watchdog.
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
 
     steps:
       - name: Checkout code
@@ -146,19 +149,48 @@ jobs:
       - name: Build CLI (required by integration tests that spawn bin/aiwg.mjs)
         run: npm run build:cli
 
-      - name: Run tests
+      - name: Verify native shard inventory
+        run: node tools/testing/check-native-shards.mjs 2
+
+      - name: Run default test shard
         env:
           # Shared-runner policy: paired Node baselines, median of 7 samples.
           AIWG_PERF_BUDGET_VERSION_MS: "300"
           AIWG_PERF_BUDGET_HELP_MS: "750"
           AIWG_PERF_SAMPLE_COUNT: "7"
-        # Bounded below this job's timeout-minutes so a hang fails with
-        # attribution instead of silently holding a runner slot for hours.
-        # Vitest's own exit guard is armed only once the run completes, so a
-        # wedged worker never trips it (#2521). Healthy Validate Build runs
-        # measured 3.0-4.8 min end to end, so 10m is roughly 2x headroom on the
-        # whole job; the additional deployment lane has a separate 18m cap.
-        run: node tools/ci/run-with-hang-report.mjs --timeout 10m -- npm test -- --run
+        # Bound workers as in source CI; retain all per-test deadlines and
+        # the owned TMPDIR/leak gate supplied by npm test.
+        run: node tools/ci/run-with-hang-report.mjs --timeout 10m -- npm test -- --shard=${{ matrix.shard }}/2 --maxWorkers=4
+
+  deployment:
+    name: Provider deployment integration
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    needs: build
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build CLI prerequisites
+        run: npm run build:cli
 
       - name: Run provider deployment integration lane
         run: node tools/ci/run-with-hang-report.mjs --timeout 18m -- npm run test:deployment
+
+  validate:
+    name: Validate Build
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    needs: [build, test-shards, deployment]
+    if: always()
+    timeout-minutes: 1
+    steps:
+      - name: Require all plugin validation jobs
+        run: |
+          test "${{ needs.build.result }}" = success
+          test "${{ needs.test-shards.result }}" = success
+          test "${{ needs.deployment.result }}" = success
