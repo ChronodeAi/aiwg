@@ -196,6 +196,7 @@ Options:
   --manifest <path>  Override the discovery manifest path
   --provider-home <path>  Override the provider home root (testing/portable homes)
   --codex-root <path>  Authorize a shared Codex sessions/export root (repeatable)
+                   Adds to defaults separately authorized by --provider-home
   --omp-root <path>  Explicitly authorize an OMP profile sessions root
   --muse-root <path>  Explicitly authorize a Muse Code sessions root
   --dsh-root <path>  Explicitly authorize a DeepSeek Harness sessions root

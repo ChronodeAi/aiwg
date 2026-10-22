@@ -105,6 +105,7 @@ describe('sessions CLI contracts', () => {
         .toContain('--workspace <path-or-id>');
     }
     expect(usage).toContain('--db <path>');
+    expect(usage).toContain('Adds to defaults separately authorized by --provider-home');
     expect(usage).toContain('--max-record-bytes <n>');
     expect(usage).toContain('--max-source-bytes <n>');
     expect(usage).toContain('default 67108864');

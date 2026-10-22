@@ -619,11 +619,11 @@ async function rediscoverManifestIdentity(manifest: SessionDiscoveryManifest): P
 
 async function codexDiscoveryRoots(options: DiscoverWorkspaceOptions): Promise<string[]> {
   const explicit = [...(options.codexRoots ?? []), ...(options.codexRoot ? [options.codexRoot] : [])];
-  if (explicit.length > 0) return [...new Set(explicit.map((root) => resolve(root)))];
+  const roots = [...new Set(explicit.map((root) => resolve(root)))];
   // Shared stores require the same explicit provider-home authorization as the default root.
-  if (!options.providerHome) return [];
+  if (!options.providerHome) return roots;
   const codexHome = join(resolve(options.providerHome), '.codex');
-  const roots = [join(codexHome, 'sessions')];
+  roots.push(join(codexHome, 'sessions'));
   if (process.env.CODEX_HOME) roots.push(resolve(process.env.CODEX_HOME, 'sessions'));
   try {
     const roles = await readdir(join(codexHome, 'roles-runtime'), { withFileTypes: true });
