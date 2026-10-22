@@ -42,7 +42,8 @@ async function readAdmissionConfig(projectRoot: string): Promise<AiwgConfig | nu
 }
 
 /** Shared binding used by MC and the managed Mission/Flow/Ralph caller paths. */
-export async function createMcAdmissionScheduler(projectRoot: string, cfg: AiwgConfig | null) {
+export async function createMcAdmissionScheduler(projectRoot: string, cfg: AiwgConfig | null,
+  hostRegistry?: Pick<import('../../serve/executor-registry.js').ExecutorRegistry, 'resolveHostAdmissionAuthority'>) {
   const { resolveParallelism, workerActivationDigests, workerConfigDigest } = await import('../../config/aiwg-config.js');
   const { FileAdmissionStore, SharedHostScheduler } = await import('../../serve/shared-host-scheduler.js');
   const provider = cfg?.providers[0] ?? 'unknown';
@@ -54,8 +55,13 @@ export async function createMcAdmissionScheduler(projectRoot: string, cfg: AiwgC
       throw new Error('managed admission requires a current activated policy');
     }
     const authority = projectAdmissionAuthority(projectRoot);
-    const policy = managedProjectAdmissionPolicy(projectRoot, parallelism, workerConfigDigest(activation), parallelism.max_parallel_subagents);
-    const scheduler = new SharedHostScheduler(new FileAdmissionStore(authority.path), policy);
+    const authorityRef = parallelism.admission?.authorityRef ?? 'project';
+    const policy = managedProjectAdmissionPolicy(projectRoot, { ...parallelism,
+      admission: { ...parallelism.admission, authorityRef: 'project' },
+    }, workerConfigDigest(activation), parallelism.max_parallel_subagents);
+    const binding = authorityRef === 'project' ? { store: new FileAdmissionStore(authority.path), policy }
+      : (hostRegistry ?? (await import('../../serve/executor-registry.js')).executorRegistry).resolveHostAdmissionAuthority(authorityRef, policy);
+    const scheduler = new SharedHostScheduler(binding.store, binding.policy);
     scheduler.reconcileNow();
     return scheduler;
   }

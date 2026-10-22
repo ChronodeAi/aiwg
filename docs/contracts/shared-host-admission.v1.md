@@ -373,3 +373,81 @@ kernel confirmation that the bound supervisor no longer exists, reaches shared
 settlement. An unavailable process observation cannot supply that confirmation.
 Late evidence remains reconcilable after pause/cancel without changing the
 parent's control decision.
+
+## Managed host authority (S4)
+
+`parallelism.admission.authorityRef=host:<id>` uses the existing executor
+registry and `FileAdmissionStore`. It never falls back to the project MC file.
+Direct dispatch and disabled/legacy routes retain their existing behavior.
+
+The trusted service owner calls `bindTrustedHostAdmissionPolicy` with a local
+host identity, positive policy revision, host ceilings, canonical upstream
+account/quota/model bindings and an explicit set of approved project policies.
+Project identities are hashes of canonical roots. Build each approved project
+policy with `managedProjectAdmissionPolicy` using `authorityRef=project` while
+retaining the activation digest of the actual host configuration. The MC factory
+performs the same normalization; it compares the complete approved policy.
+When changing the authority reference creates a new activation digest, the host
+owner also approves `migrationFrom`, the exact prior project policy. Only the
+activation digest may differ; unrelated project policy changes require separate
+reconciliation. Migration compares the source against that approved prior policy.
+Host ceilings intersect project ceilings. Project model/quota limits remain
+project-scoped; host model/quota limits aggregate all approved installations.
+Host installation model allowlists and canonical upstream quota aliases cannot
+be supplied or changed by a project request. Unknown native dimensions reserve
+conservatively. Local member, request, run and task IDs are project-namespaced;
+public scheduler snapshots contain only that project's records and allowances.
+
+After migration, the owner calls
+`ExecutorRegistry.installHostAdmissionAuthority(executorId, version, store,
+workerWritableRoots)` on an existing registration advertising
+`x-admission-policy-revision:1`. This capability alone grants no authority; the
+public executor registration payload cannot install a host binding. File-backed
+bindings persist in the existing executor identity store at
+`~/.config/aiwg/executor-identities.json`. Host lookup ignores project storage
+redirects and `AIWG_EXECUTOR_IDENTITY_STORE`. A trusted embedding can provide an
+explicit host identity-store location to `ExecutorRegistry` and pass that
+registry to `createMcAdmissionScheduler`; project configuration cannot choose it.
+Fresh MC/Ralph processes restore the protected binding from that location.
+Changed registrations and deregistration fence existing clients and revoke the
+binding; trusted installation is required to reopen it. Every scheduler
+transaction compares the complete effective policy, host revision and project
+authority generation against the current admission snapshot.
+
+Host registration and admission files require canonical absolute paths, private
+owner directories/files and no worker-writable mount containing either file.
+Host admission reads reject symlinks, writable aliases through hardlinks and
+files larger than 16 MiB; registration files are bounded to 1 MiB. Migration enables durable writes on both file stores. Protected
+and migration writes use exclusive temporary files, atomic rename and file/directory fsync.
+An existing file lock or temporary-file conflict blocks writes. These checks
+require actual sandbox/ACL enforcement outside the worker's writable mounts;
+private modes alone cannot isolate an unsandboxed process with the same uid.
+Read or write failure blocks managed admission. Retention, stale-lock disposition
+and disk-pressure remediation remain trusted operator actions.
+
+`migrateProjectAdmissionToHost(source, target, projectId, options)` extends the
+same store owner. `options` supplies a stable migration ID and expected source
+and target revisions. Approved projects have no host generation until migration
+completes, including projects with an empty local store. Migration closes the
+old route first, freezes the host, and drains both authorities. Renew, stop and
+proof settlement remain available while frozen; submissions, queued admissions
+and launch claims are blocked. Admitted or uncertain leases prevent transfer.
+Expiry, cancellation, final results and status strings never satisfy draining.
+
+The drained history digests bind all reservations, measured/unknown spend,
+original deadlines, attempt counters and idempotency records. Transfer preserves
+local identities under the project namespace, intersects tighter host budgets
+without resetting clocks, remaps quota cooldowns to trusted upstream identities
+and keeps the later cooldown. Independent failure counts accumulate once per
+canonical alias. Charged history requires current-generation,
+confirmed stop evidence. A source/target revision conflict, history change,
+invalid evidence or failure at freeze/drain/transfer/commit leaves dispatch
+closed. The host generation commit is atomic within its existing store; the
+host stays frozen until the source redirect is recorded. Recovery repeats the
+same migration ID against matching bindings/digests and is idempotent. No blind
+rollback, stale-lock removal or automatic replay of uncertain work is provided.
+The first freeze write can precede the second after a crash; the old route is
+closed and the project still lacks a usable host generation, so two authorities
+cannot dispatch that project's work. The trusted owner resumes the same
+migration to complete freezing/reconciliation. This is a single-host protocol;
+no distributed lock or cross-host authority is supported.

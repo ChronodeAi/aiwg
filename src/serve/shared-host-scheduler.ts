@@ -11,6 +11,10 @@
 
 import {
   closeSync,
+  constants,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -20,7 +24,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { hostname } from 'node:os';
 import { createHash } from 'node:crypto';
 import { advanceProgressWatermark, assertMissionWorkerHandoff, assertValidWorkerPayload, decideLeaseMapping, projectHealthTrace } from '../mission-protocol/codecs.js';
 import { isCanonicalWorkerModelKey } from '../models/provider-policy.js';
@@ -104,7 +109,10 @@ export interface ManagedAttemptAccounting {
 }
 
 export interface ManagedAdmissionPolicy {
-  authorityRef: 'project';
+  authorityRef: 'project' | `host:${string}`;
+  hostPolicyRevision?: number;
+  authorityGeneration?: number;
+  upstream?: Record<string, { accountScope: string; quotaScope: string; models: string[] }>;
   projectId: string;
   policyDigest: string;
   maxQueued: number;
@@ -148,7 +156,7 @@ export function managedProjectAdmissionPolicy(
 ): SharedHostPolicy {
   const { projectId } = projectAdmissionAuthority(projectRoot);
   const admission = parallelism.admission;
-  if ((admission?.authorityRef ?? 'project') !== 'project') throw new Error('only project admission authority is supported');
+  if ((admission?.authorityRef ?? 'project') !== 'project') throw new Error('only project admission authority is supported by the project policy builder');
   if (parallelism.budgets?.enforcement === 'hard') throw new Error('OG_BUDGET_UNMEASURABLE: managed admission does not enforce hard spend budgets');
   const dimensions: Record<string, number> = {};
   const add = (worker: ManagedWorkerReservation, cap: number): void => {
@@ -199,6 +207,8 @@ export interface AdmissionRequest {
 }
 
 export interface AdmissionRecord extends AdmissionRequest {
+  /** Authority-owned namespace; never accepted from the request. */
+  projectId?: string;
   state: AdmissionState;
   revision: number;
   reason: string;
@@ -246,14 +256,20 @@ export interface AdmissionSnapshot {
   policyBinding?: SharedHostPolicy;
   allowances?: Record<string, ManagedAllowanceScope>;
   cooldowns?: Record<string, { until: string; failures: number }>;
+  hostBinding?: TrustedHostAdmissionBinding;
+  hostRegistrationRevoked?: boolean;
+  projectGenerations?: Record<string, number>;
+  migration?: AdmissionMigration;
+  authorityRedirect?: { authorityRef: string; generation: number; migrationId: string };
 }
 
 /** Initialize a validated activation under the store lock. Policy replacement/migration
  * is deliberately not supported here; active or uncertain work must first be reconciled. */
 export function bindManagedAdmissionPolicy(store: AdmissionStore, policy: SharedHostPolicy): void {
-  if (!policy.managed) throw new Error('managed policy is required');
+  if (!policy.managed || policy.managed.authorityRef !== 'project') throw new Error('managed project policy is required');
   new SharedHostScheduler(store, policy);
   store.transact(snapshot => {
+    if (snapshot.hostBinding || snapshot.migration || snapshot.authorityRedirect) throw new Error('authority migration requires the trusted owner');
     if (snapshot.policyBinding && canonical(snapshot.policyBinding) !== canonical(policy)) {
       throw new Error('managed admission policy binding conflicts with the activated policy');
     }
@@ -285,9 +301,43 @@ export class InMemoryAdmissionStore implements AdmissionStore {
 /** Durable cross-process store. The lock is deliberately non-blocking: a
  * concurrent writer receives a conflict and retries through its control loop. */
 export class FileAdmissionStore implements AdmissionStore {
+  private hostWritableRoots?: string[];
+  private durableWrites = false;
+
   constructor(private readonly path: string) {}
 
+  /** Migration checkpoints must survive a completed write on either authority. */
+  useDurableWrites(): void { this.durableWrites = true; }
+
+  /** Trusted executor bootstrap supplies the actual sandbox writable mounts.
+   * Mode checks do not isolate an unsandboxed process running as the same uid. */
+  protectHostAuthority(workerWritableRoots: string[]): void {
+    if (!Array.isArray(workerWritableRoots) || workerWritableRoots.some(root => !isAbsolute(root))) throw new Error('absolute worker writable roots are required');
+    this.hostWritableRoots = workerWritableRoots.map(root => realpathSync(root));
+    this.assertHostPath();
+  }
+
+  /** Only the trusted registration owner persists this protected location. */
+  hostAuthorityPath(): string {
+    if (!this.hostWritableRoots) throw new Error('host authority path has not been protected');
+    this.readUnsafe();
+    return this.path;
+  }
+
+  private assertHostPath(): void {
+    if (!this.hostWritableRoots) return;
+    const parent = dirname(this.path);
+    if (!isAbsolute(this.path) || realpathSync(parent) !== resolve(parent)) throw new Error('host authority path must be canonical without symlink parents');
+    const directory = lstatSync(parent);
+    if (!directory.isDirectory() || (directory.mode & 0o077) !== 0 || directory.uid !== process.getuid?.()) throw new Error('host authority directory must be private to its owner');
+    for (const root of this.hostWritableRoots) {
+      const within = relative(root, resolve(this.path));
+      if (!within || (!within.startsWith('../') && within !== '..' && !isAbsolute(within))) throw new Error('worker writable mount includes the host authority');
+    }
+  }
+
   transact<T>(mutate: (snapshot: AdmissionSnapshot) => T): T {
+    this.assertHostPath();
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     const lockPath = `${this.path}.lock`;
     let descriptor: number;
@@ -304,8 +354,16 @@ export class FileAdmissionStore implements AdmissionStore {
       const result = mutate(snapshot);
       snapshot.revision += 1;
       const temporary = `${this.path}.${process.pid}.tmp`;
-      writeFileSync(temporary, `${JSON.stringify(snapshot, null, 2)}\n`, { mode: 0o600 });
+      if (this.hostWritableRoots || this.durableWrites) {
+        const file = openSync(temporary, 'wx', 0o600);
+        try { writeFileSync(file, `${JSON.stringify(snapshot, null, 2)}\n`); fsyncSync(file); }
+        finally { closeSync(file); }
+      } else writeFileSync(temporary, `${JSON.stringify(snapshot, null, 2)}\n`, { mode: 0o600 });
       renameSync(temporary, this.path);
+      if (this.hostWritableRoots || this.durableWrites) {
+        const directory = openSync(dirname(this.path), 'r');
+        try { fsyncSync(directory); } finally { closeSync(directory); }
+      }
       return result;
     } finally {
       closeSync(descriptor);
@@ -318,6 +376,16 @@ export class FileAdmissionStore implements AdmissionStore {
   }
 
   private readUnsafe(): AdmissionSnapshot {
+    this.assertHostPath();
+    if (this.hostWritableRoots || this.durableWrites) {
+      if (!this.hostWritableRoots && !existsSync(this.path)) return { revision: 0, records: {} };
+      const file = openSync(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const stat = fstatSync(file);
+        if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.() || stat.size > 16 * 1024 * 1024) throw new Error('host authority must be a private bounded regular file');
+        return JSON.parse(readFileSync(file, 'utf8')) as AdmissionSnapshot;
+      } finally { closeSync(file); }
+    }
     if (!existsSync(this.path)) return { revision: 0, records: {} };
     return JSON.parse(readFileSync(this.path, 'utf8')) as AdmissionSnapshot;
   }
@@ -343,14 +411,14 @@ export class SharedHostScheduler {
     const managed = this.policy.managed;
     if (managed) {
       managedDimensionKeys(managed.projectId, { kind: 'native' });
-      if (managed.authorityRef !== 'project') throw new Error('managed admission requires authorityRef=project');
+      if (managed.authorityRef !== 'project' && !/^host:[a-z][a-z0-9-]{0,62}$/.test(managed.authorityRef)) throw new Error('invalid managed authority reference');
       if (!/^sha256:[a-f0-9]{64}$/.test(managed.policyDigest)) throw new Error('invalid activated policy digest');
       if (!Number.isSafeInteger(managed.maxQueued) || managed.maxQueued < 0) throw new Error('maxQueued must be a nonnegative integer');
       if (!Number.isSafeInteger(policy.maxConcurrent) || !Number.isFinite(policy.leaseTtlMs) || !Number.isFinite(policy.agingIntervalMs)) {
         throw new Error('managed capacity and lease intervals must be finite');
       }
       for (const [key, cap] of Object.entries(managed.dimensionCaps)) {
-        if (!isCanonicalManagedDimension(managed.projectId, key)) throw new Error('invalid canonical admission dimension key');
+        if (!(managed.authorityRef === 'project' ? isCanonicalManagedDimension(managed.projectId, key) : isHostDimension(key))) throw new Error('invalid canonical admission dimension key');
         if (!Number.isSafeInteger(cap) || cap < 1) throw new Error('dimension caps must be positive integers');
       }
       if (managed.budgets?.enforcement === 'hard') throw new Error('OG_BUDGET_UNMEASURABLE: no enforcing spend adapter is bound');
@@ -377,7 +445,9 @@ export class SharedHostScheduler {
     this.validateRequest(request);
     return this.store.transact(snapshot => {
       this.assertPolicyBinding(snapshot);
-      const existing = snapshot.records[request.requestId];
+      this.assertSubmissionsOpen(snapshot);
+      const requestKey = this.requestKey(request.requestId);
+      const existing = snapshot.records[requestKey];
       if (existing) {
         if (!(this.policy.managed ? sameManagedRequest(existing, request) : sameRequest(existing, request))) {
           throw new Error(`request '${request.requestId}' conflicts with an existing admission`);
@@ -385,8 +455,9 @@ export class SharedHostScheduler {
         return this.policy.managed ? structuredClone(existing) : existing;
       }
       if (this.policy.managed) this.reconcile(snapshot);
-      snapshot.records[request.requestId] = {
+      snapshot.records[requestKey] = {
         ...structuredClone(request),
+        ...(snapshot.hostBinding ? { projectId: this.policy.managed!.projectId } : {}),
         state: 'queued',
         revision: 1,
         reason: 'awaiting shared-host capacity',
@@ -399,15 +470,16 @@ export class SharedHostScheduler {
         } : {}),
       };
       this.reconcile(snapshot);
-      if (this.policy.managed && snapshot.records[request.requestId]!.state === 'queued'
-        && Object.values(snapshot.records).filter(record => record.state === 'queued').length > this.policy.managed.maxQueued) {
-        const record = snapshot.records[request.requestId]!;
+      if (this.policy.managed && snapshot.records[requestKey]!.state === 'queued'
+        && (Object.values(snapshot.records).filter(record => record.state === 'queued' && (!snapshot.hostBinding || record.projectId === this.policy.managed!.projectId)).length > this.policy.managed.maxQueued
+          || (snapshot.hostBinding && Object.values(snapshot.records).filter(record => record.state === 'queued').length > snapshot.hostBinding.maxQueued))) {
+        const record = snapshot.records[requestKey]!;
         record.state = 'denied';
         record.reason = 'managed admission queue is full';
         record.finishedAt = new Date(this.clock()).toISOString();
         record.revision += 1;
       }
-      return structuredClone(snapshot.records[request.requestId]!);
+      return structuredClone(snapshot.records[requestKey]!);
     });
   }
 
@@ -415,7 +487,7 @@ export class SharedHostScheduler {
     return this.store.transact(snapshot => {
       this.assertPolicyBinding(snapshot);
       this.reconcile(snapshot);
-      return structuredClone(snapshot);
+      return this.projectSnapshot(snapshot);
     });
   }
 
@@ -468,6 +540,7 @@ export class SharedHostScheduler {
   claimLaunch(requestId: string, generation: number): AdmissionRecord {
     return this.store.transact(snapshot => {
       this.assertPolicyBinding(snapshot);
+      this.assertSubmissionsOpen(snapshot);
       const record = this.required(snapshot, requestId);
       this.assertGeneration(record, generation);
       if (record.state !== 'admitted' || Date.parse(record.leaseExpiresAt!) <= this.clock()) throw new Error('launch requires a current admitted lease');
@@ -633,7 +706,21 @@ export class SharedHostScheduler {
   }
 
   snapshot(): AdmissionSnapshot {
-    return this.store.read();
+    const snapshot = this.store.read();
+    if (this.policy.managed?.authorityRef.startsWith('host:')) this.assertPolicyBinding(snapshot);
+    return this.projectSnapshot(snapshot);
+  }
+
+  private projectSnapshot(value: AdmissionSnapshot): AdmissionSnapshot {
+    const snapshot = structuredClone(value);
+    if (this.policy.managed?.authorityRef.startsWith('host:')) {
+      const projectId = this.policy.managed.projectId;
+      snapshot.records = Object.fromEntries(Object.values(snapshot.records)
+        .filter(record => record.projectId === projectId).map(record => [record.requestId, record]));
+      snapshot.allowances = Object.fromEntries(Object.entries(snapshot.allowances ?? {})
+        .filter(([key]) => JSON.parse(key)[0] === projectId));
+    }
+    return snapshot;
   }
 
   private reconcile(snapshot: AdmissionSnapshot): void {
@@ -653,6 +740,7 @@ export class SharedHostScheduler {
       }
     }
 
+    if (snapshot.migration || snapshot.authorityRedirect) return;
     let queued = Object.values(snapshot.records)
       .filter(record => record.state === 'queued')
       .sort((a, b) => this.compare(a, b, now));
@@ -671,7 +759,7 @@ export class SharedHostScheduler {
       candidate.state = 'admitted';
       candidate.reason = 'admitted by shared-host policy';
       candidate.admittedAt = new Date(now).toISOString();
-      candidate.leaseExpiresAt = new Date(now + this.policy.leaseTtlMs).toISOString();
+      candidate.leaseExpiresAt = new Date(now + this.policyFor(snapshot, candidate).leaseTtlMs).toISOString();
       candidate.revision += 1;
     }
     queued = [];
@@ -689,7 +777,7 @@ export class SharedHostScheduler {
     }
     const retry = this.policy.managed!.retry;
     const cooldowns = snapshot.cooldowns ??= {};
-    const quota = record.managed?.cli ? this.policy.managed!.installations[record.managed.cli]!.quotaScope : null;
+    const quota = record.managed?.cli ? (this.policy.managed!.upstream ?? this.policy.managed!.installations)[record.managed.cli]!.quotaScope : null;
     if (failure.class === 'rate-limit' && !quota) throw new Error('quota observation requires an admitted installation');
     const key = `quota/${encodeURIComponent(quota ?? '')}`;
     const failures = failure.class === 'rate-limit' ? (cooldowns[key]?.failures ?? 0) + 1
@@ -709,8 +797,8 @@ export class SharedHostScheduler {
   private bindAllowance(snapshot: AdmissionSnapshot, request: AdmissionRequest): ManagedAttemptAccounting {
     const policy = this.policy.managed!;
     const allowance: ManagedAllowance = request.allowance ?? { runId: request.orchestratorId, taskId: request.metadata?.missionId ?? request.requestId };
-    const runKey = JSON.stringify(['run', allowance.runId]);
-    const taskKey = JSON.stringify(['task', allowance.runId, allowance.taskId]);
+    const runKey = this.allowanceKey(JSON.stringify(['run', allowance.runId]));
+    const taskKey = this.allowanceKey(JSON.stringify(['task', allowance.runId, allowance.taskId]));
     const scopes = snapshot.allowances ??= {};
     const bind = (key: string, limits: ManagedBudgets): ManagedAllowanceScope => {
       const previous = scopes[key];
@@ -754,7 +842,7 @@ export class SharedHostScheduler {
       const purpose = candidate.allowance?.purpose ?? 'retry';
       if (purpose === 'retry' || purpose === 'fallback' || failure?.class === 'rate-limit') {
         if (!failure || !failure.retryable || !['rate-limit', 'unavailable', 'timeout'].includes(failure.class)) return deny('previous failure does not permit automatic retry');
-        if (!(this.policy.managed!.retry?.on ?? ['rate-limit', 'unavailable', 'timeout']).includes(failure.class as 'rate-limit' | 'unavailable' | 'timeout')) return deny(`${failure.class} retries are disabled`);
+        if (!(this.policyFor(snapshot, candidate).managed!.retry?.on ?? ['rate-limit', 'unavailable', 'timeout']).includes(failure.class as 'rate-limit' | 'unavailable' | 'timeout')) return deny(`${failure.class} retries are disabled`);
       }
     } else if (candidate.allowance?.previousRequestId) return deny('unknown previous task attempt');
     for (const key of [accounting.runKey, accounting.taskKey]) {
@@ -775,8 +863,10 @@ export class SharedHostScheduler {
       }
     }
     if (taskAttempts.some(record => Date.parse(record.accounting!.notBefore ?? '') > now)) return false;
-    if (this.policy.managed!.budgets?.unknownCost === 'deny' && accounting.reservation.costUsd === null) return deny('unknown cost is denied by policy');
-    const quotas = candidate.managed?.quotaScope ? [`quota/${encodeURIComponent(candidate.managed.quotaScope)}`]
+    if (this.policyFor(snapshot, candidate).managed!.budgets?.unknownCost === 'deny' && accounting.reservation.costUsd === null) return deny('unknown cost is denied by policy');
+    const quotaScope = candidate.managed?.cli && snapshot.hostBinding
+      ? this.policyFor(snapshot, candidate).managed!.upstream![candidate.managed.cli]!.quotaScope : candidate.managed?.quotaScope;
+    const quotas = quotaScope ? [`quota/${encodeURIComponent(quotaScope)}`]
       : Object.keys(snapshot.cooldowns ?? {});
     if (quotas.some(key => Date.parse(snapshot.cooldowns?.[key]?.until ?? '') > now)) return false;
     return true;
@@ -803,25 +893,26 @@ export class SharedHostScheduler {
   }
 
   private hasCapacity(snapshot: AdmissionSnapshot, candidate: AdmissionRecord): boolean {
-    const active = Object.values(snapshot.records).filter(record => record.state === 'admitted' || (this.policy.managed && record.state === 'uncertain'));
-    const slots = this.policy.managed ? candidate.reservedSlots ?? 1 : 1;
-    if (active.reduce((sum, record) => sum + (this.policy.managed ? record.reservedSlots ?? 1 : 1), 0) + slots > this.policy.maxConcurrent) return false;
-    if (this.policy.managed) {
+    const policy = this.policyFor(snapshot, candidate);
+    const active = Object.values(snapshot.records).filter(record => record.state === 'admitted' || (policy.managed && record.state === 'uncertain'));
+    const slots = policy.managed ? candidate.reservedSlots ?? 1 : 1;
+    if (active.reduce((sum, record) => sum + (policy.managed ? record.reservedSlots ?? 1 : 1), 0) + slots > policy.maxConcurrent) return false;
+    if (policy.managed) {
       for (const key of candidate.dimensions ?? []) {
-        const cap = this.policy.managed.dimensionCaps[key];
+        const cap = policy.managed.dimensionCaps[key];
         if (cap === undefined) continue;
         const used = active.filter(record => !record.dimensions || record.dimensions.includes(key))
           .reduce((sum, record) => sum + (record.reservedSlots ?? 1), 0);
         if (used + slots > cap) return false;
       }
     }
-    if (!belowQuota(active, 'environment', candidate.environment, this.policy.environmentQuotas, slots, !!this.policy.managed)) return false;
-    if (!belowQuota(active, 'provider', candidate.provider, this.policy.providerQuotas, slots, !!this.policy.managed)) return false;
+    if (!belowQuota(active, 'environment', candidate.environment, policy.environmentQuotas, slots, !!policy.managed)) return false;
+    if (!belowQuota(active, 'provider', candidate.provider, policy.providerQuotas, slots, !!policy.managed)) return false;
     const runtimeQuotas = {
-      host: this.policy.defaultHostQuota ?? 1,
-      ...this.policy.runtimeQuotas,
+      host: policy.defaultHostQuota ?? 1,
+      ...policy.runtimeQuotas,
     };
-    return belowQuota(active, 'runtimeKind', candidate.runtimeKind, runtimeQuotas, slots, !!this.policy.managed);
+    return belowQuota(active, 'runtimeKind', candidate.runtimeKind, runtimeQuotas, slots, !!policy.managed);
   }
 
   private effectivePriority(record: AdmissionRecord, now: number): number {
@@ -836,7 +927,7 @@ export class SharedHostScheduler {
   }
 
   private required(snapshot: AdmissionSnapshot, requestId: string): AdmissionRecord {
-    const record = snapshot.records[requestId];
+    const record = snapshot.records[this.requestKey(requestId)];
     if (!record) throw new Error(`unknown admission request '${requestId}'`);
     return record;
   }
@@ -851,6 +942,7 @@ export class SharedHostScheduler {
     if (!this.policy.managed && request.allowance) throw new Error('allowance requires managed admission');
     if (!this.policy.managed && request.managed) throw new Error('managed request requires an activated managed policy');
     if (this.policy.managed) {
+      if ('projectId' in request) throw new Error('request cannot choose its authority project');
       if (request.allowance) {
         if (request.allowance.runId !== request.orchestratorId || !request.allowance.taskId?.trim()) throw new Error('stable allowance run/task identity is required');
         if (!Number.isSafeInteger(request.allowance.attempts ?? 1) || (request.allowance.attempts ?? 1) < 1
@@ -879,6 +971,8 @@ export class SharedHostScheduler {
       if (worker.cli) {
         const binding = this.policy.managed.installations[worker.cli];
         if (!binding || worker.quotaScope !== binding.quotaScope) throw new Error('worker quota does not match the activated installation binding');
+        const upstream = this.policy.managed.upstream?.[worker.cli];
+        if (upstream && worker.model && !upstream.models.includes(worker.model)) throw new Error('worker model is not approved by the host installation binding');
       } else if (worker.quotaScope) throw new Error('quota identity requires an installation binding');
       if (worker.group || worker.member) {
         const member = this.policy.managed.members[`${worker.group}/${worker.member}`];
@@ -888,26 +982,334 @@ export class SharedHostScheduler {
   }
 
   private assertPolicyBinding(snapshot: AdmissionSnapshot): void {
-    if (this.policy.managed || snapshot.policyBinding) {
+    if (snapshot.authorityRedirect) throw new Error('project authority migrated; use the trusted host binding');
+    if (snapshot.hostBinding) {
+      if (snapshot.hostRegistrationRevoked) throw new Error('trusted host executor registration is revoked');
+      const managed = this.policy.managed;
+      if (!managed || snapshot.hostBinding.hostId !== hostname()
+        || canonical(hostProjectAdmissionPolicy(snapshot, managed.projectId)) !== canonical(this.policy)) {
+        throw new Error('trusted host policy revision or project binding mismatch');
+      }
+    } else if (this.policy.managed || snapshot.policyBinding) {
       if (!snapshot.policyBinding || canonical(snapshot.policyBinding) !== canonical(this.policy)) {
         throw new Error('managed admission policy digest or policy binding mismatch');
       }
     }
   }
 
+  private assertSubmissionsOpen(snapshot: AdmissionSnapshot): void {
+    if (snapshot.migration || snapshot.authorityRedirect) throw new Error('admission authority is frozen for migration');
+  }
+
+  private requestKey(requestId: string): string {
+    return this.policy.managed?.authorityRef.startsWith('host:')
+      ? hostProjectKey(this.policy.managed.projectId, requestId) : requestId;
+  }
+
+  private allowanceKey(key: string): string {
+    return this.policy.managed?.authorityRef.startsWith('host:') ? hostProjectKey(this.policy.managed.projectId, key) : key;
+  }
+
+  private policyFor(snapshot: AdmissionSnapshot, record: AdmissionRecord): SharedHostPolicy {
+    return snapshot.hostBinding ? hostProjectAdmissionPolicy(snapshot, record.projectId!) : this.policy;
+  }
+
   private reservationDimensions(request: AdmissionRequest): string[] {
     const managed = this.policy.managed!;
     const worker = request.managed!;
-    const dimensions = managedDimensionKeys(managed.projectId, worker);
+    let dimensions = managedDimensionKeys(managed.projectId, worker);
+    if (managed.authorityRef.startsWith('host:')) dimensions = hostReservationDimensions(managed, worker, dimensions);
     // Native workers with incomplete identity conservatively occupy every unknown
     // dimension. Missing observations must never manufacture extra capacity.
     if (worker.kind === 'native') {
       for (const key of Object.keys(managed.dimensionCaps)) {
+        if (managed.authorityRef.startsWith('host:') && key.startsWith('project/') && !key.startsWith(`project/${managed.projectId}/`)) continue;
         if ((!worker.group && key.includes('/group/')) || (!worker.cli && key.includes('/installation/'))
-          || (!worker.model && key.startsWith('model/')) || (!worker.quotaScope && key.startsWith('quota/'))) dimensions.push(key);
+          || (!worker.model && (key.startsWith('model/') || key.includes('/model/'))) || (!worker.quotaScope && (key.startsWith('quota/') || key.includes('/quota/')))) dimensions.push(key);
       }
     }
     return [...new Set(dimensions)].sort();
+  }
+}
+
+/** Installed only by the existing executor/service owner, never registration payloads
+ * or project config. Store access and this binding must be outside worker writes. */
+export interface TrustedHostAdmissionBinding {
+  authorityRef: `host:${string}`;
+  hostId: string;
+  revision: number;
+  policy: Omit<SharedHostPolicy, 'managed'>;
+  maxQueued: number;
+  dimensionCaps: Record<string, number>;
+  budgets?: ParallelismConfig['budgets'];
+  retry?: ParallelismConfig['retry'];
+  projects: Record<string, {
+    policy: SharedHostPolicy;
+    /** Prior project activation when changing only the authority reference. */
+    migrationFrom?: SharedHostPolicy;
+    /** Qualified upstream identities, independent of project aliases. */
+    installations: Record<string, { accountScope: string; quotaScope: string; models: string[] }>;
+  }>;
+}
+
+export interface AdmissionMigration {
+  id: string;
+  projectId: string;
+  bindingDigest: string;
+  phase: 'frozen' | 'drained' | 'reconciled' | 'committed';
+  sourceDigest?: string;
+  targetDigest?: string;
+}
+
+function hostProjectKey(projectId: string, key: string): string {
+  return JSON.stringify([projectId, key]);
+}
+
+function isHostDimension(key: string): boolean {
+  const match = /^project\/([a-f0-9]{64})(?:\/(model\/.*|quota\/.*))?$/.exec(key);
+  if (match) return !match[2] || isCanonicalManagedDimension(match[1]!, match[2]);
+  const project = /^project\/([a-f0-9]{64})\//.exec(key)?.[1] ?? '0'.repeat(64);
+  return isCanonicalManagedDimension(project, key);
+}
+
+function hostReservationDimensions(policy: ManagedAdmissionPolicy, worker: ManagedWorkerReservation, dimensions: string[]): string[] {
+  const project = `project/${policy.projectId}`;
+  const upstream = worker.cli ? policy.upstream![worker.cli] : undefined;
+  const keys = [...dimensions.filter(key => !key.startsWith('quota/')),
+    ...(worker.model ? [`${project}/model/${worker.model}`] : []),
+    ...(worker.quotaScope ? [`${project}/quota/${encodeURIComponent(worker.quotaScope)}`] : []),
+    ...(upstream ? [`quota/${encodeURIComponent(upstream.quotaScope)}`] : []),
+  ];
+  if (worker.kind === 'native') for (const key of Object.keys(policy.dimensionCaps)) {
+    if (key.startsWith('project/') && !key.startsWith(`${project}/`)) continue;
+    if ((!worker.group && key.includes('/group/')) || (!worker.cli && key.includes('/installation/'))
+      || (!worker.model && (key.startsWith('model/') || key.includes('/model/')))
+      || (!worker.quotaScope && (key.startsWith('quota/') || key.includes('/quota/')))) keys.push(key);
+  }
+  return [...new Set(keys)].sort();
+}
+
+/** Derive the exact per-project view of the persisted authority. No caller caps
+ * enter this function; project ceilings are approved by the host owner first. */
+export function hostProjectAdmissionPolicy(snapshot: AdmissionSnapshot, projectId: string): SharedHostPolicy {
+  const host = snapshot.hostBinding;
+  const project = host?.projects[projectId];
+  const generation = snapshot.projectGenerations?.[projectId];
+  if (!host || !project || !generation) throw new Error('missing approved host project binding or migration generation');
+  const dimensions = { ...host.dimensionCaps };
+  for (const [id, approved] of Object.entries(host.projects)) {
+    dimensions[`project/${id}`] = approved.policy.maxConcurrent;
+    for (const [key, cap] of Object.entries(approved.policy.managed!.dimensionCaps)) {
+      const scoped = key.startsWith('model/') || key.startsWith('quota/') ? `project/${id}/${key}` : key;
+      dimensions[scoped] = Math.min(dimensions[scoped] ?? cap, cap);
+    }
+  }
+  const managed = project.policy.managed!;
+  const budgets = host.budgets || managed.budgets ? {
+    ...managed.budgets,
+    enforcement: host.budgets?.enforcement === 'hard' || managed.budgets?.enforcement === 'hard' ? 'hard' as const : 'observed' as const,
+    unknownCost: host.budgets?.unknownCost === 'deny' || managed.budgets?.unknownCost === 'deny' ? 'deny' as const : 'reserve' as const,
+    reservationUsd: Math.max(host.budgets?.reservationUsd ?? 0, managed.budgets?.reservationUsd ?? 0) || undefined,
+    ...Object.fromEntries((['perRun', 'perTask'] as const).map(scope => [scope, {
+      ...Object.fromEntries((['tokens', 'costUsd', 'wallSeconds'] as const).flatMap(key => {
+        const value = Math.min(host.budgets?.[scope]?.[key] ?? Infinity, managed.budgets?.[scope]?.[key] ?? Infinity);
+        return Number.isFinite(value) ? [[key, value]] : [];
+      })),
+    }])),
+  } : undefined;
+  const retry = host.retry || managed.retry ? {
+    maxAttempts: Math.min(host.retry?.maxAttempts ?? 3, managed.retry?.maxAttempts ?? 3),
+    baseDelaySeconds: Math.max(host.retry?.baseDelaySeconds ?? 1, managed.retry?.baseDelaySeconds ?? 1),
+    maxDelaySeconds: Math.max(host.retry?.maxDelaySeconds ?? 60, managed.retry?.maxDelaySeconds ?? 60),
+    on: (managed.retry?.on ?? ['rate-limit', 'unavailable', 'timeout'] as const)
+      .filter(value => (host.retry?.on ?? ['rate-limit', 'unavailable', 'timeout']).includes(value)),
+  } : undefined;
+  return {
+    ...structuredClone(host.policy),
+    leaseTtlMs: Math.min(host.policy.leaseTtlMs, project.policy.leaseTtlMs),
+    managed: {
+      ...structuredClone(managed), authorityRef: host.authorityRef, hostPolicyRevision: host.revision,
+      authorityGeneration: generation, maxQueued: Math.min(host.maxQueued, managed.maxQueued),
+      dimensionCaps: dimensions, budgets, retry, upstream: structuredClone(project.installations),
+    },
+  };
+}
+
+/** Owner-only activation. Approved projects stay closed until their local store
+ * (including an empty store) has completed freeze/drain/reconcile migration. */
+export function bindTrustedHostAdmissionPolicy(store: AdmissionStore, binding: TrustedHostAdmissionBinding): void {
+  if (store instanceof FileAdmissionStore) store.useDurableWrites();
+  const host = structuredClone(binding);
+  if (!/^host:[a-z][a-z0-9-]{0,62}$/.test(host.authorityRef) || host.hostId !== hostname()) throw new Error('host authority must be local to this execution host');
+  if (!Number.isSafeInteger(host.revision) || host.revision < 1 || !Number.isSafeInteger(host.maxQueued) || host.maxQueued < 0) throw new Error('invalid host policy revision or queue bound');
+  if ('managed' in host.policy) throw new Error('host policy cannot supply a caller managed binding');
+  for (const [key, cap] of Object.entries(host.dimensionCaps)) {
+    if ((!key.startsWith('model/') && !key.startsWith('quota/')) || !isHostDimension(key) || !Number.isSafeInteger(cap) || cap < 1) throw new Error('invalid host model/quota cap');
+  }
+  const accounts = new Map<string, string>();
+  for (const [id, approved] of Object.entries(host.projects)) {
+    const policy = approved.policy;
+    if (policy.managed?.authorityRef !== 'project' || policy.managed.projectId !== id) throw new Error('invalid approved project policy');
+    new SharedHostScheduler(new InMemoryAdmissionStore(), policy);
+    if (approved.migrationFrom) {
+      new SharedHostScheduler(new InMemoryAdmissionStore(), approved.migrationFrom);
+      const prior = structuredClone(approved.migrationFrom), current = structuredClone(policy);
+      if (prior.managed?.authorityRef !== 'project' || prior.managed.projectId !== id) throw new Error('invalid prior project activation');
+      prior.managed.policyDigest = current.managed!.policyDigest;
+      if (canonical(prior) !== canonical(current)) throw new Error('authority migration cannot change unrelated project policy');
+    }
+    if (canonical(Object.keys(approved.installations).sort()) !== canonical(Object.keys(policy.managed.installations).sort())) throw new Error('host must approve every project installation');
+    const localAccounts = new Map<string, string>();
+    for (const [cli, upstream] of Object.entries(approved.installations)) {
+      if (!upstream.accountScope?.trim() || !upstream.quotaScope?.trim() || !Array.isArray(upstream.models)
+        || upstream.models.some(model => !isCanonicalWorkerModelKey(model))) throw new Error('invalid qualified upstream identity');
+      const localAccount = policy.managed.installations[cli]!.accountScope;
+      const identity = canonical([upstream.accountScope, upstream.quotaScope]);
+      if (localAccounts.has(localAccount) && localAccounts.get(localAccount) !== identity) throw new Error('conflicting project account aliases in host binding');
+      localAccounts.set(localAccount, identity);
+      const previous = accounts.get(upstream.accountScope);
+      if (previous && previous !== upstream.quotaScope) throw new Error('conflicting upstream account quota aliases');
+      accounts.set(upstream.accountScope, upstream.quotaScope);
+    }
+    const view = hostProjectAdmissionPolicy({ revision: 0, records: {}, hostBinding: host, projectGenerations: { [id]: 1 } }, id);
+    new SharedHostScheduler(new InMemoryAdmissionStore(), view);
+  }
+  store.transact(snapshot => {
+    if (snapshot.migration || snapshot.authorityRedirect || snapshot.policyBinding || Object.keys(snapshot.records).length
+      || Object.keys(snapshot.allowances ?? {}).length || Object.keys(snapshot.cooldowns ?? {}).length) throw new Error('host authority activation requires an empty unbound store');
+    if (snapshot.hostBinding && canonical(snapshot.hostBinding) !== canonical(host)) throw new Error('host authority is already bound to another policy revision');
+    snapshot.hostBinding = host;
+    snapshot.projectGenerations ??= {};
+  });
+}
+
+function migrationContentDigest(snapshot: AdmissionSnapshot): string {
+  const { revision: _revision, migration: _migration, authorityRedirect: _redirect, ...content } = snapshot;
+  return createHash('sha256').update(canonical(content)).digest('hex');
+}
+
+/** Trusted owner operation on the same AdmissionStore implementation. Interruptions
+ * remain closed. Resume the same id/binding; no stale-lock deletion or blind rollback. */
+export function migrateProjectAdmissionToHost(source: AdmissionStore, target: AdmissionStore, projectId: string, options: {
+  id: string; expectedSourceRevision: number; expectedTargetRevision: number;
+  onPhase?: (phase: AdmissionMigration['phase']) => void;
+}): void {
+  if (source instanceof FileAdmissionStore) source.useDurableWrites();
+  if (target instanceof FileAdmissionStore) target.useDurableWrites();
+  if (source === target || !options.id.trim()) throw new Error('migration requires distinct authorities and a stable id');
+  let local = source.read();
+  let host = target.read();
+  if (host.hostBinding?.hostId !== hostname()) throw new Error('migration requires a local trusted host binding');
+  const approved = host.hostBinding.projects[projectId];
+  if (!approved || canonical(approved.migrationFrom ?? approved.policy) !== canonical(local.policyBinding)) throw new Error('migration project policy is not host-approved');
+  const bindingDigest = createHash('sha256').update(canonical(host.hostBinding)).digest('hex');
+  const matches = (marker: AdmissionMigration | undefined): boolean => !!marker && marker.id === options.id
+    && marker.projectId === projectId && marker.bindingDigest === bindingDigest;
+  if (local.authorityRedirect && !host.migration) {
+    if (local.authorityRedirect.migrationId === options.id && local.authorityRedirect.authorityRef === host.hostBinding.authorityRef
+      && host.projectGenerations?.[projectId] === local.authorityRedirect.generation) return;
+    throw new Error('project authority has already migrated');
+  }
+  if ((local.migration && !matches(local.migration)) || (host.migration && !matches(host.migration))) throw new Error('conflicting migration id or binding digest');
+  if (!local.migration && !host.migration) {
+    if (local.revision !== options.expectedSourceRevision || host.revision !== options.expectedTargetRevision) throw new Error('migration authority revision mismatch');
+    if (host.projectGenerations?.[projectId]) throw new Error('project already has an active host generation');
+  }
+  const write = (store: AdmissionStore, expected: AdmissionSnapshot, mutate: (snapshot: AdmissionSnapshot) => void): void => {
+    store.transact(snapshot => {
+      if (snapshot.revision !== expected.revision) throw new Error('migration authority revision changed; both authorities remain frozen');
+      mutate(snapshot);
+    });
+  };
+  const marker: AdmissionMigration = { id: options.id, projectId, bindingDigest, phase: 'frozen' };
+  // Close the old route first. The new project route has no generation yet, so
+  // a crash between these writes cannot expose two usable authorities.
+  if (!local.migration) write(source, local, snapshot => { snapshot.migration = marker; });
+  if (!host.migration) write(target, host, snapshot => { snapshot.migration = marker; });
+  local = source.read(); host = target.read();
+  let phase = host.migration!.phase;
+  if (phase === 'frozen') {
+    options.onPhase?.('frozen');
+    if ([...Object.values(local.records), ...Object.values(host.records)].some(record => record.state === 'admitted' || record.state === 'uncertain')) {
+      throw new Error('migration requires proof-drained leases; live or uncertain work remains frozen');
+    }
+    const drained: AdmissionMigration = { ...marker, phase: 'drained', sourceDigest: migrationContentDigest(local), targetDigest: migrationContentDigest(host) };
+    write(source, local, snapshot => { snapshot.migration = drained; });
+    write(target, host, snapshot => { snapshot.migration = drained; });
+    local = source.read(); host = target.read(); phase = 'drained';
+  }
+  if (phase === 'drained') {
+    options.onPhase?.('drained');
+    if (migrationContentDigest(local) !== host.migration!.sourceDigest || migrationContentDigest(host) !== host.migration!.targetDigest) throw new Error('migration history digest changed; reconcile under the trusted owner');
+    write(target, host, snapshot => {
+      const view = hostProjectAdmissionPolicy({ ...snapshot, projectGenerations: { ...snapshot.projectGenerations, [projectId]: 1 } }, projectId);
+      const scopes = snapshot.allowances ??= {};
+      for (const [key, scope] of Object.entries(local.allowances ?? {})) {
+        const scoped = hostProjectKey(projectId, key);
+        if (scopes[scoped]) throw new Error('migration allowance history conflicts');
+        const budget = JSON.parse(key)[0] === 'run' ? view.managed!.budgets?.perRun : view.managed!.budgets?.perTask;
+        const limits = intersectBudgets(scope.limits, projectBudgets(budget),
+          JSON.parse(key)[0] === 'task' ? { maxAttempts: view.managed!.retry?.maxAttempts ?? 3 } : undefined);
+        const deadline = Math.min(Date.parse(scope.deadlineAt ?? '') || Infinity,
+          limits.timeoutSeconds === undefined ? Infinity : Date.parse(scope.startedAt) + limits.timeoutSeconds * 1000);
+        scopes[scoped] = { ...structuredClone(scope), limits, ...(Number.isFinite(deadline) ? { deadlineAt: new Date(deadline).toISOString() } : {}) };
+      }
+      for (const record of Object.values(local.records)) {
+        if (!record.managed || !record.accounting || (record.accounting.attemptNumber !== undefined && (record.state !== 'settled' || !record.accounting.stopEvidence))) throw new Error('history requires proof-checked managed reconciliation');
+        if (record.accounting.stopEvidence) {
+          assertValidWorkerPayload('workerHealthSummary', record.accounting.stopEvidence);
+          if (record.accounting.stopEvidence.observerGeneration !== record.leaseGeneration || decideLeaseMapping({ leaseGeneration: record.leaseGeneration!,
+            observedGeneration: record.leaseGeneration!, leaseState: 'admitted', settled: false,
+            health: record.accounting.stopEvidence }) !== 'release-once') throw new Error('migration requires current-generation confirmed stop evidence');
+        }
+        const key = hostProjectKey(projectId, record.requestId);
+        if (snapshot.records[key]) throw new Error('migration idempotency history conflicts');
+        const imported = structuredClone(record);
+        imported.projectId = projectId;
+        if (imported.accounting) {
+          imported.accounting.runKey = hostProjectKey(projectId, imported.accounting.runKey);
+          imported.accounting.taskKey = hostProjectKey(projectId, imported.accounting.taskKey);
+        }
+        if (imported.managed) imported.dimensions = hostReservationDimensions(view.managed!, imported.managed,
+          managedDimensionKeys(projectId, imported.managed));
+        snapshot.records[key] = imported;
+      }
+      const cooldowns = snapshot.cooldowns ??= {};
+      for (const [key, cooldown] of Object.entries(local.cooldowns ?? {})) {
+        if (!Number.isFinite(Date.parse(cooldown.until)) || !Number.isSafeInteger(cooldown.failures) || cooldown.failures < 0) throw new Error('invalid migration cooldown history');
+        const aliases = Object.entries((approved.migrationFrom ?? approved.policy).managed!.installations).filter(([, entry]) => `quota/${encodeURIComponent(entry.quotaScope)}` === key);
+        if (!aliases.length) throw new Error('unbound cooldown history requires explicit reconciliation');
+        const upstreamKeys = new Set(aliases.map(([cli]) => `quota/${encodeURIComponent(approved.installations[cli]!.quotaScope)}`));
+        for (const upstreamKey of upstreamKeys) {
+          const previous = cooldowns[upstreamKey];
+          cooldowns[upstreamKey] = { until: previous && Date.parse(previous.until) > Date.parse(cooldown.until) ? previous.until : cooldown.until,
+            failures: (previous?.failures ?? 0) + cooldown.failures };
+        }
+      }
+      snapshot.migration = { ...snapshot.migration!, phase: 'reconciled' };
+      snapshot.migration.targetDigest = migrationContentDigest(snapshot);
+    });
+    host = target.read(); phase = 'reconciled';
+  }
+  if (phase === 'reconciled') {
+    options.onPhase?.('reconciled');
+    local = source.read();
+    if (migrationContentDigest(local) !== host.migration!.sourceDigest || migrationContentDigest(host) !== host.migration!.targetDigest) throw new Error('migration history digest changed before commit');
+    write(target, host, snapshot => {
+      (snapshot.projectGenerations ??= {})[projectId] = 1;
+      snapshot.migration = { ...snapshot.migration!, phase: 'committed' };
+      snapshot.migration.targetDigest = migrationContentDigest(snapshot);
+    });
+    host = target.read(); phase = 'committed';
+  }
+  if (phase === 'committed') {
+    options.onPhase?.('committed');
+    local = source.read();
+    if (migrationContentDigest(local) !== host.migration!.sourceDigest || migrationContentDigest(host) !== host.migration!.targetDigest) throw new Error('history changed after migration commit');
+    write(source, local, snapshot => {
+      snapshot.authorityRedirect = { authorityRef: host.hostBinding!.authorityRef, generation: host.projectGenerations![projectId]!, migrationId: options.id };
+    });
+    write(target, host, snapshot => { delete snapshot.migration; });
   }
 }
 
@@ -936,7 +1338,7 @@ function isCanonicalManagedDimension(projectId: string, key: string): boolean {
 function sameManagedRequest(record: AdmissionRecord, request: AdmissionRequest): boolean {
   const { state: _state, revision: _revision, reason: _reason, admittedAt: _admittedAt,
     leaseExpiresAt: _leaseExpiresAt, finishedAt: _finishedAt, preemptedBy: _preemptedBy,
-    attemptGeneration: _attempt, leaseGeneration: _lease, dimensions: _dimensions, reservedSlots: _slots, accounting: _accounting,
+    projectId: _project, attemptGeneration: _attempt, leaseGeneration: _lease, dimensions: _dimensions, reservedSlots: _slots, accounting: _accounting,
     launchClaimedAt: _launch, execution: _execution, health: _health, lastProgressAt: _progress, finalEvidence: _final, ...original } = record;
   return canonical(original) === canonical(request);
 }
