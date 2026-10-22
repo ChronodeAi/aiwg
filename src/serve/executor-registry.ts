@@ -621,6 +621,13 @@ export class ExecutorRegistry extends EventEmitter {
   authenticate(executorId: string, token: string): boolean {
     const executor = this.executors.get(executorId);
     if (executor) return executor.token === token;
+    // A host-bound ID authenticates only against the protected host record,
+    // never the environment/project-selectable identity store (#2923 review).
+    let hostRecord: ExecutorIdentityRecord | undefined;
+    try { hostRecord = this.loadHostIdentities().get(executorId); } catch { return false; } // unreadable host store fails closed
+    if (hostRecord?.hostAdmission || [...this.admissionAuthorities.values()].some(entry => entry.executorId === executorId)) {
+      return !!token && hostRecord?.token === token;
+    }
     // Fall back to identity store for executors that registered in a prior server run
     const stored = this.identityStore.get(executorId);
     return stored !== undefined && stored.token === token;
