@@ -295,6 +295,44 @@ describe('T-OG-15 models resolve direct invocation', () => {
     expect(load).not.toHaveBeenCalled(); log.mockRestore();
   });
 
+  it.each([
+    { label: 'omitted', taskArgs: [] },
+    { label: 'without a value', taskArgs: ['--task'] },
+    { label: 'empty inline value', taskArgs: ['--task='] },
+  ])('explains missing --task before loading ($label)', async ({ taskArgs }) => {
+    const load = vi.fn(); const handler = createModelsHandler({ load });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const args = ['resolve', '--role=coding', '--group=workers', '--brief=/fixture/brief',
+      '--workdir=/fixture/tree', '--final-output=/fixture/final', ...taskArgs];
+    const message = 'Missing required --task. Valid task classes: inventory, implementation, architecture, review, plus classes configured in defaults.workerSelection.taskClasses.';
+    expect(() => parseWorkerCommandArgs(args.slice(1))).toThrow(message);
+    expect((await handler.execute({ args, rawArgs: args, cwd: '/unused', frameworkRoot: '/unused' })).exitCode).toBe(2);
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toEqual({ status: 'blocked', diagnostics: [
+      { code: 'OG_CONFIG_REFERENCE', pointer: '/request/task', message },
+    ] });
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it.each(['brief', 'workdir', 'final_output'] as const)('explains a relative %s with a specific request pointer', async key => {
+    const f = await fixture();
+    f.request[key] = 'relative-input';
+    for (const format of ['json', 'shell']) {
+      const result = await f.call(format);
+      expect(result.result.exitCode).toBe(2);
+      expect(result.plan.invocation).toBeUndefined();
+      expect(result.plan.diagnostics.at(-1)).toEqual({ code: 'OG_CONFIG_REFERENCE', pointer: `/request/${key}`,
+        message: `--${key.replace('_', '-')} must be an absolute path; relative paths are not resolved against cwd or --workdir.` });
+      expect(result.output).not.toContain('relative-input');
+      if (format === 'shell') expect(result.stdout).toBe('');
+    }
+    expect(f.buildInvocation).not.toHaveBeenCalled();
+  });
+
+  it('accepts a configured task class at argument parsing', () => {
+    expect(parseWorkerCommandArgs(['--role=coding', '--task=custom-task', '--group=workers',
+      '--brief=/fixture/brief', '--workdir=/fixture/tree', '--final-output=/fixture/final']).task).toBe('custom-task');
+  });
+
   it.each(['shell', 'json'])('rejects an equals-bearing executable in %s format', async format => {
     const f = await fixture();
     f.drivers.codex.buildInvocation = async () => ({ argv: ['/no/such/a=b', '/bin/echo', 'wrong-executable'], stdin: 'closed', envNames: [] });

@@ -319,6 +319,18 @@ export interface WorkerCommandRequest {
   authority?: { premiumAuthorized: true; maxAutoTier: 3 };
 }
 
+/** Only fixed argument guidance is safe to expose in public request diagnostics. */
+class WorkerRequestArgumentError extends WorkerPolicyError {
+  readonly pointer: string;
+
+  constructor(key: 'task' | 'brief' | 'workdir' | 'final_output') {
+    super('OG_CONFIG_REFERENCE', key === 'task'
+      ? `Missing required --task. Valid task classes: ${Object.keys(DEFAULT_WORKER_SELECTION.taskClasses!).join(', ')}, plus classes configured in defaults.workerSelection.taskClasses.`
+      : `--${key.replace('_', '-')} must be an absolute path; relative paths are not resolved against cwd or --workdir.`);
+    this.pointer = `/request/${key}`;
+  }
+}
+
 /** Reject unsupported syntax before discovery or any path reads. */
 export function parseWorkerCommandArgs(args: string[]): WorkerCommandRequest {
   const names: Record<string, string> = { role: 'role', task: 'task', group: 'group', brief: 'brief',
@@ -339,6 +351,7 @@ export function parseWorkerCommandArgs(args: string[]): WorkerCommandRequest {
     if (key in result) throw new Error(`Duplicate --${match[1]}`);
     const value = match[2] ?? args[++i];
     if (!value || value.startsWith('--') && match[2] === undefined || value.includes('\0')) {
+      if (key === 'task' && !value?.includes('\0')) throw new WorkerRequestArgumentError('task');
       throw new Error(`--${match[1]} requires a value`);
     }
     result[key] = value;
@@ -346,6 +359,7 @@ export function parseWorkerCommandArgs(args: string[]): WorkerCommandRequest {
   if (json && result.format && result.format !== 'json') throw new Error('--json conflicts with --format');
   if (json) result.format = 'json';
   for (const key of ['role', 'task', 'group', 'brief', 'workdir', 'final_output']) {
+    if (key === 'task' && !result[key]) throw new WorkerRequestArgumentError('task');
     if (!result[key]) throw new Error(`Missing ${key}`);
   }
   if (!['efficiency', 'coding', 'reasoning'].includes(result.role)) throw new Error('Unsupported role');
@@ -443,7 +457,9 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
   let failureCode: WorkerPolicyDiagnostic['code'] = 'OG_CONFIG_REFERENCE';
   let plan: WorkerCommandPlan | undefined;
   try {
-    if (!path.isAbsolute(request.brief)) throw new WorkerPolicyError('OG_CONFIG_REFERENCE', '--brief must be an absolute path; relative paths are not resolved against cwd or --workdir.');
+    for (const key of ['brief', 'workdir', 'final_output'] as const) {
+      if (!path.isAbsolute(request[key])) throw new WorkerRequestArgumentError(key);
+    }
     const bytes = await readBrief(request.brief);
     const briefDigest = bytes === null ? null : bytesDigest(bytes);
     if (expected && expected.briefDigest !== briefDigest) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Brief digest changed; resolve again');
@@ -618,7 +634,9 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
 /** Public diagnostics contain fixed summaries or explicit typed request-path details. */
 export function workerInvocationDiagnostic(error: unknown, pointer: string,
   fallback: WorkerPolicyDiagnostic['code'] = 'OG_CONFIG_REFERENCE'): WorkerPolicyDiagnostic {
-  if (error instanceof WorkerPathScopeError) return { code: error.code, pointer: error.pointer, message: error.message };
+  if (error instanceof WorkerPathScopeError || error instanceof WorkerRequestArgumentError) {
+    return { code: error.code, pointer: error.pointer, message: error.message };
+  }
   if (error instanceof WorkerInvocationCheckError) return { code: error.code, reason: error.reason, ...invocationChecks[error.reason] };
   const code = error instanceof WorkerPolicyError ? error.code : fallback;
   const messages: Record<WorkerPolicyDiagnostic['code'], string> = {
@@ -631,6 +649,5 @@ export function workerInvocationDiagnostic(error: unknown, pointer: string,
     OG_POLICY_RELAXATION: 'The request would relax the resolved worker policy.',
     OG_BUDGET_UNMEASURABLE: 'The requested worker budget cannot be enforced.',
   };
-  return { code, pointer, message: error instanceof WorkerPolicyError && error.message === '--brief must be an absolute path; relative paths are not resolved against cwd or --workdir.'
-    ? error.message : messages[code] };
+  return { code, pointer, message: messages[code] };
 }
