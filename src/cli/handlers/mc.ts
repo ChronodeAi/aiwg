@@ -18,12 +18,50 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { assertMissionWorkerHandoff } from '../../mission-protocol/codecs.js';
+import type { AiwgConfig } from '../../config/aiwg-config.js';
 
 // ── Constants ────────────────────────────────────────────────
 
 const MC_ROOT = '.aiwg/ralph-external/mc';
 const SESSIONS_DIR = join(MC_ROOT, 'sessions');
 const CONTROL_ID_RE = /^[a-zA-Z0-9._-]+$/;
+
+/** Managed callers fail closed on invalid configuration; legacy reads keep their
+ * historical best-effort behavior. No activation is installed by a caller. */
+async function readAdmissionConfig(projectRoot: string): Promise<AiwgConfig | null> {
+  const { readAiwgConfig, readAiwgConfigCandidate } = await import('../../config/aiwg-config.js');
+  try {
+    return await readAiwgConfig(projectRoot);
+  } catch (error) {
+    const candidate = await readAiwgConfigCandidate(projectRoot);
+    if (candidate?.parallelism?.worker_mode === 'managed') throw error;
+    return null;
+  }
+}
+
+/** Shared binding used by MC and the managed Mission/Flow/Ralph caller paths. */
+export async function createMcAdmissionScheduler(projectRoot: string, cfg: AiwgConfig | null) {
+  const { resolveParallelism, workerActivationDigests, workerConfigDigest } = await import('../../config/aiwg-config.js');
+  const { FileAdmissionStore, SharedHostScheduler } = await import('../../serve/shared-host-scheduler.js');
+  const provider = cfg?.providers[0] ?? 'unknown';
+  const parallelism = resolveParallelism(cfg?.parallelism, provider);
+  if (parallelism.worker_mode === 'managed') {
+    const { managedProjectAdmissionPolicy, projectAdmissionAuthority } = await import('../../serve/shared-host-scheduler.js');
+    const activation = parallelism.activation;
+    if (!cfg || !activation || activation.configDigest !== workerActivationDigests(cfg).configDigest) {
+      throw new Error('managed admission requires a current activated policy');
+    }
+    const authority = projectAdmissionAuthority(projectRoot);
+    const policy = managedProjectAdmissionPolicy(projectRoot, parallelism, workerConfigDigest(activation), parallelism.max_parallel_subagents);
+    const scheduler = new SharedHostScheduler(new FileAdmissionStore(authority.path), policy);
+    scheduler.reconcileNow();
+    return scheduler;
+  }
+  const maxConcurrent = parallelism.max_parallel_mc_missions;
+  return new SharedHostScheduler(new FileAdmissionStore(join(projectRoot, MC_ROOT, 'admission.json')), {
+    maxConcurrent, leaseTtlMs: 5 * 60_000, agingIntervalMs: 30_000, allowPreemption: false, defaultHostQuota: maxConcurrent,
+  });
+}
 
 type MissionStatus = 'queued' | 'running' | 'done' | 'failed' | 'aborted' | 'paused';
 type SessionState = 'active' | 'paused' | 'stopped';
@@ -712,8 +750,16 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
 
   const projectRoot = ctx.cwd || process.cwd();
   const frameworkRoot = ctx.frameworkRoot;
-  const { readAiwgConfig, resolveParallelism } = await import('../../config/aiwg-config.js');
-  const cfg = await readAiwgConfig(projectRoot).catch(() => null);
+  let cfg: AiwgConfig | null;
+  let scheduler: Awaited<ReturnType<typeof createMcAdmissionScheduler>>;
+  try {
+    cfg = await readAdmissionConfig(projectRoot);
+    scheduler = await createMcAdmissionScheduler(projectRoot, cfg);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ui.error(message);
+    return { exitCode: 1, message };
+  }
   const provider = cfg?.providers[0] ?? 'unknown';
 
   const estimate = estimateMissionRunCost(eligible, provider);
@@ -750,18 +796,7 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
   let launched = 0;
   let skipped = 0;
   let failed = 0;
-  const { FileAdmissionStore, SharedHostScheduler } = await import('../../serve/shared-host-scheduler.js');
-  const maxConcurrent = resolveParallelism(cfg?.parallelism, provider).max_parallel_mc_missions;
-  const scheduler = new SharedHostScheduler(
-    new FileAdmissionStore(join(projectRoot, MC_ROOT, 'admission.json')),
-    {
-      maxConcurrent,
-      leaseTtlMs: 5 * 60_000,
-      agingIntervalMs: 30_000,
-      allowPreemption: false,
-      defaultHostQuota: maxConcurrent,
-    },
-  );
+  const managed = cfg?.parallelism?.worker_dispatch && cfg.parallelism.worker_mode === 'managed';
 
   for (const mission of queued) {
     if (mission.mode === 'pty-orchestrator') {
@@ -790,9 +825,10 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
       runtimeKind: 'host',
       priority: mission.priority === 'critical' ? 100 : mission.priority === 'high' ? 50 : mission.priority === 'low' ? 0 : 10,
       submittedAt: admissionSubmittedAt,
-      queueTimeoutMs: 24 * 60 * 60_000,
+      queueTimeoutMs: managed ? (cfg?.parallelism?.admission?.queueTimeoutSeconds ?? 300) * 1000 : 24 * 60 * 60_000,
       preemptible: false,
       metadata: { missionId: mission.id },
+      ...(managed ? { managed: { kind: 'native' as const } } : {}),
     });
     mission.admissionRequestId = admissionRequestId;
     mission.admissionSubmittedAt = admissionSubmittedAt;
@@ -846,8 +882,11 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
       mission.status = 'failed';
       mission.error = msg;
       mission.completedAt = new Date().toISOString();
-      scheduler.release(admissionRequestId);
-      mission.admissionState = 'released';
+      if (managed) mission.admissionState = scheduler.cancel(admissionRequestId).state;
+      else {
+        scheduler.release(admissionRequestId);
+        mission.admissionState = 'released';
+      }
       mission.admissionLeaseExpiresAt = undefined;
       await writeSession(session);
       await appendLog(session.id, {
@@ -884,15 +923,9 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
  */
 async function syncMissionsFromRalph(session: Session, projectRoot: string): Promise<boolean> {
   let mutated = false;
-  const { readAiwgConfig, resolveParallelism } = await import('../../config/aiwg-config.js');
-  const { FileAdmissionStore, SharedHostScheduler } = await import('../../serve/shared-host-scheduler.js');
-  const cfg = await readAiwgConfig(projectRoot).catch(() => null);
-  const provider = cfg?.providers[0] ?? 'unknown';
-  const maxConcurrent = resolveParallelism(cfg?.parallelism, provider).max_parallel_mc_missions;
-  const scheduler = new SharedHostScheduler(
-    new FileAdmissionStore(join(projectRoot, MC_ROOT, 'admission.json')),
-    { maxConcurrent, leaseTtlMs: 5 * 60_000, agingIntervalMs: 30_000, allowPreemption: false, defaultHostQuota: maxConcurrent },
-  );
+  const cfg = await readAdmissionConfig(projectRoot);
+  const scheduler = await createMcAdmissionScheduler(projectRoot, cfg);
+  const managed = cfg?.parallelism?.worker_dispatch && cfg.parallelism.worker_mode === 'managed';
   for (const mission of session.missions) {
     if (mission.status !== 'running') continue;
     if (!mission.ralphLoopId) continue;
@@ -935,8 +968,11 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
         }
         mutated = true;
         if (mission.admissionRequestId) {
-          try { scheduler.release(mission.admissionRequestId); } catch { /* already expired or released */ }
-          mission.admissionState = 'released';
+          if (managed) mission.admissionState = scheduler.cancel(mission.admissionRequestId).state;
+          else {
+            try { scheduler.release(mission.admissionRequestId); } catch { /* already expired or released */ }
+            mission.admissionState = 'released';
+          }
           mission.admissionLeaseExpiresAt = undefined;
         }
       } else if (mission.admissionRequestId) {
@@ -1080,15 +1116,8 @@ async function mcAbort(ctx: HandlerContext): Promise<HandlerResult> {
     if (mission?.admissionRequestId) {
       try {
         const projectRoot = ctx.cwd || process.cwd();
-        const { readAiwgConfig, resolveParallelism } = await import('../../config/aiwg-config.js');
-        const { FileAdmissionStore, SharedHostScheduler } = await import('../../serve/shared-host-scheduler.js');
-        const cfg = await readAiwgConfig(projectRoot).catch(() => null);
-        const provider = cfg?.providers[0] ?? 'unknown';
-        const maxConcurrent = resolveParallelism(cfg?.parallelism, provider).max_parallel_mc_missions;
-        const scheduler = new SharedHostScheduler(
-          new FileAdmissionStore(join(projectRoot, MC_ROOT, 'admission.json')),
-          { maxConcurrent, leaseTtlMs: 5 * 60_000, agingIntervalMs: 30_000, allowPreemption: false, defaultHostQuota: maxConcurrent },
-        );
+        const cfg = await readAdmissionConfig(projectRoot);
+        const scheduler = await createMcAdmissionScheduler(projectRoot, cfg);
         scheduler.cancel(mission.admissionRequestId);
       } catch {
         // The mission state is authoritative; lease expiry provides recovery.

@@ -97,3 +97,69 @@ Backpressure maps as follows:
 Implementation evidence is in `src/serve/shared-host-scheduler.ts` and
 `test/unit/serve/shared-host-scheduler.test.ts`. Related work: AIWG #1546,
 #1589, #1657, #1990–#1994, and `roctinam/agentic-sandbox#234` / #460.
+
+## Managed project admission
+
+When `parallelism.worker_dispatch=true` and `parallelism.worker_mode=managed`,
+the same scheduler adds project worker dimensions. The preceding legacy lease
+recovery and preemption rules continue to apply to callers without this mode.
+Managed cancellation, lease expiry, and runtime status strings do not prove
+termination and cannot release capacity.
+
+Omitted `parallelism.admission.authorityRef` resolves to `project`. Its store is
+`<canonical-project-root>/.aiwg/ralph-external/mc/admission.json`; project aliases
+resolve through the real filesystem path. Host authorities and cross-project
+aggregation require a later authority/migration capability and fail closed here.
+
+The config/authority owner builds a policy with `managedProjectAdmissionPolicy`
+and installs it once with `bindManagedAdmissionPolicy` under the existing store
+lock, after validating activation. Dispatch callers use `createMcAdmissionScheduler`
+and cannot initialize or replace the binding. The binding contains the activation
+digest and effective admission policy. Every scheduler transaction compares both;
+a stale digest, different limits with the same digest, or a legacy writer against
+a bound store is rejected without changing state. Binding replacement is not
+supported by this slice. The activation writer remains responsible for validating
+the paired config/model snapshot; this admission API does not activate config.
+
+Canonical reservation dimensions are:
+
+| Dimension | Key |
+|---|---|
+| Project | `project/<sha256-of-canonical-root>` |
+| Group | `project/<id>/group/<group>` |
+| Member | `project/<id>/group/<group>/member/<member>` |
+| Installation | `project/<id>/installation/<cli>` |
+| Model | `model/<inference-provider>/<RFC3986-encoded-api-model-id>` |
+| Quota | `quota/<percent-encoded-authority-owned-quota-scope>` |
+
+Member IDs are group-local. Model and quota dimensions aggregate installations
+within this project authority. Multiple installations of one account must bind
+the same quota scope; conflicting aliases are rejected. Requests cannot override
+the activated installation/quota or group/member bindings.
+
+Each managed request supplies a `managed` reservation with `kind` (`native` or
+`external`) and an optional positive integer `lowerBound` (default one slot).
+External workers require group, member, CLI, canonical model, and quota identity.
+Native workers use the same admission path; incomplete native identities and
+pre-existing native leases conservatively count against every unknown capped
+dimension. They also consume the project worker cap, which comes from
+`max_parallel_subagents`. Group `maxParallel` and admission caps intersect.
+All applicable dimensions reserve the lower bound in one transaction or leave
+the request queued; queued records consume no execution capacity. This scheduler
+does not enforce hard spend budgets, so those policies are rejected.
+
+The managed queue defaults to 128 entries, a 300-second deadline, and 60-second
+leases. A full queue denies waiting requests, including when its bound is zero;
+immediate admissions remain possible. Cancelled, expired, and denied queue entries
+remain terminal on replay. Reusing a request ID with any changed payload fails.
+
+Managed records persist `attemptGeneration`, `leaseGeneration`, `dimensions`, and
+`reservedSlots`. Generations start at one; this slice does not implement fencing
+or settlement. An `uncertain` record retains all reserved capacity and has no
+completion timestamp. Managed preemption cannot free capacity, and the legacy
+`release` API rejects managed records. MC launch failures and terminal/paused Ralph
+status observations retain uncertainty. A later proof-checked settlement API must
+check the current generation before releasing capacity.
+
+Offline coverage: `test/unit/serve/shared-host-scheduler-managed.test.ts` and
+`test/unit/cli/handlers/mc-managed-admission.test.ts` (T-OG-05/06/08).
