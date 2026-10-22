@@ -11,6 +11,7 @@ import { main as indexCli } from '../../../../src/artifacts/cli.js';
 import { SessionRepository } from '../../../../src/sessions/repository.js';
 import { grokbotTranscriptReplicaFilename } from '../../../../src/sessions/adapters/grokbot-locator.js';
 import { claudeProjectKey } from '../../../../src/sessions/workspace-discovery.js';
+import * as resourcePreflight from '../../../../tools/scripts/resource-preflight.mjs';
 
 vi.mock('node:os', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:os')>(),
@@ -27,12 +28,17 @@ vi.mock('../../../../src/features/runtime.js', async (importOriginal) => {
 
 let root: string;
 let log: ReturnType<typeof vi.spyOn>;
+const availableHostResources = {
+  supported: true, availMemGb: 16, loadRatio: 0, memPsiAvg10: 0, memPsiAvg60: 0, freeDiskGb: 100,
+};
 beforeEach(() => {
   vi.stubEnv('CODEX_HOME', '');
   root = mkdtempSync(join(tmpdir(), 'sessions-coverage-cli-'));
   vi.stubEnv('HOME', root);
   vi.stubEnv('XDG_DATA_HOME', join(root, 'data'));
   vi.stubEnv('XDG_STATE_HOME', join(root, 'state'));
+  // Exercise the real refresh gate without depending on live CI host pressure.
+  vi.spyOn(resourcePreflight, 'readLiveHostResources').mockReturnValue({ ...availableHostResources });
   log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 });
 afterEach(() => {
@@ -46,7 +52,7 @@ async function cli(args: string[]) {
 }
 
 describe('sessions coverage CLI', () => {
-  itWithSqlite('repairs a narrow explicit manifest on refresh and imports all configured providers into a fresh catalog', async () => {
+  itWithSqlite.each([false, true])('repairs a narrow explicit manifest on refresh and imports all configured providers into a fresh catalog (defer first: %s)', async deferFirst => {
     const claude = join(root, '.claude/projects', claudeProjectKey(root));
     const codex = join(root, '.codex/sessions/2026/10/14');
     const grokbot = join(root, 'grokbot');
@@ -71,21 +77,53 @@ describe('sessions coverage CLI', () => {
     expect(discovery.data.warnings).toContainEqual(expect.objectContaining({
       code: 'CONFIGURED_PROVIDERS_OUTSIDE_SCOPE', missingProviders: ['claude', 'codex'],
     }));
+    const manifestPath = join(root, '.aiwg/sessions/discovery-manifest.json');
+    const savedManifest = readFileSync(manifestPath, 'utf8');
     const automatic = await cli(['discover', '--workspace', root, '--provider-home', root,
       '--grokbot-root', grokbot, '--dry-run', '--json']);
     expect(automatic.data.manifest.preflight).toMatchObject({
       expectedProviders: ['claude', 'codex', 'grokbot'], expectedProviderBasis: 'workspace-config',
     });
     expect(automatic.data.manifest.sources).toHaveLength(3);
+    expect(readFileSync(manifestPath, 'utf8')).toBe(savedManifest);
     const stalePreview = await cli(['import-discovered', '--workspace', root, '--dry-run', '--json']);
     expect(stalePreview.data.warnings[0].missingProviders).toEqual(['claude', 'codex']);
     const catalog = join(root, '.aiwg/sessions/catalog.sqlite');
-    new SessionRepository(catalog).close();
+    const empty = new SessionRepository(catalog);
+    try {
+      expect(empty.getBatchImportRunForManifest(discovery.data.manifest.manifestId, root)).toBeNull();
+    } finally { empty.close(); }
     const doctor = await cli(['doctor', '--workspace', root, '--json']);
     expect(doctor.data.warnings[0].missingProviders).toEqual(['claude', 'codex']);
+    if (deferFirst) {
+      vi.spyOn(resourcePreflight, 'readLiveHostResources').mockReturnValueOnce({
+        ...availableHostResources, loadRatio: 0.81,
+      });
+      log.mockClear();
+      await indexCli(['refresh', '--workspace', root, '--only', 'sessions', '--json']);
+      const deferred = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+      expect(deferred, JSON.stringify(deferred, null, 2)).toMatchObject({
+        status: 'deferred', reason: 'load ratio 0.81 > 0.8',
+        jobs: [{ kind: 'sessions', status: 'deferred' }],
+        totals: { jobs: 1, deferred: 1, ok: 0, errors: 0 },
+      });
+      expect(deferred.jobs[0].sessionImport).toBeUndefined();
+      expect(deferred.jobs[0].sessionImports).toBeUndefined();
+      expect(readFileSync(manifestPath, 'utf8')).toBe(savedManifest);
+      const untouched = new SessionRepository(catalog);
+      try {
+        expect(untouched.listSessions({ workspaceId: root, limit: 10 }).items).toEqual([]);
+      } finally { untouched.close(); }
+    }
     log.mockClear();
     await indexCli(['refresh', '--workspace', root, '--only', 'sessions', '--json']);
     const refreshed = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+    expect(refreshed, JSON.stringify(refreshed, null, 2)).toMatchObject({
+      status: 'ok', jobs: [{ kind: 'sessions', status: 'ok',
+        sessionImport: { run: { status: 'complete' }, totals: { accepted: 3, rejected: 0, pending: 0 } },
+      }],
+      totals: { jobs: 1, ok: 1, deferred: 0, errors: 0 },
+    });
     expect(refreshed.jobs[0].sessionImport.run.preflight).toMatchObject({
       expectedProviders: ['claude', 'codex', 'grokbot'], expectedProviderBasis: 'workspace-config',
       scopeWarnings: [expect.objectContaining({ missingProviders: ['claude', 'codex'] })],
