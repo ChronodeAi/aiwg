@@ -40,6 +40,7 @@ export default defineConfig({
     exclude: [
       // Required serial packaging and corpus lanes run separately in CI.
       ...packagingFiles, ...artifactIndexFiles, ...discoveryFiles, ...deploymentFiles, ...nodeFiles, ...d29SlowFiles, ...d17SlowFiles, ...orchestrationConformanceFiles,
+      'test/evidence/**',
       'test/uat/**',
       'tools/ralph-external/**',
       'test/unit/ralph/**',
