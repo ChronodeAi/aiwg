@@ -2,7 +2,7 @@
 
 Status: v2026.8.5 re-audit pass for #2015
 
-AIWG's MCP server is a provider-agnostic optional hook. The baseline integration path for every provider is file deployment plus the CLI bridge: `aiwg discover` to find a capability and `aiwg show <type> <name>` to fetch it. MCP adds structured, model-callable access to the same catalog and to selected project operations, but no provider should depend on MCP for basic AIWG reachability.
+AIWG's MCP server is a provider-agnostic optional hook. The baseline integration path for every provider is file deployment plus the CLI bridge: `aiwg discover` to find a capability and `aiwg show <type> <name> --body` to fetch it. MCP adds structured, model-callable access to the same catalog and to selected project operations, but no provider should depend on MCP for basic AIWG reachability.
 
 ## Current Tool Inventory
 
@@ -13,9 +13,9 @@ The default `aiwg mcp serve` surface currently registers 15 tools:
 | Tool | Status | Boundary |
 |---|---|---|
 | `discover` | active | Cross-type ranked search; mirrors `aiwg discover --json` |
-| `skill-list` / `skill-show` | active | Skill catalog enumeration and full body fetch |
+| `skill-list` / `skill-show` | active | Skill catalog enumeration with metadata cards and opt-in body fetches |
 | `command-list` / `command-show` | active | CLI command catalog and command spec lookup |
-| `rule-list` / `rule-show` | active | Rule catalog and rule body fetch; CLI equivalent is `aiwg show rule <name>` |
+| `rule-list` / `rule-show` | active | Rule catalog with metadata cards and opt-in rule body fetches; CLI equivalent is `aiwg show rule <name> --body` |
 | `agent-list` / `agent-show` | active | Agent catalog and full agent definition fetch |
 | `template-list` / `template-show` / `template-render` | active | Template catalog, raw body fetch, and simple rendering |
 | `command-run` | active | Allow-listed CLI dispatch; destructive commands require `confirmed: true` |
@@ -87,7 +87,7 @@ Provider adapters should therefore say:
 - Optional enrichment: connect `aiwg mcp serve` for structured tool calls.
 - No provider requires MCP for skills, discovery, or rule reachability.
 
-Hermes now follows this framing: rules are compressed into `AGENTS.md` as `### Rule:` sections, with full rule bodies reachable by `aiwg show rule <name>`; MCP exposes the same rule path when configured.
+Hermes now follows this framing: rules are compressed into `AGENTS.md` as `### Rule:` sections, with full rule bodies reachable by `aiwg show rule <name> --body`; MCP exposes the same rule path when configured.
 
 ## Install, Inject, and Profile UX Check
 
@@ -115,7 +115,7 @@ MCP adds value when the host can call tools directly:
 The CLI + `AGENTS.md` bridge already covers:
 
 - Capability discovery through `aiwg discover`.
-- Full body fetches through `aiwg show skill|agent|command|rule|flow|runbook|template|behavior`.
+- Full body fetches through `aiwg show <type> <name> --body` (skill, agent, command, rule, flow, runbook, template, or behavior).
 - Rule delivery for providers that load generated context files.
 - Operator-driven command execution from a shell.
 

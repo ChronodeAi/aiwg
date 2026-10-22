@@ -7,7 +7,7 @@ activation: on-demand
 
 # artifact-output-policy — guidance
 
-Authority: `aiwg show rule artifact-output-policy` (kernel). This companion supplies supporting explanation; the complete imperative core is self-contained in that rule.
+Authority: `aiwg show rule artifact-output-policy --body` (kernel). This companion supplies supporting explanation; the complete imperative core is self-contained in that rule.
 
 ## Destination example
 

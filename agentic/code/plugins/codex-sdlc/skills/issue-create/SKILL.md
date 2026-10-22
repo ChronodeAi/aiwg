@@ -24,7 +24,7 @@ commandHint:
 >
 > ```bash
 > aiwg discover "<capability>"
-> aiwg show skill <name>
+> aiwg show skill <name> --body
 > ```
 >
 > Only kernel-listed skills (`aiwg-doctor`, `aiwg-refresh`, `aiwg-status`, `aiwg-help`, `use`, `steward`) are directly invokable as slash commands. See [skill-discovery rule](https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/aiwg-utils/rules/skill-discovery.md).
@@ -832,7 +832,7 @@ Use `regression-check` manually after issue creation to verify.
 Usage: discover and load the skill, then compose the issue request:
 
 aiwg discover "issue create"
-aiwg show skill issue-create
+aiwg show skill issue-create --body
 
 Examples:
 - Create an issue titled "Implement user auth"

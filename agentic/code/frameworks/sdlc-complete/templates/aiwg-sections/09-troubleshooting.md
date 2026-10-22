@@ -23,7 +23,7 @@ aiwg use sdlc
 
 # Verify canonical discovery
 aiwg discover "SDLC project orchestration"
-aiwg show skill orchestrate-project
+aiwg show skill orchestrate-project --body
 ```
 
 **Disable AIWG context**:

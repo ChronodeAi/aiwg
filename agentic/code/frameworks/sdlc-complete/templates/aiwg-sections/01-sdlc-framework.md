@@ -54,4 +54,4 @@ All SDLC artifacts (requirements, architecture, testing, etc.) are stored in **`
 ### Artifact output destinations
 
 Configuration: `.aiwg/aiwg.config` `artifact_outputs`. Destination authority:
-`aiwg show rule artifact-output-policy` (kernel).
+`aiwg show rule artifact-output-policy --body` (kernel).

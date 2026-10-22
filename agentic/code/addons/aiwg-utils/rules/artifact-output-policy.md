@@ -16,4 +16,4 @@ Before any durable AIWG plan/review/report/SDLC artifact, MUST resolve `.aiwg/ai
 - Unknown/unsupported destinations MUST fail safe with a clear diagnostic. Report honestly when the provider acts above AIWG's controllable prompt/tool boundary.
 - Project policy is the ceiling; within it, explicit task selection outranks user preferences and provider defaults. Higher-authority safety, privacy, and project data boundaries always apply.
 
-Supporting rationale and examples: [artifact-output-policy-guidance](./artifact-output-policy-guidance.md) (`aiwg show rule artifact-output-policy-guidance`, on-demand).
+Supporting rationale and examples: [artifact-output-policy-guidance](./artifact-output-policy-guidance.md) (`aiwg show rule artifact-output-policy-guidance --body`, on-demand).

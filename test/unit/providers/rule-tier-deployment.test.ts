@@ -177,8 +177,8 @@ describe('on-demand index propagation (#1675)', () => {
     it('renders an H2 heading, fetch fence, and one bullet per rule', () => {
       const s = renderOnDemandRuleSection(od);
       expect(s).toContain('## On-Demand Rules');
-      expect(s).toContain('aiwg show rule <name>');
-      expect(s).toContain('- `alpha` — `aiwg show rule alpha`');
+      expect(s).toContain('```bash\naiwg show rule <name> --body\n```');
+      expect(s).toContain('- `alpha` — `aiwg show rule alpha --body`');
       expect((s.match(/^- /gm) || []).length).toBe(3);
     });
     it('honors a custom heading level', () => {
@@ -195,7 +195,7 @@ describe('on-demand index propagation (#1675)', () => {
   describe('interpolateContextTokens', () => {
     it('substitutes the {{ON_DEMAND_RULES}} token', () => {
       const out = interpolateContextTokens('before\n{{ON_DEMAND_RULES}}\nafter', {
-        onDemandRules: '## On-Demand Rules\n- `r` — `aiwg show rule r`',
+        onDemandRules: '## On-Demand Rules\n- `r` — `aiwg show rule r --body`',
       });
       expect(out).toContain('## On-Demand Rules');
       expect(out).not.toContain('{{ON_DEMAND_RULES}}');
@@ -453,10 +453,10 @@ describe('inline rule budget (#2562)', () => {
     const count = writeOnDemandRuleIndex(dest, [medium], { demotedFiles: [demoted], inlineBudgetTokens: 64_000 });
     expect(count).toBe(2);
     const content = await readFile(join(dest, 'RULES-ONDEMAND.md'), 'utf8');
-    expect(content).toContain('- `activity-log` — `aiwg show rule activity-log`');
+    expect(content).toContain('- `activity-log` — `aiwg show rule activity-log --body`');
     expect(content).toContain('## Binding rules moved on demand to fit the inline budget');
     expect(content).toContain('64,000-token inline budget');
-    expect(content).toContain('- `ops-safety` — `aiwg show rule ops-safety`');
+    expect(content).toContain('- `ops-safety` — `aiwg show rule ops-safety --body`');
     // The demoted rule is not also listed as a MEDIUM/LOW rule.
     expect(content.split('ops-safety').length).toBe(3);
   });
@@ -484,7 +484,7 @@ describe('inline rule budget (#2562)', () => {
     expect(count).toBe(2);
     const content = await readFile(join(dest, 'RULES-ONDEMAND.md'), 'utf8');
     expect(content).toContain('## Binding rules moved on demand to fit the inline budget');
-    expect(content).toContain('- `god-session` — `aiwg show rule god-session`');
-    expect(content).toContain('- `ops-safety` — `aiwg show rule ops-safety`');
+    expect(content).toContain('- `god-session` — `aiwg show rule god-session --body`');
+    expect(content).toContain('- `ops-safety` — `aiwg show rule ops-safety --body`');
   });
 });

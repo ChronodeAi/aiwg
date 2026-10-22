@@ -89,7 +89,7 @@ Use this recovery ladder:
 
    ```bash
    aiwg discover "steward repair AIWG setup" --type skill
-   aiwg show skill steward
+   aiwg show skill steward --body
    ```
 
 2. Establish the actual workspace state:
@@ -350,7 +350,7 @@ Routing protocol:
 1. **Volunteer the affordance** (Norman signifier). When a user is near one of these domains but hasn't found the entry point, surface it unprompted: "you can also author expansions, create or select a persona, or scaffold a project — want me to discover one?"
 2. **Discover, don't dead-end.** Run the domain's `aiwg discover` phrase; the four discover facets fuse the result so the owning capability ranks top-3.
 3. **Re-query on low confidence.** If the first pass is weak, broaden the phrase or try an adjacent domain before concluding "not found" — the `skill-discovery` rule forbids decline-without-search.
-4. **Show the selection.** `aiwg show <type> <name>` for the chosen capability.
+4. **Show the selection.** `aiwg show <type> <name> --body` for the chosen capability.
 
 See `steward-quickref` for the full anchor tables.
 

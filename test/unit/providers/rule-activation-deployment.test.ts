@@ -50,7 +50,7 @@ describe('activation-selected provider deployment (#2939)', () => {
       expect(report.selected_bytes).toBeGreaterThan(0);
       const startup = report.contributors.map((file: any) => readFileSync(file.path, 'utf8')).join('\n');
       if (provider === 'hermes') {
-        expect(startup).toContain('fixture-kernel — Follow the fixture kernel policy. Fetch and follow: `aiwg show rule fixture-kernel`.');
+        expect(startup).toContain('fixture-kernel — Follow the fixture kernel policy. Fetch and follow: `aiwg show rule fixture-kernel --body`.');
         expect(readFileSync(join(root, 'target/AGENTS.md'), 'utf8')).not.toContain('FIXTURE_KERNEL_BODY');
       } else expect(startup).toContain('FIXTURE_KERNEL_BODY');
       expect(startup).toContain('Follow the fixture summary policy.');
@@ -321,7 +321,7 @@ describe('activation-selected provider deployment (#2939)', () => {
     deploy(root, 'hermes');
     const startup = readFileSync(join(root, 'target/AGENTS.md'), 'utf8');
     expect(startup).toContain(criticalBody);
-    expect(startup).toContain('fixture-kernel — Follow the fixture kernel policy. Fetch and follow: `aiwg show rule fixture-kernel`.');
+    expect(startup).toContain('fixture-kernel — Follow the fixture kernel policy. Fetch and follow: `aiwg show rule fixture-kernel --body`.');
     expect(startup).not.toContain('LARGE_NONCRITICAL_BODY');
     expect(startup.length).toBeLessThanOrEqual(19000);
     const before = contents(root);

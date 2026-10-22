@@ -7,7 +7,7 @@ activation: on-demand
 
 # instruction-comprehension — guidance
 
-Authority: `aiwg show rule instruction-comprehension` (kernel). This companion supplies supporting explanation; the complete imperative core is self-contained in that rule.
+Authority: `aiwg show rule instruction-comprehension --body` (kernel). This companion supplies supporting explanation; the complete imperative core is self-contained in that rule.
 
 ## Overview
 

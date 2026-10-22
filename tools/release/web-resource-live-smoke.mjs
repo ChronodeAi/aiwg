@@ -106,7 +106,7 @@ async function main() {
     expect(offline.query?.manifest_sha256 === online.query.manifest_sha256, 'offline discover manifest digest changed');
 
     const baseShow = [
-      'show', 'skill', first.id,
+      'show', 'skill', first.id, '--body',
       '--graph', 'framework',
       '--backend', 'fortemi-core',
       '--resource-source', 'web',

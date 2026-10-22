@@ -198,8 +198,14 @@ export function parseAIWGCommand(input, identities) {
   if (args[0] === identities?.node && args[1] === identities?.cli) args.splice(0, 2, 'aiwg');
   else if (args[0] === identities?.shim || args[0] === identities?.cli) args[0] = 'aiwg';
   if (args[0] !== 'aiwg') return null;
-  if (args[1] === 'show' && args.length >= 4 && args.length <= 5 && /^(rule|behavior|skill|agent|command|flow)$/.test(args[2])
-      && /^[\w:.-]+$/.test(args[3]) && (args.length === 4 || args[4] === '--json')) return { kind: 'show', type: args[2], id: args[3], ...(args.length === 5 ? { json: true } : {}) };
+  if (args[1] === 'show' && args.length >= 4 && /^(rule|behavior|skill|agent|command|flow)$/.test(args[2])
+      && /^[\w:.-]+$/.test(args[3])) {
+    const flags = args.slice(4);
+    if (new Set(flags).size === flags.length && flags.every(flag => ['--json', '--body'].includes(flag))) {
+      return { kind: 'show', type: args[2], id: args[3], ...(flags.includes('--json') ? { json: true } : {}),
+        ...(flags.includes('--body') ? { body: true } : {}) };
+    }
+  }
   if (args[1] === 'migrate-workspace' && args.length === 3 && args[2] === '--dry-run') return { kind: 'migration-preview' };
   if (args[1] === 'discover') {
     const types = new Set(['skill', 'agent', 'command', 'rule', 'schema', 'decision-definition', 'decision-ruleset', 'decision-binding', 'gate-pack', 'flow', 'runbook', 'template', 'behavior']);
@@ -222,6 +228,25 @@ export function parseAIWGCommand(input, identities) {
   return null;
 }
 
+/** Supports legacy raw bodies and the new opt-in JSON body envelope, never cards. */
+export function hasAuthoredShowBody(output) {
+  if (typeof output === 'string') {
+    const text = output.trim();
+    if (!text) return false;
+    try { return hasAuthoredShowBody(JSON.parse(text)); } catch {
+      return !/^ID: aiwg:/m.test(text) && !/## Drill in/.test(text);
+    }
+  }
+  if (Array.isArray(output)) return output.some(hasAuthoredShowBody);
+  if (output && typeof output === 'object') {
+    if (typeof output.content === 'string') return !!output.content.trim();
+    if (Array.isArray(output.content)) return output.content.some(hasAuthoredShowBody);
+    if (typeof output.text === 'string') return hasAuthoredShowBody(output.text);
+    if (Array.isArray(output.bound_rules)) return output.bound_rules.some(hasAuthoredShowBody);
+  }
+  return false;
+}
+
 export function ruleFetches(tools, rule, bodyFingerprint = '', artifactType = 'rule', identities) {
   const escaped = rule.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const file = new RegExp(`(?:^|[/\\\\])${escaped}\\.(?:md|mdc)(?=[\"'\\s:]|$)`, 'i');
@@ -236,7 +261,7 @@ export function ruleFetches(tools, rule, bodyFingerprint = '', artifactType = 'r
     const output = outputText(tool.output);
     const returnedBody = bodyFingerprint.length >= 80 && output.replace(/\s+/g, ' ').includes(bodyFingerprint);
     const parsed = isExec && parseAIWGCommand(tool.input, identities);
-    return (parsed?.kind === 'show' && parsed.type === artifactType && parsed.id === rule) || readsBody || mcpShow || returnedBody;
+    return ((parsed?.kind === 'show' && parsed.type === artifactType && parsed.id === rule) || readsBody || mcpShow || returnedBody) && hasAuthoredShowBody(tool.output);
   });
   return { attempted: matches.length > 0,
     fetched: matches.some(tool => tool.success === true && outputText(tool.output).trim().length > 0),
@@ -250,10 +275,11 @@ export function evaluateRequiredRuleChecks(checks, trace, actionPattern, identit
   const terminal = trace.events?.findIndex(event => event.type === 'result' || event.type === 'turn.completed');
   const boundary = actionStart ?? (actions.length ? Math.min(...actions.map(tool => tool.start_event ?? -1)) : terminal);
   return checks.map((check, index) => {
-    const fetch = check.fetch_command?.match(/^aiwg show (rule|behavior) ([a-z0-9:-]+)$/);
+    const fetch = check.fetch_command?.match(/^aiwg show (rule|behavior) ([a-z0-9:-]+)(?: --body)?$/);
     const fetched = fetch ? trace.tools.filter(tool => {
       const parsed = parseAIWGCommand(tool.input, identities);
       if (!/^(?:shell|Bash)$/i.test(tool.name) || parsed?.kind !== 'show' || parsed.type !== fetch[1]) return false;
+      if (!hasAuthoredShowBody(tool.output)) return false;
       if (parsed.id === fetch[2]) return true;
       const alias = boundRules[index]?.name;
       if (!parsed.json || typeof alias !== 'string' || !alias || parsed.id !== alias || typeof tool.output !== 'string') return false;

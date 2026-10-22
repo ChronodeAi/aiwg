@@ -207,7 +207,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
         for (const name of ['fortemi-roadmap-skill', found.results[0].id]) {
           consoleSpy.mockClear();
           consoleErrorSpy.mockClear();
-          await indexCliMain(['show', 'skill', name, '--json']);
+          await indexCliMain(['show', 'skill', name, '--body', '--json']);
           expect(readConsoleJson().content).toContain('Follow the required project roadmap procedure.');
           expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
         }
@@ -232,7 +232,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('aiwg index build --graph project'));
     consoleSpy.mockClear();
     consoleErrorSpy.mockClear();
-    await showArtifact(tmp, { name: 'intake-wizard', json: true, backend: 'fortemi-core' });
+    await showArtifact(tmp, { body: true, name: 'intake-wizard', json: true, backend: 'fortemi-core' });
     expect(readConsoleJson().content).toContain('Intake Wizard');
     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
   });
@@ -267,7 +267,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(status.itemCount).toBeGreaterThan(0);
     consoleSpy.mockClear();
 
-    await showArtifact(tmp, {
+    await showArtifact(tmp, { body: true,
       typeFilter: ["skill"],
       name: "schema-registry",
       json: true,
@@ -320,7 +320,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(readConsoleJson().results[0].name).toBe("kairos-probe");
     consoleSpy.mockClear();
 
-    await showArtifact(tmp, {
+    await showArtifact(tmp, { body: true,
       typeFilter: ["skill"],
       name: "kairos-probe",
       json: true,
@@ -356,7 +356,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(consoleErrorSpy.mock.calls.flat().join("\n")).toContain("source index is newer");
     consoleSpy.mockClear();
     consoleErrorSpy.mockClear();
-    await showArtifact(tmp, { name: "intake-wizard", json: true, backend: "fortemi-core" });
+    await showArtifact(tmp, { body: true, name: "intake-wizard", json: true, backend: "fortemi-core" });
     expect(readConsoleJson().content).toContain("Intake Wizard");
     expect(consoleErrorSpy.mock.calls.flat().join("\n")).toContain("source index is newer");
   });
@@ -527,7 +527,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(discover.results[0].path).toContain(frameworkSkill.path);
     consoleSpy.mockClear();
 
-    await showArtifact(tmp, {
+    await showArtifact(tmp, { body: true,
       typeFilter: ["skill"],
       name: "doc-sync",
       json: true,
@@ -765,7 +765,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
       ["flow", "flow-release", "Run the release gate sequence"],
       ["runbook", "certificate-rotation", "Rotate expiring service certificates"],
     ] as const) {
-      await showArtifact(tmp, {
+      await showArtifact(tmp, { body: true,
         typeFilter: [type],
         name,
         json: true,
@@ -845,7 +845,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
       generatedAt: "2026-01-05T00:00:00.000Z",
     });
 
-    await showArtifact(tmp, {
+    await showArtifact(tmp, { body: true,
       typeFilter: ["skill"],
       name: frameworkSkill.path,
       json: true,
@@ -899,7 +899,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(discover.results[0].path).toContain(customSkill.path);
     consoleSpy.mockClear();
 
-    await showArtifact(tmp, {
+    await showArtifact(tmp, { body: true,
       typeFilter: ["skill"],
       name: "custom-review",
       json: true,
@@ -954,7 +954,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(discover.results[0].path).toContain("user-custom-review/SKILL.md");
     consoleSpy.mockClear();
 
-    await showArtifact(tmp, {
+    await showArtifact(tmp, { body: true,
       typeFilter: ["skill"],
       name: "user-custom-review",
       json: true,
@@ -1030,7 +1030,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(discover.results[0].title).toBe("Project Shared Review");
     consoleSpy.mockClear();
 
-    await showArtifact(tmp, {
+    await showArtifact(tmp, { body: true,
       typeFilter: ["skill"],
       name: "shared-review",
       json: true,
@@ -1113,7 +1113,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
       generatedAt: "2026-01-05T00:00:00.000Z",
     });
 
-    await showArtifact(tmp, {
+    await showArtifact(tmp, { body: true,
       name: ".aiwg/skills/intake-wizard/SKILL.md",
       graph: "project",
       json: true,
@@ -1128,7 +1128,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     });
     try {
       await expect(
-        showArtifact(tmp, {
+        showArtifact(tmp, { body: true,
           name: "intake-wizard",
           graph: "project",
           json: true,
@@ -1170,7 +1170,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
       );
       expect(exitSpy).toHaveBeenCalledWith(1);
       consoleSpy.mockClear();
-      await expect(showArtifact(tmp, {
+      await expect(showArtifact(tmp, { body: true,
         name: 'intake-wizard', typeFilter: ['skill'], graph: 'project',
         json: true, backend: 'fortemi-core',
       })).rejects.toThrow('process.exit');
@@ -1316,7 +1316,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     });
     try {
       await expect(
-        showArtifact(tmp, {
+        showArtifact(tmp, { body: true,
           type: "skill",
           name: "intake-wizard",
           graph: "project",
@@ -1460,7 +1460,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     ]);
     consoleSpy.mockClear();
 
-    await showArtifact(tmp, {
+    await showArtifact(tmp, { body: true,
       typeFilter: ["rule"],
       name: "acme-review",
       json: true,

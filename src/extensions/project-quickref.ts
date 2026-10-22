@@ -358,7 +358,7 @@ export function renderProjectQuickref(definition: ProjectQuickref): string {
       lines.push(`- Discover: \`aiwg discover ${JSON.stringify(phrase)}\``);
     }
     for (const hint of entry.show) {
-      lines.push(`- Fetch: \`aiwg show ${hint.type} ${hint.name}\``);
+      lines.push(`- Fetch: \`aiwg show ${hint.type} ${hint.name} --body\``);
     }
     lines.push('');
   }

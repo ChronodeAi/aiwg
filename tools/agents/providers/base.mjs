@@ -2474,7 +2474,7 @@ export function applyInlineRuleBudget(ruleFiles) {
 /**
  * Tier gate (#1673, enforcement-tiered deployment ADR). Only CRITICAL and HIGH
  * rules are inlined into a provider's always-on rule directory; MEDIUM/LOW are
- * left on-demand (reachable via `aiwg show rule <name>` and the assembled
+ * left on-demand (reachable via `aiwg show rule <name> --body` and the assembled
  * RULES-INDEX pointer index). Index files and rules with no enforcement marker
  * default to always-on, so an un-triaged or structural file is never dropped.
  */
@@ -2558,17 +2558,17 @@ export function renderOnDemandRuleSection(onDemandFiles, opts = {}) {
     'on demand:',
     '',
     '```bash',
-    'aiwg show rule <name>',
+    'aiwg show rule <name> --body',
     '```',
     '',
-    ...names.map((n) => `- \`${n}\` — \`aiwg show rule ${n}\``),
+    ...names.map((n) => `- \`${n}\` — \`aiwg show rule ${n} --body\``),
   ].join('\n');
 }
 
 /**
  * Write a compact on-demand rule index (#1673) into a provider's rule dir.
  * Lists the MEDIUM/LOW rules that are NOT inlined at startup, with the
- * `aiwg show rule <name>` fetch hint. Removes a stale index when empty.
+ * `aiwg show rule <name> --body` fetch hint. Removes a stale index when empty.
  */
 export function writeOnDemandRuleIndex(destDir, onDemandFiles, opts = {}) {
   const indexPath = path.join(destDir, 'RULES-ONDEMAND.md');
@@ -2588,10 +2588,10 @@ export function writeOnDemandRuleIndex(destDir, onDemandFiles, opts = {}) {
     'fetch any rule body on demand:',
     '',
     '```bash',
-    'aiwg show rule <name>',
+    'aiwg show rule <name> --body',
     '```',
     '',
-    ...names.map((n) => `- \`${n}\` — \`aiwg show rule ${n}\``),
+    ...names.map((n) => `- \`${n}\` — \`aiwg show rule ${n} --body\``),
     '',
   ];
   if (demotedNames.length > 0) {
@@ -2605,7 +2605,7 @@ export function writeOnDemandRuleIndex(destDir, onDemandFiles, opts = {}) {
       '(AIWG_RULES_INLINE_BUDGET_TOKENS) and break subagent dispatch with "Prompt is too long".',
       'Fetch any of them before work they govern:',
       '',
-      ...demotedNames.map((n) => `- \`${n}\` — \`aiwg show rule ${n}\``),
+      ...demotedNames.map((n) => `- \`${n}\` — \`aiwg show rule ${n} --body\``),
       '',
     );
   }
@@ -3338,7 +3338,7 @@ export function replaceBoundRulesBlock(content, rules = []) {
   const unique = [...new Map(rules.map(rule => [rule.name, rule])).values()]
     .sort((a, b) => a.name.localeCompare(b.name));
   return `${clean}${clean.endsWith('\n') ? '' : '\n'}\n<!-- AIWG:bound-rules:start -->\n## Bound rules\n\nRequired reading on every invocation: fetch and follow every bound rule below before starting governed work. A summary or discovery pointer does not discharge this obligation.\n\n${unique.map(rule =>
-    `- ${rule.name} — ${rule.summary}\n  Fetch and follow before governed work: \`aiwg show rule ${rule.name}\`.`
+    `- ${rule.name} — ${rule.summary}\n  Fetch and follow before governed work: \`aiwg show rule ${rule.name} --body\`.`
   ).join('\n')}\n<!-- AIWG:bound-rules:end -->\n`;
 }
 

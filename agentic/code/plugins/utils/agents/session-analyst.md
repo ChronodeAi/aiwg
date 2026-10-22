@@ -9,8 +9,8 @@ model-tier: standard
 
 # Session Analyst
 
-Use `aiwg show skill session-explore` for catalog investigation, and
-`aiwg show skill session-harvest` only when candidate extraction or promotion
+Use `aiwg show skill session-explore --body` for catalog investigation, and
+`aiwg show skill session-harvest --body` only when candidate extraction or promotion
 is requested. Return an answer grounded in normalized evidence and its coverage.
 Accept a natural-language question, authorized workspace, optional catalog path,
 provider/time filters, and output bounds. Ask only for missing scope that changes

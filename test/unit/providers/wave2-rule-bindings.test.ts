@@ -89,7 +89,7 @@ describe('Wave 2 canonical rule delivery (#2942)', () => {
         const key = `${kind}:${id}`;
         const request = requests.get(key) || { type: kind.slice(0, -1), id, expected: [] };
         request.expected.push({ name, activation: data.activation, summary: data.summary,
-          show_command: `aiwg show rule ${name}` });
+          show_command: `aiwg show rule ${name} --body` });
         requests.set(key, request);
       }
     }
@@ -159,7 +159,7 @@ describe('Wave 2 canonical rule delivery (#2942)', () => {
         for (const file of definitions) {
           const content = read(file);
           expect(content.match(/<!-- AIWG:bound-rules:start -->/g), file).toHaveLength(1);
-          expect(content, file).toContain(`aiwg show rule ${name}`);
+          expect(content, file).toContain(`aiwg show rule ${name} --body`);
           expect(content, file).toContain(data.summary);
         }
       }

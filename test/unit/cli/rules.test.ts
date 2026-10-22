@@ -183,7 +183,7 @@ describe('rules command', () => {
     expect(shown.local_pin.matches[0].source).toBe('project');
     write.mockClear();
     await showArtifact(root, { name: 'fixture-bound', typeFilter: ['rule'], graph: 'project', backend: 'local', json: false });
-    expect(write.mock.calls.map(call => String(call[0])).join('')).toContain('Pinned locally: kernel (canonical bound; project).');
+    expect(String(log.mock.calls.at(-1)?.[0])).toContain('Pinned locally: kernel (canonical bound; project).');
     const { buildWorkspaceStatus } = await import('../../../tools/cli/workspace-status.mjs');
     expect((await buildWorkspaceStatus(root)).rule_pins.rules[0].canonical_activation).toBe('bound');
     const doctor = await doctorHandler.execute({ args: ['--deployment', '--json'], rawArgs: ['doctor', '--deployment', '--json'], cwd: root, frameworkRoot: repo });

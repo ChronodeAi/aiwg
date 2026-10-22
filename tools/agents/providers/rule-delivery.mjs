@@ -247,11 +247,11 @@ export function renderRuleKernelIndex(rules, nativePaths = false) {
   const paths = nativePaths ? [] : rules.filter(rule => rule.tagged && (rule.canonicalActivation || rule.activation) === 'paths');
   if (!summary.length && !paths.length) return '';
   const lines = ['# Rule kernel index', ''];
-  for (const rule of summary) lines.push(`- ${rule.name} — ${rule.summary} Fetch and follow: \`aiwg show rule ${rule.name}\`.`, '');
+  for (const rule of summary) lines.push(`- ${rule.name} — ${rule.summary} Fetch and follow: \`aiwg show rule ${rule.name} --body\`.`, '');
   if (paths.length) {
     lines.push('## Path rules (prompt emulation)', '',
       'Before reading or changing files, compare intended project-relative paths with the globs below and fetch matching rules before their first read/write. If paths are initially unknown, check when they become known. An agent-only task has no path match. This is prompt emulation, not a filesystem hook.', '');
-    for (const rule of paths) lines.push(`- ${rule.name} | ${rule.paths.map(glob => `\`${glob}\``).join(', ')} | ${rule.summary} | \`aiwg show rule ${rule.name}\``, '');
+    for (const rule of paths) lines.push(`- ${rule.name} | ${rule.paths.map(glob => `\`${glob}\``).join(', ')} | ${rule.summary} | \`aiwg show rule ${rule.name} --body\``, '');
   }
   return lines.join('\n');
 }
@@ -354,7 +354,7 @@ function projectRules(opts, provider) {
     const routing = routes.length ? `## Invoked artifact definitions\n\nRead the complete definition before invoking its artifact:\n${routes.map(route => `- ${route}`).join('\n')}` : '';
     let startupIndex = index;
     let startupRouting = routing;
-    const fetchKernels = deferredKernels.length ? 'Before every task and subagent task, fetch and follow the kernel rules listed below with `aiwg show rule <name>` before governed work. Their full rules are binding.' : '';
+    const fetchKernels = deferredKernels.length ? 'Before every task and subagent task, fetch and follow the kernel rules listed below with `aiwg show rule <name> --body` before governed work. Their full rules are binding.' : '';
     const renderBody = () => [...kernels.map(rule => `## Rule: ${rule.name}\n\n${rule.body.trim()}`), fetchKernels, startupIndex, startupRouting].filter(Boolean).join('\n\n');
     const dest = path.join(opts.target, 'AGENTS.md');
     if (provider.name === 'hermes' && block(read(dest), renderBody()).length > 19_000) {

@@ -28,7 +28,7 @@ You are the **AIWG Steward** persona: the thin Tier-1 routing identity for AIWG 
 ## Tier Loading Contract
 
 - **Tier 1, this file:** role, guardrails, context discipline, decision loop, and exact next-hop routes.
-- **Tier 2, quickrefs:** `[[steward-quickref]]`, `[[aiwg-utils-quickref]]`, and framework quickrefs. Use `aiwg discover "<phrase>"`, then `aiwg show <type> <name>`.
+- **Tier 2, quickrefs:** `[[steward-quickref]]`, `[[aiwg-utils-quickref]]`, and framework quickrefs. Use `aiwg discover "<phrase>"`, then `aiwg show <type> <name> --body`.
 - **Tier 3, references:** `[[aiwg-steward routing reference]]` and `[[aiwg-steward worked examples]]` for lookup tables, report scaffolds, deploy errata, badge snippets, and diagnostics.
 
 When a route is ambiguous, ask **one** clarifying question before acting. When a linked route is missing, stale, or contradicted by current CLI output, file a detailed AIWG correction issue through `aiwg-issue` / `steward-prep-delivery` with the broken target, expected route, observed output, and reproduction command.
@@ -91,8 +91,8 @@ Use these only after the Tier-2 route says the detail is needed:
 
 - `aiwg discover "aiwg-steward routing reference"` -> `[[aiwg-steward routing reference]]`: full CLI table, kernel/deploy paths, capability examples, invocation patterns, `$AIWG_ROOT` readability diagnostic, cross-provider diagnostic, orchestration routing table.
 - `aiwg discover "aiwg-steward worked examples"` -> `[[aiwg-steward worked examples]]`: report templates, refresh/deploy transcripts, session reload table, Hermes composition, deploy errata, badge helper snippets.
-- `aiwg show skill steward-quickref`: expansion/persona/project quick anchors.
-- `aiwg show skill aiwg-utils-quickref`: core utility routing and skill-first CLI policy.
+- `aiwg show skill steward-quickref --body`: expansion/persona/project quick anchors.
+- `aiwg show skill aiwg-utils-quickref --body`: core utility routing and skill-first CLI policy.
 
 ## Capability Matrix Rule
 

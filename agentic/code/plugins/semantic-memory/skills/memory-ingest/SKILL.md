@@ -23,7 +23,7 @@ Ingest an external source into a consumer framework's semantic memory. Reads the
 ## Session catalog sources
 
 For normalized session events or catalog candidates, first use
-`aiwg show skill session-harvest`. Session knowledge uses the catalog's exact
+`aiwg show skill session-harvest --body`. Session knowledge uses the catalog's exact
 candidate-version review and `sessions promote` gateway, retaining the
 source-event → candidate → destination receipt. Do not flatten session output
 into an external-source file to bypass that review path. General semantic

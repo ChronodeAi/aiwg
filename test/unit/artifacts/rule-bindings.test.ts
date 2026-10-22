@@ -21,11 +21,12 @@ const plain = '# Unbound\n\nKeep this exact text.\n';
 async function show(name: string, type: string, extra: Partial<ShowParams> = {}) {
   log.mockClear(); write.mockClear();
   await showArtifact(root, { name, typeFilter: [type], graph: 'project', backend: 'local', json: true, ...extra });
-  return extra.json === false ? write.mock.calls.map(c => String(c[0])).join('') : JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+  return extra.json === false ? write.mock.calls.map(c => String(c[0])).join('') + log.mock.calls.map(c => String(c[0])).join('\n') : JSON.parse(String(log.mock.calls.at(-1)?.[0]));
 }
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-bindings-'));
-  vi.stubEnv('XDG_DATA_HOME', path.join(root, 'xdg'));
+  for (const key of ['HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME']) vi.stubEnv(key, path.join(root, key));
+  vi.stubEnv('AIWG_ROOT', root);
   for (const key of ['AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH', 'AIWG_PROJECT_AIWG_DIR']) vi.stubEnv(key, '');
   const files = {
     'skills/work/SKILL.md': '---\nname: work\n---\n# Work\n',
@@ -43,7 +44,9 @@ beforeEach(async () => {
   log = vi.spyOn(console, 'log').mockImplementation(() => {});
   write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   await buildIndex(root, { force: true, graph: 'project' });
-  cli.mockImplementation(async (args: string[]) => ({ code: 0, stderr: '', stdout: JSON.stringify(await show(args[2], args[1], { boundRuleBodies: args.includes('--bound-rule-bodies') })) }));
+  cli.mockImplementation(async (args: string[]) => ({ code: 0, stderr: '', stdout: JSON.stringify(await show(args[2], args[1], { boundRuleBodies: args.includes('--bound-rule-bodies'), body: args.includes('--body'),
+    sections: args.flatMap((arg, index) => arg === '--section' ? [args[index + 1]] : []), withRuleBodies: args.includes('--with-rule-bodies'),
+    resource: args.includes('--resource') ? args[args.indexOf('--resource') + 1] : undefined })) }));
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); });
 
@@ -51,8 +54,8 @@ describe('bound rule expansion', () => {
   it('returns each binding once, across all target types, without rule bodies by default (U4)', async () => {
     const skill = await show('work', 'skill');
     expect(skill.bound_rules).toEqual([
-      { name: 'first', activation: 'bound', summary: 'Follow the first rule.', show_command: 'aiwg show rule first' },
-      { name: 'second', activation: 'summary', summary: 'Follow the second rule.', show_command: 'aiwg show rule second' },
+      { name: 'first', activation: 'bound', enforcement: null, summary: 'Follow the first rule.', show_command: 'aiwg show rule first --body' },
+      { name: 'second', activation: 'summary', enforcement: null, summary: 'Follow the second rule.', show_command: 'aiwg show rule second --body' },
     ]);
     for (const [name, type] of [['worker', 'agent'], ['workflow', 'flow']]) {
       expect((await show(name, type)).bound_rules).toEqual([skill.bound_rules[0]]);
@@ -64,20 +67,23 @@ describe('bound rule expansion', () => {
     expect(await show('work', 'skill', { json: false, boundRuleBodies: true })).toContain('# First rule body');
   });
   it('lists typed reverse targets and preserves legacy rules', async () => {
-    expect((await show('first', 'rule')).bound_to).toEqual({ skills: ['work'], agents: ['worker'], flows: ['workflow'] });
+    const card = await show('first', 'rule');
+    expect(card.bound_to).toEqual({ skills: ['work'], agents: ['worker'], flows: ['workflow'] });
+    expect(card.bound_targets.map((target: any) => target.type).sort()).toEqual(['agent', 'flow', 'skill']);
     expect(await show('first', 'rule', { json: false })).toContain('## Bound targets');
-    expect((await show('legacy', 'rule')).bound_to).toBeUndefined();
+    expect((await show('legacy', 'rule')).bound_to).toEqual({});
   });
-  it('keeps unbound text and JSON byte-identical to the previous envelope', async () => {
-    expect(await show('unbound', 'skill', { json: false })).toMatchInlineSnapshot(`
+  it('keeps unbound body text byte-identical with --body and defaults to a card', async () => {
+    expect(await show('unbound', 'skill', { json: false, body: true })).toMatchInlineSnapshot(`
       "# Unbound
 
       Keep this exact text.
       "
     `);
-    const value = await show('unbound', 'skill');
+    const value = await show('unbound', 'skill', { body: true });
+    expect((await show('unbound', 'skill')).content).toBeUndefined();
     expect(value.content).toBe(plain);
-    expect(Object.keys(value)).toEqual(['id', 'path', 'type', 'name', 'title', 'kernel', 'provenance', 'providerModels', 'content']);
+    expect(value).toMatchObject({ type: 'skill', outline: [{ heading: 'Unbound', level: 1, bytes: plain.length, lines: 3 }], resources: [] });
   });
   it('reads absent and malformed declarations tolerantly', () => {
     expect(extractRuleBindings({})).toEqual({});
@@ -99,6 +105,8 @@ describe('bound rule expansion', () => {
     const expected = await show(name, type);
     const result = await tools.get(`${type}-show`)({ name });
     expect(JSON.parse(result.content[0].text)).toEqual(expected);
+    const body = await tools.get(`${type}-show`)({ name, body: true });
+    expect(JSON.parse(body.content[0].text)).toEqual(await show(name, type, { body: true }));
     if (type !== 'rule') {
       const full = await tools.get(`${type}-show`)({ name, bound_rule_bodies: true });
       expect(JSON.parse(full.content[0].text).bound_rules[0].content).toContain('# First rule body');

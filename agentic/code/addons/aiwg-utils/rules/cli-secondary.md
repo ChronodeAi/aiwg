@@ -65,7 +65,7 @@ Preferred path for any action, strict priority order (P1→P4):
 | Priority | Surface | When |
 |---|---|---|
 | **1. Local skill/agent** | Already in context (kernel skills, framework quickrefs, deployed agents) | Always check first — free to invoke |
-| **2. Discovered skill/agent** | `aiwg discover "<need>"` + `aiwg show <type> <name>` | No local match; query index before improvising or falling to CLI |
+| **2. Discovered skill/agent** | `aiwg discover "<need>"` + `aiwg show <type> <name> --body` | No local match; query index before improvising or falling to CLI |
 | **3. Raw CLI** | `aiwg <command>` | Only when no skill exists, OR on the discovery surface, OR inside a skill calling CLI as its step |
 | **4. Manual file ops** | Direct edits bypassing skill/CLI | Last resort — bypasses priming AND registry update logic |
 
@@ -86,7 +86,7 @@ These are the priming entry points and MUST remain direct-callable (read-only / 
 | Command | Purpose |
 |---|---|
 | `aiwg discover` | Capability search across skills, agents, commands, rules |
-| `aiwg show` | Fetch the body of a discovered artifact |
+| `aiwg show <type> <name> --body` | Fetch the body of a discovered artifact |
 | `aiwg list` | List installed frameworks and addons |
 | `aiwg catalog` | Search/list marketplace packages |
 | `aiwg features` | List capability features |
@@ -145,7 +145,7 @@ For paired action surfaces, raw CLI examples are implementation affordances only
 
 ### Rule 6: Skill Documentation Must Say So
 
-Every skill with a paired CLI command MUST carry a one-line note: *"Prefer invoking this skill over running `aiwg <command>` directly. The skill carries the priming this CLI command needs."* Every CLI reference doc (e.g. `docs/cli-reference.md`) MUST, for paired commands, link the skill: *"Agents: invoke via the `[skill-name]` skill rather than calling this CLI directly. See `aiwg show skill <name>`."*
+Every skill with a paired CLI command MUST carry a one-line note: *"Prefer invoking this skill over running `aiwg <command>` directly. The skill carries the priming this CLI command needs."* Every CLI reference doc (e.g. `docs/cli-reference.md`) MUST, for paired commands, link the skill: *"Agents: invoke via the `[skill-name]` skill rather than calling this CLI directly. See `aiwg show skill <name> --body`."*
 
 ### Rule 7: When Raw CLI Is Acceptable
 
@@ -153,7 +153,7 @@ Invoke the CLI directly without a paired skill ONLY when: (1) the user explicitl
 
 ## Recovery
 
-About to invoke a paired CLI command directly? STOP → `aiwg discover "<purpose>"` → `aiwg show skill <name>` → invoke the skill. If the paired skill genuinely doesn't exist (rare), file an issue to add the pairing.
+About to invoke a paired CLI command directly? STOP → `aiwg discover "<purpose>"` → `aiwg show skill <name> --body` → invoke the skill. If the paired skill genuinely doesn't exist (rare), file an issue to add the pairing.
 
 ## Interaction with Other Rules
 

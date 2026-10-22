@@ -1600,7 +1600,7 @@ export const showHandler: CommandHandler = {
   id: "show",
   name: "Show",
   description:
-    "Print the full text of a specific AIWG skill, agent, command, or rule by name",
+    "Show an AIWG metadata card; --section or --body fetches content",
   category: "index",
   aliases: [],
 

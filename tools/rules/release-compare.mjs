@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import yaml from 'js-yaml';
 import Ajv from 'ajv/dist/2020.js';
-import { loadProbes, evaluateAssertions, parseTrace } from './run-rule-probes.mjs';
+import { loadProbes, evaluateAssertions, parseTrace, hasAuthoredShowBody } from './run-rule-probes.mjs';
 import { ROOT } from './measure-startup-context.mjs';
 import { importImpl } from '../_resolve-impl.mjs';
 const { boundedSpawnSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
@@ -253,7 +253,7 @@ export function runnerAdapter(file, spawn = boundedSpawnSync) {
 }
 function toolStats(trace) {
   const calls = trace.tools.filter(tool => tool.success === true);
-  const bodyCalls = calls.filter(tool => tool.output != null && JSON.stringify(tool.output).length > 2);
+  const bodyCalls = calls.filter(tool => hasAuthoredShowBody(tool.output));
   const descriptions = calls.map(tool => `${tool.name} ${typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input)}`);
   const fetches = bodyCalls.map(tool => `${tool.name} ${typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input)}`).flatMap(text => [...text.matchAll(/aiwg\s+show\s+(rule|skill|agent|command)\s+([\w-]+)/g)].map(match => `${match[1]}:${match[2]}`));
   return { total: trace.tools.length, discovery_calls: descriptions.filter(text => /aiwg\s+discover\b/.test(text)).length, fetched: [...new Set(fetches)].sort() };

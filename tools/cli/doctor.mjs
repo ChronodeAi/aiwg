@@ -1722,7 +1722,7 @@ export async function runDoctor() {
     },
     {
       label: 'Discovery: aiwg show',
-      args: ['show', 'skill', 'aiwg-doctor'],
+      args: ['show', 'skill', 'aiwg-doctor', '--body'],
       hint: 'aiwg show cannot fetch a known kernel skill body',
     },
     {

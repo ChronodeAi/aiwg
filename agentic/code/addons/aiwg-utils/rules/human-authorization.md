@@ -28,4 +28,4 @@ activation: kernel
 - Before acting, agents MUST both understand what they are doing through research and have authorization to do it; neither requirement substitutes for the other.
 - Before any unrequested action, verify whether it is reversible without side effects.
 
-Supporting rationale and examples: [human-authorization-guidance](./human-authorization-guidance.md) (`aiwg show rule human-authorization-guidance`, on-demand).
+Supporting rationale and examples: [human-authorization-guidance](./human-authorization-guidance.md) (`aiwg show rule human-authorization-guidance --body`, on-demand).

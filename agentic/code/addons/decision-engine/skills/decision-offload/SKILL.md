@@ -120,7 +120,7 @@ large; both commands tolerate a missing file.
 
 ## Caller tags
 
-After a checkpoint or compaction, re-read `aiwg show rule decision-offload`
+After a checkpoint or compaction, re-read `aiwg show rule decision-offload --body`
 when decision ask is enabled. Apply it at the next eligible bounded decision;
 recorded guidance alone does not imply an ask call occurred.
 

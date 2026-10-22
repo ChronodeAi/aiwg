@@ -230,7 +230,7 @@ describe('aiwg use decision-engine --provider hermes (#2873)', () => {
     expect(agents.length).toBeLessThanOrEqual(19000);
     expect(routing.length).toBeLessThanOrEqual(19000);
     expect(agents).toContain('# Critical probe\n\nCRITICAL_ADDON_BODY must remain verbatim.');
-    expect(agents).toContain('fetch-probe — Follow the addon fetch policy. Fetch and follow: `aiwg show rule fetch-probe`.');
+    expect(agents).toContain('fetch-probe — Follow the addon fetch policy. Fetch and follow: `aiwg show rule fetch-probe --body`.');
     expect(agents).not.toContain('NONCRITICAL_ADDON_BODY');
     // Kernel-tier skill lands at the platform-native skills root...
     expect(existsSync(join(hermesHome, 'skills', 'kern-probe', 'SKILL.md'))).toBe(true);

@@ -144,7 +144,7 @@ describe("artifact CLI signed web resources", () => {
     const discoveredId = JSON.parse(discovered.stdout.toString("utf8")).results[0].id;
 
     const coldShow = await runCli([
-      "show", "skill", discoveredId,
+      "show", "skill", discoveredId, "--body",
       "--resource-source", "web",
       "--aiwg-version", TEST_VERSION,
     ]);
@@ -155,7 +155,7 @@ describe("artifact CLI signed web resources", () => {
     const requestsBeforeOffline = fixture.requestPaths.length;
     await fixture.stop();
     const warmShow = await runCli([
-      "show", "skill", discoveredId,
+      "show", "skill", discoveredId, "--body",
       "--resource-source", "web",
       "--aiwg-version", TEST_VERSION,
       "--offline",

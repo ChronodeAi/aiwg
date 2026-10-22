@@ -175,7 +175,7 @@ describe('Wave 5 SDLC lane a canonical rule delivery (#2945)', () => {
       const shown = JSON.parse(stdout);
       for (const { name, data } of target.rules) expect(shown.bound_rules, `${target.type}:${target.id}`).toEqual(
         expect.arrayContaining([expect.objectContaining({ name, activation: data.activation,
-          summary: data.summary, show_command: `aiwg show rule ${name}` })]));
+          summary: data.summary, show_command: `aiwg show rule ${name} --body` })]));
     }
   }, 600_000);
 
@@ -218,7 +218,7 @@ describe('Wave 5 SDLC lane a canonical rule delivery (#2945)', () => {
         const heading = read(path.join(bundle, 'rules', `${name}.md`)).split('\n').find(line => line.startsWith('# '));
         if (data.activation === 'summary') {
           expect(startup).toContain(data.summary);
-          expect(startup).toContain(`aiwg show rule ${name}`);
+          expect(startup).toContain(`aiwg show rule ${name} --body`);
           expect(startup).not.toContain(heading);
         } else if (data.activation === 'kernel') {
           const body = read(path.join(bundle, 'rules', `${name}.md`)).replace(/^---\n[\s\S]*?\n---\s*/, '').trim();
@@ -248,7 +248,7 @@ describe('Wave 5 SDLC lane a canonical rule delivery (#2945)', () => {
           for (const file of definitions) {
             const content = read(file);
             expect(content.match(/<!-- AIWG:bound-rules:start -->/g), file).toHaveLength(1);
-            expect(content, file).toContain(`aiwg show rule ${name}`);
+            expect(content, file).toContain(`aiwg show rule ${name} --body`);
             expect(content, file).toContain(data.summary);
           }
         }

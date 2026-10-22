@@ -22,4 +22,4 @@ activation: kernel
 - Treat unrequested improvements, changes of approach without user prompting, requested-format mismatches, solving a similar-but-different problem, and the user pasting instructions again as instruction-drift or comprehension-failure signals, and immediately apply the recovery protocol.
 - Before writing code, agents MUST both understand WHAT the user wants and research HOW to accomplish it.
 
-Supporting rationale and examples: [instruction-comprehension-guidance](./instruction-comprehension-guidance.md) (`aiwg show rule instruction-comprehension-guidance`, on-demand).
+Supporting rationale and examples: [instruction-comprehension-guidance](./instruction-comprehension-guidance.md) (`aiwg show rule instruction-comprehension-guidance --body`, on-demand).

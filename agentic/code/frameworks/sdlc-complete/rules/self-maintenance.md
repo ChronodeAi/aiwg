@@ -55,7 +55,7 @@ For AIWG maintenance operations, the priority order is:
 | Check version | (discovery surface — direct CLI is correct) | `aiwg version` | Read `package.json` |
 | Detect provider | (discovery surface — direct CLI is correct) | `aiwg runtime-info` | Inspect directory structure |
 | Discover a capability | (discovery surface — direct CLI is correct) | `aiwg discover "..."` | Filesystem grep (forbidden — see `skill-discovery`) |
-| Fetch a skill body | (discovery surface — direct CLI is correct) | `aiwg show skill <name>` | Direct file read (forbidden — see `skill-discovery`) |
+| Fetch a skill body | (discovery surface — direct CLI is correct) | `aiwg show skill <name> --body` | Direct file read (forbidden — see `skill-discovery`) |
 
 ### 2. Pre-Flight Check (Long Sessions)
 

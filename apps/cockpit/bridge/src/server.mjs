@@ -3534,7 +3534,7 @@ export function createBridge({
         // ambiguous name is operator-correctable input, never a Bridge 502.
         if (!type || !name) return json(res, 400, { error: 'type_name_or_path_required' });
         try {
-          return json(res, 200, { type, name, body: await runAiwg(['show', type, name]) });
+          return json(res, 200, { type, name, body: await runAiwg(['show', type, name, '--body']) });
         } catch (e) {
           const detail = String(e?.message ?? e);
           const ambiguous = /ambiguous/i.test(detail);

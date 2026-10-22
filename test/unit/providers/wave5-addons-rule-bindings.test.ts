@@ -143,7 +143,7 @@ describe('Wave 5 addon rule delivery (#2945)', () => {
       for (const { name, data } of target.rules) {
         expect(shown.bound_rules, `${target.type}:${target.id}`).toEqual(expect.arrayContaining([
           expect.objectContaining({ name: data.name ?? name, activation: data.activation, summary: data.summary,
-            show_command: `aiwg show rule ${data.name ?? name}` }),
+            show_command: `aiwg show rule ${data.name ?? name} --body` }),
         ]));
       }
     }
@@ -197,7 +197,7 @@ describe('Wave 5 addon rule delivery (#2945)', () => {
     for (const { name, data } of rules) {
       if (data.activation === 'summary') {
         expect(startup).toContain(data.summary);
-        expect(startup).toContain(`aiwg show rule ${data.name ?? name}`);
+        expect(startup).toContain(`aiwg show rule ${data.name ?? name} --body`);
       } else if (data.activation === 'bound') {
         expect(startup).not.toContain(`aiwg show rule ${data.name ?? name}`);
       }
@@ -220,7 +220,7 @@ describe('Wave 5 addon rule delivery (#2945)', () => {
         for (const file of definitions) {
           const content = read(file);
           expect(content.match(/<!-- AIWG:bound-rules:start -->/g), file).toHaveLength(1);
-          expect(content, file).toContain(`aiwg show rule ${data.name ?? name}`);
+          expect(content, file).toContain(`aiwg show rule ${data.name ?? name} --body`);
           expect(content, file).toContain(data.summary);
         }
       }

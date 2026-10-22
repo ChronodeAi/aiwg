@@ -39,13 +39,17 @@ This document is the operator's guide to using the new model effectively, plus v
 aiwg discover "<the user's need, paraphrased>" --limit 3
 
 # Fetch the full body of a specific operational asset
+# Default show returns a metadata card; inspect it before fetching a section or body.
 aiwg show skill <name>
-aiwg show agent <name>
-aiwg show command <name>
-aiwg show rule <name>
-aiwg show flow <name>
-aiwg show template <name>
-aiwg show behavior <name>
+aiwg show skill <name> --section "Heading from the outline"
+aiwg show skill <name> --rules --with-rule-bodies
+aiwg show skill <name> --body
+aiwg show agent <name> --body
+aiwg show command <name> --body
+aiwg show rule <name> --body
+aiwg show flow <name> --body
+aiwg show template <name> --body
+aiwg show behavior <name> --body
 
 # Health check
 aiwg doctor
@@ -98,7 +102,7 @@ Filesystem `Grep`/`Glob`/`Read` against any provider artifact directory (`.claud
 ```bash
 # Self-service (works on every platform)
 aiwg discover "deploy production" --limit 3
-aiwg show skill flow-deploy-to-production
+aiwg show skill flow-deploy-to-production --body
 
 # Delegated (Claude Code Task tool example; symmetric on Hermes/Factory)
 Task(subagent_type="aiwg-finder", prompt="find the skill for deploying production")
@@ -150,7 +154,7 @@ sequenceDiagram
   CLI->>Index: rank artifacts by capability + triggers
   Index-->>CLI: top 3 results with paths + scores
   CLI-->>Agent: flow-deploy-to-production [0.51]<br/>+ 2 alternatives
-  Agent->>CLI: aiwg show skill flow-deploy-to-production
+  Agent->>CLI: aiwg show skill flow-deploy-to-production --body
   CLI->>FS: read SKILL.md
   FS-->>CLI: full skill body
   CLI-->>Agent: SKILL.md content (instructions)
@@ -179,7 +183,7 @@ Source of truth ($AIWG_ROOT/agentic/code/...)
    `aiwg use sdlc`                `aiwg discover "..."`
     deploys both tiers           returns absolute paths
     (kernel copies, standard     anchored to $AIWG_ROOT
-    skipped by default)          → `aiwg show skill <name>`
+    skipped by default)          → `aiwg show skill <name> --body`
 ```
 
 ### Why no-copy for standard skills?
@@ -264,7 +268,7 @@ These pair with the always-deployed `aiwg-steward` agent for orchestrated repair
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────┐
-│ Agent: aiwg show skill flow-deploy-to-production        │
+│ Agent: aiwg show skill flow-deploy-to-production --body        │
 │                                                         │
 │   ---                                                   │
 │   namespace: aiwg                                       │
@@ -378,7 +382,7 @@ If `path` is relative (`agentic/code/...`), check that `aiwg use` rebuilt the fr
 ### 4. Confirm `aiwg show` reads from the indexed location
 
 ```bash
-aiwg show skill flow-deploy-to-production | head -20
+aiwg show skill flow-deploy-to-production --body | head -20
 ```
 
 You should see the SKILL.md frontmatter + body streaming. If you get "no artifact found matching", run `aiwg discover` first to confirm the name and check `aiwg index stats --graph framework` to confirm the index is current.
@@ -412,10 +416,10 @@ You should see the 9 quickrefs and 6 ops skills enumerated. If only quickrefs ap
 aiwg discover "intake wizard" --limit 1
 
 # Read its body
-aiwg show skill intake-wizard | head -10
+aiwg show skill intake-wizard --body | head -10
 
 # Read by JSON envelope (path + content)
-aiwg show skill intake-wizard --json | jq -r .path
+aiwg show skill intake-wizard --body --json | jq -r .path
 ```
 
 The `path` returned by show should match the `path` returned by discover — both anchored to `$AIWG_ROOT`.
@@ -427,7 +431,7 @@ with its `aiwg-model-*-worker` wrapper. Orchestrators can therefore select a
 specific provider model without launching a probe session:
 
 ```bash
-aiwg show skill intake-wizard --json |
+aiwg show skill intake-wizard --body --json |
   jq '.providerModels.providers.codex'
 ```
 
@@ -482,7 +486,7 @@ The default `--type` is `skill,agent,command,rule,flow,runbook,template,behavior
 
 ```bash
 aiwg discover "deploy production" --json --limit 3
-aiwg show skill flow-deploy-to-production --json
+aiwg show skill flow-deploy-to-production --body --json
 ```
 
 JSON output emits a stable schema, compact enough to forward to a subagent without context-bloat.
@@ -534,7 +538,7 @@ The curated skill encodes deliberate decisions — templates, gate criteria, mul
 
 > ❌ Agent: "Let me cat `/home/.../agentic/code/frameworks/.../skills/intake-wizard/SKILL.md`"
 >
-> ✅ Agent: "Let me run `aiwg show skill intake-wizard`"
+> ✅ Agent: "Let me run `aiwg show skill intake-wizard --body`"
 
 The CLI is the access point. It works the same regardless of where AIWG is installed (npm global, dev mode, custom corpus path) and survives layout changes.
 
@@ -546,7 +550,7 @@ This is the most common drift mode. Discovery succeeded, the path came back, and
 >
 > ❌ Agent: "The Skill tool says `aiwg:intake-wizard` doesn't exist. Let me grep for it."
 >
-> ✅ `aiwg discover "intake wizard"` → returns path → agent runs `aiwg show skill intake-wizard`
+> ✅ `aiwg discover "intake wizard"` → returns path → agent runs `aiwg show skill intake-wizard --body`
 
 There is no "deployed copy to locate." Most AIWG skills aren't deployed per-project (no-copy default, #1217). The `aiwg show` command always fetches from the indexed location regardless of deploy state.
 
@@ -556,7 +560,7 @@ The platform's Skill tool can only invoke kernel-listed skills directly. For eve
 
 > ❌ Skill tool errors → agent runs `find` / `ls` / `Read` on `<provider>/skills/` paths
 >
-> ✅ Skill tool errors → agent runs `aiwg show <type> <name>` and applies the returned body
+> ✅ Skill tool errors → agent runs `aiwg show <type> <name> --body` and applies the returned body
 
 ## Recovery when discovery itself breaks
 
@@ -611,7 +615,7 @@ The bar for kernel-tier skills is high. Today's kernel falls into two categories
 ## Backward compatibility
 
 - `aiwg index discover` still works (same dispatch path). The top-level `aiwg discover` is the canonical surface.
-- `aiwg index show <type> <name>` still works alongside the top-level `aiwg show <type> <name>`.
+- `aiwg index show <type> <name>` still works alongside the top-level `aiwg show <type> <name> --body`.
 - `aiwg sync` is a deprecated alias for `aiwg refresh` — emits a warning, scheduled for removal after the 2026.5.x stable line.
 - Pre-rc.14 installs will still find their skills under `<provider>/.aiwg/skills/` — `aiwg refresh` migrates to the new layout (deletes the legacy mirror) on next deploy.
 

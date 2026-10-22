@@ -60,7 +60,7 @@ All SDLC artifacts (requirements, architecture, testing, etc.) are stored in **`
 ### Artifact output destinations
 
 Configuration: `.aiwg/aiwg.config` `artifact_outputs`. Destination authority:
-`aiwg show rule artifact-output-policy` (kernel).
+`aiwg show rule artifact-output-policy --body` (kernel).
 
 ## Provider-Neutral SDLC Orchestrator Role
 
@@ -76,7 +76,7 @@ When users request SDLC work in natural language or through an adapter command:
 
    ```bash
    aiwg discover "<SDLC capability or workflow>"
-   aiwg show skill <name>
+   aiwg show skill <name> --body
    ```
 
 4. Follow the selected skill's inputs, outputs, gates, references, and executable playbook where present.
@@ -121,8 +121,8 @@ Provider adapters may expose familiar names such as `/flow-inception-to-elaborat
 
 ## Capability Routing
 
-Routing authority: `aiwg show rule skill-discovery` (kernel). Capability phrases:
-`aiwg show skill aiwg-utils-quickref`.
+Routing authority: `aiwg show rule skill-discovery --body` (kernel). Capability phrases:
+`aiwg show skill aiwg-utils-quickref --body`.
 
 ## AIWG-Specific Rules
 
@@ -189,7 +189,7 @@ If steward is not loaded natively, discover and show it:
 
 ```bash
 aiwg discover "steward repair AIWG setup" --type skill
-aiwg show skill steward
+aiwg show skill steward --body
 ```
 
 Standard recovery ladder:
@@ -283,14 +283,14 @@ Before starting any orchestration session > 30 minutes:
 
    ```bash
    aiwg discover "create or complete project intake"
-   aiwg show skill intake-wizard
+   aiwg show skill intake-wizard --body
    ```
 
 2. **Start the selected lifecycle work**:
 
    ```bash
    aiwg discover "SDLC concept to inception"
-   aiwg show skill flow-concept-to-inception
+   aiwg show skill flow-concept-to-inception --body
    ```
 
    Follow the fetched skill with the project's `.aiwg/intake/` artifacts. If the provider exposes a slash-command adapter, it may invoke the same skill but is not the source of workflow behavior.
@@ -299,7 +299,7 @@ Before starting any orchestration session > 30 minutes:
 
    ```bash
    aiwg discover "project status"
-   aiwg show skill project-status
+   aiwg show skill project-status --body
    ```
 
 4. **Progress through phases**:
@@ -373,7 +373,7 @@ aiwg use sdlc
 
 # Verify canonical discovery
 aiwg discover "SDLC project orchestration"
-aiwg show skill orchestrate-project
+aiwg show skill orchestrate-project --body
 ```
 
 **Disable AIWG context**:

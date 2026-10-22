@@ -91,6 +91,23 @@ describe('release comparison extends rule probes (#3298)', () => {
     expect(report.scenarios[0].B.usage[0].input_tokens).toBe(3);
     expect(report.scenarios[0].A.fetched).toEqual(['rule:delivery-policy']);
   });
+  it('compares legacy body fetches against card-only and explicit body fetches without crediting cards (#3306)', () => {
+    for (const withBody of [false, true]) {
+      const prepared = fixtures();
+      const report = executeComparison(plan(undefined, { n: 1 }), prepared, {
+        subject(_request, context) {
+          const result = subjectResult();
+          const side = fs.readFileSync(path.join(context.cwd, 'side.txt'), 'utf8');
+          if (side === 'B') result.trace.tools = [{ name: 'Bash', success: true,
+            input: `aiwg show rule delivery-policy${withBody ? ' --body --json' : ' --json'}`,
+            output: JSON.stringify({ id: 'aiwg:rule:synthetic', outline: [], ...(withBody ? { content: '# Policy' } : {}) }) }];
+          return result;
+        }, judge: () => judgment(),
+      });
+      expect(report.scenarios[0].A.fetched).toEqual(['rule:delivery-policy']);
+      expect(report.scenarios[0].B.fetched).toEqual(withBody ? ['rule:delivery-policy'] : []);
+    }
+  });
   it('sorts regressions first and retains both transcripts, failed assertions, fetches and causes', () => {
     const prepared = fixtures();
     const report = executeComparison(plan([scenario('unchanged'), scenario('regression')]), prepared, {

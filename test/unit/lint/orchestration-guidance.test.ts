@@ -9,7 +9,7 @@
  * summary/bound_to activation contract after the #2945 migration.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { validateDecisionAskInput, DecisionAskUsageError } from '../../../src/decision/ask.js';
 import { parseRuleFrontmatter } from '../../../src/rules/activation.mjs';
@@ -178,5 +178,37 @@ describe('supported orchestration activation (#2945)', () => {
     expect(result.rule.activation).toBe('summary');
     expect(Object.values(result.rule.bound_to).flat().length).toBeGreaterThan(0);
     expect(result.data).not.toHaveProperty('bound');
+  });
+});
+
+// #3311 owns the kernel discovery rule and its mirrors; keep that explicit exception
+// until its companion migration lands. All other body-loading guidance is checked.
+function implicitShowBodies(text: string): string[] {
+  return text.split('\n').filter(line => /aiwg show/.test(line)
+    && !/--(?:body|section)\b/.test(line)
+    && /(?:streams? .*(?:body|content)|fetch(?:es)? (?:the |its |a )?(?:full |selected |artifact |skill |rule )*(?:body|bodies)|(?:body|bodies) (?:via|with|as fetched)|load(?:s)? .*before applying)/i.test(line));
+}
+describe('show metadata-card guidance (#3306)', () => {
+  it('rejects instructions that promise implicit body output', () => {
+    expect(implicitShowBodies('aiwg show skill demo # streams the SKILL.md body')).toHaveLength(1);
+    expect(implicitShowBodies('Fetch its body with `aiwg show skill demo`')).toHaveLength(1);
+    expect(implicitShowBodies('aiwg show skill demo --body # streams the body')).toEqual([]);
+    expect(implicitShowBodies('aiwg show skill demo --section "Steps" # fetch the body')).toEqual([]);
+    expect(implicitShowBodies('aiwg show skill demo # metadata card')).toEqual([]);
+  });
+  it('keeps source rule, skill, agent, and quickref instructions explicit about body access', () => {
+    const failures: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+        const relative = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(relative);
+        else if (entry.name.endsWith('.md') && !entry.name.startsWith('skill-discovery')
+          && /(?:rules|skills|agents)\//.test(relative.replaceAll('\\', '/'))) {
+          for (const line of implicitShowBodies(read(relative))) failures.push(`${relative}: ${line}`);
+        }
+      }
+    };
+    walk('agentic/code');
+    expect(failures).toEqual([]);
   });
 });

@@ -9,6 +9,7 @@
  */
 
 import { z } from 'zod';
+import { showDrillInSchema, showDrillInArgs } from './discovery.mjs';
 import { parse as parseYaml } from 'yaml';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -157,28 +158,23 @@ export function registerFlowToolset(server) {
 
   server.registerTool('flow-show', {
     title: 'Show AIWG Flow',
-    description: 'Fetch a declarative Flow playbook by name, including parsed step summary and the wrapper skill path when present.',
+    description: 'Return the same metadata card as aiwg show flow, with optional body, section, rules, and resource drill-ins.',
     inputSchema: {
+      ...showDrillInSchema,
       name: z.string().describe('Flow name or playbook file name (e.g. flow-release)'),
-      bound_rule_bodies: z.boolean().optional().describe('Include full bound rule bodies'),
       framework: z.string().optional().describe('Optional framework disambiguator'),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async ({ name, framework, bound_rule_bodies }) => {
+  }, async ({ name, framework, ...drillIn }) => {
     try {
-      const flow = await findFlow(name, framework);
-      if (!flow) return mcpError(`flow-show: flow not found: ${name}`);
-      flow.wrapper_skill.exists = await pathExists(flow.wrapper_skill.path);
+      const flow = framework ? await findFlow(name, framework) : null;
+      if (framework && !flow) return mcpError(`flow-show: flow not found: ${name}`);
       const { stdout, stderr, code } = await runAiwgCli([
-        'show', 'flow', flow.path, '--json',
-        ...(bound_rule_bodies ? ['--bound-rule-bodies'] : []),
+        'show', 'flow', flow?.path ?? name, '--json',
+        ...showDrillInArgs(drillIn),
       ]);
-      if (code !== 0) return mcpError(`flow-show binding lookup failed: ${stderr}`);
-      const shown = JSON.parse(stdout);
-      return mcpJson({ ...flow, ...(shown.bound_rules ? { bound_rules: shown.bound_rules,
-        ...(shown.required_rule_checks ? { required_rule_checks: shown.required_rule_checks } : {}),
-        ...(shown.rule_stats ? { rule_stats: shown.rule_stats } : {}),
-        ...(shown.rule_check_obligation ? { rule_check_obligation: shown.rule_check_obligation } : {}) } : {}) });
+      if (code !== 0) return mcpError(`flow-show lookup failed: ${stderr}`);
+      return mcpJson(stdout);
     } catch (err) {
       return mcpError(`flow-show: ${err.message}`);
     }
