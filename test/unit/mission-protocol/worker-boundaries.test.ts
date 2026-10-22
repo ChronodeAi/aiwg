@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   WORKER_BASELINE_FEATURES,
   WORKER_MAX_JSON_BYTES,
+  assertMissionWorkerHandoff,
   decodeMission,
   decodeWorkerPayload,
   encodeMission,
@@ -10,6 +11,7 @@ import {
   encodeWorkerPayloadSnapshot,
   validateWorkerPayload,
   workerDefinitionBundleDigest,
+  workerConsumerSupport,
   type CanonicalMission,
   type MissionTarget,
   type WorkerDefinitionName,
@@ -113,6 +115,51 @@ describe('existing Mission worker consumer boundaries', () => {
     for (const carrier of ['extensions', 'metadata']) {
       expect(() => decodeMission({ id: 'synthetic', goal: 'Synthetic', [carrier]: { 'aiwg.worker-dispatch': dispatch } }, target)).toThrow(/OG_CONTRACT_UNSUPPORTED/);
     }
+  });
+
+  it('requires explicit managed MC qualification instead of recognizing a consumer name', () => {
+    const record = boundMission('/extensions', fixture('dispatch-health-feature'));
+    expect(() => assertMissionWorkerHandoff(record, 'mission-control-session')).toThrow(/OG_CONTRACT_UNSUPPORTED/);
+    expect(() => assertMissionWorkerHandoff(record, 'mission-control-session', workerConsumerSupport([
+      ...WORKER_BASELINE_FEATURES, 'worker-health.v1',
+    ]))).not.toThrow();
+    expect(() => assertMissionWorkerHandoff(record, 'mission-control-session', workerConsumerSupport(WORKER_BASELINE_FEATURES))).toThrow(/missing required feature 'worker-health.v1'/);
+  });
+
+  it.each(['mission-control-session', 'mission-plan', 'mission-ledger', 'executor-v1', 'fleet-workload-v1'] as const)('preserves managed dispatch through explicitly qualified %s codecs', target => {
+    const dispatch = fixture('dispatch-health-feature');
+    const support = workerConsumerSupport([...WORKER_BASELINE_FEATURES, 'worker-health.v1']);
+    const encoded = encodeMission(boundMission('/extensions', dispatch), target, { allowLoss: true, workerConsumer: support });
+    const decoded = decodeMission(encoded.value, target, support).value;
+    const preserved = decoded.extensions?.[`aiwg.source.${target}`] as Record<string, unknown>;
+    const extensions = (target === 'executor-v1' || target === 'fleet-workload-v1') ? preserved.metadata as Record<string, unknown> : preserved;
+    expect(extensions['aiwg.worker-dispatch']).toEqual(dispatch);
+    expect(JSON.stringify(extensions['aiwg.worker-dispatch'])).toBe(JSON.stringify(dispatch));
+    expect(() => assertMissionWorkerHandoff(decoded, 'mission-control-session', support)).not.toThrow();
+    expect(() => decodeMission(encoded.value, target)).toThrow(/OG_CONTRACT_UNSUPPORTED/);
+  });
+
+  it.each([
+    ['revision', { revision: 999 }],
+    ['digest', { bundleDigest: 'sha256:wrong' }],
+    ['lossless preservation', { lossless: false }],
+    ['feature metadata', { features: undefined }],
+  ])('rejects explicit managed support with incompatible %s', (_reason, delta) => {
+    const record = boundMission('/extensions', fixture('dispatch-roundtrip'));
+    const support = { ...workerConsumerSupport(WORKER_BASELINE_FEATURES), ...delta };
+    expect(() => assertMissionWorkerHandoff(record, 'mission-control-session', support)).toThrow(/OG_CONTRACT_UNSUPPORTED/);
+    expect(() => encodeMission(record, 'mission-control-session', { workerConsumer: support })).toThrow(/OG_CONTRACT_UNSUPPORTED/);
+  });
+
+  it('cannot qualify unknown features or malformed dispatch through explicit consumer support', () => {
+    const support = workerConsumerSupport([...WORKER_BASELINE_FEATURES, 'worker-health.v1']);
+    expect(() => workerConsumerSupport([...WORKER_BASELINE_FEATURES, 'worker.future.v999'])).toThrow(/unknown consumer feature/);
+    for (const delta of [{ version: 999 }, { requiredFeatures: [...WORKER_BASELINE_FEATURES, 'worker.future.v999'] }]) {
+      const record = boundMission('/extensions', { ...fixture('dispatch-roundtrip'), ...delta });
+      expect(() => assertMissionWorkerHandoff(record, 'mission-control-session', support)).toThrow(/OG_CONTRACT_UNSUPPORTED/);
+    }
+    const malformed = boundMission('/extensions', { ...fixture('dispatch-roundtrip'), workerSuppliedAuthority: true });
+    expect(() => assertMissionWorkerHandoff(malformed, 'mission-control-session', support)).toThrow(/Invalid workerDispatch/);
   });
 
   it('blocks a worker extension inside a preserved native carrier', () => {

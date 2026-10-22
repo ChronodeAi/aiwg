@@ -178,6 +178,11 @@ jobs:
         # CI budget intact. Zero network I/O — fully deterministic. (#1183)
         run: npm run test:conformance
 
+      - name: Run evidence traces (S2 scheduler and MC caller verdicts, offline)
+        # Records PASS/FAIL/NOT-EXPRESSIBLE verdicts as data for #2917; the lane
+        # fails only when the harness itself breaks. No network or paid calls.
+        run: npm run test:evidence
+
       - name: Preserve testing conformance evidence
         if: always()
         uses: actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d  # v3.2.1-node20

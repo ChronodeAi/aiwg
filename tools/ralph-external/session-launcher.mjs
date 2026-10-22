@@ -36,7 +36,7 @@ import { spawn } from 'child_process';
 import { createWriteStream, mkdirSync, existsSync, readFileSync, copyFileSync, constants } from 'fs';
 import { open, mkdir, rename, unlink, lstat, readdir, realpath, link } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, dirname, join, relative, isAbsolute } from 'path';
 import { EventEmitter } from 'events';
 import { homedir, constants as osConstants } from 'os';
@@ -413,6 +413,45 @@ function subscribeWorkerRecovery(owner, breaker) {
   _workerRecoverySubscriptions.set(owner, () => reporter.owners.delete(owner));
 }
 
+/** Reuse the MC authority and its registered one-shot identity at every spawn boundary. */
+export async function assertManagedWorkerLaunch(options, invocation, inputs, projectRoot = process.cwd()) {
+  if (!options.managedAdmission || invocation.mode !== 'managed'
+    || inputs.snapshot.config.parallelism?.worker_mode !== 'managed') throw new Error('Managed worker admission is required');
+  const { createMcAdmissionScheduler } = await importImpl(import.meta.url, 'cli/handlers/mc.js');
+  const { loadLauncherRegistry } = await importImpl(import.meta.url, 'cli/handlers/ralph-launcher.js');
+  const { workerModelKey } = await importImpl(import.meta.url, 'models/provider-policy.js');
+  const scheduler = await createMcAdmissionScheduler(projectRoot, inputs.snapshot.config);
+  const { requestId, generation } = options.managedAdmission;
+  const snapshot = scheduler.snapshot();
+  const record = snapshot.records[requestId];
+  const deadlineAtMs = Math.min(...[record?.accounting?.runKey, record?.accounting?.taskKey]
+    .map(key => snapshot.allowances?.[key]?.deadlineAt).filter(Boolean).map(Date.parse));
+  const registered = loadLauncherRegistry(projectRoot).loops[process.env.RALPH_LOOP_ID];
+  const worker = record?.managed;
+  const reservation = record?.accounting?.reservation;
+  if (!record || record.state !== 'admitted' || record.leaseGeneration !== generation
+    || !record.launchClaimedAt || !record.metadata?.invocationId || Date.parse(record.leaseExpiresAt ?? '') <= Date.now()
+    || deadlineAtMs <= Date.now()
+    || worker?.kind !== 'external' || worker.group !== invocation.selected.group
+    || worker.member !== invocation.selected.member || worker.cli !== invocation.selected.cli
+    || worker.model !== workerModelKey(invocation.selected.inferenceProvider, invocation.selected.model)
+    || reservation?.tokens != null && !(invocation.limits.tokens <= reservation.tokens)
+    || reservation?.costUsd != null && !(invocation.limits.costUsd !== null && invocation.limits.costUsd <= reservation.costUsd)
+    || registered?.managedAdmission?.requestId !== requestId || registered.managedAdmission.generation !== generation
+    || registered.managedWorker?.invocationPath !== options.invocationPath
+    || registered.managedWorker?.runDir !== options.runDir) {
+    throw new Error('Managed worker launch differs from the current claimed admission');
+  }
+  if (record.execution) {
+    const identity = sampleWorkerIdentity(process.pid);
+    if (record.execution.pid !== process.pid || !identity?.bootId || !identity.startTicks
+      || record.execution.startedAt !== `${identity.bootId}:${identity.startTicks}:${identity.uid}`) {
+      throw new Error('Managed worker supervisor identity differs');
+    }
+  }
+  return { ...record, deadlineAtMs };
+}
+
 async function launchOneWorker(owner, options) {
   const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validate } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
   const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
@@ -425,6 +464,11 @@ async function launchOneWorker(owner, options) {
   const clock = () => typeof options.now === 'function' ? options.now() : options.now ?? new Date().toISOString();
   const now = clock();
   const invocation = await validate(saved, inputs.snapshot, inputs.drivers, now);
+  if (invocation.mode === 'managed' || options.managedAdmission) {
+    const admitted = await assertManagedWorkerLaunch(options, invocation, inputs);
+    options = { ...options, scopedBreaker: null, managedInvocationId: admitted.metadata.invocationId,
+      managedDeadlineAtMs: admitted.deadlineAtMs };
+  }
   if (invocation.transport !== 'shell') throw new Error('One-shot capture requires shell transport; use the qualified MCP descriptor directly');
   if (process.platform !== 'linux') throw new Error('One-shot worker capture requires qualified Linux process identity');
   const runDir = options.runDir;
@@ -1472,7 +1516,7 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
   if (runStat.uid !== process.getuid()) throw new Error('Worker run directory must be conductor-owned');
   await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     try { await handle.chmod(0o700); } finally { await handle.close(); } });
-  const invocationId = randomUUID();
+  const invocationId = options.managedAdmission ? options.managedInvocationId : randomUUID();
   const reservation = await withWorkerPath(join(runDir, '.launch-owner'), target => open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
   try { await reservation.writeFile(invocationId); await reservation.sync(); } finally { await reservation.close(); }
   const supervisor = sampleWorkerIdentity(process.pid);
@@ -1492,11 +1536,12 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
   const handles = [];
   let outcome;
   let artifacts;
+  let managedSpawnAttempted = false;
   try {
     artifacts = await materializeWorkerArtifacts(invocation, runDir);
     const displayArgv = artifacts.argv.map((token, i) => i === 0 ? token : `<argument:${bytesDigest(token)}>`);
     await publish('invocation.json', { version: 1, origin: 'launcher', invocationId, attemptId: invocationId,
-      previousAttemptId: verifiedPreviousAttemptId ?? null, requestId: invocationId, taskDigest: qualificationDigest(saved.request), role: saved.request.role,
+      previousAttemptId: verifiedPreviousAttemptId ?? null, requestId: options.managedAdmission?.requestId ?? invocationId, taskDigest: qualificationDigest(saved.request), role: saved.request.role,
       selected: invocation.selected, planDigest: qualificationDigest(saved), invocationDigest: qualificationDigest(invocation),
       policyDigest: invocation.policyDigest, catalogDigest: invocation.catalogDigest, profileDigest: invocation.profileDigest,
       expiresAt: invocation.expiresAt, argv: displayArgv, commandDisplay: displayArgv.map(token => JSON.stringify(token)).join(' '),
@@ -1540,6 +1585,11 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
       command: artifacts.argv[0], args: artifacts.argv.slice(1), cwd: invocation.cwd,
       memoryMaxGb: options.memoryMaxGb ?? 4, gate: localGate, config: inputs.snapshot.config, isolation,
       allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
+      ...(options.managedAdmission ? { onDispatchCommit: async () => {
+        const admitted = await assertManagedWorkerLaunch(options, invocation, inputs);
+        options.managedDeadlineAtMs = Math.min(options.managedDeadlineAtMs, admitted.deadlineAtMs);
+      } } : {}),
+      ...(options.managedAdmission ? { onSpawnAttempt: () => { managedSpawnAttempted = true; } } : {}),
       env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
     outcome = typeof launchResult?.then === 'function' ? await launchResult : launchResult;
     if (!outcome.child) throw new Error('Worker launch did not return an attached child');
@@ -1548,7 +1598,9 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
       brief: ctx.brief, stdinBytes: ctx.stdinBytes, runDir });
   } catch (error) {
     if (!outcome?.child) await publish('exit.json', { invocationId, exitCode: null, signal: null,
-      endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
+      ...(options.managedAdmission ? { managedAdmission: options.managedAdmission } : {}),
+      endedAt: new Date().toISOString(), termination: managedSpawnAttempted ? 'uncertain' : 'confirmed',
+      descendants: managedSpawnAttempted ? 'unknown' : 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
     throw error;
   } finally {
     try { await artifacts?.cleanup(); } finally {
@@ -1588,9 +1640,13 @@ async function captureOneWorkerBaseline(owner, ctx) {
   let sawClose = false;
   const driver = ctx.inputs.drivers[invocation.selected.cli];
   const observationOptions = { provider: driver.qualification.adapter.provider, profile: ctx.profile,
-    effectiveHealth: invocation.health, invocationId, startedAt: Number(BigInt(monotonicStart)) / 1e6,
+    effectiveHealth: options.managedAdmission ? { ...invocation.health,
+      hardTimeoutSeconds: Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds,
+        (options.managedDeadlineAtMs - Date.parse(launchTime)) / 1000) } : invocation.health,
+    invocationId, startedAt: Number(BigInt(monotonicStart)) / 1e6,
     launchTime, contentDigest: ctx.baselineContent, sessionId: options.healthSessionLog?.sessionId ?? null,
-    runId: options.healthSessionLog?.runId ?? null, maxOutputBytes: invocation.maxOutputBytes };
+    runId: options.healthSessionLog?.runId ?? null, maxOutputBytes: invocation.maxOutputBytes,
+    ...(options.managedAdmission ? { observerGeneration: options.managedAdmission.generation, requestId: options.managedAdmission.requestId } : {}) };
   const observer = driver.createHealthObserver?.(observationOptions) ?? createWorkerHealthObserver(observationOptions);
   const tickRate = qualifyWorkerCpuTickRate();
   let previousCpu = null;
@@ -1707,6 +1763,7 @@ async function captureOneWorkerBaseline(owner, ctx) {
     const exitCode = resultSignal ? null
       : outcome.mode === 'systemd-unit' && native?.execMainCode === 1 ? native.execMainStatus : waitCode;
     const result = { invocationId, exitCode, signal: resultSignal,
+      ...(options.managedAdmission ? { managedAdmission: options.managedAdmission } : {}),
       endedAt: new Date().toISOString(), termination: confirmed ? 'confirmed' : 'uncertain',
       descendants: confirmed ? 'stopped' : 'unknown', timedOut: resultTimedOut,
       cancelled: stopReason === 'CANCELLED', stopReason, errorCode: errorCode ?? null, capturedBytes: Math.min(total, output.length),
@@ -1772,8 +1829,11 @@ async function captureOneWorkerBaseline(owner, ctx) {
     sawExit = true; waitCode = code; waitSignal = sig; later(() => finish(), graceMs);
   });
   child.once('close', () => { sawClose = true; finish(); });
-  const hardRemaining = () => Math.max(0, Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds,
-    invocation.limits.wallSeconds) * 1000 - (Number(process.hrtime.bigint() - BigInt(monotonicStart)) / 1e6));
+  const hardRemaining = () => Math.max(0, Math.min(
+    Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds, invocation.limits.wallSeconds,
+      options.managedAdmission ? (options.managedDeadlineAtMs - Date.parse(launchTime)) / 1000 : Infinity) * 1000
+      - (Number(process.hrtime.bigint() - BigInt(monotonicStart)) / 1e6),
+    options.managedAdmission ? options.managedDeadlineAtMs - Date.now() : Infinity));
   later(() => {
     observer.check();
     reportHealth(); stop('HARD_DEADLINE');
@@ -5055,3 +5115,42 @@ export function planDirectWorkerLaunch({
 }
 
 export default SessionLauncher;
+
+/** The packaged session owner accepts only the parent-bound managed one-shot contract. */
+export function parseManagedWorkerLaunchArgs(args) {
+  const result = {};
+  const seen = new Set();
+  for (let index = 0; index < args.length; index++) {
+    const flag = args[index];
+    if (seen.has(flag)) throw new Error(`Duplicate managed worker option: ${flag}`);
+    seen.add(flag);
+    if (flag === '--launch-worker') continue;
+    const key = { '--invocation': 'invocationPath', '--run-dir': 'runDir',
+      '--managed-request': 'requestId', '--managed-generation': 'generation' }[flag];
+    if (!key) throw new Error(`Unsupported managed worker option: ${flag}`);
+    const value = args[++index];
+    if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
+    result[key] = value;
+  }
+  if (!seen.has('--launch-worker') || !result.invocationPath || !result.runDir || !result.requestId || !result.generation) {
+    throw new Error('Managed worker launch requires invocation, run directory and fenced admission');
+  }
+  const generation = Number(result.generation);
+  if (!Number.isSafeInteger(generation) || generation < 1) throw new Error('Invalid managed admission generation');
+  return { invocationPath: result.invocationPath, runDir: result.runDir,
+    managedAdmission: { requestId: result.requestId, generation } };
+}
+
+async function runManagedWorkerEntry() {
+  const result = await new SessionLauncher().launchWorker(parseManagedWorkerLaunchArgs(process.argv.slice(2)));
+  console.log(JSON.stringify(result));
+  process.exitCode = result.termination !== 'confirmed' ? 2
+    : result.errorCode || result.timedOut || result.exitCode !== 0 ? 1 : 0;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runManagedWorkerEntry().catch(error => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

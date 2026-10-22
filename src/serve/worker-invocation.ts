@@ -316,6 +316,8 @@ export interface WorkerCommandRequest {
   final_output: string;
   transport?: 'shell' | 'mcp';
   format?: 'shell' | 'json';
+  /** Managed parent supplies the validated task authority; never a CLI override. */
+  managedIntent?: import('../mission-protocol/types.js').WorkerSelectionIntent;
   authority?: { premiumAuthorized: true; maxAutoTier: 3 };
 }
 
@@ -429,7 +431,9 @@ export class WorkerPathScopeError extends WorkerPolicyError {
 /** Re-resolve saved JSON through the same trusted owners; saved argv is never authority. */
 export async function revalidateWorkerInvocationPlan(saved: WorkerCommandPlan, snapshot: WorkerPlanSnapshot,
   drivers: Record<string, WorkerInvocationDriver>, now = new Date().toISOString()): Promise<WorkerResolvedInvocation> {
-  if (!saved.request || saved.mode !== 'direct' || saved.status !== 'eligible'
+  const managed = saved.mode === 'managed' && snapshot.config.parallelism?.worker_mode === 'managed';
+  if (!saved.request || (saved.mode !== 'direct' && !managed) || saved.mode !== (snapshot.config.parallelism?.worker_mode ?? 'direct') || saved.status !== 'eligible'
+    || (managed && saved.invocation?.mode !== 'managed')
     || saved.invocation?.readiness !== 'launchable' || Date.parse(saved.invocation.expiresAt) <= Date.parse(now)) {
     throw new Error('A fresh launchable models resolve JSON plan is required');
   }
@@ -457,16 +461,27 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
   let failureCode: WorkerPolicyDiagnostic['code'] = 'OG_CONFIG_REFERENCE';
   let plan: WorkerCommandPlan | undefined;
   try {
+    const managedIntent = request.managedIntent;
+    if (managedIntent) {
+      assertValidWorkerPayload('workerSelectionIntent', managedIntent);
+      if (snapshot.config.parallelism?.worker_mode !== 'managed'
+        || managedIntent.role !== request.role || managedIntent.taskClass !== request.task || managedIntent.group !== request.group) {
+        throw new Error('Managed task authority differs from the worker request');
+      }
+    }
     for (const key of ['brief', 'workdir', 'final_output'] as const) {
       if (!path.isAbsolute(request[key])) throw new WorkerRequestArgumentError(key);
     }
     const bytes = await readBrief(request.brief);
     const briefDigest = bytes === null ? null : bytesDigest(bytes);
     if (expected && expected.briefDigest !== briefDigest) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Brief digest changed; resolve again');
-    let brief: import('../mission-protocol/types.js').WorkerDirectBrief | undefined;
+    let brief: import('../mission-protocol/types.js').WorkerDirectBrief | import('../mission-protocol/types.js').WorkerBrief | undefined;
     if (bytes?.toString('utf8').trimStart().startsWith('{')) {
       brief = JSON.parse(bytes.toString('utf8'));
-      assertValidWorkerPayload('workerDirectBrief', brief);
+      assertValidWorkerPayload(managedIntent ? 'workerBrief' : 'workerDirectBrief', brief);
+      if (managedIntent && workerConfigDigest(brief!.intent) !== workerConfigDigest(managedIntent)) {
+        throw new Error('Managed brief differs from parent task authority');
+      }
       if (brief!.intent.role !== request.role || brief!.intent.taskClass !== request.task || brief!.intent.group !== request.group
         || brief!.workspace.path !== request.workdir || brief!.output.resultPath !== request.final_output) {
         throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Brief role/task/group/workspace/output differs from request');
@@ -477,12 +492,20 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       ...(brief ? { dataClass: brief.intent.dataClass, member: brief.intent.pins.member,
         model: brief.intent.pins.model, effort: brief.intent.pins.effort?.value, ceilings: {
           ...brief.intent.limits, costUsd: brief.intent.limits.costUsd ?? undefined } } : {}),
+      ...(managedIntent ? { dataClass: managedIntent.dataClass, member: managedIntent.pins.member,
+        model: managedIntent.pins.model, effort: managedIntent.pins.effort?.value,
+        ceilings: { ...managedIntent.limits, costUsd: managedIntent.limits.costUsd ?? undefined } } : {}),
       context: { estimator: 'utf8-byte-upper-bound-v1', briefTokens: bytes?.length ?? 0,
         inputTokens: 0, toolOutputAllowance: 1024, reservedOutput: 1024 },
       requiredControls: snapshot.config.parallelism?.health?.requireStepCap ? ['stepCap'] : [],
     });
     plan.request = structuredClone(request);
     if (!plan.selected) return plan;
+    if (plan.mode === 'managed' && !managedIntent) {
+      plan.diagnostics.push({ code: 'OG_CONFIG_REFERENCE', pointer: '/request/managedIntent',
+        message: 'Managed execution requires the parent task authority and shared admission.' });
+      return plan;
+    }
     const tuple = plan.selected;
     pointer = `/parallelism/clis/${tuple.cli}`;
     failureCode = 'OG_ADAPTER_UNQUALIFIED';
@@ -564,7 +587,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
     if (transport.mcp?.timeoutSeconds !== undefined) effectiveHealth = resolveWorkerEffectiveHealth(healthConfig,
       { ...healthInput, transportSeconds: Math.min(healthInput.transportSeconds ?? Infinity, transport.mcp.timeoutSeconds) });
     if (workerConfigDigest(driver.qualification) !== qualificationDigest) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Installation profile digest changed during resolution');
-    const invocation: WorkerResolvedInvocation = { version: 1, mode: 'direct', transport: tuple.transport, selected,
+    const invocation: WorkerResolvedInvocation = { version: 1, mode: managedIntent ? 'managed' : 'direct', transport: tuple.transport, selected,
       policyDigest, catalogDigest: plan.digests.catalogDigest, profileDigest: plan.digests.profileDigest,
       expiresAt, cwd: request.workdir, briefPath: request.brief, stdoutPath, stderrPath, finalPath,
       ...(transport.artifacts ? { artifacts: transport.artifacts } : {}),

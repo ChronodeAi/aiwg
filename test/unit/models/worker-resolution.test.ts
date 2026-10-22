@@ -331,7 +331,7 @@ describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => 
     expect(resolve(f).status).toBe('blocked');
   });
 
-  it('R12 retains disabled/native behavior and distinguishes managed deferral', () => {
+  it('R12 shares eligibility with activated managed callers and rejects stale activation', () => {
     const f = workerResolutionFixture();
     f.snapshot.config.parallelism!.worker_dispatch = false;
     expect(resolve(f).status).toBe('disabled');
@@ -341,7 +341,8 @@ describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => 
     f.snapshot.config.parallelism!.activation = { revision: 1, snapshotRef: 'fixture:snapshot',
       ...workerActivationDigests(f.snapshot.config), ...f.snapshot.modelDigests };
     expect(resolve(f).diagnostics.some(d => d.pointer === '/parallelism/activation')).toBe(false);
-    expect(resolve(f).selected).toBeNull(); // S2 runtime is not implemented by S1 mapping.
+    expect(resolve(f).status).toBe('eligible');
+    expect(resolve(f).selected?.member).toBe('primary');
     f.snapshot.modelDigests.userModelsDigest = workerConfigDigest({ changed: true });
     expect(resolve(f).diagnostics.some(d => d.pointer === '/parallelism/activation')).toBe(true);
   });

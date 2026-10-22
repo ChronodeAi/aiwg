@@ -69,6 +69,7 @@ vi.mock('node:fs', () => {
     }),
   };
   return {
+    existsSync: vi.fn(() => false),
     promises: fsMethods,
     default: { promises: fsMethods },
   };

@@ -865,6 +865,7 @@
         "completed",
         "done",
         "failed",
+        "pending",
         "running",
         "unknown"
       ],
@@ -1165,6 +1166,19 @@
         "aborted",
         "done",
         "failed"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "adapt",
+      "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
+    },
+    {
+      "path": "src/serve/shared-host-scheduler.ts",
+      "owner": "src/serve",
+      "role": "producer-consumer",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [
+        "cancelled",
+        "unknown"
       ],
       "serialization": "typescript/javascript",
       "migrationAction": "adapt",
@@ -1566,6 +1580,34 @@
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
     },
     {
+      "path": "test/evidence/s2-scheduler-traces.test.ts",
+      "owner": "test/evidence",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [
+        "aborted",
+        "cancelled",
+        "completed",
+        "done",
+        "failed",
+        "running",
+        "unknown"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/fixtures/managed-mc-worker.ts",
+      "owner": "test/fixtures",
+      "role": "fixture-or-test",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
       "path": "test/fixtures/ralph-recovery-baseline/src/config/aiwg-config.ts",
       "owner": "test/fixtures",
       "role": "fixture-or-test",
@@ -1886,7 +1928,8 @@
       "statusVocabulary": [
         "cancelled",
         "completed",
-        "failed"
+        "failed",
+        "unknown"
       ],
       "serialization": "typescript/javascript",
       "migrationAction": "retain",
@@ -1898,6 +1941,21 @@
       "role": "fixture-or-test",
       "currentVersion": "unversioned",
       "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/unit/cli/handlers/mc-worker-binding.test.ts",
+      "owner": "test/unit",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [
+        "completed",
+        "pending",
+        "running",
+        "unknown"
+      ],
       "serialization": "typescript/javascript",
       "migrationAction": "retain",
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
