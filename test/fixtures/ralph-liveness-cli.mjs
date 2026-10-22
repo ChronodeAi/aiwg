@@ -4,7 +4,8 @@ import { writeFileSync } from 'node:fs';
 
 // IPC controls timing; stdout remains the worker protocol under observation.
 const finalPath = process.argv[process.argv.indexOf('--final-output') + 1];
-const emit = value => new Promise(resolve => process.stdout.write(`${JSON.stringify(value)}\n`, resolve));
+const emit = value => new Promise(resolve => process.stdout.write(`${JSON.stringify(value)}\n`, resolve))
+  .then(() => { if (process.argv.includes('--hand-launch') && value.fixtureStep) process.send?.(value); });
 const claims = { version: 1, status: 'completed', summary: 'synthetic', claims: [], artifacts: [], checks: [], limitations: [] };
 const watchdog = setTimeout(() => process.exit(70), 10000);
 let descendant;
@@ -40,4 +41,5 @@ process.on('message', async ({ step, id }) => {
   }
   await emit({ fixtureStep: id, ...(descendant ? { descendant: descendant.pid } : {}) });
 });
-await emit({ fixtureStep: 'ready' });
+const effortIndex = process.argv.indexOf('--effort');
+await emit({ fixtureStep: 'ready', effort: effortIndex < 0 ? null : process.argv[effortIndex + 1] });
