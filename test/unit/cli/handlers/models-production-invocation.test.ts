@@ -9,9 +9,9 @@ import { loadWorkerInputs, modelsHandler } from '../../../../src/cli/handlers/mo
 import { ConfigLoader } from '../../../../src/models/config-loader.js';
 import { requiredWorkerControls } from '../../../../src/models/provider-policy.js';
 import { resolveWorkerPlan } from '../../../../src/models/resolver.js';
-import { hasProvider as hasInstalledProvider } from '../../../../src/models/worker-installation.mjs';
+import { hasProvider as hasInstalledProvider, registerProvider } from '../../../../src/models/worker-installation.mjs';
 import { qualificationDigest } from '../../../../src/models/qualification-digest.mjs';
-import { ProviderAdapter, registerProvider, workerNegativeFixtureDigest, workerNegativeFixtureSuite } from '../../../../tools/ralph-external/lib/provider-adapter.mjs';
+import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuite } from '../../../../tools/ralph-external/lib/provider-adapter.mjs';
 import { workerResolutionFixture } from '../../../fixtures/worker-resolution.js';
 import { recordedWorkerStdinBytes } from '../../../../src/serve/worker-stdin-frame.mjs';
 
