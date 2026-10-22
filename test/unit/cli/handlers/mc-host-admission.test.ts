@@ -4,6 +4,7 @@ import { hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import * as ui from '../../../../src/cli/ui.js';
 import { createMcAdmissionScheduler } from '../../../../src/cli/handlers/mc.js';
 import { resolveParallelism, workerActivationDigests, workerConfigDigest, type AiwgConfig } from '../../../../src/config/aiwg-config.js';
 import {
@@ -65,8 +66,10 @@ function request(id: string): AdmissionRequest {
     priority: 1, submittedAt: new Date().toISOString(), queueTimeoutMs: 60000, managed: { kind: 'native' } };
 }
 function install() {
-  registry.register(executor);
+  const result = registry.register(executor);
+  if ('status' in result) throw new Error(result.error);
   registry.installHostAdmissionAuthority(executor.executor_id, executor.version, store, roots);
+  return result.token;
 }
 
 describe('T-OG-05/08/10 MC trusted host executor binding', () => {
@@ -103,7 +106,7 @@ for (let attempt = 0; attempt < 20; attempt++) {
         JSON.stringify(configs[index]), roots[index]!, JSON.stringify(request('same'))],
       { cwd: roots[index], timeout: 15000, maxBuffer: 32000 });
     const results = await Promise.all([child(0), child(1)]);
-    expect(results.map(result => result.stdout).sort()).toEqual(['admitted', 'queued']);
+    expect(results.map(result => result.stdout.trim().split('\n').at(-1)).sort()).toEqual(['admitted', 'queued']);
     expect(Object.values(store.read().records)).toHaveLength(2);
   }, 40000);
 
@@ -120,15 +123,37 @@ for (let attempt = 0; attempt < 20; attempt++) {
     fresh.shutdown();
   });
 
+  it('warns that the identity-store override is ignored for host admission lookup', async () => {
+    install();
+    const warn = vi.spyOn(ui, 'warn').mockImplementation(() => {});
+    const scheduler = await createMcAdmissionScheduler(roots[0]!, configs[0]!, registry);
+    expect(scheduler.submit(request('diagnostic')).state).toBe('admitted');
+    expect(warn).toHaveBeenCalledExactlyOnceWith('AIWG_EXECUTOR_IDENTITY_STORE is ignored for host admission authority lookup.');
+    vi.unstubAllEnvs();
+    await createMcAdmissionScheduler(roots[0]!, configs[0]!, registry);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
   it('fails without a trusted binding rather than reopening a migrated project file', async () => {
     await expect(createMcAdmissionScheduler(roots[0]!, configs[0]!, registry)).rejects.toThrow(/trusted host executor binding/);
   });
 
   it.each(['version', 'capability', 'deregister'] as const)('rejects a changed executor %s before dispatch', async vector => {
-    install();
+    const token = install();
     if (vector === 'deregister') registry.deregister(executor.executor_id);
-    else registry.register({ ...executor, ...(vector === 'version' ? { version: '2' } : { capabilities: ['isolation:container'] }) });
+    else registry.register({ ...executor, ...(vector === 'version' ? { version: '2' } : { capabilities: ['isolation:container'] }) }, token);
     await expect(createMcAdmissionScheduler(roots[0]!, configs[0]!, registry)).rejects.toThrow(/revision-aware|revoked|trusted host executor/);
+  });
+
+  it('keeps the host binding live after unauthenticated version changes', async () => {
+    install();
+    const scheduler = await createMcAdmissionScheduler(roots[0]!, configs[0]!, registry);
+    const before = store.read();
+    expect(registry.register({ ...executor, version: '2' })).toEqual({ error: 'Unauthorized', status: 401 });
+    expect(store.read()).toEqual(before);
+    expect(store.read().hostRegistrationRevoked).not.toBe(true);
+    expect(scheduler.submit(request('still-live')).state).toBe('admitted');
+    await expect(createMcAdmissionScheduler(roots[0]!, configs[0]!, registry)).resolves.toBeDefined();
   });
 
   it('does not grant host authority through public executor registration or project caps', async () => {
@@ -150,15 +175,15 @@ for (let attempt = 0; attempt < 20; attempt++) {
   });
 
   it('preserves private host metadata across compatible service registration and revokes changed versions', async () => {
-    install();
+    const token = install();
     const trustedPath = join(root, 'trusted', 'executor-identities.json');
     vi.stubEnv('AIWG_EXECUTOR_IDENTITY_STORE', trustedPath);
     const { ExecutorRegistry } = await import('../../../../src/serve/executor-registry.js');
     const service = new ExecutorRegistry(trustedPath);
-    service.register(executor);
+    expect(service.register(executor, token)).not.toHaveProperty('status');
     const scheduler = await createMcAdmissionScheduler(roots[0]!, configs[0]!, service);
     expect(scheduler.submit(request('service')).state).toBe('admitted');
-    service.register({ ...executor, version: '2' });
+    expect(service.register({ ...executor, version: '2' }, token)).not.toHaveProperty('status');
     expect(() => scheduler.renew('service', 1)).toThrow(/revoked/);
     await expect(createMcAdmissionScheduler(roots[0]!, configs[0]!, service)).rejects.toThrow(/trusted host executor/);
     service.shutdown();

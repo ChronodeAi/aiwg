@@ -414,6 +414,16 @@ binding; trusted installation is required to reopen it. Every scheduler
 transaction compares the complete effective policy, host revision and project
 authority generation against the current admission snapshot.
 
+Re-registering a host-bound executor ID requires its current bearer token,
+including compatible registrations. Missing or incorrect tokens return HTTP 401
+without updating the registration or revoking authority. General executor
+re-register token reclaim is tracked separately as #3439. The token is checked
+only against the live executor or the protected host record, never a selectable
+identity store. Host metadata is read
+and persisted only at the protected host identity-store location; selectable
+identity stores cannot supply it. A `host:` authorityRef emits a warning when
+`AIWG_EXECUTOR_IDENTITY_STORE` is set and continues to ignore it for lookup.
+
 Host registration and admission files require canonical absolute paths, private
 owner directories/files and no worker-writable mount containing either file.
 Host admission reads reject symlinks, writable aliases through hardlinks and
@@ -424,6 +434,20 @@ require actual sandbox/ACL enforcement outside the worker's writable mounts;
 private modes alone cannot isolate an unsandboxed process with the same uid.
 Read or write failure blocks managed admission. Retention, stale-lock disposition
 and disk-pressure remediation remain trusted operator actions.
+
+Host authority is supported only on Linux/POSIX platforms with uid and mode
+checks. Missing uid or mode support fails closed.
+
+### Pilot limitation
+
+The same-uid limitation is accepted for the #2924 pilot only if its executor
+runs workers in a sandbox whose writable mounts exclude `~/.config/aiwg` and
+the host admission directory. The code checks declared writable roots but cannot
+verify the actual sandbox mounts. Before managed mode becomes generally
+available or a default, authority files require a separate service uid or an
+equivalent enforced isolation boundary.
+
+### Host migration
 
 `migrateProjectAdmissionToHost(source, target, projectId, options)` extends the
 same store owner. `options` supplies a stable migration ID and expected source
