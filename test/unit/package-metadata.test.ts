@@ -41,6 +41,7 @@ describe('Dependabot security floors (#3413)', () => {
     ['package-lock.json', '@vitest/mocker', '4.1.12'],
     ['apps/cockpit/package-lock.json', '@vitest/mocker', '4.1.12'],
     ['apps/cockpit/web/package-lock.json', '@vitest/mocker', '4.1.12'],
+    ['vscode-extension/package-lock.json', 'markdown-it', '14.3.3'],
   ])('%s keeps every copy of %s at a patched version', (file, name, minimum) => {
     const lock = readJson(file);
     expect(lock.lockfileVersion).toBe(3);
