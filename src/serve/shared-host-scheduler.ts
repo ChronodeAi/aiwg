@@ -22,14 +22,16 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { assertMissionWorkerHandoff } from '../mission-protocol/codecs.js';
+import { assertMissionWorkerHandoff, assertValidWorkerPayload, decideLeaseMapping } from '../mission-protocol/codecs.js';
 import { isCanonicalWorkerModelKey } from '../models/provider-policy.js';
+import type { CanonicalMission, WorkerExecution, WorkerHealthSummary, WorkerUsage } from '../mission-protocol/types.js';
 import type { ParallelismConfig } from '../config/aiwg-config.js';
 
 export type AdmissionState =
   | 'queued'
   | 'admitted'
   | 'uncertain'
+  | 'settled'
   | 'denied'
   | 'cancelled'
   | 'timed-out'
@@ -48,6 +50,59 @@ export interface ManagedWorkerReservation {
   lowerBound?: number;
 }
 
+export type ManagedBudgets = NonNullable<CanonicalMission['spec']['budgets']>;
+
+/** Stable parent identities are supplied by the existing workflow owner. */
+export interface ManagedAllowance {
+  runId: string;
+  taskId: string;
+  runBudgets?: ManagedBudgets;
+  taskBudgets?: ManagedBudgets;
+  reservation?: { tokens: number | null; costUsd: number | null };
+  previousRequestId?: string;
+  /** Opaque native loops reserve their bounded iteration count before launch. */
+  attempts?: number;
+  purpose?: 'initial' | 'retry' | 'fallback' | 'quality' | 'effort' | 'review';
+}
+
+/** Translate existing owner ceilings without creating another budget contract. */
+export function managedAllowanceFromOwner(runId: string, taskId: string, owner:
+  | { kind: 'mission'; budgets?: ManagedBudgets }
+  | { kind: 'ralph'; maxIterations?: number; maxTotalTokens?: number; maxTotalCost?: number; maxWallClockMinutes?: number }
+  | { kind: 'flow'; ceilings: { activations?: number; tokens?: number; costUsd?: number; timeMs?: number } },
+): ManagedAllowance {
+  const budgets = owner.kind === 'mission' ? owner.budgets : owner.kind === 'ralph' ? {
+    maxAttempts: owner.maxIterations, maxTokens: owner.maxTotalTokens, maxCostUsd: owner.maxTotalCost,
+    timeoutSeconds: owner.maxWallClockMinutes === undefined ? undefined : owner.maxWallClockMinutes * 60,
+  } : {
+    maxAttempts: owner.ceilings.activations, maxTokens: owner.ceilings.tokens, maxCostUsd: owner.ceilings.costUsd,
+    timeoutSeconds: owner.ceilings.timeMs === undefined ? undefined : owner.ceilings.timeMs / 1000,
+  };
+  return owner.kind === 'ralph'
+    ? { runId, taskId, taskBudgets: budgets, attempts: owner.maxIterations ?? 5 }
+    : { runId, taskId, runBudgets: budgets };
+}
+
+export interface ManagedAllowanceScope {
+  limits: ManagedBudgets;
+  startedAt: string;
+  deadlineAt?: string;
+}
+
+export type ManagedAttemptFailure = Pick<NonNullable<WorkerExecution['failure']>, 'class' | 'retryable' | 'resetAt'>;
+
+export interface ManagedAttemptAccounting {
+  runKey: string;
+  taskKey: string;
+  reservation: { tokens: number | null; costUsd: number | null };
+  attemptNumber?: number;
+  attemptCount: number;
+  usage: WorkerUsage | null;
+  notBefore?: string;
+  failure?: ManagedAttemptFailure;
+  stopEvidence?: WorkerHealthSummary;
+}
+
 export interface ManagedAdmissionPolicy {
   authorityRef: 'project';
   projectId: string;
@@ -56,6 +111,8 @@ export interface ManagedAdmissionPolicy {
   dimensionCaps: Record<string, number>;
   installations: Record<string, { accountScope: string; quotaScope: string }>;
   members: Record<string, { cli: string }>;
+  budgets?: ParallelismConfig['budgets'];
+  retry?: ParallelismConfig['retry'];
 }
 
 /** Canonical project identity and the existing MC authority, including symlink aliases. */
@@ -116,6 +173,7 @@ export function managedProjectAdmissionPolicy(
     managed: {
       authorityRef: 'project', projectId, policyDigest, maxQueued: admission?.maxQueued ?? 128,
       dimensionCaps: dimensions,
+      budgets: parallelism.budgets, retry: parallelism.retry,
       installations: Object.fromEntries(Object.entries(parallelism.clis ?? {}).filter(([, cli]) => cli.enabled !== false)
         .map(([id, cli]) => [id, { accountScope: cli.accountScope, quotaScope: cli.quotaScope }])),
       members: Object.fromEntries(Object.entries(parallelism.groups ?? {}).flatMap(([group, definition]) =>
@@ -137,6 +195,7 @@ export interface AdmissionRequest {
   preemptible?: boolean;
   metadata?: Record<string, string>;
   managed?: ManagedWorkerReservation;
+  allowance?: ManagedAllowance;
 }
 
 export interface AdmissionRecord extends AdmissionRequest {
@@ -151,6 +210,7 @@ export interface AdmissionRecord extends AdmissionRequest {
   leaseGeneration?: number;
   dimensions?: string[];
   reservedSlots?: number;
+  accounting?: ManagedAttemptAccounting;
 }
 
 export interface SharedHostPolicy {
@@ -171,6 +231,8 @@ export interface AdmissionSnapshot {
   records: Record<string, AdmissionRecord>;
   /** Written by the config/authority owner, never selected by a transaction caller. */
   policyBinding?: SharedHostPolicy;
+  allowances?: Record<string, ManagedAllowanceScope>;
+  cooldowns?: Record<string, { until: string; failures: number }>;
 }
 
 /** Initialize a validated activation under the store lock. Policy replacement/migration
@@ -249,7 +311,7 @@ export class FileAdmissionStore implements AdmissionStore {
 }
 
 const terminalStates = new Set<AdmissionState>([
-  'denied', 'cancelled', 'timed-out', 'preempted',
+  'denied', 'cancelled', 'timed-out', 'preempted', 'settled',
 ]);
 
 export class SharedHostScheduler {
@@ -278,6 +340,14 @@ export class SharedHostScheduler {
         if (!isCanonicalManagedDimension(managed.projectId, key)) throw new Error('invalid canonical admission dimension key');
         if (!Number.isSafeInteger(cap) || cap < 1) throw new Error('dimension caps must be positive integers');
       }
+      if (managed.budgets?.enforcement === 'hard') throw new Error('OG_BUDGET_UNMEASURABLE: no enforcing spend adapter is bound');
+      validateBudgets(projectBudgets(managed.budgets?.perRun));
+      validateBudgets(projectBudgets(managed.budgets?.perTask));
+      for (const value of [managed.retry?.maxAttempts ?? 3, managed.retry?.baseDelaySeconds ?? 1, managed.retry?.maxDelaySeconds ?? 60]) {
+        if (!Number.isSafeInteger(value) || value < 1) throw new Error('managed retry bounds must be positive integers');
+      }
+      if ((managed.retry?.baseDelaySeconds ?? 1) > (managed.retry?.maxDelaySeconds ?? 60)) throw new Error('invalid retry delay bounds');
+      if (managed.budgets?.reservationUsd !== undefined && (!Number.isFinite(managed.budgets.reservationUsd) || managed.budgets.reservationUsd <= 0)) throw new Error('reservationUsd must be positive');
       const aliases = new Map<string, string>();
       for (const [cli, binding] of Object.entries(managed.installations)) {
         managedDimensionKeys(managed.projectId, { kind: 'native', cli, quotaScope: binding.quotaScope });
@@ -312,6 +382,7 @@ export class SharedHostScheduler {
           leaseGeneration: 1,
           dimensions: this.reservationDimensions(request),
           reservedSlots: request.managed?.lowerBound ?? 1,
+          accounting: this.bindAllowance(snapshot, request),
         } : {}),
       };
       this.reconcile(snapshot);
@@ -374,6 +445,61 @@ export class SharedHostScheduler {
     });
   }
 
+  /** Called with trusted supervisor observations, never worker claims/status strings. */
+  settle(requestId: string, generation: number, health: WorkerHealthSummary | null, usage: WorkerUsage, failure?: ManagedAttemptFailure): AdmissionRecord {
+    assertValidWorkerPayload('workerUsage', usage);
+    return this.store.transact(snapshot => {
+      this.assertPolicyBinding(snapshot);
+      if (!this.policy.managed) throw new Error('settlement requires managed admission');
+      const record = this.required(snapshot, requestId);
+      const accounting = record.accounting;
+      if (!accounting?.attemptNumber) throw new Error('cannot settle an unlaunched attempt');
+      const verdict = decideLeaseMapping({
+        leaseGeneration: record.leaseGeneration!, observedGeneration: generation,
+        leaseState: record.state === 'uncertain' ? 'cancelled-disconnected' : 'admitted',
+        settled: record.state === 'settled', health,
+      });
+      if (verdict === 'deny-stale') throw new Error('stale settlement generation');
+      if (verdict === 'deny-already-settled') {
+        if (canonical(accounting.usage) !== canonical(usage)) throw new Error('conflicting settled usage');
+        return structuredClone(record);
+      }
+      if (failure) this.applyFailure(snapshot, record, failure);
+      // An unconfirmed observation cannot erase a previous measured charge.
+      if (accounting.usage && !canRefineUsage(accounting.usage, usage)) throw new Error('conflicting attempt usage');
+      accounting.usage = structuredClone(usage);
+      if (verdict === 'release-once') {
+        record.state = 'settled';
+        record.finishedAt = new Date(this.clock()).toISOString();
+        accounting.stopEvidence = structuredClone(health!);
+        record.reason = 'current-generation termination proof reconciled';
+      } else {
+        record.state = 'uncertain';
+        record.reason = 'termination proof unavailable or not current; reservation retained';
+      }
+      record.revision += 1;
+      this.reconcile(snapshot);
+      return structuredClone(record);
+    });
+  }
+
+  /** A 429 observation cools the authority-bound account even if stop is uncertain. */
+  recordRateLimit(requestId: string, generation: number, failure: { resetAt?: string } = {}): AdmissionRecord {
+    return this.recordFailure(requestId, generation, { class: 'rate-limit', retryable: true, ...failure });
+  }
+
+  recordFailure(requestId: string, generation: number, failure: ManagedAttemptFailure): AdmissionRecord {
+    return this.store.transact(snapshot => {
+      this.assertPolicyBinding(snapshot);
+      if (!this.policy.managed) throw new Error('failure observation requires managed admission');
+      const record = this.required(snapshot, requestId);
+      if (record.leaseGeneration !== generation) throw new Error('stale failure observation generation');
+      if (!record.accounting?.attemptNumber) throw new Error('failure observation requires an admitted attempt');
+      this.applyFailure(snapshot, record, failure);
+      return structuredClone(record);
+    });
+  }
+
   snapshot(): AdmissionSnapshot {
     return this.store.read();
   }
@@ -381,6 +507,7 @@ export class SharedHostScheduler {
   private reconcile(snapshot: AdmissionSnapshot): void {
     const now = this.clock();
     for (const record of Object.values(snapshot.records)) {
+      if (this.policy.managed && record.managed && !record.accounting) throw new Error('managed allowance migration required; reconcile pre-allowance reservations before dispatch');
       if (record.state === 'admitted' && Date.parse(record.leaseExpiresAt ?? '') <= now) {
         record.state = this.policy.managed ? 'uncertain' : 'timed-out';
         record.reason = this.policy.managed ? 'admission lease expired; termination is uncertain' : 'admission lease expired; capacity recovered';
@@ -399,10 +526,16 @@ export class SharedHostScheduler {
       .sort((a, b) => this.compare(a, b, now));
 
     for (const candidate of queued) {
+      if (this.policy.managed && !this.allowAttempt(snapshot, candidate, now)) continue;
       if (!this.hasCapacity(snapshot, candidate)) {
         if (this.policy.allowPreemption && !this.policy.managed) this.tryPreempt(snapshot, candidate, now);
       }
       if (!this.hasCapacity(snapshot, candidate)) continue;
+      if (candidate.accounting) {
+        candidate.accounting.attemptNumber = Object.values(snapshot.records).filter(record =>
+          record.accounting?.taskKey === candidate.accounting!.taskKey && record.accounting.attemptNumber !== undefined)
+          .reduce((sum, record) => sum + record.accounting!.attemptCount, 0) + 1;
+      }
       candidate.state = 'admitted';
       candidate.reason = 'admitted by shared-host policy';
       candidate.admittedAt = new Date(now).toISOString();
@@ -410,6 +543,111 @@ export class SharedHostScheduler {
       candidate.revision += 1;
     }
     queued = [];
+  }
+
+  private applyFailure(snapshot: AdmissionSnapshot, record: AdmissionRecord, failure: ManagedAttemptFailure): void {
+    const accounting = record.accounting!;
+    if (!['rate-limit', 'unavailable', 'timeout', 'auth', 'invalid-request', 'policy', 'parse', 'verification', 'unknown'].includes(failure.class)
+      || typeof failure.retryable !== 'boolean' || (failure.resetAt !== undefined && (typeof failure.resetAt !== 'string' || failure.resetAt.length > 128))) {
+      throw new Error('invalid attempt failure');
+    }
+    if (accounting.failure) {
+      if (canonical(accounting.failure) !== canonical(failure)) throw new Error('conflicting failure observation');
+      return;
+    }
+    const retry = this.policy.managed!.retry;
+    const cooldowns = snapshot.cooldowns ??= {};
+    const quota = record.managed?.cli ? this.policy.managed!.installations[record.managed.cli]!.quotaScope : null;
+    if (failure.class === 'rate-limit' && !quota) throw new Error('quota observation requires an admitted installation');
+    const key = `quota/${encodeURIComponent(quota ?? '')}`;
+    const failures = failure.class === 'rate-limit' ? (cooldowns[key]?.failures ?? 0) + 1
+      : Object.values(snapshot.records).filter(previous => previous.accounting?.taskKey === accounting.taskKey && previous.accounting.failure).length + 1;
+    const delay = Math.min(retry?.maxDelaySeconds ?? 60, (retry?.baseDelaySeconds ?? 1) * 2 ** Math.min(failures - 1, 30)) * 1000;
+    const now = this.clock();
+    const reset = Date.parse(failure.resetAt ?? '');
+    const until = Math.max(now + delay, Number.isFinite(reset) ? reset : now,
+      failure.class === 'rate-limit' ? Date.parse(cooldowns[key]?.until ?? '') || 0 : 0);
+    if (!Number.isFinite(new Date(until).getTime())) throw new Error('retry backoff exceeds timestamp range');
+    if (failure.class === 'rate-limit') cooldowns[key] = { until: new Date(until).toISOString(), failures };
+    accounting.notBefore = new Date(until).toISOString();
+    accounting.failure = structuredClone(failure);
+    record.revision += 1;
+  }
+
+  private bindAllowance(snapshot: AdmissionSnapshot, request: AdmissionRequest): ManagedAttemptAccounting {
+    const policy = this.policy.managed!;
+    const allowance: ManagedAllowance = request.allowance ?? { runId: request.orchestratorId, taskId: request.metadata?.missionId ?? request.requestId };
+    const runKey = JSON.stringify(['run', allowance.runId]);
+    const taskKey = JSON.stringify(['task', allowance.runId, allowance.taskId]);
+    const scopes = snapshot.allowances ??= {};
+    const bind = (key: string, limits: ManagedBudgets): ManagedAllowanceScope => {
+      const previous = scopes[key];
+      const effective = intersectBudgets(previous?.limits, limits);
+      const startedAt = previous?.startedAt ?? new Date(this.clock()).toISOString();
+      const deadline = effective.timeoutSeconds === undefined ? undefined : Date.parse(startedAt) + effective.timeoutSeconds * 1000;
+      if (deadline !== undefined && !Number.isFinite(new Date(deadline).getTime())) throw new Error('allowance deadline exceeds timestamp range');
+      return scopes[key] = { limits: effective, startedAt,
+        ...(deadline === undefined ? {} : { deadlineAt: new Date(deadline).toISOString() }) };
+    };
+    const run = bind(runKey, intersectBudgets(projectBudgets(policy.budgets?.perRun), allowance.runBudgets));
+    const task = bind(taskKey, intersectBudgets(
+      { maxAttempts: policy.retry?.maxAttempts ?? 3 }, projectBudgets(policy.budgets?.perTask), allowance.taskBudgets,
+    ));
+    const limits = intersectBudgets(run.limits, task.limits);
+    // Missing observations reserve the entire bounded envelope unless the owner
+    // supplied a smaller estimate; unbounded dimensions remain explicitly null.
+    const reservation = allowance.reservation ?? {
+      tokens: limits.maxTokens ?? null,
+      costUsd: policy.budgets?.reservationUsd ?? limits.maxCostUsd ?? null,
+    };
+    return { runKey, taskKey, reservation: structuredClone(reservation), usage: null,
+      attemptCount: Math.min(allowance.attempts ?? 1, limits.maxAttempts ?? Number.MAX_SAFE_INTEGER),
+    };
+  }
+
+  private allowAttempt(snapshot: AdmissionSnapshot, candidate: AdmissionRecord, now: number): boolean {
+    const accounting = candidate.accounting!;
+    const deny = (reason: string): false => {
+      candidate.state = 'denied'; candidate.reason = reason;
+      candidate.finishedAt = new Date(now).toISOString(); candidate.revision += 1;
+      return false;
+    };
+    const attempts = Object.values(snapshot.records).filter(record => record.accounting?.attemptNumber !== undefined);
+    const taskAttempts = attempts.filter(record => record.accounting!.taskKey === accounting.taskKey);
+    if (taskAttempts.length) {
+      const previous = taskAttempts.sort((a, b) => a.accounting!.attemptNumber! - b.accounting!.attemptNumber!).at(-1)!;
+      if (candidate.allowance?.previousRequestId !== previous.requestId) return deny('new attempt must reference the latest task attempt');
+      if (previous.state !== 'settled') return deny('previous attempt requires proof-checked reconciliation before replacement');
+      const failure = previous.accounting!.failure;
+      const purpose = candidate.allowance?.purpose ?? 'retry';
+      if (purpose === 'retry' || purpose === 'fallback' || failure?.class === 'rate-limit') {
+        if (!failure || !failure.retryable || !['rate-limit', 'unavailable', 'timeout'].includes(failure.class)) return deny('previous failure does not permit automatic retry');
+        if (!(this.policy.managed!.retry?.on ?? ['rate-limit', 'unavailable', 'timeout']).includes(failure.class as 'rate-limit' | 'unavailable' | 'timeout')) return deny(`${failure.class} retries are disabled`);
+      }
+    } else if (candidate.allowance?.previousRequestId) return deny('unknown previous task attempt');
+    for (const key of [accounting.runKey, accounting.taskKey]) {
+      const scope = snapshot.allowances![key]!;
+      if (Date.parse(scope.deadlineAt ?? '') <= now) return deny('cumulative allowance deadline elapsed');
+      const prior = attempts.filter(record => record.accounting!.runKey === key || record.accounting!.taskKey === key);
+      if (scope.limits.maxAttempts !== undefined && prior.reduce((sum, record) => sum + record.accounting!.attemptCount, 0) + accounting.attemptCount > scope.limits.maxAttempts) return deny('cumulative attempt allowance exhausted');
+      for (const [dimension, limit] of [['tokens', scope.limits.maxTokens], ['costUsd', scope.limits.maxCostUsd]] as const) {
+        if (limit === undefined) continue;
+        let used = 0;
+        for (const record of prior) {
+          const value = chargedUsage(record, dimension);
+          if (value === null) return deny(`unknown ${dimension} charge has no finite reservation`);
+          used += value;
+        }
+        const reserved = accounting.reservation[dimension];
+        if (reserved === null || reserved === 0 || used + reserved > limit) return deny(`cumulative ${dimension} reservation exceeds allowance`);
+      }
+    }
+    if (taskAttempts.some(record => Date.parse(record.accounting!.notBefore ?? '') > now)) return false;
+    if (this.policy.managed!.budgets?.unknownCost === 'deny' && accounting.reservation.costUsd === null) return deny('unknown cost is denied by policy');
+    const quotas = candidate.managed?.quotaScope ? [`quota/${encodeURIComponent(candidate.managed.quotaScope)}`]
+      : Object.keys(snapshot.cooldowns ?? {});
+    if (quotas.some(key => Date.parse(snapshot.cooldowns?.[key]?.until ?? '') > now)) return false;
+    return true;
   }
 
   private tryPreempt(snapshot: AdmissionSnapshot, candidate: AdmissionRecord, now: number): void {
@@ -478,8 +716,26 @@ export class SharedHostScheduler {
     if (!Number.isFinite(request.priority)) throw new Error('priority must be finite');
     if (!Number.isFinite(Date.parse(request.submittedAt))) throw new Error('submittedAt must be a timestamp');
     if (request.queueTimeoutMs < 1) throw new Error('queueTimeoutMs must be positive');
+    if (!this.policy.managed && request.allowance) throw new Error('allowance requires managed admission');
     if (!this.policy.managed && request.managed) throw new Error('managed request requires an activated managed policy');
     if (this.policy.managed) {
+      if (request.allowance) {
+        if (request.allowance.runId !== request.orchestratorId || !request.allowance.taskId?.trim()) throw new Error('stable allowance run/task identity is required');
+        if (!Number.isSafeInteger(request.allowance.attempts ?? 1) || (request.allowance.attempts ?? 1) < 1
+          || ((request.allowance.attempts ?? 1) !== 1 && request.managed?.kind !== 'native')) throw new Error('attempt count requires a bounded native loop');
+        if (request.allowance.purpose !== undefined && !['initial', 'retry', 'fallback', 'quality', 'effort', 'review'].includes(request.allowance.purpose)) throw new Error('invalid attempt purpose');
+        validateBudgets(request.allowance.runBudgets);
+        validateBudgets(request.allowance.taskBudgets);
+        const reservation = request.allowance.reservation;
+        if (reservation !== undefined) {
+          if (!reservation || Object.keys(reservation).some(key => key !== 'tokens' && key !== 'costUsd')) throw new Error('invalid allowance reservation');
+          for (const dimension of ['tokens', 'costUsd'] as const) {
+            const value = reservation[dimension];
+            if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value <= 0
+              || (dimension === 'tokens' && !Number.isSafeInteger(value)))) throw new Error('invalid allowance reservation');
+          }
+        }
+      }
       const worker = request.managed;
       if (!worker || !['native', 'external'].includes(worker.kind)) throw new Error('managed worker identity is required');
       if (!Number.isSafeInteger(worker.lowerBound ?? 1) || (worker.lowerBound ?? 1) < 1) throw new Error('lowerBound must be a positive integer');
@@ -548,7 +804,7 @@ function isCanonicalManagedDimension(projectId: string, key: string): boolean {
 function sameManagedRequest(record: AdmissionRecord, request: AdmissionRequest): boolean {
   const { state: _state, revision: _revision, reason: _reason, admittedAt: _admittedAt,
     leaseExpiresAt: _leaseExpiresAt, finishedAt: _finishedAt, preemptedBy: _preemptedBy,
-    attemptGeneration: _attempt, leaseGeneration: _lease, dimensions: _dimensions, reservedSlots: _slots, ...original } = record;
+    attemptGeneration: _attempt, leaseGeneration: _lease, dimensions: _dimensions, reservedSlots: _slots, accounting: _accounting, ...original } = record;
   return canonical(original) === canonical(request);
 }
 
@@ -572,4 +828,48 @@ function sameRequest(record: AdmissionRecord, request: AdmissionRequest): boolea
     && record.environment === request.environment
     && record.provider === request.provider
     && record.runtimeKind === request.runtimeKind;
+}
+
+function validateBudgets(budgets: ManagedBudgets | undefined): void {
+  for (const [key, value] of Object.entries(budgets ?? {})) {
+    if (value === undefined) continue;
+    if (!Number.isFinite(value) || value < 0 || (key === 'maxAttempts' && (!Number.isSafeInteger(value) || value < 1))) {
+      throw new Error('invalid managed allowance ceiling');
+    }
+  }
+}
+
+function projectBudgets(budgets: { tokens?: number; costUsd?: number; wallSeconds?: number } | undefined): ManagedBudgets {
+  return { maxTokens: budgets?.tokens, maxCostUsd: budgets?.costUsd, timeoutSeconds: budgets?.wallSeconds };
+}
+
+function intersectBudgets(...budgets: Array<ManagedBudgets | undefined>): ManagedBudgets {
+  const result: ManagedBudgets = {};
+  for (const budget of budgets) for (const key of ['maxAttempts', 'maxTokens', 'maxCostUsd', 'timeoutSeconds'] as const) {
+    const value = budget?.[key];
+    if (value !== undefined) result[key] = Math.min(result[key] ?? value, value);
+  }
+  return result;
+}
+
+function chargedUsage(record: AdmissionRecord, dimension: 'tokens' | 'costUsd'): number | null {
+  const accounting = record.accounting!;
+  const usage = accounting.usage;
+  const measured = !usage || usage.quality === 'unknown' ? null : dimension === 'costUsd' ? usage.costUsd
+    : usage.inputTokens === null || usage.outputTokens === null || usage.cacheTokens === null || usage.reasoningTokens === null ? null
+      : usage.inputTokens + usage.outputTokens + usage.cacheTokens + usage.reasoningTokens;
+  const reservation = accounting.reservation[dimension];
+  // Uncertain execution can still accrue spend; estimates never refund a reserve.
+  if (record.state !== 'settled' || usage?.quality !== 'reported') {
+    return reservation === null || measured === null ? reservation : Math.max(reservation, measured);
+  }
+  return measured ?? reservation;
+}
+
+function canRefineUsage(previous: WorkerUsage, next: WorkerUsage): boolean {
+  const rank = { unknown: 0, estimated: 1, reported: 2 };
+  if (rank[next.quality] < rank[previous.quality]) return false;
+  if (previous.quality !== 'reported') return true;
+  return (['inputTokens', 'outputTokens', 'cacheTokens', 'reasoningTokens', 'costUsd'] as const)
+    .every(key => previous[key] === null || (next[key] !== null && next[key]! >= previous[key]!));
 }

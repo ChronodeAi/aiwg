@@ -797,6 +797,7 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
   let skipped = 0;
   let failed = 0;
   const managed = cfg?.parallelism?.worker_dispatch && cfg.parallelism.worker_mode === 'managed';
+  const allowanceOwner = managed ? await import('../../serve/shared-host-scheduler.js') : null;
 
   for (const mission of queued) {
     if (mission.mode === 'pty-orchestrator') {
@@ -828,7 +829,12 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
       queueTimeoutMs: managed ? (cfg?.parallelism?.admission?.queueTimeoutSeconds ?? 300) * 1000 : 24 * 60 * 60_000,
       preemptible: false,
       metadata: { missionId: mission.id },
-      ...(managed ? { managed: { kind: 'native' as const } } : {}),
+      ...(managed ? { managed: { kind: 'native' as const },
+        allowance: allowanceOwner!.managedAllowanceFromOwner(session.id, mission.id, {
+          kind: 'ralph', maxIterations: mission.maxIterations, maxTotalTokens: mission.maxTotalTokens,
+          maxTotalCost: mission.maxTotalCost, maxWallClockMinutes: mission.maxWallClockMinutes,
+        }),
+      } : {}),
     });
     mission.admissionRequestId = admissionRequestId;
     mission.admissionSubmittedAt = admissionSubmittedAt;
@@ -848,15 +854,24 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
     }
 
     try {
+      let maxWallClockMinutes = mission.maxWallClockMinutes;
+      if (managed) {
+        const scopes = scheduler.snapshot().allowances!;
+        const deadlines = [scopes[admission.accounting!.runKey]!.deadlineAt, scopes[admission.accounting!.taskKey]!.deadlineAt]
+          .filter((value): value is string => value !== undefined).map(Date.parse);
+        const remainingMs = Math.min(...deadlines) - Date.now();
+        if (remainingMs <= 0) throw new Error('cumulative allowance deadline elapsed before launch');
+        maxWallClockMinutes = deadlines.length ? remainingMs / 60_000 : undefined;
+      }
       const result = await launchExternalRalph(frameworkRoot, projectRoot, {
         objective: mission.objective,
         completionCriteria: mission.completion,
-        maxIterations: mission.maxIterations,
-        maxTotalTokens: mission.maxTotalTokens,
+        maxIterations: managed ? admission.accounting!.attemptCount : mission.maxIterations,
+        maxTotalTokens: managed ? admission.accounting!.reservation.tokens ?? undefined : mission.maxTotalTokens,
         maxOutputTokens: mission.maxOutputTokens,
         maxToolCalls: mission.maxToolCalls,
-        maxTotalCost: mission.maxTotalCost,
-        maxWallClockMinutes: mission.maxWallClockMinutes,
+        maxTotalCost: managed ? admission.accounting!.reservation.costUsd ?? undefined : mission.maxTotalCost,
+        maxWallClockMinutes,
         explorationQuota: mission.explorationQuota,
         budgetStopPolicy: mission.budgetStopPolicy,
         // Defaults for cycle 1; advanced options can be added per-mission later.

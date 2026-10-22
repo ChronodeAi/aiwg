@@ -29,6 +29,8 @@ an ID with different placement identity fails closed.
 |---|---|
 | `queued` | Valid request waiting for global and quota capacity. |
 | `admitted` | Renewable lease granted; dispatch is allowed. |
+| `uncertain` | Managed execution may still be running; capacity stays reserved. |
+| `settled` | Managed stop proof reconciled; capacity released and accounting retained. |
 | `denied` | Policy permanently rejects the request. |
 | `cancelled` | Owning orchestrator cancelled before completion. |
 | `timed-out` | Queue deadline or admission lease elapsed. |
@@ -154,12 +156,93 @@ immediate admissions remain possible. Cancelled, expired, and denied queue entri
 remain terminal on replay. Reusing a request ID with any changed payload fails.
 
 Managed records persist `attemptGeneration`, `leaseGeneration`, `dimensions`, and
-`reservedSlots`. Generations start at one; this slice does not implement fencing
-or settlement. An `uncertain` record retains all reserved capacity and has no
-completion timestamp. Managed preemption cannot free capacity, and the legacy
+`reservedSlots`. Generations start at one; settlement checks the caller and
+stop-evidence generations through the existing Mission lease-mapping verdict.
+An `uncertain` record retains all reserved capacity and has no completion timestamp. Managed preemption cannot free capacity, and the legacy
 `release` API rejects managed records. MC launch failures and terminal/paused Ralph
-status observations retain uncertainty. A later proof-checked settlement API must
-check the current generation before releasing capacity.
+status observations retain uncertainty. Only `settle` with current-generation,
+trusted supervisor termination evidence releases execution capacity. The caller must obtain this evidence from the
+supervision owner; worker claims and status strings are not evidence.
 
 Offline coverage: `test/unit/serve/shared-host-scheduler-managed.test.ts` and
 `test/unit/cli/handlers/mc-managed-admission.test.ts` (T-OG-05/06/08).
+
+## Managed cumulative allowances and quota recovery
+
+Managed admission binds `parallelism.budgets` and `parallelism.retry` into the
+activated policy. `AdmissionRequest.allowance` supplies stable `runId` (equal to
+`orchestratorId`) and `taskId`, optional Mission `spec.budgets` ceilings for each
+scope, and an optional `{ tokens, costUsd }` reservation. Each supplied dimension
+must be positive and finite, or explicitly null. With no explicit reservation,
+the scheduler reserves the effective token envelope and `reservationUsd` or the
+effective cost envelope. An unbounded, unobserved dimension remains null.
+A bounded dimension without a finite reservation cannot launch.
+
+`managedAllowanceFromOwner` translates existing Mission budgets, Ralph
+`maxIterations`/`maxTotalTokens`/`maxTotalCost`/`maxWallClockMinutes`, or Flow
+`ceilings` into this binding. Mission and Flow ceilings bind the run so child
+tasks and reviews share them; an opaque Ralph loop binds its task envelope. MC uses it before launching native Ralph loops.
+A caller without an explicit binding uses its orchestrator and mission/request
+identity; callers replacing an attempt must preserve the original run/task IDs.
+These identities belong to trusted workflow owners, not worker output. Flow's
+worker-value feature handshake continues to reject unsupported runtime bindings;
+the budget conversion does not enable managed Flow execution by itself.
+
+The existing admission file persists `allowances`, `cooldowns`, and per-record
+`accounting`. Run, task, and project ceilings intersect by minimum and never
+increase when another attempt supplies larger limits. Deadlines begin with the
+first binding and include queue/backoff time. Admitting an invocation atomically
+reserves all applicable dimensions and debits the common attempt counter.
+Queued, cancelled-before-launch, and denied requests do not debit attempts.
+Retry defaults are three task attempts and exponential delays from one to sixty
+seconds. Configured ceilings override those defaults.
+
+Quality changes, effort changes, fallback, retry, and review use fresh request
+IDs and the same allowance. `previousRequestId` must identify the latest admitted
+task attempt, which must already be `settled`. Detached native loops reserve their
+bounded iteration count up front (`attemptCount`), intersected with the effective
+attempt ceiling; MC passes that bound and the reserved token/cost and remaining
+wall envelope to the existing launcher. Early completion does not refund this
+conservative attempt debit. The loop still consumes its worker reservation once.
+
+Reservations remain distinct from schema-validated `WorkerUsage`. Null usage
+means not yet observed. Reported, estimated, and unknown observations remain
+queryable on their attempt records. Unknown measurements stay null; settlement
+retains their reservation as a charge. Estimates cannot refund reservations.
+Only confirmed final reported usage can replace a reservation with a measured
+charge, including an explicitly reported zero. Before settlement, uncertainty
+retains the larger measured/reserved charge. Unknown observations may refine to
+estimates/reports; reported observations cannot decrease before settlement.
+Hard spend policies remain rejected with `OG_BUDGET_UNMEASURABLE`: this scheduler
+has no bound enforcing adapter and does not promise to stop upstream overspend.
+
+`recordFailure(requestId, generation, failure)` records a trusted observation;
+`recordRateLimit` is its 429 shorthand. `settle(requestId, generation, health,
+usage, failure?)` can record failure, charge usage, and reconcile termination in
+one transaction. The existing `decideLeaseMapping` derives stop proof from
+validated health and checks the proof's own observer generation independently
+of the supplied generation. Unconfirmed/stale proof retains uncertain capacity.
+Settlement replay is idempotent; changed final usage conflicts. All attempts and
+confirmed stop evidence remain in the same store after capacity is released.
+
+Automatic retry/fallback requires a retryable rate-limit, unavailable, or timeout
+failure permitted by `retry.on`. Authentication, invalid-request, and policy
+failures cannot trigger automatic fallback. Every replacement honors the prior
+task backoff and original deadline/attempt/spend ceilings, including a fallback
+to another account. Routing owners still enforce eligible members and exact pins.
+
+A 429 additionally cools the installation's authority-bound quota scope. Its next
+admission time is the maximum of existing cooldown, valid `resetAt`, and bounded
+exponential backoff. Missing/malformed resets use backoff. Another installation,
+group, task, or caller sharing that quota cannot evade or shorten the cooldown.
+Repeating the same failure observation does not extend/reset it. Native workers
+without quota identity conservatively honor every recorded cooldown. No sleeping
+or hidden retry loop is added to the scheduler; owners reconcile the bounded queue.
+
+Pre-allowance managed snapshots fail closed with a migration/reconciliation
+diagnostic and preserve capacity. They must be reconciled through the authority
+owner before dispatch resumes; this slice supplies no automatic migration or refund.
+
+Offline cases for T-OG-05/06/08/09 are in
+`test/unit/serve/shared-host-scheduler-budgets.test.ts`; MC and existing direct
+contract regressions remain under their existing suites.

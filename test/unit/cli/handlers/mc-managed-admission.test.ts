@@ -136,6 +136,37 @@ describe('T-OG-05/08 MC project admission binding', () => {
     expect(mocks.launch).not.toHaveBeenCalled();
   });
 
+  it('reserves the native loop envelope and launches within intersected project ceilings', async () => {
+    cfg.parallelism!.budgets = { perTask: { tokens: 100, costUsd: 2, wallSeconds: 30 } };
+    cfg.parallelism!.retry = { maxAttempts: 2 };
+    cfg.parallelism!.activation = { revision: 1, ...workerActivationDigests(cfg), snapshotRef: 'synthetic:activation' };
+    const record = session(); Object.assign(record.missions[0]!, {
+      maxIterations: 5, maxTotalTokens: 200, maxTotalCost: 4, maxWallClockMinutes: 1,
+    });
+    files.set(sessionPath, JSON.stringify(record));
+    const { store } = activate();
+    expect((await run()).exitCode).toBe(0);
+    expect(mocks.launch).toHaveBeenCalledWith(root, root, expect.objectContaining({
+      maxIterations: 2, maxTotalTokens: 100, maxTotalCost: 2, maxWallClockMinutes: 0.5,
+    }));
+    expect(store.read().records['mc-synthetic.m-synthetic']!.accounting).toMatchObject({
+      attemptNumber: 1, attemptCount: 2, reservation: { tokens: 100, costUsd: 2 }, usage: null,
+    });
+  });
+
+  it('never drops an elapsed wall deadline while persisting the admitted mission', async () => {
+    cfg.parallelism!.budgets = { perTask: { wallSeconds: 1, costUsd: 1 } };
+    cfg.parallelism!.activation = { revision: 1, ...workerActivationDigests(cfg), snapshotRef: 'synthetic:activation' };
+    const { store } = activate();
+    vi.mocked(fs.writeFile).mockImplementation(async (file: any, data: any) => {
+      files.set(String(file), String(data));
+      vi.setSystemTime(new Date(Date.parse(submittedAt) + 1000));
+    });
+    expect((await run()).exitCode).toBe(1);
+    expect(mocks.launch).not.toHaveBeenCalled();
+    expect(store.read().records['mc-synthetic.m-synthetic']!.state).toBe('uncertain');
+  });
+
   it('keeps a managed launch failure uncertain rather than releasing capacity', async () => {
     const { store } = activate();
     mocks.launch.mockRejectedValue(new Error('synthetic launch failure'));
