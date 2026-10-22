@@ -22,6 +22,15 @@ import { emptyConfig, writeAiwgConfig, getConfigPath, type AiwgConfig } from '..
 import { parseWorkerCommandArgs } from '../../../src/serve/worker-invocation.js';
 import { createWorkerHealthObserver } from '../../../tools/ralph-external/lib/worker-health.mjs';
 import { parseWorkerStatusArgs } from '../../../tools/ralph-external/index.mjs';
+import { ConfigLoader } from '../../../src/models/config-loader.js';
+import { resolveWorkerPlan } from '../../../src/models/resolver.js';
+import { PROVIDER_IDS } from '../../../src/providers/provider-definitions.js';
+import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
+
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: () => process.env.HOME! };
+});
 
 function makeTmpDir(): string {
   const dir = join(tmpdir(), `aiwg-parallelism-section-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
@@ -79,6 +88,7 @@ describe('buildParallelismSection (#1362)', () => {
     // test/unit/models/resolver.test.ts); never the user's home install.
     vi.stubEnv('AIWG_HOME', process.cwd());
     vi.stubEnv('AIWG_CONFIG', join(tmpDir, 'aiwg-user-config'));
+    vi.stubEnv('HOME', tmpDir);
   });
 
   afterEach(() => {
@@ -224,6 +234,7 @@ describe('orchestration groups block (#2893 / #2914)', () => {
     // test/unit/models/resolver.test.ts); never the user's home install.
     vi.stubEnv('AIWG_HOME', process.cwd());
     vi.stubEnv('AIWG_CONFIG', join(tmpDir, 'aiwg-user-config'));
+    vi.stubEnv('HOME', tmpDir);
   });
 
   afterEach(() => {
@@ -541,6 +552,171 @@ After changing project parallelism with \`aiwg config set/reset --project\`, fol
       rmSync(dirA, { recursive: true, force: true });
       rmSync(dirB, { recursive: true, force: true });
     }
+  });
+});
+
+describe('T-OG-07/12/15/19 remaining parallelism policy facts (#2893)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    vi.stubEnv('HOME', tmpDir);
+    vi.stubEnv('AIWG_HOME', process.cwd());
+    vi.stubEnv('AIWG_CONFIG', join(tmpDir, 'user-config'));
+    vi.stubEnv('AIWG_HIDE_PARALLELISM_IN_CONTEXT', '');
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+  });
+
+  function writeFixture(f = workerResolutionFixture()) {
+    writeConfigFileDirect(tmpDir, f.snapshot.config);
+    writeFileSync(join(tmpDir, 'models.json'), JSON.stringify({ version: '2.0', defaults: { workerSelection: f.projectPolicy } }));
+    mkdirSync(join(tmpDir, '.cache/aiwg'), { recursive: true });
+    writeFileSync(join(tmpDir, '.cache/aiwg/model-catalog.v1.json'), JSON.stringify(f.snapshot.catalog));
+    return f;
+  }
+
+  it('G01 renders real cached timestamps and ages without converting a cache read into eligibility', async () => {
+    const f = writeFixture();
+    const now = new Date(Date.parse(f.request.now) + 3600_000);
+    const before = structuredClone(f);
+    const section = await buildParallelismSection(tmpDir, { now: () => now });
+    const selected = resolveWorkerPlan(f.snapshot, { ...f.request, now: now.toISOString() }).selected!;
+    expect(section).toContain(`Cached model observations read at ${now.toISOString()}`);
+    expect(section).toContain(`catalog fetchedAt: ${new Date(f.snapshot.catalog.discovery!.fetchedAt).toISOString()} (3600s old)`);
+    expect(section).toContain(`observedAt: ${new Date(selected.observedAt).toISOString()} (3600s old)`);
+    expect(section).toContain(`verifiedAt: ${new Date(selected.verifiedAt).toISOString()} (3600s old)`);
+    expect(section).toContain('workers cached observations: 2/2 members');
+    expect(section).toContain('no eligibility read is performed by context generation');
+    expect(section).toContain('Ages are measured at this read and grow afterward');
+    expect(f).toEqual(before);
+  });
+
+  it('G02 preserves mixed observation ages and reports missing or ambiguous member evidence as unknown', async () => {
+    const f = workerResolutionFixture();
+    const rows = f.snapshot.catalog.discovery!.instances!.codex.models;
+    rows[1].worker!.observedAt = '2026-10-08T00:00:00Z';
+    writeFixture(f);
+    const deps = { now: () => new Date('2026-10-09T00:00:00Z') };
+    expect(await buildParallelismSection(tmpDir, deps)).toContain('observedAt: 2026-10-07T00:00:00.000Z (172800s old) to 2026-10-08T00:00:00.000Z (86400s old)');
+    rows.push(structuredClone(rows[0]));
+    delete rows[1].worker;
+    writeFixture(f);
+    expect(await buildParallelismSection(tmpDir, deps)).toContain('workers cached observations: 0/2 members; observedAt: unknown; verifiedAt: unknown');
+  });
+
+  it.each(['missing', 'corrupt', 'invalid'] as const)('G03 reports unknown ages for a %s catalog', async kind => {
+    writeFixture();
+    const cache = join(tmpDir, '.cache/aiwg/model-catalog.v1.json');
+    if (kind === 'missing') rmSync(cache);
+    if (kind === 'corrupt') writeFileSync(cache, '{');
+    if (kind === 'invalid') writeFileSync(cache, JSON.stringify({ version: '1', providers: {}, discovery: { fetchedAt: 'invented' } }));
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('catalog fetchedAt: unknown');
+    expect(section).toContain('workers cached observations: 0/2 members; observedAt: unknown; verifiedAt: unknown');
+    expect(section).not.toContain('invented');
+  });
+
+  it('G04 labels future evidence without inventing a nonnegative age and the resolver blocks it', async () => {
+    const f = writeFixture();
+    const now = new Date(Date.parse(f.request.now) - 1000);
+    const section = await buildParallelismSection(tmpDir, { now: () => now });
+    expect(section).toContain('future timestamp; age unavailable');
+    expect(section).toContain('Future-dated evidence is blocked');
+    expect(resolveWorkerPlan(f.snapshot, { ...f.request, now: now.toISOString() }).selected).toBeNull();
+  });
+
+  it('G05 renders merged freshness limits and matches resolver warning/block boundaries', async () => {
+    const f = workerResolutionFixture();
+    f.projectPolicy.freshness = { warnHours: 1, blockHours: 2, policyDays: 3 };
+    writeFixture(f);
+    const models = await new ConfigLoader(tmpDir).load(f.snapshot.config.parallelism);
+    f.snapshot.models = models;
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('observation warning after 1 hours; observation blocked after 2 hours; verification blocked after 3 days');
+    const resolveAt = (hours: number) => resolveWorkerPlan(f.snapshot, {
+      ...f.request, now: new Date(Date.parse(f.request.now) + hours * 3600_000).toISOString(),
+    });
+    expect(resolveAt(1).selected?.diagnostics).toEqual([]);
+    expect(resolveAt(1.5).selected?.diagnostics).toContainEqual(expect.objectContaining({ blocking: false }));
+    expect(resolveAt(2).selected).not.toBeNull();
+    expect(resolveAt(2.01).selected).toBeNull();
+    for (const row of f.snapshot.catalog.discovery!.instances!.codex.models) row.worker!.verifiedAt = '2026-10-03T00:00:00Z';
+    expect(resolveAt(0).selected).toBeNull();
+  });
+
+  it('G06 explains required cross-family review and matches missing, same, unknown and conflicting lineage guards', async () => {
+    const f = writeFixture();
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('reviewer must use a different observed model family from the writer');
+    expect(section).toContain('Different CLI names do not prove different families');
+    expect(section).toContain('direct CLI does not accept review-lineage flags');
+    f.request.requireDifferentFamily = true;
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
+    f.request.reviewOf = { ...structuredClone(f.observation), cliId: 'muse' };
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
+    f.snapshot.catalog.discovery!.instances!.codex.models[1].worker!.family = 'independent-family';
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected?.member).toBe('alternate');
+    f.request.reviewOf.family = 'unknown';
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
+    f.request.reviewOf = { ...structuredClone(f.observation), conflicts: [{ field: '/family', evidence: ['a', 'b'].map(value => ({
+      value, source: 'fixture:family', pointer: '/family', observedAt: f.request.now, digest: f.observation.provenance[0].digest,
+    })) }] };
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
+    const argv = ['--role', 'coding', '--task', 'implementation', '--group', 'workers', '--brief', '/tmp/brief', '--workdir', '/tmp/tree', '--final-output', '/tmp/final'];
+    for (const flag of ['--review-of', '--require-different-family']) expect(() => parseWorkerCommandArgs([...argv, flag, 'synthetic'])).toThrow('Unsupported');
+  });
+
+  it.each(['groupCaps', 'memberCaps', 'cliCaps', 'modelCaps', 'quotaCaps'] as const)('G07 renders %s and matches the resolver minimum for local processing', async field => {
+    const f = workerResolutionFixture();
+    const p = f.snapshot.config.parallelism!;
+    p.max_parallel_subagents = 12;
+    p.groups!.workers.maxParallel = 10;
+    p.clis = { codex: { adapter: 'providers:codex', accountScope: 'synthetic', quotaScope: 'local-shared' } };
+    for (const row of f.snapshot.catalog.discovery!.instances!.codex.models) row.worker!.dataUse.processing = 'local';
+    const keys = { groupCaps: 'workers', memberCaps: 'workers/primary', cliCaps: 'codex', modelCaps: 'vendor/synthetic%2Fa%25b', quotaCaps: 'local-shared' };
+    p.admission = Object.fromEntries(Object.entries(keys).map(([name, key]) => [name, { [key]: name === field ? 1 : 9 }]));
+    writeFixture(f);
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain(`${field}: ${keys[field]}=1`);
+    expect(section).toContain('Local/self-hosted models obey these same ceilings');
+    expect(section).toContain('Tier 0 conductors must self-count active workers');
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected?.effectiveMaxParallel).toBe(1);
+    f.request.maxParallel = 0;
+    expect(section).toContain('a current/request capacity ceiling of zero blocks selection');
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
+  });
+
+  it.each(PROVIDER_IDS)('G08 renders identical group policy facts for conductor %s', async provider => {
+    const f = writeFixture();
+    const deps = { now: () => new Date(f.request.now) };
+    const baseline = await buildParallelismSection(tmpDir, deps);
+    f.snapshot.config.providers = [provider];
+    writeFixture(f);
+    const section = await buildParallelismSection(tmpDir, deps);
+    const groupBlock = (text: string) => text.slice(text.indexOf('### Orchestration groups'));
+    expect(groupBlock(section)).toBe(groupBlock(baseline));
+    const original = `Operator introduction\n${baseline}\nOperator closing text`;
+    const replaced = replaceOrAppendParallelismBlock(original, section);
+    expect(replaced).toContain('Operator introduction');
+    expect(replaced).toContain('Operator closing text');
+    expect(replaced.split(PARALLELISM_BLOCK_START)).toHaveLength(2);
+  });
+
+  it('G09 hiding guidance leaves resolver review and capacity guards intact and reads no catalog', async () => {
+    const f = writeFixture();
+    const readCatalog = vi.fn();
+    vi.stubEnv('AIWG_HIDE_PARALLELISM_IN_CONTEXT', '1');
+    expect(await buildParallelismSection(tmpDir, { readCatalog })).toBe('');
+    expect(readCatalog).not.toHaveBeenCalled();
+    f.request.requireDifferentFamily = true;
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
+    delete f.request.requireDifferentFamily;
+    f.request.maxParallel = 0;
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
   });
 });
 
