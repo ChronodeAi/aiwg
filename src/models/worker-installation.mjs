@@ -663,7 +663,9 @@ async function loadQualifiedModules({ registry, modules, workerWritableRoots, pl
     for (const id of entry.adapterIds) {
       const builtinConflict = canonicalIds.has(id) ? false : providerRegistry.has(id);
       if (ids.has(id) || ((builtinConflict || installedModules.has(inspectedModule.key))
-        && installedModules.get(id) !== inspectedModule.key)) throw new Error(`Duplicate worker adapter ID: ${id}`);
+        && installedModules.get(id) !== inspectedModule.key)) {
+        throw Object.assign(new Error(`Duplicate worker adapter ID: ${id}`), { code: 'WORKER_ADAPTER_CONFLICT' });
+      }
       ids.add(id);
     }
     inspected.push(inspectedModule);
@@ -866,55 +868,81 @@ export async function recordWorkerInstallation(instance, options) {
 export async function loadRecordedWorkerInstallations({ registry, cwd, policy, parallelism, storePath, storeDigest }) {
   const { WorkerPolicyError, parseProviderModelCapabilities } = await import('./provider-policy.js');
   const { qualificationDigest } = await import('./qualification-digest.mjs');
-  const fail = () => new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', 'Trusted installation qualification is required');
-  const filename = storePath ?? installationStorePath();
+  // Only fixed stage codes and bounded record indexes may leave this boundary.
+  // Underlying errors can contain probe output, environment values or paths.
+  const rejections = [];
+  const fail = () => new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED',
+    `Trusted installation qualification is required (${[...new Set(rejections.map(row => row.reason))].join(', ')})`,
+    { rejections });
+  let reason = 'store-binding';
+  let filename;
   let stored, digest;
   try {
+    filename = storePath ?? installationStorePath();
     if (!path.isAbsolute(filename) || (storePath !== undefined && !/^sha256:[a-f0-9]{64}$/.test(storeDigest ?? ''))) throw fail();
+    reason = 'store-untrusted';
     await assertTrustedStore(filename, [cwd]);
+    reason = 'store-record';
     ({ stored, digest } = await readInstallationStore(filename, storeDigest));
   }
-  catch { throw fail(); }
+  catch { rejections.push({ registration: null, reason }); throw fail(); }
   const installations = {};
   const drivers = {};
   const observations = {};
   const resolvedRegistry = structuredClone(registry);
   const counts = new Map();
   for (const record of stored.registrations) counts.set(record?.cli, (counts.get(record?.cli) ?? 0) + 1);
-  for (const record of stored.registrations) {
+  for (const [registration, record] of stored.registrations.entries()) {
+    reason = 'record-identity';
     try {
       const { cli, binding, adapter } = record;
       if (!/^[a-z][a-z0-9-]{0,62}$/.test(cli) || counts.get(cli) !== 1) throw fail();
       const installation = { ...record.installation, adapter, now: Date.now(), environment: {} };
+      reason = 'environment-name';
       if (record.installation.environment && Object.keys(record.installation.environment).length) throw fail();
       for (const name of installation.environmentNames ?? []) {
         if (typeof name !== 'string' || process.env[name] === undefined) throw fail();
         installation.environment[name] = process.env[name];
       }
+      reason = 'binding-mismatch';
       if (binding.profile !== installation.profile || binding.cliVersion !== installation.cliVersion
         || binding.accountScope !== installation.accountScope
-        || qualificationDigest(binding.boundary) !== qualificationDigest(installation.boundary)
-        || qualificationDigest(policy) !== installation.effectiveConfigDigest) throw fail();
+        || qualificationDigest(binding.boundary) !== qualificationDigest(installation.boundary)) throw fail();
+      reason = 'effective-config-digest';
+      if (qualificationDigest(policy) !== installation.effectiveConfigDigest) throw fail();
+      reason = 'evidence';
       const proof = adapter.invocationProfiles?.[binding.profile]?.installationQualification;
       if (!proof || ['scopeDigest', 'fixtureDigest', 'verifiedAt', 'evidenceRef'].some(key => proof[key] !== installation.evidence?.[key])) throw fail();
       // Reject expired/unbound negative observations before any factory import.
       const { requiredWorkerControls, isOperatorQualifiedWorkerAdapter } = await import('./provider-policy.js');
       if (!isOperatorQualifiedWorkerAdapter(adapter)) installation.requiredControls = requiredWorkerControls(installation);
       await assertWorkerInstallationEvidence(installation, proof.scopeDigest);
+      reason = 'store-untrusted';
       await assertTrustedStore(filename, installation.workerWritableRoots);
+      reason = 'adapter-metadata';
       const candidateRegistry = structuredClone(resolvedRegistry);
       if (candidateRegistry.providers[adapter.id]) candidateRegistry.providers[adapter.id].workerAdapter = adapter;
       else { candidateRegistry.workerAdapters ??= {}; candidateRegistry.workerAdapters[adapter.id] = adapter; }
       parseProviderModelCapabilities(candidateRegistry);
       // The loader validates package identity, bytes and static exports BEFORE import.
       // Only this installation's metadata is needed; unrelated absent modules do not block it.
-      const loadingRegistry = structuredClone(registry);
-      for (const provider of Object.values(loadingRegistry.providers)) delete provider.workerAdapter;
-      loadingRegistry.workerAdapters = { [adapter.id]: adapter };
+      // Preserve the canonical provider slot used to distinguish upgrades from ID conflicts.
+      const loadingRegistry = structuredClone(candidateRegistry);
+      const canonical = loadingRegistry.providers[adapter.id]?.workerAdapter?.id === adapter.id;
+      for (const [name, provider] of Object.entries(loadingRegistry.providers)) {
+        if (canonical && name === adapter.id) provider.workerAdapter = adapter;
+        else delete provider.workerAdapter;
+      }
+      loadingRegistry.workerAdapters = canonical ? {} : { [adapter.id]: adapter };
+      reason = 'module-registration';
       await loadInstalledWorkerAdapters({ registry: loadingRegistry, modules: installation.modules,
         workerWritableRoots: installation.workerWritableRoots, platform: process.platform });
+      reason = 'binary-identity';
       const instance = createProvider(adapter.id);
-      const { scope } = await recheckWorkerInstallation(instance, installation);
+      const scope = await inspectWorkerInstallation(instance, installation);
+      reason = 'scope-digest';
+      await assertWorkerInstallationEvidence(installation, scope.scopeDigest);
+      reason = 'binary-identity';
       if (parallelism && isOperatorQualifiedWorkerAdapter(adapter)) {
         const { resolveWorkerGroupInstallation } = await import('../config/aiwg-config.js');
         const configured = resolveWorkerGroupInstallation(parallelism, cli, candidateRegistry);
@@ -931,15 +959,19 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, p
         }
         if (!executable || await realpath(executable) !== scope.binary.realpath) throw fail();
       }
+      reason = 'scope-digest';
       if (scope.scopeDigest !== proof.scopeDigest) throw fail();
       // A launcher can keep the same bytes while its CLI payload is updated.
       // Reuse the bounded, credential-free doctor probe before granting authority.
+      reason = 'version';
       const { version } = await boundedVersionProbe(scope.binary.realpath,
         adapter.invocation.versionArgv, workerVersionProbeEnvironment(), cwd,
         workerVersionProbeDefaults.timeoutMs, workerVersionProbeDefaults.maxBytes,
         adapter.invocation.versionPattern);
-      if (version !== binding.cliVersion
-        || (await inspectWorkerInstallation(instance, installation)).scopeDigest !== scope.scopeDigest) throw fail();
+      if (version !== binding.cliVersion) throw fail();
+      reason = 'scope-digest';
+      if ((await inspectWorkerInstallation(instance, installation)).scopeDigest !== scope.scopeDigest) throw fail();
+      reason = 'driver';
       const profile = adapter.invocationProfiles[binding.profile];
       let mcpRegistry;
       if (profile.transport === 'mcp') {
@@ -979,8 +1011,15 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, p
       installations[cli] = structuredClone(binding);
       if (record.modelObservations) observations[cli] = structuredClone(record.modelObservations);
       Object.assign(resolvedRegistry, candidateRegistry);
-    } catch { /* One missing/changed installation cannot grant authority or hide qualified peers. */ }
+    } catch (error) {
+      // One rejected installation cannot grant authority or hide qualified peers.
+      rejections.push({ registration, reason: reason === 'module-registration' && error?.code === 'WORKER_ADAPTER_CONFLICT'
+        ? 'adapter-conflict' : reason });
+    }
   }
-  if (!Object.keys(installations).length) throw fail();
+  if (!Object.keys(installations).length) {
+    if (!rejections.length) rejections.push({ registration: null, reason: 'no-records' });
+    throw fail();
+  }
   return { registry: resolvedRegistry, installations, drivers, observations };
 }

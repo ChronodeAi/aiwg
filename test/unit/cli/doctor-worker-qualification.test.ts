@@ -73,18 +73,110 @@ const result = await ({models: modelsHandler, doctor: doctorHandler})[command].e
 if (result.message) console.error(result.message);
 process.exitCode = result.exitCode;
 `);
-  const run = async (args: string[], cwd = project) => {
+  const runNode = async (args: string[], cwd = project) => {
     try {
-      const result = await exec(process.execPath, [entry, ...args], { cwd, env, timeout: 30000, maxBuffer: 1024 * 1024 });
+      const result = await exec(process.execPath, args, { cwd, env, timeout: 30000, maxBuffer: 1024 * 1024 });
       return { code: 0, ...result };
     } catch (error: any) { return { code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
   };
+  const run = (args: string[], cwd = project) => runNode([entry, ...args], cwd);
   const resolve = () => run(['models', 'resolve', '--role', 'coding', '--task', 'implementation', '--group', 'workers',
     '--brief', brief, '--workdir', project, '--final-output', path.join(project, 'result.json'), '--format', 'json']);
-  return { root, project, config, binary, installed, writeCli, run, resolve };
+  return { root, project, config, binary, installed, writeCli, run, runNode, resolve };
 }
 
 describe('doctor worker qualification through the public CLI (fake CLIs only)', () => {
+  it('loads and revalidates an eligible plan through the launcher after builtin Codex registration', async () => {
+    const f = await fixture(false, true);
+    const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    expect(qualified.code, qualified.stderr).toBe(0);
+    expect(JSON.parse(qualified.stdout).qualification.status).toBe('recorded');
+    const script = path.join(f.root, 'launcher-check.mjs');
+    const planPath = path.join(f.root, 'plan.json');
+    await writeFile(script, `import { mkdir, writeFile } from 'node:fs/promises';
+import { loadWorkerInputs } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'src/cli/handlers/models.ts')).href)};
+import { hasProvider } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'src/models/worker-installation.mjs')).href)};
+const context = { cwd: process.cwd(), args: [], rawArgs: [], frameworkRoot: ${JSON.stringify(f.installed)} };
+if (process.argv[2] === 'seed') {
+  if (hasProvider('codex')) throw new Error('Unexpected builtin registration before resolve');
+  const { snapshot } = await loadWorkerInputs(context);
+  const directory = process.env.HOME + '/.cache/aiwg';
+  await mkdir(directory, { recursive: true });
+  await writeFile(directory + '/model-catalog.v1.json', JSON.stringify(snapshot.catalog));
+} else {
+  await import(${JSON.stringify(pathToFileURL(path.join(f.installed, 'tools/ralph-external/lib/codex-adapter.mjs')).href)});
+  if (!hasProvider('codex')) throw new Error('Builtin Codex was not registered');
+  const { SessionLauncher } = await import(${JSON.stringify(pathToFileURL(path.join(f.installed, 'tools/ralph-external/session-launcher.mjs')).href)});
+  let loaded = false;
+  let spawned = false;
+  try {
+    await new SessionLauncher().launchWorker({ invocationPath: ${JSON.stringify(planPath)}, runDir: process.cwd(),
+      loadInputs: async () => { const inputs = await loadWorkerInputs(context); loaded = true; return inputs; },
+      launchIsolated: () => { spawned = true; throw new Error('Unexpected worker spawn'); } });
+    throw new Error('Expected invalid run directory refusal');
+  } catch (error) {
+    if (error.message !== 'Worker run directory must be fresh, empty, private and owned') throw error;
+  }
+  console.log(JSON.stringify({ loaded, spawned }));
+}
+`);
+    expect((await f.runNode([script, 'seed'])).code).toBe(0);
+    const resolved = await f.resolve();
+    expect(resolved.code, resolved.stdout).toBe(0);
+    expect(JSON.parse(resolved.stdout)).toMatchObject({ status: 'eligible', invocation: { readiness: 'launchable' } });
+    await writeFile(planPath, resolved.stdout, { mode: 0o600 });
+    const launched = await f.runNode([script, 'launch']);
+    expect(launched.code, launched.stderr).toBe(0);
+    expect(JSON.parse(launched.stdout)).toEqual({ loaded: true, spawned: false });
+    const storePath = path.join(f.config, 'worker-installations.json');
+    const store = JSON.parse(await readFile(storePath, 'utf8'));
+    store.registrations[0].installation.environment = { AIWG_SYNTHETIC_PRIVATE: 'synthetic-private-content' };
+    await writeFile(storePath, JSON.stringify(store));
+    const refused = await f.runNode([script, 'launch']);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain('OG_ADAPTER_UNQUALIFIED');
+    expect(refused.stderr).toContain('environment-name');
+    expect(refused.stderr).not.toContain('synthetic-private-content');
+  });
+
+  it('refuses a non-canonical workerAdapters entry claiming a pre-registered builtin id', async () => {
+    const f = await fixture();
+    expect((await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json'])).code).toBe(0);
+    const script = path.join(f.root, 'conflicting-adapter.mjs');
+    await writeFile(script, `import { readFile } from 'node:fs/promises';
+import ${JSON.stringify(pathToFileURL(path.join(f.installed, 'tools/ralph-external/lib/codex-adapter.mjs')).href)};
+import { loadInstalledWorkerAdapters, loadRecordedWorkerInstallations, createProvider } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'src/models/worker-installation.mjs')).href)};
+import { loadProviderModelCapabilities } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'src/models/provider-policy.ts')).href)};
+import { ConfigLoader } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'src/models/config-loader.ts')).href)};
+import { readAiwgConfig } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'src/config/aiwg-config.ts')).href)};
+const { registrations: [record] } = JSON.parse(await readFile(${JSON.stringify(path.join(f.config, 'worker-installations.json'))}, 'utf8'));
+const registry = structuredClone(loadProviderModelCapabilities());
+for (const provider of Object.values(registry.providers)) delete provider.workerAdapter;
+registry.workerAdapters = { imposter: record.adapter };
+const builtin = createProvider('codex').constructor;
+try {
+  await loadInstalledWorkerAdapters({ registry, modules: record.installation.modules,
+    workerWritableRoots: record.installation.workerWritableRoots });
+  throw new Error('Unexpected conflicting registration');
+} catch (error) {
+  if (error.code !== 'WORKER_ADAPTER_CONFLICT' || createProvider('codex').constructor !== builtin) throw error;
+  console.log(error.code);
+}
+const config = await readAiwgConfig(process.cwd());
+const models = await new ConfigLoader(process.cwd()).load(config.parallelism);
+try {
+  await loadRecordedWorkerInstallations({ registry, cwd: process.cwd(), policy: models.defaults.workerSelection });
+  throw new Error('Unexpected promotion of a conflicting workerAdapters entry');
+} catch (error) {
+  if (error.code !== 'OG_ADAPTER_UNQUALIFIED' || error.details?.rejections?.[0]?.reason !== 'adapter-metadata') throw error;
+  console.log(error.code);
+}
+`);
+    const result = await f.runNode([script]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout.trim().split('\n')).toEqual(['WORKER_ADAPTER_CONFLICT', 'OG_ADAPTER_UNQUALIFIED']);
+  });
+
   it.each([false, true])('checks the configured tuple without launching a worker (build failure: %s)', async fail => {
     const f = workerResolutionFixture();
     const root = await mkdtemp(path.join(os.tmpdir(), 'worker-build-check-')); roots.push(root);
