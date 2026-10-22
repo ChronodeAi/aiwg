@@ -68,6 +68,8 @@ export interface RalphLaunchOptions {
   verbose?: boolean;
   /** Write timestamped log to this file path (in addition to daemon-output.log) */
   logFile?: string;
+  /** Current managed reservation; absent on direct and legacy launches. */
+  managedAdmission?: { requestId: string; generation: number };
 }
 
 /**
@@ -79,6 +81,7 @@ export interface RalphLaunchResult {
   pid: number;
   message: string;
   registryPath: string;
+  execution?: { pid: number; startedAt: string };
 }
 
 /**
@@ -99,6 +102,7 @@ export interface LoopRegistryEntry {
   sessionStderrFile?: string;
   promptFile?: string;
   provider?: string;
+  managedAdmission?: { requestId: string; generation: number; execution?: { pid: number; startedAt: string }; processIdentity?: Record<string, unknown> };
 }
 
 /**
@@ -282,6 +286,9 @@ export async function launchExternalRalph(
   await assertRalphParallelismCap(projectRoot);
 
   const loopId = options.loopId || generateLoopId(options.objective);
+  if (loadLauncherRegistry(projectRoot).loops[loopId]?.managedAdmission) {
+    throw new Error('Managed loop identity cannot be relaunched before admission reconciliation');
+  }
   const loopDir = join(registryDir, 'loops', loopId);
   mkdirSync(loopDir, { recursive: true });
 
@@ -293,6 +300,17 @@ export async function launchExternalRalph(
 
   // Build arguments
   const args = buildArgs(options);
+
+  if (options.managedAdmission) {
+    const registry = loadLauncherRegistry(projectRoot);
+    registry.loops[loopId] = { loopId, pid: 0, objective: options.objective,
+      completionCriteria: options.completionCriteria, status: 'running',
+      startedAt: new Date().toISOString(), lastUpdate: new Date().toISOString(),
+      iteration: 0, maxIterations: options.maxIterations || 5, outputFile,
+      sessionStdoutFile, sessionStderrFile, promptFile, provider: options.provider,
+      managedAdmission: { ...options.managedAdmission } };
+    saveLauncherRegistry(projectRoot, registry);
+  }
 
   // Create output file descriptors
   const { openSync, closeSync } = await import('fs');
@@ -330,6 +348,24 @@ export async function launchExternalRalph(
     });
   }
 
+  let managedAdmission: LoopRegistryEntry['managedAdmission'];
+  if (options.managedAdmission) {
+    const { sampleWorkerIdentity, createWorkerIdentityCapture } = await import(join(frameworkRoot, 'tools', 'ralph-external', 'process-monitor.mjs'));
+    const capture = createWorkerIdentityCapture({ timeoutMs: 250 });
+    const identityDeadline = process.hrtime.bigint() + 250_000_000n;
+    let identity;
+    while (!identity && process.hrtime.bigint() < identityDeadline) {
+      if ((child.exitCode !== null && child.exitCode !== undefined) || child.signalCode) break;
+      identity = capture.observe(sampleWorkerIdentity(pid));
+      if (!identity) await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    if (!identity?.bootId || !identity.startTicks || !Number.isSafeInteger(identity.uid)) {
+      throw new Error('managed Ralph execution identity unavailable; reconcile uncertain launch');
+    }
+    managedAdmission = { ...options.managedAdmission,
+      execution: { pid, startedAt: `${identity.bootId}:${identity.startTicks}:${identity.uid}` }, processIdentity: identity };
+  }
+
   // Record the loop in our launcher registry (backup to the external-multi-loop-state-manager)
   const launcherRegistry = loadLauncherRegistry(projectRoot);
   launcherRegistry.loops[loopId] = {
@@ -347,6 +383,7 @@ export async function launchExternalRalph(
     sessionStderrFile,
     promptFile,
     provider: options.provider,
+    ...(managedAdmission ? { managedAdmission } : {}),
   };
   saveLauncherRegistry(projectRoot, launcherRegistry);
 
@@ -356,6 +393,7 @@ export async function launchExternalRalph(
     pid,
     message: `agent loop started (${loopId}). Check status: aiwg ralph-status`,
     registryPath: getRegistryPath(projectRoot),
+    ...(managedAdmission ? { execution: managedAdmission.execution } : {}),
   };
 }
 
@@ -457,7 +495,7 @@ export function getLoopStatuses(
     }
 
     // Auto-clean completed entries if requested
-    if (options.autoCleanCompleted && (entry.status === 'completed')) {
+    if (options.autoCleanCompleted && !entry.managedAdmission && (entry.status === 'completed')) {
       cleanupCompletedLoop(projectRoot, loopId);
       registryDirty = true;
       continue; // Don't include in statuses
@@ -496,6 +534,8 @@ export function abortLoop(projectRoot: string, loopId?: string): { success: bool
     return { success: false, message: `Loop not found: ${loopId}` };
   }
 
+  if (entry.managedAdmission) return { success: false, message: 'Managed loop cancellation requires its current admission generation' };
+
   if (!isProcessAlive(entry.pid)) {
     entry.status = 'aborted';
     saveLauncherRegistry(projectRoot, registry);
@@ -514,6 +554,29 @@ export function abortLoop(projectRoot: string, loopId?: string): { success: bool
       message: `Failed to kill process ${entry.pid}: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+}
+
+/** Signal only the birth identity bound to this current managed reservation.
+ * Native Ralph exit/status cannot prove descendant termination, so cancellation
+ * always leaves its admission reservation uncertain for explicit reconciliation.
+ */
+export async function cancelManagedRalph(
+  frameworkRoot: string, projectRoot: string, loopId: string,
+  binding: { requestId: string; generation: number; execution: { pid: number; startedAt: string } },
+): Promise<{ state: 'uncertain'; signalled: boolean }> {
+  const entry = loadLauncherRegistry(projectRoot).loops[loopId];
+  const owned = entry?.managedAdmission;
+  if (!owned?.execution || !owned.processIdentity || owned.requestId !== binding.requestId || owned.generation !== binding.generation
+    || owned.execution.pid !== binding.execution.pid || owned.execution.startedAt !== binding.execution.startedAt) {
+    return { state: 'uncertain', signalled: false };
+  }
+  const { sampleWorkerIdentity } = await import(join(frameworkRoot, 'tools', 'ralph-external', 'process-monitor.mjs'));
+  const identity = sampleWorkerIdentity(owned.execution.pid);
+  const expected = owned.processIdentity;
+  if (!identity || ['pid', 'uid', 'bootId', 'startTicks', 'executable', 'pgid', 'sessionId']
+    .some(key => identity[key] !== expected[key])) return { state: 'uncertain', signalled: false };
+  const { signalOwnedWorker } = await import(join(frameworkRoot, 'tools', 'ralph-external', 'session-launcher.mjs'));
+  return { state: 'uncertain', signalled: signalOwnedWorker(identity, 'SIGTERM') };
 }
 
 /**
@@ -575,6 +638,8 @@ export async function resumeLoop(
       exitCode: EXIT_CODES.USAGE,
     });
   }
+
+  if (entry.managedAdmission) throw new Error('Managed loops require policy and admission reconciliation before resume');
 
   const loopDir = join(registryDir, 'loops', targetLoopId);
   const outputFile = join(loopDir, 'daemon-output.log');
@@ -643,6 +708,9 @@ export function cleanupCompletedLoop(
   const registryDir = getRegistryDir(projectRoot);
   const loopDir = join(registryDir, 'loops', loopId);
   const preserved: string[] = [];
+  if (loadLauncherRegistry(projectRoot).loops[loopId]?.managedAdmission) {
+    return { success: false, message: 'Managed loop artifacts require admission reconciliation before cleanup', preserved };
+  }
 
   // Preserve completion reports before deleting the loop directory
   if (existsSync(loopDir)) {
@@ -774,7 +842,7 @@ export function cleanupRegistry(projectRoot: string, keepDays: number = 7): numb
   let cleaned = 0;
 
   for (const [loopId, entry] of Object.entries(registry.loops)) {
-    if (entry.status !== 'running') {
+    if (entry.status !== 'running' && !entry.managedAdmission) {
       const lastUpdate = new Date(entry.lastUpdate).getTime();
       if (lastUpdate < cutoff) {
         delete registry.loops[loopId];

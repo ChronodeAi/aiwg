@@ -141,7 +141,7 @@ describe('T-OG-05/08/09 cumulative managed allowances', () => {
   });
 
   it('requires latest-task reconciliation and fences settlement proof independently of caller generation', () => {
-    const { scheduler } = setup(); scheduler.submit(request('a')); scheduler.cancel('a');
+    const { scheduler } = setup(); scheduler.submit(request('a')); scheduler.cancel('a', 1);
     expect(scheduler.submit(next('blocked', 'a')).state).toBe('denied');
     expect(() => scheduler.settle('a', 0, health(), usage())).toThrow(/stale/);
     expect(scheduler.settle('a', 1, health({ observerGeneration: 0 }), usage()).state).toBe('uncertain');

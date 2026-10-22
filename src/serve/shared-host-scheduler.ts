@@ -22,7 +22,7 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { assertMissionWorkerHandoff, assertValidWorkerPayload, decideLeaseMapping } from '../mission-protocol/codecs.js';
+import { advanceProgressWatermark, assertMissionWorkerHandoff, assertValidWorkerPayload, decideLeaseMapping, projectHealthTrace } from '../mission-protocol/codecs.js';
 import { isCanonicalWorkerModelKey } from '../models/provider-policy.js';
 import type { CanonicalMission, WorkerExecution, WorkerHealthSummary, WorkerUsage } from '../mission-protocol/types.js';
 import type { ParallelismConfig } from '../config/aiwg-config.js';
@@ -211,6 +211,19 @@ export interface AdmissionRecord extends AdmissionRequest {
   dimensions?: string[];
   reservedSlots?: number;
   accounting?: ManagedAttemptAccounting;
+  /** Durable dispatch boundary: a claimed launch is never automatically replayed. */
+  launchClaimedAt?: string;
+  execution?: ManagedExecutionIdentity;
+  health?: WorkerHealthSummary;
+  lastProgressAt?: string | null;
+  /** Final evidence is separate from supervisor stop evidence and task acceptance. */
+  finalEvidence?: { health: WorkerHealthSummary; usage?: WorkerUsage };
+}
+
+export interface ManagedExecutionIdentity {
+  pid: number;
+  /** OS process birth identity, including host boot identity; never PID alone. */
+  startedAt: string;
 }
 
 export interface SharedHostPolicy {
@@ -406,10 +419,15 @@ export class SharedHostScheduler {
     });
   }
 
-  renew(requestId: string): AdmissionRecord {
+  renew(requestId: string, generation?: number): AdmissionRecord {
     return this.store.transact(snapshot => {
       this.assertPolicyBinding(snapshot);
       const record = this.required(snapshot, requestId);
+      if (this.policy.managed) {
+        this.assertGeneration(record, generation);
+        this.reconcile(snapshot);
+        if (record.state === 'uncertain') return structuredClone(record);
+      }
       if (record.state !== 'admitted') throw new Error(`cannot renew ${record.state} admission`);
       record.leaseExpiresAt = new Date(this.clock() + this.policy.leaseTtlMs).toISOString();
       record.revision += 1;
@@ -431,10 +449,11 @@ export class SharedHostScheduler {
     });
   }
 
-  cancel(requestId: string): AdmissionRecord {
+  cancel(requestId: string, generation?: number): AdmissionRecord {
     return this.store.transact(snapshot => {
       this.assertPolicyBinding(snapshot);
       const record = this.required(snapshot, requestId);
+      if (this.policy.managed) this.assertGeneration(record, generation);
       if (terminalStates.has(record.state)) return structuredClone(record);
       record.state = this.policy.managed && (record.state === 'admitted' || record.state === 'uncertain') ? 'uncertain' : 'cancelled';
       record.reason = 'cancelled by orchestrator';
@@ -445,21 +464,134 @@ export class SharedHostScheduler {
     });
   }
 
+  /** Persist before spawning. A crash on either side requires reconciliation. */
+  claimLaunch(requestId: string, generation: number): AdmissionRecord {
+    return this.store.transact(snapshot => {
+      this.assertPolicyBinding(snapshot);
+      const record = this.required(snapshot, requestId);
+      this.assertGeneration(record, generation);
+      if (record.state !== 'admitted' || Date.parse(record.leaseExpiresAt!) <= this.clock()) throw new Error('launch requires a current admitted lease');
+      if (!record.accounting || [record.accounting.runKey, record.accounting.taskKey].some(key =>
+        Date.parse(snapshot.allowances?.[key]?.deadlineAt ?? '') <= this.clock())) throw new Error('cumulative allowance deadline elapsed before launch');
+      if (record.launchClaimedAt) throw new Error('launch already claimed; reconcile before dispatch');
+      record.launchClaimedAt = new Date(this.clock()).toISOString();
+      record.revision += 1;
+      return structuredClone(record);
+    });
+  }
+
+  bindExecution(requestId: string, generation: number, execution: ManagedExecutionIdentity): AdmissionRecord {
+    if (!Number.isSafeInteger(execution.pid) || execution.pid <= 0 || typeof execution.startedAt !== 'string' || !execution.startedAt.trim()) {
+      throw new Error('execution requires a PID and OS process birth identity');
+    }
+    return this.store.transact(snapshot => {
+      this.assertPolicyBinding(snapshot);
+      const record = this.required(snapshot, requestId);
+      this.assertGeneration(record, generation);
+      if (!record.launchClaimedAt || !['admitted', 'uncertain'].includes(record.state)) throw new Error('execution requires a claimed launch');
+      if (record.execution) {
+        if (canonical(record.execution) !== canonical(execution)) throw new Error('execution identity conflicts; possible PID reuse');
+        return structuredClone(record);
+      }
+      record.execution = structuredClone(execution);
+      record.revision += 1;
+      return structuredClone(record);
+    });
+  }
+
+  stop(requestId: string, generation: number, reason: 'cancel' | 'disconnect' | 'preempt' | 'observer-loss' = 'cancel'): AdmissionRecord {
+    if (!['cancel', 'disconnect', 'preempt', 'observer-loss'].includes(reason)) throw new Error('invalid stop reason');
+    return this.store.transact(snapshot => {
+      this.assertPolicyBinding(snapshot);
+      const record = this.required(snapshot, requestId);
+      this.assertGeneration(record, generation);
+      if (terminalStates.has(record.state)) return structuredClone(record);
+      record.state = record.state === 'queued' ? 'cancelled' : 'uncertain';
+      record.reason = `${reason}; termination is uncertain`;
+      if (record.state === 'cancelled') record.finishedAt = new Date(this.clock()).toISOString();
+      record.revision += 1;
+      this.reconcile(snapshot);
+      return structuredClone(record);
+    });
+  }
+
+  disconnect(requestId: string, generation: number): AdmissionRecord {
+    return this.stop(requestId, generation, 'disconnect');
+  }
+
+  /** Supervision observations may advance progress, but never release capacity. */
+  observeHealth(requestId: string, generation: number, health: WorkerHealthSummary): AdmissionRecord {
+    assertValidWorkerPayload('workerHealthSummary', health);
+    return this.store.transact(snapshot => {
+      this.assertPolicyBinding(snapshot);
+      const record = this.required(snapshot, requestId);
+      this.assertGeneration(record, generation);
+      if (health.observerGeneration !== generation) throw new Error('stale health observer generation');
+      if (!record.accounting?.attemptNumber) throw new Error('health requires an admitted attempt');
+      if (record.state === 'settled') return structuredClone(record);
+      this.reconcile(snapshot);
+      const verdict = this.healthVerdict(record, generation, health);
+      const trace = projectHealthTrace(health, record.health?.state, { lastProgressAt: record.lastProgressAt ?? null });
+      record.lastProgressAt = advanceProgressWatermark({ lastProgressAt: record.lastProgressAt ?? null }, trace.progressCredit, health).lastProgressAt;
+      if (!record.health || Date.parse(health.lastObservedAt ?? '') >= Date.parse(record.health.lastObservedAt ?? '') || record.health.lastObservedAt === null) {
+        record.health = structuredClone(health);
+      }
+      if (verdict === 'retain-uncertain') {
+        record.state = 'uncertain';
+        record.reason = 'supervisor observation is uncertain; reservation retained';
+      }
+      record.revision += 1;
+      return structuredClone(record);
+    });
+  }
+
+  /** Ingest final evidence without conflating it with a supervisor stop proof. */
+  acceptFinal(requestId: string, generation: number, health: WorkerHealthSummary, usage?: WorkerUsage): AdmissionRecord {
+    assertValidWorkerPayload('workerHealthSummary', health);
+    if (usage) assertValidWorkerPayload('workerUsage', usage);
+    return this.store.transact(snapshot => {
+      this.assertPolicyBinding(snapshot);
+      const record = this.required(snapshot, requestId);
+      this.assertGeneration(record, generation);
+      if (health.observerGeneration !== generation) throw new Error('stale final observer generation');
+      if (!record.accounting?.attemptNumber) throw new Error('final requires an admitted attempt');
+      const evidence = { health, ...(usage ? { usage } : {}) };
+      if (record.finalEvidence) {
+        if (canonical(record.finalEvidence) !== canonical(evidence)) throw new Error('conflicting final evidence');
+        return structuredClone(record);
+      }
+      this.reconcile(snapshot);
+      record.finalEvidence = structuredClone(evidence);
+      record.revision += 1;
+      return structuredClone(record);
+    });
+  }
+
+  private assertGeneration(record: AdmissionRecord, generation: number | undefined): void {
+    if (!this.policy.managed) throw new Error('operation requires managed admission');
+    if (!Number.isSafeInteger(generation) || generation! < 1 || generation !== record.leaseGeneration) throw new Error('stale admission generation');
+  }
+
+  private healthVerdict(record: AdmissionRecord, generation: number, health: WorkerHealthSummary | null) {
+    return decideLeaseMapping({ leaseGeneration: record.leaseGeneration!, observedGeneration: generation,
+      leaseState: record.state === 'uncertain' ? 'cancelled-disconnected' : 'admitted',
+      settled: record.state === 'settled', health });
+  }
+
   /** Called with trusted supervisor observations, never worker claims/status strings. */
-  settle(requestId: string, generation: number, health: WorkerHealthSummary | null, usage: WorkerUsage, failure?: ManagedAttemptFailure): AdmissionRecord {
+  settle(requestId: string, generation: number, health: WorkerHealthSummary | null, usage: WorkerUsage, failure?: ManagedAttemptFailure, execution?: ManagedExecutionIdentity): AdmissionRecord {
     assertValidWorkerPayload('workerUsage', usage);
     return this.store.transact(snapshot => {
       this.assertPolicyBinding(snapshot);
       if (!this.policy.managed) throw new Error('settlement requires managed admission');
       const record = this.required(snapshot, requestId);
+      this.assertGeneration(record, generation);
       const accounting = record.accounting;
       if (!accounting?.attemptNumber) throw new Error('cannot settle an unlaunched attempt');
-      const verdict = decideLeaseMapping({
-        leaseGeneration: record.leaseGeneration!, observedGeneration: generation,
-        leaseState: record.state === 'uncertain' ? 'cancelled-disconnected' : 'admitted',
-        settled: record.state === 'settled', health,
-      });
+      let verdict = this.healthVerdict(record, generation, health);
       if (verdict === 'deny-stale') throw new Error('stale settlement generation');
+      if (record.execution && canonical(record.execution) !== canonical(execution)) throw new Error('stop proof execution identity mismatch; possible PID reuse');
+      if (verdict === 'release-once' && record.launchClaimedAt && !record.execution) verdict = 'retain-uncertain';
       if (verdict === 'deny-already-settled') {
         if (canonical(accounting.usage) !== canonical(usage)) throw new Error('conflicting settled usage');
         return structuredClone(record);
@@ -804,7 +936,8 @@ function isCanonicalManagedDimension(projectId: string, key: string): boolean {
 function sameManagedRequest(record: AdmissionRecord, request: AdmissionRequest): boolean {
   const { state: _state, revision: _revision, reason: _reason, admittedAt: _admittedAt,
     leaseExpiresAt: _leaseExpiresAt, finishedAt: _finishedAt, preemptedBy: _preemptedBy,
-    attemptGeneration: _attempt, leaseGeneration: _lease, dimensions: _dimensions, reservedSlots: _slots, accounting: _accounting, ...original } = record;
+    attemptGeneration: _attempt, leaseGeneration: _lease, dimensions: _dimensions, reservedSlots: _slots, accounting: _accounting,
+    launchClaimedAt: _launch, execution: _execution, health: _health, lastProgressAt: _progress, finalEvidence: _final, ...original } = record;
   return canonical(original) === canonical(request);
 }
 

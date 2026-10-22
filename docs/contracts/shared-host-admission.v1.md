@@ -246,3 +246,54 @@ owner before dispatch resumes; this slice supplies no automatic migration or ref
 Offline cases for T-OG-05/06/08/09 are in
 `test/unit/serve/shared-host-scheduler-budgets.test.ts`; MC and existing direct
 contract regressions remain under their existing suites.
+
+## Managed fencing and checkpoint reconciliation
+
+Managed `renew(requestId, generation)` and `cancel(requestId, generation)` require
+an explicit current `leaseGeneration`. `stop(requestId, generation, reason)` accepts
+`cancel`, `disconnect`, `preempt`, or `observer-loss`; `disconnect(requestId,
+generation)` is its disconnect shorthand. Each rejects stale generations before
+mutation. Stopping an admitted worker immediately records `uncertain`, retaining
+all dimensions; stopping queued work cancels it without an execution reservation.
+Expiry also retains uncertainty. Renew never modifies observed health or the
+semantic progress watermark, and cannot revive an expired or uncertain lease.
+
+Before spawning, the execution owner calls `claimLaunch(requestId, generation)`
+and checkpoints that generation in its existing Mission/MC state. The claim
+rechecks the original run/task deadlines as well as the lease. A second claim
+is rejected, including after restart. A crash between claim and launch therefore
+requires reconciliation; the owner never automatically replays uncertain or
+already claimed work. `bindExecution(requestId, generation, { pid, startedAt })`
+binds the actual process immutably. Here `startedAt` is the OS birth identity
+(including boot/start identity), not a wall-clock timestamp or a PID-only check.
+A changed identity, including reuse of the same PID, conflicts.
+A claimed launch with no reconciled execution identity retains capacity even
+when supplied confirmed health; identity reconciliation must precede settlement.
+
+`observeHealth(requestId, generation, health)` consumes the shared Mission health
+mapping and advances a nondecreasing semantic progress watermark only for fresh
+progress. Its health observer generation must match the lease. Observer loss and
+uncertain observations retain capacity; even confirmed health observations alone
+do not settle. `acceptFinal(requestId, generation, health, usage?)` stores final
+evidence separately from termination proof. Stale finals are rejected before any
+state change. A late final remains evidence while cancellation or disconnect is
+uncertain and never releases capacity or accepts task completion.
+
+Only explicit `settle` releases capacity. When an execution identity is bound,
+`settle(requestId, generation, health, usage, failure?, execution?)` additionally
+requires that same identity. The trusted supervision owner must verify process
+group or authoritative remote termination; a status string, worker final or
+notification delivery cannot supply that proof. Both caller and proof generations
+must be current. Settlement replay leaves the attempt unchanged and conflicting
+final usage is rejected.
+
+Managed MC checkpoints persist the launch claim, admission generation and process
+identity before status reconciliation. Local cancellation records uncertainty
+before attempting a bounded owned-process signal; unproved descendants retain
+capacity. Resume revalidates the current activated policy and lease state,
+preserves existing artifacts, and never launches an uncertain attempt. Ordinary
+unfenced Ralph abort/resume/cleanup routes reject managed registry entries.
+
+Offline recovery and fencing vectors (T-OG-06/24) are in
+`test/unit/serve/shared-host-scheduler-fencing.test.ts`; the S2 trace harness has
+separate managed cases in `test/evidence/s2-scheduler-traces.test.ts`.

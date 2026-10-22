@@ -197,7 +197,7 @@ describe('T-OG-05/06 managed queue and retained uncertainty', () => {
     scheduler.submit(request('cancelled'));
     scheduler.submit(request('expired', { queueTimeoutMs: 10 }));
     expect(scheduler.submit(request('full')).state).toBe('denied');
-    expect(scheduler.cancel('cancelled').state).toBe('cancelled');
+    expect(scheduler.cancel('cancelled', 1).state).toBe('cancelled');
     current += 11;
     scheduler.reconcileNow();
     expect(scheduler.submit(request('cancelled')).state).toBe('cancelled');
@@ -222,7 +222,7 @@ describe('T-OG-05/06 managed queue and retained uncertainty', () => {
     const { scheduler } = setup(value, () => current);
     scheduler.submit(request('running', { preemptible: true, priority: 0 }));
     if (trigger === 'expiry') current += value.leaseTtlMs + 1;
-    if (trigger === 'cancel') scheduler.cancel('running');
+    if (trigger === 'cancel') scheduler.cancel('running', 1);
     expect(scheduler.submit(request('replacement', { priority: 100, submittedAt: new Date(current).toISOString() })).state).toBe('queued');
     expect(scheduler.snapshot().records.running!.state).toBe(trigger === 'preemption' ? 'admitted' : 'uncertain');
     expect(() => scheduler.release('running')).toThrow(/proof-checked settlement/);

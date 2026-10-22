@@ -17,7 +17,8 @@ import * as ui from '../ui.js';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { assertMissionWorkerHandoff } from '../../mission-protocol/codecs.js';
+import { assertMissionWorkerHandoff, validateWorkerPayload } from '../../mission-protocol/codecs.js';
+import type { WorkerHealthSummary } from '../../mission-protocol/types.js';
 import type { AiwgConfig } from '../../config/aiwg-config.js';
 
 // ── Constants ────────────────────────────────────────────────
@@ -98,6 +99,9 @@ interface Mission {
   admissionState?: string;
   admissionLeaseExpiresAt?: string;
   admissionSubmittedAt?: string;
+  admissionGeneration?: number;
+  admissionLaunchClaimed?: boolean;
+  admissionExecution?: { pid: number; startedAt: string };
 }
 
 interface Session {
@@ -840,6 +844,7 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
     mission.admissionSubmittedAt = admissionSubmittedAt;
     mission.admissionState = admission.state;
     mission.admissionLeaseExpiresAt = admission.leaseExpiresAt;
+    if (managed) mission.admissionGeneration = admission.leaseGeneration;
     await writeSession(session);
     if (admission.state !== 'admitted') {
       await appendLog(session.id, {
@@ -863,6 +868,11 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
         if (remainingMs <= 0) throw new Error('cumulative allowance deadline elapsed before launch');
         maxWallClockMinutes = deadlines.length ? remainingMs / 60_000 : undefined;
       }
+      if (managed) {
+        scheduler.claimLaunch(admissionRequestId, mission.admissionGeneration!);
+        mission.admissionLaunchClaimed = true;
+        await writeSession(session);
+      }
       const result = await launchExternalRalph(frameworkRoot, projectRoot, {
         objective: mission.objective,
         completionCriteria: mission.completion,
@@ -876,8 +886,21 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
         budgetStopPolicy: mission.budgetStopPolicy,
         // Defaults for cycle 1; advanced options can be added per-mission later.
         verbose: false,
+        ...(managed ? { managedAdmission: { requestId: admissionRequestId, generation: mission.admissionGeneration! } } : {}),
       });
 
+      if (managed) {
+        if (!result.execution || result.execution.pid !== result.pid) throw new Error('managed launch requires its OS process birth identity');
+        scheduler.bindExecution(admissionRequestId, mission.admissionGeneration!, result.execution);
+        mission.admissionExecution = result.execution;
+        mission.ralphLoopId = result.loopId;
+        mission.ralphPid = result.pid;
+        const current = scheduler.renew(admissionRequestId, mission.admissionGeneration);
+        if (current.state !== 'admitted') {
+          await cancelManagedMission(ctx, scheduler, mission);
+          throw new Error('managed launch lost admission during execution checkpoint; reconcile uncertain work');
+        }
+      }
       mission.status = 'running';
       mission.startedAt = new Date().toISOString();
       mission.ralphLoopId = result.loopId;
@@ -897,7 +920,7 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
       mission.status = 'failed';
       mission.error = msg;
       mission.completedAt = new Date().toISOString();
-      if (managed) mission.admissionState = scheduler.cancel(admissionRequestId).state;
+      if (managed) mission.admissionState = scheduler.stop(admissionRequestId, mission.admissionGeneration!, 'observer-loss').state;
       else {
         scheduler.release(admissionRequestId);
         mission.admissionState = 'released';
@@ -952,10 +975,20 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
       mission.ralphLoopId,
       'session-state.json',
     );
+    if (managed) {
+      const current = mission.admissionRequestId ? scheduler.snapshot().records[mission.admissionRequestId] : undefined;
+      if (!current || !mission.admissionGeneration || current.leaseGeneration !== mission.admissionGeneration) continue;
+    }
     try {
       const raw = await fs.readFile(ralphStatePath, 'utf-8');
       const state = JSON.parse(raw);
       const ralphStatus = String(state.status || '').toLowerCase();
+      if (managed && mission.admissionRequestId && state.health !== undefined) {
+        if (!validateWorkerPayload('workerHealthSummary', state.health).valid) throw new Error('invalid Ralph worker health');
+        const observed = scheduler.observeHealth(mission.admissionRequestId, mission.admissionGeneration!, state.health as WorkerHealthSummary);
+        mission.admissionState = observed.state;
+        mutated = true;
+      }
       // Map ralph status → mc mission status
       let nextStatus: MissionStatus | null = null;
       if (ralphStatus === 'completed') nextStatus = 'done';
@@ -983,7 +1016,10 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
         }
         mutated = true;
         if (mission.admissionRequestId) {
-          if (managed) mission.admissionState = scheduler.cancel(mission.admissionRequestId).state;
+          if (managed) {
+            if (state.health) scheduler.acceptFinal(mission.admissionRequestId, mission.admissionGeneration!, state.health as WorkerHealthSummary);
+            mission.admissionState = scheduler.stop(mission.admissionRequestId, mission.admissionGeneration!, 'observer-loss').state;
+          }
           else {
             try { scheduler.release(mission.admissionRequestId); } catch { /* already expired or released */ }
             mission.admissionState = 'released';
@@ -992,7 +1028,9 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
         }
       } else if (mission.admissionRequestId) {
         try {
-          const renewed = scheduler.renew(mission.admissionRequestId);
+          const renewed = managed
+            ? scheduler.renew(mission.admissionRequestId, mission.admissionGeneration)
+            : scheduler.renew(mission.admissionRequestId);
           mission.admissionState = renewed.state;
           mission.admissionLeaseExpiresAt = renewed.leaseExpiresAt;
           mutated = true;
@@ -1001,7 +1039,12 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
         }
       }
     } catch {
-      // State file missing/unreadable — leave mission status unchanged.
+      if (managed && mission.admissionRequestId) {
+        mission.admissionState = scheduler.disconnect(mission.admissionRequestId, mission.admissionGeneration!).state;
+        mission.admissionLeaseExpiresAt = undefined;
+        mutated = true;
+      }
+      // Missing supervision preserves the last task status and all artifacts.
     }
   }
   if (mutated) {
@@ -1105,6 +1148,46 @@ async function mcStatus(ctx: HandlerContext): Promise<HandlerResult> {
   return { exitCode: 0 };
 }
 
+async function managedControlScheduler(ctx: HandlerContext, missions: Mission[]) {
+  const projectRoot = ctx.cwd || process.cwd();
+  const cfg = await readAdmissionConfig(projectRoot);
+  if (!cfg?.parallelism?.worker_dispatch || cfg.parallelism.worker_mode !== 'managed') return undefined;
+  const scheduler = await createMcAdmissionScheduler(projectRoot, cfg);
+  const snapshot = scheduler.snapshot();
+  for (const mission of missions) {
+    if (!mission.admissionRequestId) continue;
+    const record = snapshot.records[mission.admissionRequestId];
+    if (!record || !mission.admissionGeneration || record.leaseGeneration !== mission.admissionGeneration) {
+      throw new Error('stale managed Mission checkpoint generation');
+    }
+  }
+  return scheduler;
+}
+
+function managedControlFailure(error: unknown): HandlerResult {
+  const message = error instanceof Error ? error.message : String(error);
+  ui.error(message);
+  return { exitCode: 1, message };
+}
+
+async function cancelManagedMission(
+  ctx: HandlerContext, scheduler: Awaited<ReturnType<typeof createMcAdmissionScheduler>>, mission: Mission,
+): Promise<void> {
+  if (!mission.admissionRequestId) return;
+  const cancelled = scheduler.cancel(mission.admissionRequestId, mission.admissionGeneration);
+  mission.admissionState = cancelled.state;
+  mission.admissionLeaseExpiresAt = undefined;
+  if (cancelled.state !== 'uncertain' || !mission.ralphLoopId || !mission.admissionExecution) return;
+  try {
+    const { cancelManagedRalph } = await import('./ralph-launcher.js');
+    await cancelManagedRalph(ctx.frameworkRoot, ctx.cwd || process.cwd(), mission.ralphLoopId, {
+      requestId: mission.admissionRequestId, generation: mission.admissionGeneration!, execution: mission.admissionExecution,
+    });
+  } catch {
+    // Reservation is already uncertain; unavailable signalling cannot release it.
+  }
+}
+
 async function mcAbort(ctx: HandlerContext): Promise<HandlerResult> {
   const positional = getPositionalArgs(ctx.args);
   const sessionId = positional[0];
@@ -1115,6 +1198,11 @@ async function mcAbort(ctx: HandlerContext): Promise<HandlerResult> {
     return { exitCode: 1 };
   }
 
+  let managedScheduler: Awaited<ReturnType<typeof managedControlScheduler>>;
+  try {
+    const selected = await readSession(sessionId);
+    managedScheduler = await managedControlScheduler(ctx, selected?.missions.filter(mission => mission.id === missionId) ?? []);
+  } catch (error) { return managedControlFailure(error); }
   const flags = mutationFlags(ctx.args);
   const result = await mutateSession(sessionId, 'cancel', missionId, flags.expectedUpdatedAt, flags.requestId, session => {
     const mission = session.missions.find(m => m.id === missionId);
@@ -1130,12 +1218,18 @@ async function mcAbort(ctx: HandlerContext): Promise<HandlerResult> {
     const mission = result.session.missions.find(candidate => candidate.id === missionId);
     if (mission?.admissionRequestId) {
       try {
-        const projectRoot = ctx.cwd || process.cwd();
-        const cfg = await readAdmissionConfig(projectRoot);
-        const scheduler = await createMcAdmissionScheduler(projectRoot, cfg);
-        scheduler.cancel(mission.admissionRequestId);
-      } catch {
-        // The mission state is authoritative; lease expiry provides recovery.
+        if (managedScheduler) {
+          await cancelManagedMission(ctx, managedScheduler, mission);
+          await writeSession(result.session);
+        } else {
+          const projectRoot = ctx.cwd || process.cwd();
+          const cfg = await readAdmissionConfig(projectRoot);
+          const scheduler = await createMcAdmissionScheduler(projectRoot, cfg);
+          scheduler.cancel(mission.admissionRequestId);
+        }
+      } catch (error) {
+        if (managedScheduler) return managedControlFailure(error);
+        // Legacy leases keep their existing best-effort cancellation behavior.
       }
     }
   }
@@ -1153,6 +1247,9 @@ async function mcPause(ctx: HandlerContext): Promise<HandlerResult> {
     ui.error('No active session to pause.');
     return { exitCode: 1 };
   }
+  let managedScheduler: Awaited<ReturnType<typeof managedControlScheduler>>;
+  try { managedScheduler = await managedControlScheduler(ctx, selected.missions.filter(mission => mission.status === 'running')); }
+  catch (error) { return managedControlFailure(error); }
   const flags = mutationFlags(ctx.args);
   const result = await mutateSession(selected.id, 'pause', selected.id, flags.expectedUpdatedAt, flags.requestId, session => {
     if (session.state !== 'active') return 'invalid_state';
@@ -1161,6 +1258,13 @@ async function mcPause(ctx: HandlerContext): Promise<HandlerResult> {
     return undefined;
   });
   if (!result.ok) return mutationFailure(result);
+
+  if (!result.replayed && managedScheduler) {
+    for (const mission of result.session.missions) {
+      if (mission.status === 'paused') await cancelManagedMission(ctx, managedScheduler, mission);
+    }
+    await writeSession(result.session);
+  }
 
   ui.success(`${result.replayed ? 'Replayed pause for' : 'Paused'} session: ${selected.id}`);
   return { exitCode: 0, message: JSON.stringify({ ok: true, replayed: result.replayed, updated_at: result.session.updatedAt }) };
@@ -1174,6 +1278,24 @@ async function mcResume(ctx: HandlerContext): Promise<HandlerResult> {
   if (!selected || selected.state !== 'paused') {
     ui.error('No paused session to resume.');
     return { exitCode: 1 };
+  }
+  try {
+    const cfg = await readAdmissionConfig(ctx.cwd || process.cwd());
+    if (cfg?.parallelism?.worker_dispatch && cfg.parallelism.worker_mode === 'managed') {
+      const scheduler = await createMcAdmissionScheduler(ctx.cwd || process.cwd(), cfg);
+      const snapshot = scheduler.snapshot();
+      for (const mission of selected.missions.filter(candidate => candidate.status === 'paused')) {
+        if (!mission.admissionRequestId) continue;
+        const record = snapshot.records[mission.admissionRequestId];
+        if (!record || record.leaseGeneration !== mission.admissionGeneration || record.state !== 'admitted') {
+          throw new Error('managed resume requires current admission and reconciliation of uncertain work');
+        }
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ui.error(message);
+    return { exitCode: 1, message };
   }
   const flags = mutationFlags(ctx.args);
   const result = await mutateSession(selected.id, 'resume', selected.id, flags.expectedUpdatedAt, flags.requestId, session => {
@@ -1199,6 +1321,12 @@ async function mcStop(ctx: HandlerContext): Promise<HandlerResult> {
     return { exitCode: 1 };
   }
 
+  let managedScheduler: Awaited<ReturnType<typeof managedControlScheduler>>;
+  try {
+    managedScheduler = await managedControlScheduler(ctx, session.missions.filter(mission =>
+      mission.status === 'queued' || (!drain && (mission.status === 'running' || mission.status === 'paused'))));
+  } catch (error) { return managedControlFailure(error); }
+
   if (drain) {
     // Mark queued missions as aborted, let running finish
     for (const m of session.missions) {
@@ -1218,6 +1346,11 @@ async function mcStop(ctx: HandlerContext): Promise<HandlerResult> {
     }
   }
 
+  if (managedScheduler) {
+    for (const mission of session.missions) {
+      if (mission.status === 'aborted') await cancelManagedMission(ctx, managedScheduler, mission);
+    }
+  }
   session.state = 'stopped';
   await writeSession(session);
   await appendLog(session.id, { event: 'session_stopped', drain });
