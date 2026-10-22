@@ -1171,6 +1171,19 @@
       "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
     },
     {
+      "path": "src/serve/shared-host-scheduler.ts",
+      "owner": "src/serve",
+      "role": "producer-consumer",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [
+        "cancelled",
+        "unknown"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "adapt",
+      "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
+    },
+    {
       "path": "src/serve/telemetry.ts",
       "owner": "src/serve",
       "role": "producer-consumer",
