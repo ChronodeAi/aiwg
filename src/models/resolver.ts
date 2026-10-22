@@ -495,7 +495,6 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
       activation[key as keyof WorkerActivation] !== digests[key as keyof typeof digests])) {
       block('OG_CONFIG_REFERENCE', '/parallelism/activation', 'Managed activation is missing or stale');
     }
-    block('OG_ADAPTER_UNQUALIFIED', '/parallelism/worker_mode', 'Managed activation/admission runtime is deferred to S2+');
   }
   if (!policy) block('OG_CONFIG_REFERENCE', '/defaults/workerSelection', 'Current merged worker policy is required');
   const catalogErrors = validateWorkerCatalogDiscovery(snapshot.catalog.discovery);

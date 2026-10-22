@@ -70,6 +70,8 @@ export interface RalphLaunchOptions {
   logFile?: string;
   /** Current managed reservation; absent on direct and legacy launches. */
   managedAdmission?: { requestId: string; generation: number };
+  /** Qualified one-shot execution; completion remains owned by the parent. */
+  managedWorker?: { invocationPath: string; runDir: string };
 }
 
 /**
@@ -103,6 +105,7 @@ export interface LoopRegistryEntry {
   promptFile?: string;
   provider?: string;
   managedAdmission?: { requestId: string; generation: number; execution?: { pid: number; startedAt: string }; processIdentity?: Record<string, unknown> };
+  managedWorker?: { invocationPath: string; runDir: string };
 }
 
 /**
@@ -143,6 +146,12 @@ export function generateLoopId(objective: string): string {
  * Build command-line arguments for the external Ralph process
  */
 export function buildArgs(options: RalphLaunchOptions): string[] {
+  if (options.managedWorker) {
+    if (!options.managedAdmission) throw new Error('Managed worker execution requires admission');
+    return ['--launch-worker', '--invocation', options.managedWorker.invocationPath,
+      '--run-dir', options.managedWorker.runDir, '--managed-request', options.managedAdmission.requestId,
+      '--managed-generation', String(options.managedAdmission.generation)];
+  }
   const args: string[] = [options.objective];
 
   args.push('--completion', options.completionCriteria);
@@ -266,7 +275,9 @@ export async function launchExternalRalph(
   projectRoot: string,
   options: RalphLaunchOptions
 ): Promise<RalphLaunchResult> {
-  const orchestratorPath = getOrchestratorPath(frameworkRoot);
+  const orchestratorPath = options.managedWorker
+    ? join(frameworkRoot, 'tools', 'ralph-external', 'session-launcher.mjs')
+    : getOrchestratorPath(frameworkRoot);
 
   if (!existsSync(orchestratorPath)) {
     throw new AiwgError({
@@ -306,9 +317,10 @@ export async function launchExternalRalph(
     registry.loops[loopId] = { loopId, pid: 0, objective: options.objective,
       completionCriteria: options.completionCriteria, status: 'running',
       startedAt: new Date().toISOString(), lastUpdate: new Date().toISOString(),
-      iteration: 0, maxIterations: options.maxIterations || 5, outputFile,
+      iteration: 0, maxIterations: options.managedWorker ? 1 : options.maxIterations || 5, outputFile,
       sessionStdoutFile, sessionStderrFile, promptFile, provider: options.provider,
-      managedAdmission: { ...options.managedAdmission } };
+      managedAdmission: { ...options.managedAdmission },
+      ...(options.managedWorker ? { managedWorker: { ...options.managedWorker } } : {}) };
     saveLauncherRegistry(projectRoot, registry);
   }
 
@@ -377,13 +389,14 @@ export async function launchExternalRalph(
     startedAt: new Date().toISOString(),
     lastUpdate: new Date().toISOString(),
     iteration: 0,
-    maxIterations: options.maxIterations || 5,
+    maxIterations: options.managedWorker ? 1 : options.maxIterations || 5,
     outputFile,
     sessionStdoutFile,
     sessionStderrFile,
     promptFile,
     provider: options.provider,
     ...(managedAdmission ? { managedAdmission } : {}),
+    ...(options.managedWorker ? { managedWorker: { ...options.managedWorker } } : {}),
   };
   saveLauncherRegistry(projectRoot, launcherRegistry);
 

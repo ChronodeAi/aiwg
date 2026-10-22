@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  abortLoop, cancelManagedRalph, cleanupCompletedLoop, cleanupRegistry,
+  abortLoop, buildArgs, cancelManagedRalph, cleanupCompletedLoop, cleanupRegistry,
   launchExternalRalph, loadLauncherRegistry, resumeLoop, saveLauncherRegistry,
 } from '../../../../src/cli/handlers/ralph-launcher.js';
 
@@ -54,6 +54,21 @@ async function launch(managed = true) {
 }
 
 describe('T-OG-06 managed Ralph process fencing', () => {
+  it('T-OG-08 launches a managed qualified worker once through the one-shot capture path', async () => {
+    const managedWorker = { invocationPath: join(root, 'plan.json'), runDir: join(root, 'capture') };
+    await launchExternalRalph(root, root, { objective: 'synthetic', completionCriteria: 'parent gate',
+      loopId: 'synthetic-loop', maxIterations: 8, managedAdmission: binding, managedWorker });
+    expect(mocks.spawn.mock.calls[0]![1]).toEqual([join(tools, 'session-launcher.mjs'), '--launch-worker',
+      '--invocation', managedWorker.invocationPath, '--run-dir', managedWorker.runDir,
+      '--managed-request', binding.requestId, '--managed-generation', '1']);
+    expect(loadLauncherRegistry(root).loops['synthetic-loop']).toMatchObject({ maxIterations: 1, managedWorker });
+  });
+
+  it('rejects a managed worker launch without parent admission', () => {
+    expect(() => buildArgs({ objective: 'synthetic', completionCriteria: 'parent gate',
+      managedWorker: { invocationPath: '/synthetic/plan', runDir: '/synthetic/run' } })).toThrow(/requires admission/);
+  });
+
   it('binds a managed launch to its kernel birth identity without adding direct state', async () => {
     expect(await launch()).toMatchObject({ execution: { pid: 12345, startedAt: 'synthetic-boot:123:1000' } });
     expect(loadLauncherRegistry(root).loops['synthetic-loop']!.managedAdmission).toMatchObject(binding);

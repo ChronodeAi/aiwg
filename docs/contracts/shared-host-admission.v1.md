@@ -297,3 +297,79 @@ unfenced Ralph abort/resume/cleanup routes reject managed registry entries.
 Offline recovery and fencing vectors (T-OG-06/24) are in
 `test/unit/serve/shared-host-scheduler-fencing.test.ts`; the S2 trace harness has
 separate managed cases in `test/evidence/s2-scheduler-traces.test.ts`.
+
+## Managed Flow adapter
+
+Managed composition uses `createManagedCompositionAdapter` from the bundled
+composition runtime. Its trusted host supplies the existing project scheduler,
+`prepareNode`, the execution owner's `invokeNode`, and
+`managedAllowanceFromOwner`. `prepareNode` qualifies selection and returns the
+existing admission request; Flow retains graph permissions, approval gates,
+routes, completion and original run ceilings. Every attempt submits to that same
+scheduler, links the latest same-task attempt, claims launch, and binds the
+execution owner's OS birth identity before accepting termination evidence.
+Prepared briefs must name the same project reservation and fenced generation.
+
+The execution callback receives the admitted record and fenced `bindExecution`,
+`renew`, `observeHealth` and `cancel` operations. Its result or thrown error may
+carry `managedEvidence: { health, usage, failure? }`, using the existing Mission
+health and usage definitions. Only current proof checked by `acceptFinal` and
+`settle`, against the bound identity, permits output delivery. Missing, stale or
+uncertain proof disconnects the attempt and retains shared capacity. Raw output
+presence and status strings cannot supply proof. Fenced admission identities and
+selected worker dimensions survive in Flow results and checkpoints.
+
+The factory reports revision 1, the current Mission worker definition digest,
+lossless handling, the five baseline features, `worker-health.v1`, and
+`worker-flow-values.v1`. `composition run` forwards this adapter registration;
+managed metadata alone cannot qualify an arbitrary execution callback. Existing
+adapters without managed mode retain their previous behavior.
+
+Before dispatch, managed Flow resolves schemas offline from their bundled owners
+and checks actual inputs, outputs, state and restored results. Draft-07 and
+2020-12 validators keep their dialects, including cross-dialect references and
+format checks. Present but invalid output fails before state or output delivery.
+Every serial or parallel attempt is accounted before output validation; sibling
+spend survives parallel failure. Missing usage remains null with conservative
+reservations, and checkpoints retain both known spend and unknown reservations.
+An interrupted invocation boundary requires owner reconciliation before replay.
+
+## Managed MC worker handoff
+
+`aiwg mc dispatch <session> <objective> --completion <criteria>
+--worker-dispatch <absolute-path>` accepts prepared `workerDispatch` JSON in
+managed mode. MCP `mission-dispatch.worker_dispatch` forwards the same path to
+MC; both front ends use the same resolver and policy checks. Dispatch queues
+without reserving capacity or launching. `mc run` rechecks current qualification,
+selection pins, activation and artifact digests before submitting the existing
+shared admission request. Native and external workers share project capacity.
+Direct MCP worker tools retain their independent handoff path.
+
+The dispatch's intent and prepared brief must be bounded local artifacts inside
+the project. The intent identifies the original Mission parent and task; the
+brief binds the selected tuple, policy/catalog digests, project reservation and
+generation, isolated workspace, output path and zero delegation allowance.
+The brief's lease must match admission before the durable launch claim. Managed
+configuration without explicit parent task authority can expose eligibility but
+cannot render a launchable direct invocation.
+
+MC checkpoints the generation, claim, qualified invocation and capture directory
+before launching Ralph's existing one-shot shell capture. The child rechecks the
+shared lease and selected dimensions at dispatch, uses the original cumulative
+deadline, and does not charge a second direct allowance. Managed capture currently
+requires a qualified Linux shell profile; unsupported transports fail before
+admission. `createMcFlowAdapter` supplies the same qualification and project
+authority to the composition adapter through its trusted execution callback.
+Flow may hand a qualified MCP descriptor to that callback; the managed MC
+one-shot capture remains limited to shell transport.
+
+Running observations renew ownership without manufacturing progress. Missing or
+stale capture evidence retains uncertain capacity. Status strings, final claims,
+and cancellation never settle. MC stores a `workerResult` with independent
+verification pending and unavailable usage explicitly unknown; successful worker
+claims leave the mission paused for the parent's original completion checks.
+Only matching fenced capture evidence confirming descendant termination, plus
+kernel confirmation that the bound supervisor no longer exists, reaches shared
+settlement. An unavailable process observation cannot supply that confirmation.
+Late evidence remains reconcilable after pause/cancel without changing the
+parent's control decision.

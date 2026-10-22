@@ -16,8 +16,10 @@ import { resolveParallelism, workerActivationDigests, workerConfigDigest, readAi
 import { cancelManagedRalph, launchExternalRalph } from '../../src/cli/handlers/ralph-launcher.js';
 import { validateWorkerPayload, type WorkerHealthSummary } from '../../src/mission-protocol/index.js';
 import { fixtureJson, materialize } from '../conformance/mission-v1/worker-contract-fixtures.js';
+import { managedMcWorkerFixture } from '../fixtures/managed-mc-worker.js';
+import { loadWorkerInputs } from '../../src/cli/handlers/models.js';
 
-// Only process launch and operator configuration are substituted. Scheduler,
+// Process launch, operator configuration and trusted installation inputs are substituted. Scheduler,
 // FileAdmissionStore, MC handler, codecs and all filesystem operations are real.
 vi.mock('../../src/cli/handlers/ralph-launcher.js', () => ({
   launchExternalRalph: vi.fn(async () => ({ loopId: 'ralph-s2', pid: 4242, message: 'synthetic' })),
@@ -30,6 +32,7 @@ vi.mock('../../src/config/aiwg-config.js', async importOriginal => ({
     providers: ['codex'], parallelism: { max_parallel_mc_missions: 1 },
   })),
 }));
+vi.mock('../../src/cli/handlers/models.js', () => ({ loadWorkerInputs: vi.fn() }));
 
 const root = process.cwd();
 const outputPath = resolve(process.env.S2_TRACE_PATH ?? join(root, 'test-results/evidence/s2-traces.json'));
@@ -516,7 +519,7 @@ describe('B-OG-16 real MC caller binding', () => {
       expect(launchExternalRalph).not.toHaveBeenCalled();
       expect(c.scheduler.snapshot().records).toEqual({});
       expect(caller().missionStatus).toBe('queued');
-      c.trace.evidence.push(source('src/cli/handlers/mc.ts', "assertMissionWorkerHandoff(mission, 'mc-cli')"));
+      c.trace.evidence.push(source('src/cli/handlers/mc.ts', "assertMissionWorkerHandoff(mission, 'mc-cli', support)"));
       c.finish('NOT-EXPRESSIBLE', 'The shared dispatch-health-feature fixture is rejected with OG_CONTRACT_UNSUPPORTED before admission or launch. Legacy MC binding exists, but managed health caller events require #2919–#2924.');
       return;
     }
@@ -582,7 +585,7 @@ describe('B-OG-16 managed real MC caller binding', () => {
     const sessionPath = join(sessionDir, 'session.json');
     const storePath = join(dir, '.aiwg/ralph-external/mc/admission.json');
     const statePath = join(dir, '.aiwg/ralph-external/loops/ralph-s2/session-state.json');
-    const cfg = {
+    let cfg = {
       version: '1', providers: ['codex'], installed: {}, scripts: {},
       parallelism: { worker_dispatch: true, worker_mode: 'managed', max_parallel_subagents: 1,
         groups: { coding: { members: [{ id: 'spark', cli: 'first', model: 'model', roles: ['coding'] }] } },
@@ -592,6 +595,13 @@ describe('B-OG-16 managed real MC caller binding', () => {
       },
     } as AiwgConfig;
     cfg.parallelism!.activation = { revision: 1, ...workerActivationDigests(cfg), snapshotRef: 'synthetic:activation' };
+    const worker = event === 'worker-dispatch' ? await managedMcWorkerFixture(dir, {
+      sessionId: 'mc-s2', missionId: 'm1', objective: 'Synthetic task', now: new Date(start).toISOString(),
+    }) : undefined;
+    if (worker) {
+      cfg = worker.cfg;
+      vi.mocked(loadWorkerInputs).mockResolvedValue({ snapshot: worker.snapshot, drivers: worker.drivers });
+    }
     const parallelism = resolveParallelism(cfg.parallelism, 'codex');
     const policy = managedProjectAdmissionPolicy(dir, parallelism, workerConfigDigest(parallelism.activation), parallelism.max_parallel_subagents);
     const c = context(`mc-${event}`, 'managed real handler with synthetic Ralph state', 'B-OG-16', storePath, true, policy);
@@ -608,7 +618,7 @@ describe('B-OG-16 managed real MC caller binding', () => {
       createdAt: new Date(start).toISOString(), updatedAt: new Date(start).toISOString(),
       missions: [{ id: 'm1', objective: 'Synthetic task', completion: 'Synthetic check passes',
         status: 'queued', loop: 0, maxIterations: 1, priority: 'normal', mode: 'direct',
-        ...(event === 'worker-dispatch' ? { extensions: { 'aiwg.worker-dispatch': dispatch } } : {}),
+        ...(event === 'worker-dispatch' ? { extensions: { 'aiwg.worker-dispatch': worker!.dispatch } } : {}),
       }],
     }));
     const caller = () => {
@@ -658,21 +668,13 @@ describe('B-OG-16 managed real MC caller binding', () => {
       try { result = await mcHandler.execute({ args, rawArgs: ['mc', ...args], cwd: dir, frameworkRoot: root }); }
       finally { inCommand = false; }
       c.record(`managed mc ${args[0]}`, { args }, 'returned', { exitCode: result.exitCode }, caller());
-      expect(result.exitCode).toBe(['launch-failure', 'worker-dispatch'].includes(event) && args[0] === 'run' ? 1 : 0);
+      expect(result.exitCode).toBe(event === 'launch-failure' && args[0] === 'run' ? 1 : 0);
       return result;
     }
     const execution = { pid: 4242, startedAt: 'synthetic-boot:4242:1000' };
     if (event === 'launch-failure') vi.mocked(launchExternalRalph).mockRejectedValueOnce(new Error('synthetic launch failure'));
     else vi.mocked(launchExternalRalph).mockResolvedValueOnce({ loopId: 'ralph-s2', pid: 4242, execution, message: 'synthetic' });
-    const runResult = await command(['run', 'mc-s2', '--accept-cost']);
-    if (event === 'worker-dispatch') {
-      expect(runResult.message).toContain('OG_CONTRACT_UNSUPPORTED');
-      expect(launchExternalRalph).not.toHaveBeenCalled();
-      expect(c.scheduler.snapshot().records).toEqual({});
-      expect(caller().missionStatus).toBe('queued');
-      c.finish('NOT-EXPRESSIBLE', 'Managed worker-dispatch fixture is rejected before admission and launch; qualified dispatch enablement remains a later slice.');
-      return;
-    }
+    await command(['run', 'mc-s2', '--accept-cost']);
     expect(launchExternalRalph).toHaveBeenCalledTimes(1);
     c.op('managed MC capacity probe', { requestId: 'waiting' }, () => c.scheduler.submit({
       ...request('waiting'), managed: { kind: 'native' },
@@ -693,6 +695,25 @@ describe('B-OG-16 managed real MC caller binding', () => {
     expect(caller().admissionGeneration).toBe(1);
     expect(caller().admissionExecution).toEqual(execution);
     expect(c.scheduler.snapshot().records['mc-s2.m1'].execution).toEqual(execution);
+    if (event === 'worker-dispatch') {
+      const checkpoint = JSON.parse(readFileSync(sessionPath, 'utf8')).missions[0];
+      expect(c.scheduler.snapshot().records['mc-s2.m1'].managed).toMatchObject({
+        kind: 'external', group: 'workers', member: 'primary', cli: 'codex', model: worker!.plan.selected!.modelKey,
+      });
+      mkdirSync(checkpoint.managedWorker.runDir, { recursive: true });
+      const healthPath = join(checkpoint.managedWorker.runDir, 'health.json');
+      writeFileSync(healthPath, JSON.stringify({ invocationId: worker!.dispatch.invocationId,
+        health: { ...baseHealth, observerGeneration: 1 } }));
+      await command(['status', 'mc-s2', '--json']);
+      expect(c.scheduler.snapshot().records['mc-s2.m1'].health?.observerGeneration).toBe(1);
+      expect(c.scheduler.snapshot().records['mc-s2.m1'].state).toBe('admitted');
+      expect(c.scheduler.snapshot().records.waiting.state).toBe('queued');
+      writeFileSync(healthPath, JSON.stringify({ invocationId: worker!.dispatch.invocationId, health: uncertain(1) }));
+      await command(['status', 'mc-s2', '--json']);
+      retained();
+      c.finish('PASS', 'Managed worker dispatch resolves the qualified selection, reserves external dimensions, launches Ralph once and maps current-generation health without releasing uncertain capacity.');
+      return;
+    }
     if (event === 'abort-command') {
       const started = Date.now();
       await command(['abort', 'mc-s2', 'm1', '--request-id', 'cancel-managed-s2']);
@@ -738,8 +759,8 @@ afterAll(() => {
   const inventory = [
     { owner: 'Mission', verdict: 'NOT-EXPRESSIBLE', reason: 'Routes worker cycles and rejects unsupported worker handoffs; no SharedHostScheduler binding.', evidence: [source('src/serve/mission-conductor.ts', 'assertMissionWorkerHandoff(plan'), source('src/serve/mission-conductor.ts', "import { routeMission }")] },
     { owner: 'Fleet Mission', verdict: 'NOT-EXPRESSIBLE', reason: 'Fleet lifecycle aggregation exists, but no SharedHostScheduler binding.', evidence: [source('src/serve/fleet-mission-conductor.ts', 'assertMissionWorkerHandoff(plan'), source('src/serve/fleet-mission-conductor.ts', 'function lifecycleSatisfied')] },
-    { owner: 'Flow', verdict: 'NOT-EXPRESSIBLE', reason: 'Worker validation/accounting bindings are explicitly unsupported; no SharedHostScheduler binding.', evidence: [source('agentic/code/addons/composition-engine/lib/runtime.mjs', 'function assertNoWorkerBinding'), source('agentic/code/addons/composition-engine/lib/runtime.mjs', 'Flow runtime does not advertise')] },
-    { owner: 'Ralph', verdict: 'NOT-EXPRESSIBLE', reason: 'MC polls Ralph session-state.json; no direct SharedHostScheduler health/caller-event binding in the Ralph entry point. GainScheduler is an unrelated control component.', evidence: [source('src/cli/handlers/mc.ts', 'const ralphStatus = String(state.status'), source('tools/ralph-external/index.mjs', 'import { GainScheduler }')] },
+    { owner: 'Flow', verdict: 'NOT-EXPRESSIBLE', reason: 'Managed Flow uses the MC project adapter; separate unit fixtures cover its schema/accounting boundary, while this trace lane exercises MC callers.', evidence: [source('src/cli/handlers/mc.ts', 'export async function createMcFlowAdapter'), source('agentic/code/addons/composition-engine/lib/runtime.mjs', 'export function createManagedCompositionAdapter')] },
+    { owner: 'Ralph', verdict: 'NOT-EXPRESSIBLE', reason: 'Managed Ralph capture validates shared MC authority and fenced health; this trace lane substitutes process launch and tests MC ingestion, with capture covered in its unit lane.', evidence: [source('src/cli/handlers/mc.ts', 'const ralphStatus = String(state.status'), source('tools/ralph-external/session-launcher.mjs', 'assertManagedWorkerLaunch')] },
   ];
   for (const trace of traces) {
     for (const step of trace.steps) {
@@ -761,11 +782,11 @@ afterAll(() => {
     scheduler: 'src/serve/shared-host-scheduler.ts', store: 'FileAdmissionStore', clockStart: new Date(start).toISOString(),
     scope: 'Current worktree sources; no live providers or transcripts. Baseline rows preserve legacy observations and managed-only unavailable operations. Separate managed rows exercise the generation-bearing runtime APIs with a bound policy and real durable store.',
     restartModel: 'Abrupt owner loss between completed operations: discard scheduler and FileAdmissionStore instances, reopen the same durable file. No subprocess crash, mid-write failure, or stale-lock recovery is claimed.',
-    substitutions: ['Ralph process launcher (synthetic result/error)', 'operator config reader (synthetic provider and concurrency)', 'Date for MC (scheduler tests inject clock directly)'],
+    substitutions: ['Ralph process launcher (synthetic result/error)', 'operator config reader (synthetic provider and concurrency)', 'trusted installation inputs (offline synthetic qualified driver/catalog for managed worker dispatch)', 'Date for MC (scheduler tests inject clock directly)'],
     instrumentation: 'MC scheduler methods have pass-through observers calling their original implementations; snapshots include each internal scheduler operation and the enclosing command.',
     fixtureSources: [source(mappingSource, 'const baseHealth:'), source(mappingSource, 'const confirmedTerminal'), source(mappingSource, 'const uncertainTermination'), source(mappingSource, 'const terminalUnconfirmed'), 'test/conformance/mission-v1/fixtures/worker-contracts/mission-vectors.json#dispatch-health-feature'],
     sourceDigests: Object.fromEntries([
-      'src/serve/shared-host-scheduler.ts', 'src/cli/handlers/mc.ts', mappingSource,
+      'src/serve/shared-host-scheduler.ts', 'src/cli/handlers/mc.ts', 'src/models/resolver.ts', 'src/serve/worker-invocation.ts', 'test/fixtures/managed-mc-worker.ts', mappingSource,
       'test/conformance/mission-v1/fixtures/worker-contracts/mission-vectors.json',
     ].map(file => [file, `sha256:${createHash('sha256').update(readFileSync(join(root, file))).digest('hex')}`])),
     healthVectors: { baseHealth, currentProof: confirmed(3), staleProof: confirmed(2), futureProof: confirmed(4), uncertain: uncertain(3), terminalUnconfirmed: terminalUnconfirmed(3), nullGeneration: confirmed(null) },
