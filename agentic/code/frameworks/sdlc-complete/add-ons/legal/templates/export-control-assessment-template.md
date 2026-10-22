@@ -199,10 +199,11 @@ Section 2 determines export classification; Section 3 assesses technical charact
 | Cuba | OFAC (Treasury) | Comprehensive embargo | Limited humanitarian, informational materials |
 | Iran | OFAC (Treasury) | Comprehensive embargo | Very limited exceptions |
 | North Korea | OFAC (Treasury) | Comprehensive embargo | Extremely limited exceptions |
-| Syria | OFAC (Treasury) | Comprehensive embargo | Limited humanitarian |
 | Crimea region (Ukraine) | OFAC (Treasury) | Regional embargo | Very limited exceptions |
 
 **Policy**: Exports to embargoed countries are PROHIBITED unless specific OFAC license obtained (rare).
+
+**Syria**: OFAC ended the Syria sanctions program on July 1, 2025 (E.O. 14312) and removed the Syrian Sanctions Regulations (31 CFR part 542) on August 26, 2025, so Syria is no longer an OFAC comprehensive embargo. EAR controls still apply: Syria remains in Country Group E:1, and 15 CFR 746.9 requires a license for items on the Commerce Control List unless a listed license exception applies (License Exception SPP, 15 CFR 740.5, covers most EAR99 items since September 2, 2025). Persons on the SDN List under other programs remain blocked. See section 3.2.
 
 ### 3.2 Country Group Restrictions (EAR)
 
@@ -212,7 +213,7 @@ Section 2 determines export classification; Section 3 assesses technical charact
 | --- | --- | --- | --- |
 | **A:1** | NATO allies (less Cuba, Turkey) | UK, France, Germany, Canada (with caveats) | License Exception available (ENC, TSU) |
 | **A:5** | Other allies | Australia, Japan, South Korea | License Exception available |
-| **D:1** | Comprehensive embargo | Cuba, Iran, North Korea, Syria | License required (likely denied) |
+| **D:1** | Comprehensive embargo | Cuba, Iran, North Korea | License required (likely denied) |
 | **E:1** | Terrorism concern | Iran, North Korea, Sudan, Syria | License required (likely denied) |
 | **E:2** | Encryption concern | Belarus, China, Russia, Venezuela, and others | License may be required |
 
