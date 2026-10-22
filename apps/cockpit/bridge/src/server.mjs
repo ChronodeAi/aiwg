@@ -100,11 +100,16 @@ function allowedExecutorTarget(target, executorUrl = executorRequestContext.getS
   const url = parseExecutorUrl(target);
   // The operator-configured origin is the allowlist, including scheme and port.
   // AgentCards and request data cannot add destinations to it.
-  const origin = parseExecutorUrl(executorUrl).origin;
-  if (url.origin !== origin) {
+  const configured = parseExecutorUrl(executorUrl);
+  if (url.origin !== configured.origin) {
     throw executorAuthError('executor_target_refused', 'outbound target is outside the configured executor origin');
   }
-  return url;
+  // Keep the outgoing authority visibly rooted in operator configuration.
+  // Only path/query/fragment come from the checked target, never its origin.
+  configured.pathname = url.pathname;
+  configured.search = url.search;
+  configured.hash = url.hash;
+  return configured;
 }
 
 async function executorFetch(target, init = {}, executorUrl = executorRequestContext.getStore()?.executorOrigin ?? EXECUTOR_URL, hasFallback = false) {
