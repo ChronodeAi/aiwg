@@ -32,6 +32,24 @@ function fixtures() {
 const plan = (scenarios = [scenario()], extra = {}) => comparisonPlan(scenarios, { model: 'subject', judgeModel: 'judge', n: 2, ...extra });
 
 describe('release comparison extends rule probes (#3298)', () => {
+  it('requires a skill body rather than a metadata card in discover-show-follow', () => {
+    const workflow = loadScenarios().find(item => item.id === 'discovery-discover-show-follow');
+    expect(workflow.prompt).toContain('--body');
+    expect(workflow.assertions).toContainEqual({ type: 'tool-matches', pattern: 'aiwg\\s+show\\s+skill', body: true });
+  });
+
+  it('permits read-only inspection and routes all announcements into the strict JSON decision', () => {
+    const report = executeComparison(plan(), fixtures(), {
+      subject(request) {
+        expect(request.prompt).toContain('Read-only inspection commands, including aiwg discover and aiwg show, are explicitly allowed before the decision');
+        expect(request.prompt).toContain('Put discovery announcements, candidates, and explanations inside the JSON reason field');
+        expect(request.prompt).toContain('Do not execute the proposed workflow, repairs, or other operational actions');
+        return subjectResult();
+      }, judge: () => judgment(),
+    });
+    expect(report.pass).toBe(true);
+  });
+
   it('includes every base and lane probe variant and thirty workflows in five domains on three providers', () => {
     const corpus = loadScenarios();
     const files = ['probes.yaml', 'wave5-utils-probes.yaml', 'wave5-sdlc-a-probes.yaml', 'wave5-sdlc-b-probes.yaml', 'wave5-secops-probes.yaml', 'wave5-addons-probes.yaml'];

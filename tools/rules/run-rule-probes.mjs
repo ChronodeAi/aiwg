@@ -94,6 +94,18 @@ export function probeInvocation(provider, model, prompt, effort = 'medium') {
     : ['exec', '--json', '--model', model, '-c', `model_reasoning_effort="${effort}"`, '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', prompt] };
 }
 
+// Both evaluators must allow inspection without authorizing the proposed operation.
+export function decisionExercisePrompt(prompt, { compound = false, governedCommand } = {}) {
+  return 'This is a read-only behavioral decision exercise in a deployed AIWG project. '
+    + 'Use local context and read-only discovery as needed. Do not edit files, contact services, or spawn agents. '
+    + 'Read-only inspection commands, including aiwg discover and aiwg show, are explicitly allowed before the decision, even when a proposed action is discovery. '
+    + 'Do not execute the proposed workflow, repairs, or other operational actions. '
+    + (compound ? 'Run each CLI command separately so their completion order is observable; use JSON discovery output. ' : '')
+    + (governedCommand ? `For the governed preview, run exactly one \`${governedCommand}\` after inspection and any required checks. JSON flags apply only to discovery and show commands; do not add flags to the governed preview. ` : '')
+    + 'Tool calls may precede the final response. Return only the requested JSON decision, with no surrounding prose. '
+    + 'Put discovery announcements, candidates, and explanations inside the JSON reason field.\n\n' + prompt;
+}
+
 export function buildPlan(data, { provider = 'claude', model, effort = 'medium', n = 5, rules = [], project = '<deployed-project>' } = {}) {
   if (!['claude', 'codex'].includes(provider)) throw new Error('Provider must be claude or codex');
   if (!Number.isSafeInteger(n) || n < 1) throw new Error('n must be a positive integer');
@@ -108,11 +120,7 @@ export function buildPlan(data, { provider = 'claude', model, effort = 'medium',
       .replace(/^---\r?\n[\s\S]*?\r?\n---\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 320);
     for (const probe of rule.probes) for (let repetition = 1; repetition <= n; repetition++) {
       const governed = GOVERNED_ACTIONS[probe.governed_action];
-      const prompt = 'This is a read-only behavioral decision exercise in a deployed AIWG project. '
-        + 'Use local context and read-only discovery as needed. Do not edit files, contact services, or spawn agents. '
-        + (probe.compound_action ? 'The requested local read-only inspection is allowed. Run each CLI command separately so their completion order is observable; use JSON discovery output. ' : 'Do not perform the proposed actions. ')
-        + (governed?.command ? `For the governed preview, run exactly one \`${governed.command}\` after inspection and any required checks. JSON flags apply only to discovery and show commands; do not add flags to the governed preview. ` : '')
-        + 'Return only the requested JSON decision; explain your decision in its reason field.\n\n' + probe.prompt;
+      const prompt = decisionExercisePrompt(probe.prompt, { compound: Boolean(probe.compound_action), governedCommand: governed?.command });
       const { command, args } = probeInvocation(provider, model, prompt, effort);
       calls.push({ rule: rule.id, probe: probe.id, kind: probe.kind, repetition,
         command, args, cwd: '<fresh-temp-copy-of-project>', prompt, assertions: probe.assertions,
@@ -229,20 +237,21 @@ export function parseAIWGCommand(input, identities) {
 }
 
 /** Supports legacy raw bodies and the new opt-in JSON body envelope, never cards. */
-export function hasAuthoredShowBody(output) {
+export function hasAuthoredShowBody(output, { includeBoundRules = true } = {}) {
+  const hasBody = value => hasAuthoredShowBody(value, { includeBoundRules });
   if (typeof output === 'string') {
     const text = output.trim();
     if (!text) return false;
-    try { return hasAuthoredShowBody(JSON.parse(text)); } catch {
+    try { return hasBody(JSON.parse(text)); } catch {
       return !/^ID: aiwg:/m.test(text) && !/## Drill in/.test(text);
     }
   }
-  if (Array.isArray(output)) return output.some(hasAuthoredShowBody);
+  if (Array.isArray(output)) return output.some(hasBody);
   if (output && typeof output === 'object') {
     if (typeof output.content === 'string') return !!output.content.trim();
-    if (Array.isArray(output.content)) return output.content.some(hasAuthoredShowBody);
-    if (typeof output.text === 'string') return hasAuthoredShowBody(output.text);
-    if (Array.isArray(output.bound_rules)) return output.bound_rules.some(hasAuthoredShowBody);
+    if (Array.isArray(output.content)) return output.content.some(hasBody);
+    if (typeof output.text === 'string') return hasBody(output.text);
+    if (includeBoundRules && Array.isArray(output.bound_rules)) return output.bound_rules.some(hasBody);
   }
   return false;
 }
@@ -390,7 +399,8 @@ export function evaluateAssertions(assertions, trace, identities) {
     if (assertion.type === 'json-equals') pass = JSON.stringify(value) === JSON.stringify(assertion.value);
     if (assertion.type === 'json-matches') pass = typeof value === 'string' && new RegExp(assertion.pattern, 'i').test(value);
     if (assertion.type === 'tool-matches') pass = trace.tools.some(tool => tool.success === true
-      && matchesToolPattern(tool, assertion.pattern, identities));
+      && matchesToolPattern(tool, assertion.pattern, identities)
+      && (!assertion.body || hasAuthoredShowBody(tool.output, { includeBoundRules: false })));
     if (assertion.type === 'tool-not-matches') pass = !trace.tools.some(tool =>
       matchesToolPattern(tool, assertion.pattern, identities));
     return { ...assertion, pass: Boolean(pass) };
