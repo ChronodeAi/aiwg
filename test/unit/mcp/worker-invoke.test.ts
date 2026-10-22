@@ -594,6 +594,112 @@ describe('atomic admission under concurrency (#2892 M1)', () => {
 // cancelled, never completed.
 // ---------------------------------------------------------------------------
 describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
+  it('T-OG-20/T-OG-23 isolates cancellation on a shared MCP server while pending status stays read-only', async () => {
+    const root = await tempRoot();
+    const f = buildFixture(root, 'mcp');
+    const requests = await Promise.all(['a', 'b'].map(async id => {
+      const workdir = path.join(root, id); await mkdir(workdir);
+      const request = { operation: 'run', request_id: `shared-${id}`, role: 'coding' as const,
+        task: 'implementation', group: 'workers', brief: path.join(root, `${id}.json`),
+        workdir, final_output: path.join(workdir, 'final.json'), transport: 'mcp' as const };
+      await buildStructuredBrief(f, request);
+      return request;
+    }));
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { child, transport } = await transportFixture({ start: false });
+    const messages: any[] = [];
+    const outstanding = new Map<string, any>();
+    let entered!: () => void;
+    const bothPending = new Promise<void>(resolve => { entered = resolve; });
+    const respond = (id: number, result: any) => child.stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`));
+    // One in-process server and SDK connection multiplex both outstanding calls.
+    child.stdin.write.mockImplementation((bytes: string) => {
+      const message = JSON.parse(bytes); messages.push(message);
+      if (message.method === 'initialize') queueMicrotask(() => respond(message.id, {
+        protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1' },
+      }));
+      if (message.method === 'tools/call') {
+        outstanding.set(message.params.arguments.workspace, message);
+        if (outstanding.size === 2) entered();
+      }
+      return true;
+    });
+    child.exitCode = 0; child.signalCode = null;
+    child.stdin.end = () => child.emit('close');
+    const client = new Client({ name: 'shared-fixture', version: '1' }, { capabilities: {} });
+    await client.connect(transport);
+    let now = Date.parse(f.now);
+    const registry = createInvocationRegistry({ maxActive: 2, now: () => now });
+    const tools = new Map<string, any>();
+    const callWorker = vi.fn(async (binding: any, _server: any, options: any) => {
+      options.registerControl({ stop: async () => {
+        const request = outstanding.get(binding.arguments.workspace);
+        await client.notification({ method: 'notifications/cancelled', params: { requestId: request.id, reason: 'operator-cancel' } });
+        return { delivered: true, termination: 'uncertain' };
+      } });
+      const response = await client.callTool({ name: binding.tool, arguments: binding.arguments }, undefined, { timeout: 5000 });
+      return { outcome: 'responded', response };
+    });
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, registry, workerWorktreesRoot: root, scopedBreaker: null,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), callMcpWorker: callWorker,
+      now: () => new Date(now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const runs = requests.map(request => call(request));
+    const claims = { content: [{ type: 'text', text: JSON.stringify({ version: 1, status: 'completed',
+      summary: 'synthetic', claims: [], artifacts: [], checks: [], limitations: [] }) }] };
+    try {
+      await Promise.race([bothPending, Promise.all(runs).then(() => { throw new Error('Both calls must remain pending'); })]);
+      const entries = requests.map(request => registry.values().find((entry: any) => entry.requestId === request.request_id));
+      const wire = requests.map(request => outstanding.get(request.workdir));
+      expect(wire[0].id).not.toBe(wire[1].id);
+      const status = async (entry: any) => JSON.parse((await call({ operation: 'status', invocation_id: entry.invocationId })).content[0].text);
+      const trace = [await Promise.all(entries.map(async (entry: any) => (await status(entry)).status))];
+      const before = JSON.stringify(registry.values());
+      const wireBefore = JSON.stringify(messages);
+      const files = async () => Promise.all(requests.map(async request => Promise.all((await readdir(request.workdir)).sort().map(async name => {
+        const filename = path.join(request.workdir, name);
+        return { name, bytes: await readFile(filename, 'utf8'), mtime: (await stat(filename)).mtimeMs };
+      }))));
+      const filesBefore = await files();
+      for (let tick = 0; tick < 8; tick++) {
+        now += 15_000;
+        for (const entry of entries) {
+          const observed = await status(entry);
+          expect(observed).toMatchObject({ status: 'running', termination: 'running', health: null, diagnostics: [], terminalAt: null });
+          expect(Buffer.byteLength(JSON.stringify(observed))).toBeLessThan(2048);
+        }
+      }
+      expect(JSON.stringify(registry.values())).toBe(before);
+      expect(JSON.stringify(messages)).toBe(wireBefore);
+      expect(await files()).toEqual(filesBefore);
+      expect(registry.canStart()).toBe(false);
+      const cancelled = JSON.parse((await call({ operation: 'cancel', invocation_id: entries[0].invocationId })).content[0].text);
+      expect(cancelled).toMatchObject({ cancelRequested: true, cancelDelivered: true, termination: 'running' });
+      expect(messages.filter(message => message.method === 'notifications/cancelled')).toEqual([
+        { jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: wire[0].id, reason: 'operator-cancel' } },
+      ]);
+      expect(await status(entries[1])).toMatchObject({ status: 'running', cancelRequested: false, cancelDelivered: false });
+      trace.push(['cancel-delivered', (await status(entries[1])).status]);
+      respond(wire[1].id, claims);
+      expect(JSON.parse((await runs[1]).content[0].text).status).toBe('completed');
+      trace.push(['cancel-pending', (await status(entries[1])).status]);
+      respond(wire[0].id, claims);
+      expect(JSON.parse((await runs[0]).content[0].text).status).toBe('cancelled');
+      trace.push(await Promise.all(entries.map(async (entry: any) => (await status(entry)).status)));
+      expect(trace).toEqual([['running', 'running'], ['cancel-delivered', 'running'], ['cancel-pending', 'completed'], ['cancelled', 'completed']]);
+      for (const request of requests) expect((await call(request)).isError).toBe(true);
+      expect(callWorker).toHaveBeenCalledTimes(2);
+      expect(messages.filter(message => message.method === 'tools/call')).toHaveLength(2);
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      for (const request of outstanding.values()) respond(request.id, claims);
+      await Promise.allSettled(runs);
+      await client.close();
+    }
+  });
+
   it.each(['drop', 'late'] as const)('traces pending MCP %s after request-only cancel without replay or status mutation', async scenario => {
     const root = await tempRoot();
     const work = path.join(root, 'work'); await mkdir(work);
