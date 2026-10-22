@@ -279,6 +279,8 @@ export interface WorkerPolicyDiagnostic {
   code: 'OG_POLICY_RELAXATION' | 'OG_CONFIG_REFERENCE' | 'OG_EFFORT_DENIED' | 'OG_MODEL_UNAPPROVED' | 'OG_DATA_POLICY' | 'OG_PIN_MISMATCH' | 'OG_ADAPTER_UNQUALIFIED' | 'OG_BUDGET_UNMEASURABLE';
   pointer: string;
   message: string;
+  /** Fixed, non-sensitive invocation check identifier. */
+  reason?: 'invocation_build_failed' | 'native_argv_invalid' | 'invocation_prepare_failed' | 'qualified_workspace_mismatch';
   /** Diagnostics block by default; optional evidence conflicts are advisory. */
   blocking?: boolean;
   origins?: WorkerPolicyOrigin[];

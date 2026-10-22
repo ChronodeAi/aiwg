@@ -761,10 +761,24 @@ async function runWorkerProbeJson(projectDir, options = {}) {
       registry, section, ...options });
     if (['failed', 'partial'].includes(payload.qualification.status)) process.exitCode = 1;
   }
+  if (workerDispatch && workers.some(worker => worker.ready) && !options.dryRun) {
+    const { checkRecordedWorkerInvocationBuilds } = await import('./worker-qualification.mjs');
+    payload.invocationChecks = options.qualify
+      ? payload.qualification.results.flatMap(result => result.invocationChecks ?? [])
+      : await checkRecordedWorkerInvocationBuilds({ projectDir, config: workerConfig, registry, workers });
+    for (const worker of workers) {
+      if (payload.invocationChecks.some(check => check.cli === worker.cli && check.status === 'blocked')) {
+        worker.ready = false;
+        worker.reason = 'WORKER_DIRECT_INVOCATION_BLOCKED';
+        process.exitCode = 1;
+      }
+    }
+  }
   if (options.json !== false) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else {
     for (const worker of workers) console.log(`Direct Worker ${worker.cli}: ${worker.reason}`);
     if (payload.qualification) console.log(`Worker qualification: ${JSON.stringify(payload.qualification)}`);
+    if (payload.invocationChecks?.length) console.log(`Worker invocation checks: ${JSON.stringify(payload.invocationChecks)}`);
   }
 }
 
@@ -2332,6 +2346,14 @@ export async function runDoctor() {
         } : {}),
       });
       for (const line of directSection.lines) check(line.name, line.status, line.message);
+      if (probeWorkers && directParallelism?.worker_dispatch) {
+        const { checkRecordedWorkerInvocationBuilds } = await import('./worker-qualification.mjs');
+        const invocationChecks = await checkRecordedWorkerInvocationBuilds({ projectDir: process.cwd(), config: directConfig,
+          registry, workers: directSection.installFindings.map(toWorkerProbeRecord) });
+        for (const result of invocationChecks) {
+          check(`Direct Worker Invocation (${result.cli})`, result.status === 'passed' ? 'ok' : 'error', JSON.stringify(result));
+        }
+      }
     }
   } catch {
     if (!workerSectionsConfigFailed) {

@@ -7,6 +7,8 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { validateWorkerCatalogDiscovery } from '../../../src/models/provider-policy.js';
 import { writeExecutable } from '../../helpers/write-executable.js';
+import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
+import { checkWorkerInvocationBuilds, checkRecordedWorkerInvocationBuilds } from '../../../tools/cli/worker-qualification.mjs';
 
 const terminal = vi.hoisted(() => ({ question: vi.fn(), close: vi.fn() }));
 vi.mock('node:readline/promises', () => ({ createInterface: () => terminal }));
@@ -71,9 +73,9 @@ const result = await ({models: modelsHandler, doctor: doctorHandler})[command].e
 if (result.message) console.error(result.message);
 process.exitCode = result.exitCode;
 `);
-  const run = async (args: string[]) => {
+  const run = async (args: string[], cwd = project) => {
     try {
-      const result = await exec(process.execPath, [entry, ...args], { cwd: project, env, timeout: 30000, maxBuffer: 1024 * 1024 });
+      const result = await exec(process.execPath, [entry, ...args], { cwd, env, timeout: 30000, maxBuffer: 1024 * 1024 });
       return { code: 0, ...result };
     } catch (error: any) { return { code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
   };
@@ -83,6 +85,77 @@ process.exitCode = result.exitCode;
 }
 
 describe('doctor worker qualification through the public CLI (fake CLIs only)', () => {
+  it.each([false, true])('checks the configured tuple without launching a worker (build failure: %s)', async fail => {
+    const f = workerResolutionFixture();
+    const root = await mkdtemp(path.join(os.tmpdir(), 'worker-build-check-')); roots.push(root);
+    const buildInvocation = vi.fn(async () => {
+      if (fail) throw new Error('sensitive-build-details');
+      return { argv: ['/synthetic/worker'], stdin: 'closed', envNames: [] };
+    });
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    try {
+      const checks = await checkWorkerInvocationBuilds({ projectDir: root, config: f.snapshot.config,
+        policy: f.snapshot.models.defaults.workerSelection, cli: 'codex',
+        observations: f.snapshot.catalog.discovery!.instances!.codex, driver: { buildInvocation,
+          qualification: { adapter: f.snapshot.registry.providers.codex.workerAdapter,
+            installation: { cwd: root, profile: 'fixture-shell' } } } });
+      expect(checks).toHaveLength(2);
+      expect(buildInvocation).toHaveBeenCalledTimes(2);
+      expect(buildInvocation.mock.calls[0]).toEqual([expect.objectContaining({ cwd: root,
+        selected: expect.objectContaining({ member: 'primary', effort: { support: 'explicit', value: 'medium' } }) })]);
+      expect(checks[0]).toMatchObject({ status: fail ? 'blocked' : 'passed', workdir: root });
+      if (fail) expect(checks[0].diagnostics[0]).toMatchObject({ reason: 'invocation_build_failed', pointer: '/invocation/buildInvocation' });
+      expect(JSON.stringify(checks)).not.toContain('sensitive-build-details');
+      expect(await readdir(root)).toEqual([]);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.each(['native-controls', 'workspace'])('names the failing %s check without launching a worker', async kind => {
+    const f = workerResolutionFixture();
+    const root = await mkdtemp(path.join(os.tmpdir(), 'worker-build-check-')); roots.push(root);
+    const other = path.join(root, 'other'); await mkdir(other);
+    const adapter = f.snapshot.registry.providers.codex.workerAdapter!;
+    adapter.provider = 'codex';
+    adapter.qualification.evidenceRef = 'aiwg doctor --probe-workers --qualify';
+    const buildInvocation = vi.fn(async () => ({ argv: ['/synthetic/worker'], stdin: 'closed', envNames: [] }));
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    try {
+      const checks = await checkWorkerInvocationBuilds({ projectDir: root, config: f.snapshot.config,
+        policy: f.snapshot.models.defaults.workerSelection, cli: 'codex',
+        observations: f.snapshot.catalog.discovery!.instances!.codex, driver: { buildInvocation,
+          qualification: { adapter, installation: { cwd: kind === 'workspace' ? other : root, profile: 'fixture-shell' } } } });
+      expect(checks[0]).toMatchObject({ status: 'blocked', diagnostics: [expect.objectContaining({
+        reason: kind === 'workspace' ? 'qualified_workspace_mismatch' : 'native_argv_invalid',
+        pointer: kind === 'workspace' ? '/request/workdir' : '/invocation/argv' })] });
+      if (kind === 'workspace') expect(buildInvocation).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.each([false, true])('checks the configured tuple from recorded installations (load failure: %s)', async fail => {
+    const f = workerResolutionFixture();
+    const root = await mkdtemp(path.join(os.tmpdir(), 'worker-recorded-check-')); roots.push(root);
+    await writeFile(path.join(root, 'models.json'), JSON.stringify({ defaults: { workerSelection: f.projectPolicy } }));
+    await writeFile(path.join(root, 'worker-installations.json'), '{"version":1,"registrations":[]}');
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src'); vi.stubEnv('AIWG_CONFIG', root);
+    const host = await import('../../../src/models/worker-installation.mjs');
+    const { WorkerPolicyError } = await import('../../../src/models/provider-policy.js');
+    const load = vi.spyOn(host, 'loadRecordedWorkerInstallations');
+    if (fail) load.mockRejectedValue(new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', 'sensitive-installation-details'));
+    else load.mockResolvedValue({ ...f.snapshot, observations: { codex: f.snapshot.catalog.discovery!.instances!.codex }, drivers: {
+      codex: { qualification: { adapter: f.snapshot.registry.providers.codex.workerAdapter,
+        installation: { cwd: root, profile: 'fixture-shell' } },
+      buildInvocation: async () => ({ argv: ['/synthetic/worker'], stdin: 'closed', envNames: [] }) },
+    } } as any);
+    try {
+      const checks = await checkRecordedWorkerInvocationBuilds({ projectDir: root, config: f.snapshot.config,
+        registry: f.snapshot.registry, workers: [{ cli: 'codex', ready: true }, { cli: 'missing', ready: true }] });
+      expect(checks.find(check => check.cli === 'codex')?.status).toBe(fail ? 'blocked' : 'passed');
+      expect(checks.find(check => check.cli === 'missing')).toMatchObject({ status: 'blocked',
+        diagnostics: [expect.objectContaining({ code: 'OG_ADAPTER_UNQUALIFIED' })] });
+      expect(JSON.stringify(checks)).not.toContain('sensitive-installation-details');
+    } finally { load.mockRestore(); vi.unstubAllEnvs(); }
+  });
+
   it('blocks changed payload versions behind an unchanged launcher, and failed probes', async () => {
     const f = await fixture();
     const payload = path.join(f.root, 'payload.cjs');
@@ -114,6 +187,12 @@ describe('doctor worker qualification through the public CLI (fake CLIs only)', 
     expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
     const report = JSON.parse(qualified.stdout);
     expect(report.qualification.results).toEqual([expect.objectContaining({ cli: 'codex', status: 'qualified', models: ['synthetic-model'] })]);
+    expect(report.invocationChecks).toEqual([expect.objectContaining({ cli: 'codex', group: 'workers', member: 'primary',
+      role: 'coding', model: 'synthetic-model', effort: 'medium', workdir: f.project, status: 'passed', diagnostics: [] })]);
+    const probed = await f.run(['doctor', '--probe-workers', '--json']);
+    expect(probed.code, probed.stdout + probed.stderr).toBe(0);
+    expect(JSON.parse(probed.stdout).invocationChecks).toEqual(report.invocationChecks);
+    await expect(access(path.join(f.project, '.worker-probe'))).rejects.toMatchObject({ code: 'ENOENT' });
     const resolved = await f.resolve();
     expect(resolved.code, resolved.stdout + resolved.stderr).toBe(0);
     const invocation = JSON.parse(resolved.stdout).invocation;
@@ -122,6 +201,20 @@ describe('doctor worker qualification through the public CLI (fake CLIs only)', 
     expect(invocation.shellCommand).toContain("'-s' 'workspace-write'");
     const configPath = path.join(f.project, '.aiwg/aiwg.config');
     const configText = await readFile(configPath, 'utf8');
+    const unsupportedApproval = JSON.parse(configText);
+    unsupportedApproval.parallelism.groups.workers.execution.approval = 'on-request';
+    await writeFile(configPath, JSON.stringify(unsupportedApproval));
+    const blockedProbe = await f.run(['doctor', '--probe-workers', '--json']);
+    expect(blockedProbe.code, blockedProbe.stdout + blockedProbe.stderr).toBe(1);
+    const blockedReport = JSON.parse(blockedProbe.stdout);
+    expect(blockedReport.workers[0]).toMatchObject({ ready: false, reason: 'WORKER_DIRECT_INVOCATION_BLOCKED' });
+    const blockedResolve = await f.resolve();
+    expect(blockedResolve.code).toBe(2);
+    expect(blockedReport.invocationChecks[0].diagnostics).toEqual(JSON.parse(blockedResolve.stdout).diagnostics);
+    const blockedText = await f.run(['doctor', '--probe-workers', '--cli', 'codex']);
+    expect(blockedText.code).toBe(1);
+    expect(blockedText.stdout).toContain('invocation_build_failed');
+    await writeFile(configPath, configText);
     const stricter = JSON.parse(configText);
     stricter.parallelism.health = { requireStepCap: true };
     await writeFile(configPath, JSON.stringify(stricter));
@@ -270,11 +363,54 @@ describe('doctor worker qualification through the public CLI (fake CLIs only)', 
     expect(source).toContain("'-s', sandbox,");
     await writeFile(driver, source.replace("'-s', sandbox,", ''));
     const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
-    expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
+    expect(qualified.code, qualified.stdout + qualified.stderr).toBe(1);
+    const report = JSON.parse(qualified.stdout);
+    expect(report.qualification.results[0].status).toBe('failed');
+    expect(report.workers[0]).toMatchObject({ ready: false, inRange: true, reason: 'WORKER_DIRECT_INVOCATION_BLOCKED' });
+    expect(report.invocationChecks[0].diagnostics[0]).toMatchObject({
+      pointer: '/invocation/argv', reason: 'native_argv_invalid' });
+    await expect(access(path.join(f.config, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     const resolved = await f.resolve();
     expect(resolved.code).not.toBe(0);
     expect(JSON.parse(resolved.stdout).invocation).toBeUndefined();
     expect(resolved.stdout).toContain('OG_ADAPTER_UNQUALIFIED');
+  });
+
+  it('reports a sanitized adapter build failure before recording qualification', async () => {
+    const f = await fixture();
+    const driver = path.join(f.installed, 'tools/ralph-external/lib/codex-adapter.mjs');
+    const source = await readFile(driver, 'utf8');
+    await writeFile(driver, source.replace('const model = invocation?.selected?.model;', "throw new Error('sensitive-build-details');"));
+    const result = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.stdout);
+    expect(report.workers[0]).toMatchObject({ ready: false, reason: 'WORKER_DIRECT_INVOCATION_BLOCKED' });
+    expect(report.invocationChecks[0].diagnostics[0]).toMatchObject({
+      pointer: '/invocation/buildInvocation', reason: 'invocation_build_failed' });
+    expect(result.stdout + result.stderr).not.toContain('sensitive-build-details');
+    await expect(access(path.join(f.config, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('doctor and resolve name the same qualified workspace mismatch for another worktree', async () => {
+    const f = await fixture();
+    const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
+    const worktree = path.join(f.project, 'worktree');
+    await mkdir(path.join(worktree, '.aiwg'), { recursive: true });
+    for (const filename of ['.aiwg/aiwg.config', 'models.json', 'brief.txt']) {
+      await writeFile(path.join(worktree, filename), await readFile(path.join(f.project, filename)));
+    }
+    const probed = await f.run(['doctor', '--probe-workers', '--json'], worktree);
+    expect(probed.code, probed.stdout + probed.stderr).toBe(1);
+    const report = JSON.parse(probed.stdout);
+    expect(report.workers[0]).toMatchObject({ inRange: true, ready: false, reason: 'WORKER_DIRECT_INVOCATION_BLOCKED' });
+    const resolved = await f.run(['models', 'resolve', '--role', 'coding', '--task', 'implementation', '--group', 'workers',
+      '--brief', path.join(worktree, 'brief.txt'), '--workdir', worktree, '--final-output', path.join(worktree, 'result.json'),
+      '--format', 'json'], worktree);
+    expect(resolved.code).toBe(2);
+    const diagnostic = JSON.parse(resolved.stdout).diagnostics.at(-1);
+    expect(diagnostic).toMatchObject({ code: 'OG_CONFIG_REFERENCE', pointer: '/request/workdir', reason: 'qualified_workspace_mismatch' });
+    expect(report.invocationChecks[0].diagnostics).toContainEqual(diagnostic);
   });
 
   it('requires --yes without a TTY and dry-run previews without creating qualification records', async () => {

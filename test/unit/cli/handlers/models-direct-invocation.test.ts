@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createModelsHandler, modelsHandler } from '../../../../src/cli/handlers/models.js';
 import { parseWorkerCommandArgs, resolveWorkerInvocation, type WorkerInvocationDriver } from '../../../../src/serve/worker-invocation.js';
-import { qualifyWorkerInvocationProfile, requiredWorkerControls } from '../../../../src/models/provider-policy.js';
+import { qualifyWorkerInvocationProfile, requiredWorkerControls, WorkerPolicyError } from '../../../../src/models/provider-policy.js';
 import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuite } from '../../../../tools/ralph-external/lib/provider-adapter.mjs';
 import { McpServerRegistry, workerServerDigest } from '../../../../src/mcp/registry.js';
 import { workerResolutionFixture } from '../../../fixtures/worker-resolution.js';
@@ -188,6 +188,19 @@ describe('S1 installation owner handoff (T-OG-15/17)', () => {
     expect(changed.plan.status).toBe('blocked');
   });
 
+  it('names the qualified workspace check when resolving another worktree', async () => {
+    const f = await installedFixture();
+    const otherWorkdir = path.join(f.request.workdir, 'other-worktree');
+    await mkdir(otherWorkdir);
+    f.request.workdir = otherWorkdir;
+    const result = await f.call();
+    expect(result.result.exitCode).toBe(2);
+    expect(result.plan.diagnostics.at(-1)).toEqual({ code: 'OG_CONFIG_REFERENCE',
+      pointer: '/request/workdir', reason: 'qualified_workspace_mismatch',
+      message: 'Worker workdir differs from the qualified workspace. Use the qualified workspace or run aiwg doctor --probe-workers --qualify from the requested workdir.' });
+    expect(result.plan.invocation).toBeUndefined();
+  });
+
   it('requires the installation owner and rejects changed argv', async () => {
     const f = await installedFixture();
     const prepare = f.drivers.codex.prepareWorkerInvocation;
@@ -301,12 +314,23 @@ describe('T-OG-15 models resolve direct invocation', () => {
     }));
   });
 
+  it.each(['shell', 'json'])('names an adapter build failure without exposing its text in %s', async format => {
+    const f = await fixture();
+    f.buildInvocation.mockRejectedValueOnce(new WorkerPolicyError('OG_CONFIG_REFERENCE', 'sensitive-build-details'));
+    const result = await f.call(format);
+    expect(result.result.exitCode).toBe(2);
+    expect(result.plan.invocation).toBeUndefined();
+    expect(result.plan.diagnostics.at(-1)).toMatchObject({ code: 'OG_CONFIG_REFERENCE',
+      pointer: '/invocation/buildInvocation', reason: 'invocation_build_failed' });
+    expect(result.output).not.toContain('sensitive-build-details');
+  });
+
   it.each([
     ['brief digest', 'OG_PIN_MISMATCH', '/request/brief'],
     ['path', 'OG_CONFIG_REFERENCE', '/request/brief'],
-    ['model', 'OG_MODEL_UNAPPROVED', '/parallelism/clis/codex/invocationProfile'],
-    ['effort', 'OG_EFFORT_DENIED', '/parallelism/clis/codex/invocationProfile'],
-    ['internal', 'OG_ADAPTER_UNQUALIFIED', '/parallelism/clis/codex/invocationProfile'],
+    ['model', 'OG_MODEL_UNAPPROVED', '/invocation/prepareWorkerInvocation'],
+    ['effort', 'OG_EFFORT_DENIED', '/invocation/prepareWorkerInvocation'],
+    ['internal', 'OG_ADAPTER_UNQUALIFIED', '/invocation/prepareWorkerInvocation'],
   ])('emits a scoped, sanitized diagnostic for %s', async (kind, code, pointer) => {
     const f = await fixture();
     const secret = 'sensitive-internal-canary';
@@ -325,6 +349,7 @@ describe('T-OG-15 models resolve direct invocation', () => {
     const plan = await resolveWorkerInvocation(f.snapshot, f.request, f.drivers, f.now, expected);
     expect(plan.invocation).toBeUndefined();
     expect(plan.diagnostics.at(-1)).toMatchObject({ code, pointer });
+    if (['model', 'effort', 'internal'].includes(kind)) expect(plan.diagnostics.at(-1)?.reason).toBe('invocation_prepare_failed');
     expect(JSON.stringify(plan.diagnostics)).not.toContain(secret);
   });
 
