@@ -4,6 +4,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getFeaturesRoot } from '../../src/features/paths.js';
 import { sqliteAvailable } from '../helpers/sqlite.js';
@@ -24,7 +25,7 @@ const sources = [
   ['factory', 'factory/current.jsonl'],
 ] as const;
 
-describe.skipIf(missingBuild || !sqliteAvailable)('spawned session regression CLI', () => {
+describe.skipIf(!sqliteAvailable).each(['source router', 'compiled bin'] as const)('spawned session regression CLI (%s)', entry => {
   beforeAll(() => {
     temporaryRoot = mkdtempSync(join(tmpdir(), 'aiwg-session-cli-'));
     workspace = join(temporaryRoot, 'workspace');
@@ -37,7 +38,7 @@ describe.skipIf(missingBuild || !sqliteAvailable)('spawned session regression CL
     rmSync(temporaryRoot, { recursive: true, force: true });
   });
 
-  it('imports and replays the corpus through bin/aiwg.mjs', () => {
+  it.skipIf(entry === 'compiled bin' && missingBuild)('imports and replays the corpus through the CLI', () => {
     for (const [provider, fixture] of sources) {
       const args = [
         'sessions', 'import', resolve(corpus, fixture),
@@ -47,7 +48,7 @@ describe.skipIf(missingBuild || !sqliteAvailable)('spawned session regression CL
         '--db', database,
         '--json',
       ];
-      const first = runCli(args);
+      const first = runCli(args, entry);
       expect(first.error).toBeUndefined();
       expect(first.status, first.stderr).toBe(0);
       expect(parse(first.stdout)).toMatchObject({
@@ -59,7 +60,7 @@ describe.skipIf(missingBuild || !sqliteAvailable)('spawned session regression CL
       });
       expect(parse(first.stdout).data.totals.eventsInserted).toBeGreaterThan(0);
 
-      const replay = runCli(args);
+      const replay = runCli(args, entry);
       expect(replay.error).toBeUndefined();
       expect(replay.status, replay.stderr).toBe(0);
       expect(parse(replay.stdout)).toMatchObject({
@@ -76,7 +77,7 @@ describe.skipIf(missingBuild || !sqliteAvailable)('spawned session regression CL
       '--db', database,
       '--limit', '20',
       '--json',
-    ]);
+    ], entry);
     expect(listed.error).toBeUndefined();
     expect(listed.status, listed.stderr).toBe(0);
     const output = parse(listed.stdout);
@@ -91,8 +92,12 @@ describe.skipIf(missingBuild || !sqliteAvailable)('spawned session regression CL
   }, 60_000);
 });
 
-function runCli(args: string[]) {
-  const result = spawnSync(process.execPath, [bin, ...args], {
+function runCli(args: string[], entry: 'source router' | 'compiled bin') {
+  const launch = entry === 'compiled bin' ? [bin] : [
+    '--import', import.meta.resolve('tsx'), '--input-type=module', '--eval',
+    `const { run } = await import(${JSON.stringify(pathToFileURL(resolve(root, 'src/cli/router.ts')).href)}); await run(process.argv.slice(1)); process.exit(process.exitCode ?? 0);`,
+  ];
+  const result = spawnSync(process.execPath, [...launch, ...args], {
     cwd: root,
     timeout: 30_000,
     encoding: 'utf8',
@@ -100,6 +105,8 @@ function runCli(args: string[]) {
       ...process.env,
       HOME: temporaryRoot,
       USERPROFILE: temporaryRoot,
+      XDG_DATA_HOME: join(temporaryRoot, 'data'),
+      XDG_CONFIG_HOME: join(temporaryRoot, 'config'),
       // Dependency code may live outside the base install. Keep the selected
       // read-only package location while isolating all mutable CLI state.
       AIWG_FEATURES_HOME: getFeaturesRoot(),
