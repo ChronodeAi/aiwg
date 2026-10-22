@@ -193,6 +193,8 @@ describe('doctor worker qualification through the public CLI (fake CLIs only)', 
     expect(probed.code, probed.stdout + probed.stderr).toBe(0);
     expect(JSON.parse(probed.stdout).invocationChecks).toEqual(report.invocationChecks);
     await expect(access(path.join(f.project, '.worker-probe'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(report.qualification.accountScopeNotice).toContain('bound only to the configured accountScope label');
+    expect(report.qualification.accountScopeNotice).toContain('Account switches are not detected');
     const resolved = await f.resolve();
     expect(resolved.code, resolved.stdout + resolved.stderr).toBe(0);
     const invocation = JSON.parse(resolved.stdout).invocation;
@@ -229,6 +231,35 @@ describe('doctor worker qualification through the public CLI (fake CLIs only)', 
     const changed = await f.resolve();
     expect(changed.code).not.toBe(0);
     expect(changed.stdout).toContain('aiwg doctor --probe-workers --qualify');
+  });
+
+  it('requires requalification after the configured accountScope label changes', async () => {
+    const f = await fixture();
+    const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
+    const resolved = await f.resolve();
+    expect(resolved.code, resolved.stdout + resolved.stderr).toBe(0);
+    const filename = path.join(f.project, '.aiwg/aiwg.config');
+    const config = JSON.parse(await readFile(filename, 'utf8'));
+    config.parallelism.clis.codex.accountScope = 'synthetic-account-2';
+    await writeFile(filename, JSON.stringify(config));
+    const changed = await f.resolve();
+    expect(changed.code).not.toBe(0);
+    expect(JSON.parse(changed.stdout).invocation).toBeUndefined();
+    const requalified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    expect(requalified.code, requalified.stdout + requalified.stderr).toBe(0);
+    const restored = await f.resolve();
+    expect(restored.code, restored.stdout + restored.stderr).toBe(0);
+  });
+
+  it('reports the accountScope limitation in text qualification results', async () => {
+    const f = await fixture();
+    const result = await f.run(['doctor', '--probe-workers', '--qualify', '--yes']);
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain('bound only to the configured accountScope label');
+    expect(result.stdout).toContain('Account switches are not detected');
+    expect(result.stdout).toContain('change parallelism.clis.<cli>.accountScope');
+    expect(result.stdout).toContain('refresh model discovery, and requalify before dispatch');
   });
 
   it.each(['same-facts', 'banner', 'context', 'efforts', 'older', 'retired', 'hidden', 'conflict'])(
@@ -428,6 +459,7 @@ describe('doctor worker qualification through the public CLI (fake CLIs only)', 
     const preview = await f.run(['doctor', '--probe-workers', '--qualify', '--dry-run', '--json', '--cli', 'codex']);
     expect(preview.code, preview.stderr).toBe(0);
     expect(JSON.parse(preview.stdout).qualification.status).toBe('dry-run');
+    expect(JSON.parse(preview.stdout).qualification.accountScopeNotice).toContain('Account switches are not detected');
     expect(JSON.parse(preview.stdout).workers.map((worker: any) => worker.cli)).toEqual(['codex']);
     await expect(access(path.join(f.config, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -466,12 +498,15 @@ describe('doctor worker qualification through the public CLI (fake CLIs only)', 
         config: JSON.parse(await readFile(path.join(f.project, '.aiwg/aiwg.config'), 'utf8')),
         registry: loadProviderModelCapabilities(), section: { installFindings: [{ cli: 'codex', readiness: 'ready', installedVersion: '0.161.0' }] } });
       expect(result.status).toBe('declined');
+      expect(result.accountScopeNotice).toContain('Account switches are not detected');
       expect(terminal.question).toHaveBeenCalledTimes(1);
       expect(terminal.question.mock.calls[0][0]).toContain('synthetic-model');
       expect(terminal.question.mock.calls[0][0]).toContain('coding');
       expect(terminal.question.mock.calls[0][0]).toContain('codex');
       expect(terminal.question.mock.calls[0][0]).toContain('chmod go-w');
       expect(terminal.question.mock.calls[0][0]).toContain(f.config);
+      expect(terminal.question.mock.calls[0][0]).toContain('Account switches are not detected');
+      expect(terminal.question.mock.calls[0][0]).toContain('change parallelism.clis.<cli>.accountScope');
       expect((await stat(f.config)).mode & 0o777).toBe(0o775);
       expect(terminal.close).toHaveBeenCalledTimes(1);
       await expect(access(path.join(f.config, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
