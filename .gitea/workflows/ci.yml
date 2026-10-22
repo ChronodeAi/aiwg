@@ -23,7 +23,7 @@ jobs:
     # digest-pinned npm 11 runtime used by the publication workflow.
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
     # Preserve setup and post-test headroom around the required UAT and serve steps.
-    # The default Vitest corpus runs once across the two required test-shards legs.
+    # The default Vitest corpus runs once across the four required test-shards legs.
     timeout-minutes: 35
 
     steps:
@@ -318,6 +318,9 @@ jobs:
 
       - name: Record runner headroom (#2553)
         run: node tools/ci/runner-headroom.mjs .
+
+      - name: Verify native shard inventory
+        run: node tools/testing/check-native-shards.mjs 4
 
       - name: Run default test shard
         env:
