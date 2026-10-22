@@ -30,7 +30,7 @@ Alternate expressions and non-obvious activations (primary phrases are matched a
 | Framework inventory | "what frameworks are installed?" | Run `aiwg status` |
 | Artifact counts | "how many requirements do I have?" | Run `aiwg status` |
 | Deployment check | "what's deployed to copilot?" | Run `aiwg status` |
-| Project progress | "project-status" / "where are we?" | Do **not** run `aiwg status`; use `aiwg discover "project status"` then `aiwg show skill project-status --first` |
+| Project progress | "project-status" / "where are we?" | Do **not** run `aiwg status`; use `aiwg discover "project status"` then `aiwg show skill project-status --body --first` |
 
 ## Behavior
 

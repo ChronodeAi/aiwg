@@ -7,7 +7,7 @@ activation: on-demand
 
 # research-before-decision — guidance
 
-Authority: `aiwg show rule research-before-decision` (kernel). This companion supplies supporting explanation; the complete imperative core is self-contained in that rule.
+Authority: `aiwg show rule research-before-decision --body` (kernel). This companion supplies supporting explanation; the complete imperative core is self-contained in that rule.
 
 ## Overview
 

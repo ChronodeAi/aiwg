@@ -20,4 +20,4 @@ activation: kernel
 - When selecting a library, check the project's dependency manifest and use what already exists in the project.
 - Before making a technical decision, verify that you have read the relevant source code, checked existing project patterns, read error messages completely, searched actual file and function locations, verified types and signatures from source rather than memory, and confirmed that dependencies exist in the project.
 
-Supporting rationale and examples: [research-before-decision-guidance](./research-before-decision-guidance.md) (`aiwg show rule research-before-decision-guidance`, on-demand).
+Supporting rationale and examples: [research-before-decision-guidance](./research-before-decision-guidance.md) (`aiwg show rule research-before-decision-guidance --body`, on-demand).

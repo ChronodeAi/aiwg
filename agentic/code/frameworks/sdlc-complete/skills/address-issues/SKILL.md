@@ -39,7 +39,7 @@ commandHint:
 >
 > ```bash
 > aiwg discover "<capability>"
-> aiwg show skill <name>
+> aiwg show skill <name> --body
 > ```
 >
 > Only kernel-listed skills (`aiwg-doctor`, `aiwg-refresh`, `aiwg-status`, `aiwg-help`, `use`, `steward`) are directly invokable as slash commands. See [skill-discovery rule](../../../addons/aiwg-utils/rules/skill-discovery.md).
@@ -331,7 +331,7 @@ A recurring failure mode: cycle 3 recommends closure with a 24-hour objection wi
    Exit `0`: merged; continue. Exit `3`: open or closed unmerged; post a Cycle status comment naming the open PR and exit Phase 3.5 for the next cycle. Exit `4`: the tracker could not be read; post a blocker and stop, never assuming the merge.
 2. **Re-run verification** — execute the verification commands the earlier cycles relied on (grep for the regression pattern, run the fix's tests, check that the changed file is on disk in `default_branch`). Use the same commands recorded in earlier cycle comments so the evidence chain is reproducible.
 3. **Branch on the result**:
-   - **Verification passes** — delegate to the `issue-close` skill (`aiwg show skill issue-close`) which already implements `verify_before_close: true` semantics, posts a comprehensive closing comment with on-disk evidence, links the resolving commit/PR, and closes the issue.
+   - **Verification passes** — delegate to the `issue-close` skill (`aiwg show skill issue-close --body`) which already implements `verify_before_close: true` semantics, posts a comprehensive closing comment with on-disk evidence, links the resolving commit/PR, and closes the issue.
    - **Verification fails** — re-open the diagnostic as a fresh cycle (treat it like a Cycle N+1 reopening). Post a "verification disagreed with expectations" comment with the failing command output, do NOT close, and leave the issue in the active set for the next loop iteration.
 4. **Honor the objection window** — if a human comment landed during the stated window, never auto-close. Treat the comment as human feedback per Phase 2 Step 3 and resume cycles.
 5. **Remove the `triage-recommended-close-pending-window` label** on successful close, so the Phase 1 audit doesn't re-process it on the next run.

@@ -17,8 +17,10 @@ This is your always-loaded core directory for AIWG. It does **not** list every u
 
 ## How to use this quickref
 
-Routing authority: `aiwg show rule skill-discovery` (kernel). Skill/CLI precedence:
-`aiwg show rule cli-secondary`. The capability phrases below are lookup aids.
+`aiwg show <type> <name>` returns a metadata card. Inspect its outline, then fetch a needed `--section "Heading"` or use `--body` for the full instructions. Fetch required rules with `--rules --with-rule-bodies` before governed work.
+
+Routing authority: `aiwg show rule skill-discovery --body` (kernel). Skill/CLI precedence:
+`aiwg show rule cli-secondary --body`. The capability phrases below are lookup aids.
 
 ## Framework quickrefs (loaded if framework is installed)
 
@@ -72,7 +74,7 @@ Route these phrases carefully:
 | User intent | Use |
 |---|---|
 | Workspace inventory, installed frameworks, deployed provider files | `aiwg-status` / `aiwg status` |
-| Cross-framework project progress, "project-status", "where are we?", "what is next?" | `aiwg discover "project status"` → `aiwg show skill project-status --first` |
+| Cross-framework project progress, "project-status", "where are we?", "what is next?" | `aiwg discover "project status"` → `aiwg show skill project-status --body --first` |
 | SDLC-specific project health or lifecycle gate status | `aiwg discover "SDLC project health check"` and prefer `project-health-check` or `orchestrate-project` when those rank above generic workspace inventory |
 
 Do not answer `project-status` by running only `aiwg status`; that command reports workspace install/deployment inventory, not project progress.
@@ -105,7 +107,7 @@ aiwg discover "aiwg status"                    # → aiwg-status
 aiwg discover "aiwg doctor"                    # → aiwg-doctor
 aiwg discover "version"                        # → version
 aiwg discover "runtime info"                   # → runtime-info
-aiwg discover "project status"                 # → project-status (cross-framework project progress; then `aiwg show skill project-status --first`)
+aiwg discover "project status"                 # → project-status (cross-framework project progress; then `aiwg show skill project-status --body --first`)
 aiwg discover "SDLC project health check"       # → project-health-check / orchestrate-project
 aiwg discover "workspace health"               # → workspace-health
 ```

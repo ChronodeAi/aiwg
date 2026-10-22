@@ -1738,7 +1738,7 @@ async function handleDiscover(args: string[]): Promise<void> {
 }
 
 /**
- * Handle 'index show' command — print the full text of a specific
+ * Handle 'index show' command — show the metadata card of a specific
  * artifact by type and name.
  *
  * Shape (#1218):
@@ -1747,9 +1747,15 @@ async function handleDiscover(args: string[]): Promise<void> {
  * Type is positional (not a flag) so the verb reads as
  * "show <kind> <name>". `<type>` is one of the operational show types.
  *
- * Companion to `discover`: where discover ranks candidates, show fetches
- * the artifact body so consumers don't need to navigate the filesystem.
+ * Companion to `discover`: where discover ranks candidates, show returns
+ * a metadata card with section/body drill-ins so consumers don't need to navigate the filesystem.
  */
+function showFlagValue(flags: string[], index: number): string {
+  const value = flags[index + 1];
+  if (!value || value.startsWith('--')) throw new Error(`${flags[index]} requires a value`);
+  return value;
+}
+
 async function handleShow(args: string[]): Promise<void> {
   const { showArtifact, showMetadata } = await import('./query-engine.js');
   const cwd = process.cwd();
@@ -1782,9 +1788,11 @@ async function handleShow(args: string[]): Promise<void> {
     '  aiwg show command discover',
     '  aiwg show skill intake-wizard --resource-source web --aiwg-version stable',
     '',
+    'Default: metadata card. --body restores full output; --section <heading> is repeatable.',
+    '--rules [--with-rule-bodies] | --resources | --resource <path>',
     'Bound rules: summaries and show pointers are appended for bound skills, agents, and flows.',
     'Fetch and follow every required_rule_checks entry before starting governed work; summaries do not replace full rules.',
-    'Use --bound-rule-bodies to include their full text (JSON: bound_rules[].content).',
+    'Use --rules --with-rule-bodies to include their full text (legacy alias: --bound-rule-bodies).',
     '',
     'Tip: use `aiwg discover "<phrase>" --json` first to find the stable id.',
   ].join('\n');
@@ -1854,6 +1862,12 @@ async function handleShow(args: string[]): Promise<void> {
   const params = {
     name,
     boundRuleBodies: flags.includes('--bound-rule-bodies'),
+    body: flags.includes('--body'),
+    sections: flags.flatMap((flag, i) => flag === '--section' ? [showFlagValue(flags, i)] : []),
+    rules: flags.includes('--rules'),
+    withRuleBodies: flags.includes('--with-rule-bodies'),
+    resources: flags.includes('--resources'),
+    resource: flags.includes('--resource') ? showFlagValue(flags, flags.indexOf('--resource')) : undefined,
     typeFilter: type ? [type] : undefined,
     json,
     first,

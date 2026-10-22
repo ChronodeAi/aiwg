@@ -106,7 +106,7 @@ describe('framework capabilities outside provider directories (#3304)', () => {
     fs.writeFileSync(partial, '---\nname: local-only\n---\n# Local only\n');
     const builder = vi.spyOn(indexBuilder, 'buildIndex');
     if (query === 'show') {
-      await showArtifact(project, { name: 'induct-research', typeFilter: ['skill'], backend: 'local', json: true });
+      await showArtifact(project, { body: true, name: 'induct-research', typeFilter: ['skill'], backend: 'local', json: true });
     } else {
       await discoverCapability(project, { phrase: 'induct this paper', backend: 'local', json: true });
     }
@@ -173,7 +173,7 @@ describe('framework capabilities outside provider directories (#3304)', () => {
     expect(index().entries[induction]).toBeUndefined();
     copySkill('induct-research');
     log.mockClear();
-    await showArtifact(project, { name: 'induct-research', typeFilter: ['skill'], backend, json: true });
+    await showArtifact(project, { body: true, name: 'induct-research', typeFilter: ['skill'], backend, json: true });
     expect(json().content).toContain('# Induct Research');
     expect(json().uninstalled).not.toBe(true);
     expect(index().entries[induction]?.type).toBe('skill');
@@ -206,10 +206,10 @@ describe('framework capabilities outside provider directories (#3304)', () => {
     fs.writeFileSync(path.join(control, 'note.md'), '# Project note');
     await buildIndex(project, { graph: 'project', quiet: true });
     log.mockClear();
-    await showArtifact(project, { name: 'induct-research', typeFilter: ['skill'], graph: 'project', backend: 'local', json: true });
+    await showArtifact(project, { body: true, name: 'induct-research', typeFilter: ['skill'], graph: 'project', backend: 'local', json: true });
     expect(json().uninstalled).toBe(installed === 'absent');
     if (installed !== 'absent') expect(json().hint).not.toContain('aiwg use');
-    await showArtifact(project, { name: 'induct-research', typeFilter: ['skill'], graph: 'project', backend: 'local' });
+    await showArtifact(project, { body: true, name: 'induct-research', typeFilter: ['skill'], graph: 'project', backend: 'local' });
     const text = stdout.mock.calls.map(call => String(call[0])).join('');
     expect(text.includes('corpus-only')).toBe(installed === 'absent');
   });
@@ -220,7 +220,7 @@ describe('framework capabilities outside provider directories (#3304)', () => {
     const builder = vi.spyOn(indexBuilder, 'buildIndex');
     const status = vi.spyOn(fortemiSync, 'getFortemiCoreSyncStatus');
     for (let run = 0; run < 3; run++) {
-      await showArtifact(project, { name: 'induct-research', typeFilter: ['skill'], backend, json: true });
+      await showArtifact(project, { body: true, name: 'induct-research', typeFilter: ['skill'], backend, json: true });
       await discoverCapability(project, { phrase: 'induct this paper', backend, json: true });
     }
     expect(builder).not.toHaveBeenCalled();
@@ -386,7 +386,7 @@ describe('root-isolated framework indexes (#3308)', () => {
       expect(loadGraphIndexFile(project, 'relationships.json', 'framework')).toEqual({ root: selected });
       expect(getFortemiCoreSyncStatus(project, 'framework').location).toContain(path.dirname(dir));
       log.mockClear();
-      await showArtifact(project, { name: 'corpus-health-audit', typeFilter: ['skill'], backend: 'fortemi-core', json: true });
+      await showArtifact(project, { body: true, name: 'corpus-health-audit', typeFilter: ['skill'], backend: 'fortemi-core', json: true });
       expect(json().path).toBe(path.join(selected, `${research}/skills/corpus-health-audit/SKILL.md`));
       expect(json().content).toContain(selected === other ? 'Edge health audit' : 'Corpus Health Audit');
     }
@@ -412,7 +412,7 @@ describe('root-isolated framework indexes (#3308)', () => {
     vi.stubEnv('AIWG_ROOT', bundle);
     expect(getGraphIndexDir(project, 'framework')).toBe(getGraphIndexDir(root, 'framework'));
     log.mockClear();
-    await showArtifact(project, { name: 'corpus-health-audit', typeFilter: ['skill'], json: true });
+    await showArtifact(project, { body: true, name: 'corpus-health-audit', typeFilter: ['skill'], json: true });
     expect(json().path).toBe(path.join(root, `${research}/skills/corpus-health-audit/SKILL.md`));
     expect(builder).not.toHaveBeenCalled();
   });
@@ -424,7 +424,7 @@ describe('root-isolated framework indexes (#3308)', () => {
     const other = secondRoot();
     for (const selected of [root, other, root, other]) {
       log.mockClear();
-      await showArtifact(selected, { name: 'corpus-health-audit', typeFilter: ['skill'], json: true });
+      await showArtifact(selected, { body: true, name: 'corpus-health-audit', typeFilter: ['skill'], json: true });
       expect(json().path).toBe(path.join(selected, `${research}/skills/corpus-health-audit/SKILL.md`));
       log.mockClear();
       await discoverCapability(selected, { phrase: 'corpus health audit', json: true });
@@ -455,7 +455,7 @@ describe('root-isolated framework indexes (#3308)', () => {
     const sync = vi.spyOn(fortemiSync, 'syncFortemiCoreIndex');
     for (let i = 0; i < 3; i++) {
       await refreshFrameworkCapabilities(root);
-      await showArtifact(project, { name: 'corpus-health-audit', typeFilter: ['skill'], json: true });
+      await showArtifact(project, { body: true, name: 'corpus-health-audit', typeFilter: ['skill'], json: true });
       await discoverCapability(project, { phrase: 'corpus health audit', json: true });
     }
     expect(builder).toHaveBeenCalledTimes(1);

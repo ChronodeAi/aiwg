@@ -7,7 +7,7 @@ activation: on-demand
 
 # human-authorization — guidance
 
-Authority: `aiwg show rule human-authorization` (kernel). This companion supplies supporting explanation; the complete imperative core is self-contained in that rule.
+Authority: `aiwg show rule human-authorization --body` (kernel). This companion supplies supporting explanation; the complete imperative core is self-contained in that rule.
 
 ## Overview
 

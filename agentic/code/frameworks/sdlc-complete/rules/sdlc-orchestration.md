@@ -87,7 +87,7 @@ Canonical AIWG skills are the authoritative source of workflow behavior. Start w
 
 ```bash
 aiwg discover "<SDLC capability or workflow>"
-aiwg show skill <name>
+aiwg show skill <name> --body
 ```
 
 For project-wide lifecycle coordination, prefer `orchestrate-project`. Flow skills such as `flow-inception-to-elaboration`, `flow-security-review-cycle`, and `flow-gate-check` define their own inputs, artifacts, gates, and orchestration behavior. Do not enumerate the SDLC catalog from memory; query the index and fetch the selected skill.

@@ -4,14 +4,14 @@
 
    ```bash
    aiwg discover "create or complete project intake"
-   aiwg show skill intake-wizard
+   aiwg show skill intake-wizard --body
    ```
 
 2. **Start the selected lifecycle work**:
 
    ```bash
    aiwg discover "SDLC concept to inception"
-   aiwg show skill flow-concept-to-inception
+   aiwg show skill flow-concept-to-inception --body
    ```
 
    Follow the fetched skill with the project's `.aiwg/intake/` artifacts. If the provider exposes a slash-command adapter, it may invoke the same skill but is not the source of workflow behavior.
@@ -20,7 +20,7 @@
 
    ```bash
    aiwg discover "project status"
-   aiwg show skill project-status
+   aiwg show skill project-status --body
    ```
 
 4. **Progress through phases**:

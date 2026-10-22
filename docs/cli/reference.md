@@ -4274,7 +4274,7 @@ Multi-token queries require ≥50% token overlap to surface partial matches — 
 
 ### show
 
-Print the full text of a specific AIWG skill, agent, command, or rule by name (#1218). The companion to `discover`: where discover ranks candidates, show fetches the body so consumers don't navigate AIWG's storage paths themselves.
+Show a metadata card for an AIWG skill, agent, flow, command, or rule (#3306). The card includes identity, owning capability and install state, governing rules with enforcement/activation and `rule_stats`, required rule checks, an outline with byte/line sizes, companion resources, and exact drill-in commands. The local card path uses the #3305 relationship sidecar instead of loading the full framework index; only the selected artifact is read for its outline and description.
 
 ```bash
 aiwg show <type> <id-or-name-or-path> [options]
@@ -4282,11 +4282,20 @@ aiwg show metadata <id-or-name-or-path> [options]
 aiwg index show <type> <name> [options]      # equivalent
 ```
 
-**Type** is positional for body lookup. Allowed values: `skill`, `agent`, `command`, `rule`. Metadata lookup uses `metadata` as the subcommand and accepts the same identifier/name/path forms.
+**Type** is positional for card lookup. Core values: `skill`, `agent`, `flow`, `command`, `rule`. Metadata lookup uses `metadata` as the subcommand and accepts the same identifier/name/path forms.
 
 **Options:**
 
-- `--json` — For body lookup, emit `{ id, path, type, name, title, kernel, providerModels, content }`. For `show metadata`, emit `{ id, backend, type, name, title, paths, provenance, providerModels, metadata }`. `providerModels` lists the reasoning, coding, and efficiency model names plus their model-pinned worker wrapper for providers installed in `.aiwg/aiwg.config`. Default body mode streams the file unmodified.
+- `--json` — Return the same metadata card. Top-level `content` appears only with `--body` or `--section`. `providerModels` retains provider worker metadata where configured. `show metadata` remains the separate full index metadata/debug view.
+- `--body` — Return the complete authored file (the old default), plus governing-rule guidance.
+- `--section <heading>` — Fetch a section, including its child headings; repeat for several sections. Exact heading match wins, then case-insensitive match. Unknown or duplicate ambiguous headings fail with the available heading list; no approximate matching is performed. Markdown ATX and Setext headings are supported; fenced examples are ignored. YAML flows with no Markdown headings expose an empty outline and can be read with `--body`.
+- `--rules` — Show governing rule summaries and required checks (also present on the default card).
+- `--with-rule-bodies` — Include complete governing contracts in `bound_rules[].content`; combine with `--rules`. `--bound-rule-bodies` remains a compatibility alias.
+- `--resources` — List companion `templates/`, `scripts/`, `references/`, `resources/`, and `assets/` files and explicitly linked companion resources with sizes (also listed on the card).
+- `--resource <path>` — Fetch a listed companion resource; JSON returns `resource.body`. Only listed paths within the owning bundle are accepted; arbitrary traversal and symlink resources are rejected. Web cards list resources committed by the signed release manifest; resource drill-ins use the same verified cache and `--offline` policy.
+
+Fetch and follow every `required_rule_checks[].fetch_command` before governed work. A card or rule summary does not replace the rule body. Rule cards expose activation, enforcement, and bound targets using the same model.
+
 - `--first` — On ambiguity, pick the top match instead of erroring with the disambiguation list.
 - `--graph <name>` — Override the default graph (defaults to `framework` then `project`).
 - `--backend <fortemi-core|local>` — Lookup backend. Default is
@@ -4312,15 +4321,18 @@ aiwg index show <type> <name> [options]      # equivalent
 **Examples:**
 
 ```bash
-aiwg show skill aiwg:skill:6f1477d99813ca8d         # streams SKILL.md to stdout
-aiwg show skill flow-deploy-to-production --json    # id + path + content envelope
+aiwg show skill aiwg:skill:6f1477d99813ca8d         # metadata card; no body by default
+aiwg show skill flow-deploy-to-production --json    # same metadata card as JSON
 aiwg show skill architecture-evolution              # @aiwg/cli selects signed stable web resources
 aiwg show skill architecture-evolution --resource-source web --aiwg-version stable
 aiwg show metadata aiwg:skill:6f1477d99813ca8d --json # full Fortemi metadata + paths
-aiwg show agent aiwg-steward                        # agent definition
-aiwg show command discover                          # CLI command spec
-aiwg show rule no-attribution                       # rule body
-aiwg show skill research-query --json
+aiwg show agent aiwg-steward                        # agent metadata card
+aiwg show command discover                          # command metadata card
+aiwg show rule no-attribution                       # rule metadata card
+aiwg show skill research-query --section "Steps" --json
+aiwg show skill research-query --rules --with-rule-bodies
+aiwg show skill research-query --resources
+aiwg show skill research-query --body
 aiwg show agent aiwg-model-coding-worker --json | jq '.providerModels'
 ```
 
@@ -4412,7 +4424,7 @@ Then surface the top match (or top-3 candidates) — this makes your reasoning a
 
 **Don't skip discovery before declining or improvising.** The `skill-discovery` HIGH framing rule mandates `aiwg discover` before saying "AIWG can't do that" or writing a custom workflow from scratch. Most AIWG skills (~460 of 480 today) are NOT in your loaded context — the kernel set is just the orientation layer + self-maintenance ops.
 
-**Read skill bodies via `aiwg show`, not via filesystem paths.** When discovery returns a candidate and you need its full body, call `aiwg show skill <id>` (or the stable name if that is all you have). Don't construct paths or `cat` files directly — the CLI is the access point and works the same regardless of where AIWG is installed. Exact path parameters remain supported for compatibility, but identifier lookup is the primary path.
+**Read skill bodies via `aiwg show`, not via filesystem paths.** When discovery returns a candidate and you need its full body, inspect `aiwg show skill <id>`, then call `aiwg show skill <id> --section "Heading"` or `aiwg show skill <id> --body` (or the stable name if that is all you have). Don't construct paths or `cat` files directly — the CLI is the access point and works the same regardless of where AIWG is installed. Exact path parameters remain supported for compatibility, but identifier lookup is the primary path.
 
 **Skip discovery only when:**
 
@@ -4472,7 +4484,7 @@ aiwg index <subcommand> [options]
 - `build` - Build/rebuild the artifact index
 - `query` - Search artifacts by keyword, type, phase, tags
 - `discover` - Capability search across AIWG skills/agents/commands/rules (canonical form is the top-level [`aiwg discover`](#discover); this subcommand is preserved for backward compatibility)
-- `show` - Print the full text of a specific skill/agent/command/rule (canonical form is the top-level [`aiwg show`](#show))
+- `show` - Show an artifact metadata card with `--section` / `--body` drill-ins (canonical form is the top-level [`aiwg show`](#show))
 - `sync` - Materialize the Fortemi Core static index cache for a graph
 - `migrate-legacy` - Move compatible legacy root indexes into graph sidecar indexes without modifying packaged/prebuilt indexes
 - `deps` - Show artifact dependency graph

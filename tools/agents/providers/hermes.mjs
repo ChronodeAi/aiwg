@@ -224,7 +224,7 @@ export function assertContextBudget(content, name = 'AGENTS.md', rules = []) {
  * priming on every Hermes turn (#1318 / S7; skill-discovery added #1347).
  *
  * The full rule bodies are reachable without MCP via `aiwg discover` and
- * `aiwg show rule <name>`; MCP exposes the same path through `rule-list` and
+ * `aiwg show rule <name> --body`; MCP exposes the same path through `rule-list` and
  * `rule-show` when configured (#1320). The bodies exceed Hermes's 20K context
  * cap if inlined verbatim (anti-laziness alone is 32K chars), so we inline
  * compressed directives only and point to CLI/MCP for the full text.
@@ -240,7 +240,7 @@ const CRITICAL_RULE_DIRECTIVES = `## CRITICAL Rules (always apply)
 These are the highest-enforcement AIWG rules. Full bodies are reachable without
 MCP:
 - Find rules: \`aiwg discover "rule <topic>" --type rule\`
-- Fetch a rule: \`aiwg show rule <name>\`
+- Fetch a rule: \`aiwg show rule <name> --body\`
 
 If the optional MCP sidecar is configured, the same surface is available through
 \`mcp_aiwg_rule_list\` and \`mcp_aiwg_rule_show\`.
@@ -339,7 +339,7 @@ export function generateAgentsMd(agentCount, skillCount, targetDir, opts) {
   const header = `# AIWG Integration
 
 Skills: \`$HERMES_HOME/skills/\` (kernel), \`$HERMES_HOME/skills/.aiwg/\` (standard).
-Find: \`aiwg discover "rule <topic>" --type rule\`. Fetch: \`aiwg show rule <name>\`.
+Find: \`aiwg discover "rule <topic>" --type rule\`. Fetch: \`aiwg show rule <name> --body\`.
 MCP is optional; \`mcp_aiwg_rule_show\` exposes the same rule catalog.
 `;
 
@@ -560,7 +560,7 @@ async function deploySelected(opts) {
   if (!opts.quiet) {
     console.log('');
     console.log(`Skills root: ${kernelSkillsPath}`);
-    console.log('Rules are in AGENTS.md as compressed directives; full bodies via `aiwg show rule <name>`.');
+    console.log('Rules are in AGENTS.md as compressed directives; full bodies via `aiwg show rule <name> --body`.');
     console.log('Optional: configure config.yaml to connect AIWG MCP server.');
     console.log('See: docs/integrations/hermes-quickstart.md (optional MCP setup)');
   }

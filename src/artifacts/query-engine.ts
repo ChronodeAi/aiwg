@@ -27,7 +27,7 @@ import {
 } from './types.js';
 import { loadMetadataIndex, loadGraphIndexFile } from './index-reader.js';
 import { bm25Rank, type FullTextDoc } from './fulltext.js';
-import { parseFrontmatter } from './index-builder.js';
+import { parseFrontmatter, parseFlowDoc, extractMarkdownLinks } from './index-builder.js';
 import {
   applyFacetFusion,
   diagnoseFacetActivations,
@@ -1527,12 +1527,18 @@ export interface ShowParams {
   name: string;
   /** Restrict to specific types — defaults to showable operational types */
   typeFilter?: string[];
-  /** Emit a JSON envelope (path + content) instead of raw file text */
+  /** Emit the metadata card as JSON. Content is opt-in. */
   json?: boolean;
   /** Override default graph (defaults to `framework`, falls back to `project`) */
   graph?: GraphType;
   /** Include full bound rule bodies in addition to summaries and pointers. */
   boundRuleBodies?: boolean;
+  body?: boolean;
+  sections?: string[];
+  rules?: boolean;
+  withRuleBodies?: boolean;
+  resources?: boolean;
+  resource?: string;
   /** When ambiguous, pick the first match instead of erroring */
   first?: boolean;
   /** Query backend. Defaults to Fortemi Core; use local for the legacy path. */
@@ -1588,13 +1594,21 @@ async function loadShowEntries(
   if (compact && resourceSource !== 'web' && (!params.graph || params.graph === 'framework')) {
     relations = await ensureRelations(cwd) ?? undefined;
     if (relations?.index.artifacts) {
-      const frameworkEntries = Object.values(relations.index.artifacts).map(entry => withIndexProvenance({
-        phase: '', tags: [], created: '', updated: '', checksum: '', summary: '', dependencies: [], dependents: [], ...entry,
-      } as MetadataEntry, 'framework'));
+      const reader = relations;
+      const matched = findShowMatches(Object.values(reader.index.artifacts!) as MetadataEntry[], params.typeFilter ?? [...OPERATIONAL_SHOW_TYPES], params.name.trim());
+      const frameworkEntries = matched.map(entry => {
+        const id = discoveryIdForEntry(entry);
+        const rule = reader.index.rules[id];
+        return withIndexProvenance({ ...entry, phase: '', tags: [], created: '', updated: '', checksum: '', summary: '', dependencies: [], dependents: [],
+          ...(rule ? { activation: reader.pinnedRuleIds.has(id) ? 'kernel' : rule.activation ?? undefined,
+            ruleSummary: rule.summary, ruleEnforcement: rule.enforcement ?? undefined, bound_to: rule.bound_to } : {}),
+        } as MetadataEntry, 'framework');
+      });
       const localEntries = params.graph ? [] : defaultCapabilityGraphs(cwd).filter(graph => graph !== 'framework')
         .flatMap(graph => loadLocalCapabilityEntries(cwd, graph));
       const compactEntries = [...localEntries, ...frameworkEntries];
-      if (findShowMatches(compactEntries, params.typeFilter ?? [...OPERATIONAL_SHOW_TYPES], params.name.trim()).length) {
+      if ((params.typeFilter?.every(type => ['skill', 'agent', 'flow', 'command', 'rule', 'behavior'].includes(type)))
+        || findShowMatches(compactEntries, params.typeFilter ?? [...OPERATIONAL_SHOW_TYPES], params.name.trim()).length) {
         return { entries: compactEntries, aiwgRoot, resourceSource: 'local', relations };
       }
     }
@@ -1746,7 +1760,7 @@ function findShowMatches(entries: MetadataEntry[], types: string[], needle: stri
   const normalizedNeedle = normalizeIndexedPath(needle);
   const candidates = entries.filter(e => types.includes(e.type));
 
-  let matches = candidates.filter(e => discoveryIdForEntry(e) === needle);
+  let matches = needle.startsWith('aiwg:') ? candidates.filter(e => discoveryIdForEntry(e) === needle) : [];
   if (matches.length === 0) {
     matches = candidates.filter(e => e.path === needle || normalizeIndexedPath(e.path) === normalizedNeedle);
   }
@@ -2202,8 +2216,8 @@ export function compoundGoverningRules(entries: MetadataEntry[], target: Metadat
   return [...found.values()].sort((a, b) => (a.rule.name ?? a.rule.path).localeCompare(b.rule.name ?? b.rule.path) || a.rule.path.localeCompare(b.rule.path));
 }
 function boundRuleDescriptor(rule: MetadataEntry) {
-  return { name: rule.name ?? path.basename(rule.path, '.md'), activation: rule.activation ?? null,
-    summary: rule.ruleSummary ?? '', show_command: `aiwg show ${rule.type} ${rule.name ?? path.basename(rule.path, '.md')}` };
+  return { name: rule.name ?? path.basename(rule.path, '.md'), activation: rule.activation ?? null, enforcement: rule.ruleEnforcement ?? null,
+    summary: (rule.ruleSummary ?? '').replace(/\s+/g, ' ').trim(), show_command: `aiwg show ${rule.type} ${rule.name ?? path.basename(rule.path, '.md')} --body` };
 }
 /** Counts unique attached contracts; every emitted check is required irrespective of severity. */
 export function governingRuleStats(governing: GoverningRule[]): RuleStats {
@@ -2220,7 +2234,7 @@ export function governingRuleFields(governing: GoverningRule[]) {
   if (!governing.length) return {};
   return { bound_rules: governing.map(({ rule }) => boundRuleDescriptor(rule)), rule_stats: governingRuleStats(governing),
     required_rule_checks: governing.map(({ rule, applicability }) => ({ rule_id: discoveryIdForEntry(rule),
-      applicability, fetch_command: `aiwg show ${rule.type} ${discoveryIdForEntry(rule)}` })), rule_check_obligation: RULE_CHECK_OBLIGATION };
+      applicability, fetch_command: `aiwg show ${rule.type} ${discoveryIdForEntry(rule)} --body` })), rule_check_obligation: RULE_CHECK_OBLIGATION };
 }
 function statsText(stats: RuleStats): string {
   return `rules: ${Object.entries(stats.by_enforcement).map(([level, count]) => `${count} ${level}`).join(', ') || '0'} · activation: ${Object.entries(stats.by_activation).map(([mode, count]) => `${count} ${mode}`).join(', ') || 'none'} · ${stats.required_checks} required checks`;
@@ -2248,10 +2262,11 @@ async function showBindings(
   relations?: RelationsReader,
 ): Promise<{ fields: Record<string, unknown>; text: string }> {
   const governing = compoundGoverningRules(entries, target, relations, '', false, false);
+  for (const { rule } of governing) if (relations?.pinnedRuleIds.has(discoveryIdForEntry(rule))) rule.activation = 'kernel';
   const rules = governing.map(item => item.rule);
   const boundRules = await Promise.all(rules.map(async rule => ({
     ...boundRuleDescriptor(rule),
-    ...(params.boundRuleBodies ? { content: await read(rule) } : {}),
+    ...((params.boundRuleBodies || params.withRuleBodies) ? { content: await read(rule) } : {}),
   })));
   // Parse the selected rule for reverse lookup, including corpus-only rules.
   const targets = target.type === 'rule' || target.type === 'behavior'
@@ -2262,26 +2277,207 @@ async function showBindings(
         const names = Array.isArray(values) ? [...new Set(values.filter((value): value is string => typeof value === 'string' && !!value.trim()))] : [];
         return names.length ? [[key, names]] : [];
       })) : {};
+  const boundTargets = new Map<string, { type: string; id: string; name?: string }>();
+  if (target.type === 'rule' || target.type === 'behavior') {
+    for (const edge of relations?.targetsForRule(discoveryIdForEntry(target)) ?? []) {
+      boundTargets.set(`${edge.type}:${edge.id}`, { ...edge, name: relations?.index.artifacts?.[edge.id]?.name
+        ?? relations?.index.targets[`${edge.type}:${edge.id}`]?.name });
+    }
+    const selectedRule = { ...target, bound_to: boundTo } as MetadataEntry;
+    for (const candidate of entries) if (rulesBoundTo([selectedRule], candidate).length) {
+      const id = discoveryIdForEntry(candidate);
+      boundTargets.set(`${candidate.type}:${id}`, { type: candidate.type, id, name: candidate.name });
+    }
+  }
   let text = '';
   if (boundRules.length) {
-    text += `\n## Bound rules\n\n${RULE_CHECK_OBLIGATION}\n\n${statsText(governingRuleStats(governing))}\n\n` + boundRules.map(rule =>
-      `- **${rule.name}**: ${rule.summary} (\`${rule.show_command}\`)`
+    // Cards already print these stats in the header; body/section output has no header.
+    const stats = params.body || params.sections?.length ? `${statsText(governingRuleStats(governing))}\n\n` : '';
+    text += `\n## Bound rules\n\n${RULE_CHECK_OBLIGATION}\n\n${stats}` + boundRules.map(rule =>
+      `- **${rule.name}** [${rule.activation ?? 'unknown'} / ${rule.enforcement ?? 'unknown'}]: ${rule.summary} (\`${rule.show_command}\`)`
       + ('content' in rule ? `\n\n${rule.content}` : '')).join('\n') + '\n';
   }
   if (Object.keys(boundTo).length) {
     text += '\n## Bound targets\n\n' + Object.entries(boundTo)
       .map(([key, names]) => `- ${key}: ${(names as string[]).map(name => `\`${name}\``).join(', ')}`).join('\n') + '\n';
   }
+  if (boundTargets.size) text += '\nResolved targets: ' + [...boundTargets.values()].map(target => `${target.type} ${target.name ?? target.id}`).join(', ') + '\n';
   return { fields: {
     ...governingRuleFields(governing),
+    ...(['rule', 'behavior'].includes(target.type) ? { bound_to: boundTo, bound_targets: [...boundTargets.values()] } : {}),
     ...(boundRules.length ? { bound_rules: boundRules } : {}),
     ...(Object.keys(boundTo).length ? { bound_to: boundTo } : {}),
   }, text };
 }
 
+/** Sections include their nested headings, stopping at the next peer/ancestor. */
+function showSections(content: string) {
+  const body = parseFrontmatter(content).body;
+  const headings: Array<{ heading: string; level: number; start: number }> = [];
+  let offset = 0;
+  let fence = '';
+  const lines = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (marker) {
+      if (!fence) fence = marker[1];
+      else if (marker[1][0] === fence[0] && marker[1].length >= fence.length) fence = '';
+    } else if (!fence) {
+      const atx = line.match(/^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/);
+      const setext = i + 1 < lines.length && lines[i + 1].match(/^ {0,3}(=+|-+)\s*$/);
+      if (atx) headings.push({ heading: atx[2], level: atx[1].length, start: offset });
+      else if (line.trim() && setext) headings.push({ heading: line.trim(), level: setext[1][0] === '=' ? 1 : 2, start: offset });
+    }
+    offset += line.length;
+  }
+  return headings.map((heading, i) => {
+    const end = headings.slice(i + 1).find(next => next.level <= heading.level)?.start ?? body.length;
+    const text = body.slice(heading.start, end);
+    return { heading: heading.heading, level: heading.level, bytes: Buffer.byteLength(text),
+      lines: text.split('\n').length - (text.endsWith('\n') ? 1 : 0), text };
+  });
+}
+
+/** List companion directories and explicitly linked resources within the owning bundle.
+ * Resolve paths against that boundary and exclude symlink components. */
+function showResources(filePath: string, source: string, release?: VerifiedWebRelease): Array<{ path: string; bytes: number }> {
+  if (release) {
+    const base = path.posix.dirname(filePath);
+    const linked = new Set(extractMarkdownLinks(source).map(link => path.posix.normalize(path.posix.join(base, link))));
+    const boundary = filePath.match(/^(raw\/agentic\/code\/(?:frameworks|addons|extensions)\/[^/]+)\//)?.[1];
+    return [...release.descriptors.values()].filter(descriptor => {
+      const relative = path.posix.relative(base, descriptor.path);
+      const category = /(?:^|\/)(?:templates|scripts|references|resources|assets)\//.test(relative);
+      const inside = relative !== '..' && !relative.startsWith('../');
+      return (inside && category || linked.has(descriptor.path) && (inside || category))
+        && (!boundary || descriptor.path.startsWith(`${boundary}/`));
+    }).map(descriptor => ({ path: path.posix.relative(base, descriptor.path), bytes: descriptor.size }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }
+  const base = path.dirname(filePath);
+  const normalizedBase = normalizeIndexedPath(base);
+  const boundary = normalizedBase.match(/^(.*\/(?:frameworks|addons|extensions)\/[^/]+)(?:\/|$)/)?.[1]
+    ?? normalizedBase.match(/^(.*\/\.aiwg)(?:\/|$)/)?.[1] ?? base;
+  const resources = new Map<string, { path: string; bytes: number }>();
+  const walk = (relative: string) => {
+    const absolute = path.resolve(base, relative);
+    const contained = path.relative(boundary, absolute);
+    if (contained === '..' || contained.startsWith(`..${path.sep}`) || path.isAbsolute(contained)) return;
+    let cursor = boundary;
+    let stat: fs.Stats | undefined;
+    try {
+      for (const component of contained.split(path.sep)) {
+        cursor = path.join(cursor, component);
+        stat = fs.lstatSync(cursor);
+        if (stat.isSymbolicLink()) return;
+      }
+    } catch { return; }
+    if (stat?.isDirectory()) {
+      for (const name of fs.readdirSync(absolute).sort()) walk(path.join(relative, name));
+    } else if (stat?.isFile() && absolute !== filePath) {
+      const key = normalizeIndexedPath(path.relative(base, absolute));
+      resources.set(key, { path: key, bytes: stat.size });
+    }
+  };
+  for (const directory of ['templates', 'scripts', 'references', 'resources', 'assets']) walk(directory);
+  const { data } = parseFrontmatter(source);
+  const declared = Array.isArray(data.resources) ? data.resources.filter((value): value is string => typeof value === 'string') : [];
+  for (const link of [...extractMarkdownLinks(source), ...declared]) {
+    if (path.isAbsolute(link) || /^[a-z]+:/i.test(link)) continue;
+    const relative = path.relative(base, path.resolve(base, link));
+    // Outside the artifact directory, only declared companion categories qualify.
+    if ((relative === '..' || relative.startsWith(`..${path.sep}`)) && !/(?:^|\/)(?:templates|scripts|references|resources|assets)\//.test(normalizeIndexedPath(relative))) continue;
+    walk(relative);
+  }
+  return [...resources.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+async function emitShowCard(
+  cwd: string, aiwgRoot: string | null, entry: MetadataEntry, filePath: string, source: string,
+  params: ShowParams, bindings: { fields: Record<string, unknown>; text: string },
+  extra: Record<string, unknown>, local: boolean, release?: VerifiedWebRelease,
+): Promise<void> {
+  const { data } = parseFrontmatter(source);
+  const flow = entry.type === 'flow' || entry.type === 'runbook' ? parseFlowDoc(source, entry.path) : null;
+  const sections = showSections(source);
+  const selected = (params.sections ?? []).map(heading => {
+    const exact = sections.filter(section => section.heading === heading);
+    const matches = exact.length ? exact : sections.filter(section => section.heading.toLowerCase() === heading.toLowerCase());
+    if (matches.length !== 1) throw new Error(`${matches.length ? 'Ambiguous' : 'Unknown'} heading "${heading}". Headings: ${sections.map(section => section.heading).join(', ') || '(none)'}`);
+    return matches[0].text;
+  });
+  const owner = normalizeIndexedPath(entry.path).match(/(?:^|\/)(?:agentic\/code|\.aiwg)\/(frameworks|addons|extensions)\/([^/]+)\//);
+  const kind = owner ? ({ frameworks: 'framework', addons: 'addon', extensions: 'extension' } as const)[owner[1] as 'frameworks' | 'addons' | 'extensions'] : null;
+  const installed = local && (owner && aiwgRoot
+    ? await isCorpusBundleInstalled(cwd, aiwgRoot, kind!, owner[2]) : true);
+  const resources = local || release ? showResources(filePath, source, release) : [];
+  const resource = params.resource ? resources.find(resource => resource.path === params.resource) : undefined;
+  if (params.resource && !resource) throw new Error(`Unknown resource "${params.resource}". Resources: ${resources.map(resource => resource.path).join(', ') || '(none)'}`);
+  const quote = (value: string) => '"' + value.replace(/["\\$`]/g, '\\$&') + '"';
+  const command = `aiwg show ${entry.type} ${extra.hint ? params.name : discoveryIdForEntry(entry)}`
+    + (params.graph ? ` --graph ${quote(params.graph)}` : '')
+    + (params.backend ? ` --backend ${params.backend}` : '')
+    + (params.resourceSource ? ` --resource-source ${params.resourceSource}` : '')
+    + (params.aiwgVersion ? ` --aiwg-version ${quote(params.aiwgVersion)}` : '')
+    + (params.offline ? ' --offline' : '');
+  let resourceBody: string | undefined;
+  if (resource) {
+    if (local) resourceBody = fs.readFileSync(path.join(path.dirname(filePath), resource.path), 'utf8');
+    else if (release) {
+      const { fetchVerifiedRawResource } = await import('../resources/web-release.js');
+      resourceBody = (await fetchVerifiedRawResource(release,
+        path.posix.normalize(path.posix.join(path.posix.dirname(filePath), resource.path)),
+        { ...params.webReleaseOptions, offline: params.offline })).toString('utf8');
+    }
+  }
+  const localPin = extra.local_pin as { canonical_activation: string; matches: Array<{ source: string }> } | undefined;
+  const pinNote = localPin ? `Pinned locally: kernel (canonical ${localPin.canonical_activation}; ${localPin.matches.map(match => match.source).join(', ')}).` : '';
+  const card = {
+    id: discoveryIdForEntry(entry), type: entry.type, name: entry.name ?? String(data.name ?? entry.title),
+    title: entry.title, path: filePath, description: String(data.description ?? data.summary ?? flow?.description ?? entry.capability ?? entry.ruleSummary ?? entry.summary ?? ''),
+    capability: owner ? { kind, name: owner[2] } : null, installed, kernel: entry.kernel ?? false,
+    ...(['rule', 'behavior'].includes(entry.type) ? {
+      activation: localPin ? 'kernel' : entry.activation ?? data.activation ?? null, enforcement: data.enforcement ?? entry.ruleEnforcement ?? null,
+      bound_to: data.bound_to ?? entry.bound_to ?? {},
+    } : {}),
+    bound_rules: [], rule_stats: emptyRuleStats(), required_rule_checks: [], rule_check_obligation: RULE_CHECK_OBLIGATION,
+    ...bindings.fields,
+    outline: sections.map(({ text: _text, ...metadata }) => metadata), resources,
+    drill_in: {
+      sections: sections.map(section => `${command} --section ${quote(section.heading)}`),
+      rules: `${command} --rules`, rule_bodies: `${command} --rules --with-rule-bodies`,
+      resources: `${command} --resources`, resource: resources.map(resource => `${command} --resource ${quote(resource.path)}`),
+      body: `${command} --body`,
+    },
+    ...extra,
+    ...(params.body || selected.length ? { content: params.body ? source : selected.join('\n') } : {}),
+    ...(resource ? { resource: { ...resource, body: resourceBody! } } : {}),
+  };
+  if (params.json) { console.log(JSON.stringify(card, null, 2)); return; }
+  if ('content' in card) {
+    if (extra.hint) process.stdout.write(`<!-- AIWG: ${card.installed ? 'installed bundle artifact — not in the selected index.' : 'corpus-only artifact — not in the indexed workspace.'}\n     ${extra.hint}\n     Origin: ${filePath}\n-->\n\n`);
+    if (entry.script) process.stdout.write(`<!-- AIWG: executable skill — run via: ${buildRunHint(entry)} -->\n`);
+    if (pinNote) process.stdout.write(`${pinNote}\n`);
+    process.stdout.write(card.content!);
+    if (!card.content!.endsWith('\n')) process.stdout.write('\n');
+    if (bindings.text) process.stdout.write(bindings.text);
+    return;
+  }
+  const lines = [`# ${card.type}: ${card.name}`, `ID: ${card.id}`, card.description,
+    `Owner: ${card.capability ? `${card.capability.kind}:${card.capability.name}` : 'project/unowned'} | installed: ${card.installed}`, statsText(card.rule_stats as RuleStats)];
+  if (pinNote) lines.push(pinNote);
+  if ('activation' in card) lines.push(`Activation: ${card.activation} | enforcement: ${card.enforcement}`, `Bound targets: ${JSON.stringify(card.bound_to)}`);
+  lines.push(bindings.text || RULE_CHECK_OBLIGATION, '\n## Outline', ...card.outline.map(section => `- ${section.heading} (${section.bytes} bytes, ${section.lines} lines)`),
+    '\n## Resources', ...resources.map(resource => `- ${resource.path} (${resource.bytes} bytes)`), '\n## Drill in',
+    ...Object.values(card.drill_in).flat().map(command => `- ${command}`));
+  if (card.resource) lines.push(`\n## Resource: ${card.resource.path}`, card.resource.body);
+  console.log(lines.join('\n'));
+}
+
 /**
- * Read and emit the full text of a specific artifact (typically a
- * SKILL.md). Consumers don't need to know where AIWG stores skills —
+ * Emit a metadata card, with opt-in body/section drill-ins for a
+ * SKILL.md. Consumers don't need to know where AIWG stores skills —
  * they pass the skill name and the CLI reads the file from the indexed
  * location.
  *
@@ -2313,7 +2509,7 @@ export async function showArtifact(
     relations,
   } = await loadShowEntries(cwd, params, true);
 
-  if (entries.length === 0 && params.backend !== 'fortemi-core') {
+  if (entries.length === 0 && !relations && params.backend !== 'fortemi-core') {
     console.error('Error: No artifact index found.');
     console.error('Run `aiwg index build --graph framework` (or `aiwg use <framework>`) first.');
     process.exit(1);
@@ -2348,39 +2544,11 @@ export async function showArtifact(
           : corpusMatch.bundleKind && corpusMatch.bundleId
           ? `Run \`aiwg use ${corpusMatch.bundleId}\` to install this ${corpusMatch.bundleKind} into the workspace.`
           : 'Run `aiwg index build --graph framework` to refresh the artifact index.';
-        const bindings = await showBindings(entries, {
-          path: corpusMatch.path, type: corpusMatch.type, name: needle, title: needle,
-        } as MetadataEntry, content, params, rule => fs.readFile(resolveMetadataPath(cwd, aiwgRoot, rule), 'utf8'), relations);
-        if (params.json) {
-          console.log(JSON.stringify({
-            ...bindings.fields,
-            path: corpusMatch.path,
-            type: corpusMatch.type,
-            title: needle,
-            kernel: false,
-            uninstalled: !installed,
-            ...(localPin ? { local_pin: localPin } : {}),
-            hint: installHint,
-            content,
-          }, null, 2));
-          return;
-        }
-        // Plain text mode: distinguish a missing index entry from an
-        // uninstalled bundle, then stream the body.
-        const banner = [
-          installed
-            ? '<!-- AIWG: installed bundle artifact — not in the selected index.'
-            : '<!-- AIWG: corpus-only artifact — not in the indexed workspace.',
-          `     ${installHint}`,
-          '     Origin: ' + corpusMatch.path,
-          '-->',
-          '',
-        ].join('\n');
-        process.stdout.write(banner);
-        if (localPin) process.stdout.write(`Pinned locally: kernel (canonical ${localPin.canonical_activation}; ${localPin.matches.map(match => match.source).join(', ')}).\n`);
-        process.stdout.write(content);
-        if (!content.endsWith('\n')) process.stdout.write('\n');
-        if (bindings.text) process.stdout.write(bindings.text);
+        const fallbackEntry = { path: path.relative(aiwgRoot, corpusMatch.path), type: corpusMatch.type, name: needle, title: needle } as MetadataEntry;
+        const bindings = await showBindings(entries, fallbackEntry, content, params, rule => fs.readFile(resolveMetadataPath(cwd, aiwgRoot, rule), 'utf8'), relations);
+        await emitShowCard(cwd, aiwgRoot, fallbackEntry,
+          corpusMatch.path, content, params, bindings, { uninstalled: !installed, installed, hint: installHint,
+            ...(localPin ? { local_pin: localPin } : {}) }, true);
         return;
       }
     }
@@ -2478,55 +2646,18 @@ export async function showArtifact(
     return resolved.bytes.toString('utf8');
   }, relations);
 
-  if (params.json) {
-    const providerModels = resourceSource === 'local'
-      ? await loadProviderModelMetadata(cwd, aiwgRoot)
-      : null;
-    console.log(JSON.stringify({
-      id: discoveryIdForEntry(entry),
-      path: filePath,
-      type: entry.type,
-      name: entry.name,
-      title: entry.title,
-      kernel: entry.kernel ?? false,
-      provenance: {
-        graph: (entry as ProvenancedEntry).indexGraph ?? null,
-        scope: (entry as ProvenancedEntry).indexScope ?? null,
-        ...(webRelease
-          ? {
-              resource_source: 'web',
-              aiwg_selector: webRelease.selector,
-              aiwg_version: webRelease.version,
-              manifest_sha256: webRelease.manifestDigest,
-              manifest_url: webRelease.manifestUrl,
-            }
-          : {}),
-      },
-      // #1227 — surface script-bearing skills so callers can route to
-      // `aiwg run skill <name>` instead of treating SKILL.md as
-      // instructions for the agent to execute itself.
-      ...(entry.script
-        ? { executable: true, run_hint: buildRunHint(entry) }
-        : {}),
-      ...(providerModels ? { providerModels } : {}),
-      ...bindings.fields,
-      ...(localPin ? { local_pin: localPin } : {}),
-      content,
-    }, null, 2));
-    return;
-  }
-
-  // Stream the authored content first; append binding guidance only when present.
-  // #1227 — for script-bearing skills, prepend a one-line banner so
-  // agents reading the body immediately see the skill is executable.
-  if (entry.script) {
-    const hint = buildRunHint(entry);
-    process.stdout.write(`<!-- AIWG: executable skill — run via: ${hint} -->\n`);
-  }
-  if (localPin) process.stdout.write(`Pinned locally: kernel (canonical ${localPin.canonical_activation}; ${localPin.matches.map(match => match.source).join(', ')}).\n`);
-  process.stdout.write(content);
-  if (!content.endsWith('\n')) process.stdout.write('\n');
-  if (bindings.text) process.stdout.write(bindings.text);
+  const providerModels = resourceSource === 'local' ? await loadProviderModelMetadata(cwd, aiwgRoot) : null;
+  await emitShowCard(cwd, aiwgRoot, entry, filePath, content, params, bindings, {
+    provenance: {
+      graph: (entry as ProvenancedEntry).indexGraph ?? null,
+      scope: (entry as ProvenancedEntry).indexScope ?? null,
+      ...(webRelease ? { resource_source: 'web', aiwg_selector: webRelease.selector, aiwg_version: webRelease.version,
+        manifest_sha256: webRelease.manifestDigest, manifest_url: webRelease.manifestUrl } : {}),
+    },
+    ...(entry.script ? { executable: true, run_hint: buildRunHint(entry) } : {}),
+    ...(providerModels ? { providerModels } : {}),
+    ...(localPin ? { local_pin: localPin } : {}),
+  }, resourceSource === 'local', webRelease);
 }
 
 export async function showMetadata(

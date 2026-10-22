@@ -19,7 +19,7 @@ For end-to-end release sequences (version bump → tag → CI verification → r
 
 ```bash
 aiwg discover "release"          # confirms flow-release is reachable
-aiwg show skill flow-release     # reads the gate-by-gate procedure
+aiwg show skill flow-release --body     # reads the gate-by-gate procedure
 ```
 
 Use `flow-release` as your default release orchestration. The gates below ("Operating Procedure") apply to the broader deployment-readiness review that precedes any release.

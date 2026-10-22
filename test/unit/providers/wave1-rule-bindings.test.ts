@@ -85,7 +85,7 @@ describe('Wave 1 canonical rule delivery (#2941)', () => {
     const requests = rules.flatMap(({ name, data }) =>
       Object.entries(data.bound_to).flatMap(([kind, ids]) => (ids as string[]).map(id => ({
         type: kind.slice(0, -1), id, expected: { name, activation: data.activation,
-          summary: data.summary, show_command: `aiwg show rule ${name}` },
+          summary: data.summary, show_command: `aiwg show rule ${name} --body` },
       }))));
     const shown = showBindingEnvelopes(repo, env, requests);
     requests.forEach((request, index) => {
@@ -153,7 +153,7 @@ describe('Wave 1 canonical rule delivery (#2941)', () => {
         for (const file of definitions) {
           const content = read(file);
           expect(content.match(/<!-- AIWG:bound-rules:start -->/g), file).toHaveLength(1);
-          expect(content, file).toContain(`aiwg show rule ${name}`);
+          expect(content, file).toContain(`aiwg show rule ${name} --body`);
           expect(content, file).toContain(data.summary);
         }
       }

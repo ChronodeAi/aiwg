@@ -142,7 +142,7 @@ describe('Wave 5 secops canonical rule delivery (#2945)', () => {
       for (const { name, data } of target.rules) {
         expect(shown.bound_rules, `${target.type}:${target.id}`).toEqual(expect.arrayContaining([
           expect.objectContaining({ name, activation: data.activation, summary: data.summary,
-            show_command: `aiwg show rule ${name}` }),
+            show_command: `aiwg show rule ${name} --body` }),
         ]));
       }
     }
@@ -195,7 +195,7 @@ describe('Wave 5 secops canonical rule delivery (#2945)', () => {
       }
       if (data.activation === 'summary' || data.activation === 'paths' && !['claude', 'cursor'].includes(provider)) {
         expect(startup).toContain(data.summary);
-        expect(startup).toContain(`aiwg show rule ${name}`);
+        expect(startup).toContain(`aiwg show rule ${name} --body`);
         expect(startup).not.toContain(heading);
       }
       if (['summary', 'bound'].includes(data.activation)) {
@@ -216,7 +216,7 @@ describe('Wave 5 secops canonical rule delivery (#2945)', () => {
         for (const file of definitions) {
           const content = read(file);
           expect(content.match(/<!-- AIWG:bound-rules:start -->/g), file).toHaveLength(1);
-          expect(content, file).toContain(`aiwg show rule ${name}`);
+          expect(content, file).toContain(`aiwg show rule ${name} --body`);
           expect(content, file).toContain(data.summary);
         }
       }

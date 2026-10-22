@@ -47,7 +47,7 @@ Find the addon workflows through the standard capability path:
 ```bash
 aiwg discover "twelve factor application design"
 aiwg discover "12 factor audit evidence"
-aiwg show skill twelve-factor-audit
+aiwg show skill twelve-factor-audit --body
 ```
 
 ## Files

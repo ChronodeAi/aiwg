@@ -13,7 +13,7 @@ binary. To address one or more issues, load and follow the `address-issues`
 skill:
 
 ```bash
-aiwg show skill address-issues   # then follow its instructions
+aiwg show skill address-issues --body   # then follow its instructions
 ```
 
 The skill auto-detects the project's issue tracker from `remotes.issue_tracker`
@@ -28,6 +28,6 @@ it.
 
 ## Related
 
-- `issue-audit` — read-only backlog triage (`aiwg show skill issue-audit`)
+- `issue-audit` — read-only backlog triage (`aiwg show skill issue-audit --body`)
 - `issue` — local `.aiwg/issues/` storage CLI (`aiwg issue --help`)
 - `issue-workflow-guide` — choose and operate project issue workflows

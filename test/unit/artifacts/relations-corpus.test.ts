@@ -81,7 +81,7 @@ describe('full corpus relationship golden', () => {
           const shown = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
           const expected = rulesBoundTo(entries, target).map(rule => {
             const name = rule.name ?? path.basename(rule.path, '.md');
-            return { name, activation: rule.activation ?? null, summary: rule.ruleSummary ?? '', show_command: `aiwg show ${rule.type} ${name}` };
+            return { name, activation: rule.activation ?? null, enforcement: rule.ruleEnforcement ?? null, summary: rule.ruleSummary ?? '', show_command: `aiwg show ${rule.type} ${name} --body` };
           });
           expect(shown.bound_rules, target.path).toEqual(expected);
         }

@@ -30,7 +30,7 @@ This skill is invoked by:
 - The `agent-loop` detection-and-routing skill when it parses a user request without explicit completion criteria
 - The `ralph` executor skill during Phase 1 initialization when `--completion` is omitted
 - The `agent-loop-ext` external-loop launcher during pre-launch resolution when `--completion` is omitted
-- Direct invocation via `aiwg discover "infer completion"` → `aiwg show skill infer-completion-criteria` when a user wants to preview the inferred criterion before committing to a loop
+- Direct invocation via `aiwg discover "infer completion"` → `aiwg show skill infer-completion-criteria --body` when a user wants to preview the inferred criterion before committing to a loop
 
 This skill does **not** run when `--completion` is explicit. The user's word is authoritative.
 

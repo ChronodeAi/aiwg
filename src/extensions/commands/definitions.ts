@@ -1730,14 +1730,14 @@ export const discoverCommand: Extension = {
 };
 
 // Show: companion to `discover`. Where `discover` ranks candidates,
-// `show` fetches the full body of one specific artifact (#1218). This
+// `show` returns a metadata card with explicit section/body drill-ins. This
 // closes the loop so consumers never need to navigate AIWG's storage
 // paths themselves — the CLI is the access point.
 export const showCommand: Extension = {
   id: 'show',
   type: 'skill',
   name: 'Show',
-  description: 'Print the full text of a specific AIWG skill, agent, command, or rule by name',
+  description: 'Show an AIWG artifact metadata card; use --section or --body for content',
   version: '1.0.0',
   capabilities: ['cli', 'discovery', 'read', 'capability', 'skills'],
   keywords: ['show', 'cat', 'read skill', 'print skill', 'get skill content', 'aiwg show'],
@@ -1761,7 +1761,7 @@ export const showCommand: Extension = {
     ],
     commandHint: {
       template: 'utility',
-      argumentHint: '<type> <name> [--json] [--first] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]   # type: skill | agent | command | rule',
+      argumentHint: '<type> <name> [--body] [--section <heading>] [--rules] [--resources] [--json] [--first] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]   # type: skill | agent | command | rule',
       allowedTools: ['Read'],
     },
   } satisfies SkillMetadata,

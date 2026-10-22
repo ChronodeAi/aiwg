@@ -186,7 +186,14 @@ describe('aiwg use addon requiring aiwg-utils across providers (#3035)', () => {
         await showArtifact(project, { name: 'de-check', typeFilter: ['skill'], backend, json: true });
         const shown = JSON.parse(output.mock.calls.map(call => call[0]).join(''));
         expect(shown.path).toBe(join(root, 'agentic/code/addons/decision-engine/skills/de-check/SKILL.md'));
-        expect(shown.content).toContain(`Decision check from ${root}.`);
+        expect(shown.content).toBeUndefined();
+        expect(shown.description).toBe('synthetic decision check');
+        output.mockClear();
+        await showArtifact(project, { name: 'de-check', typeFilter: ['skill'], backend, json: true, body: true });
+        const body = JSON.parse(output.mock.calls.map(call => call[0]).join(''));
+        expect(body.path).toBe(shown.path);
+        expect(body.content).toBe(readFileSync(shown.path, 'utf8'));
+        expect(body.content).toContain(`Decision check from ${root}.`);
         output.mockClear();
         await discoverCapability(project, { phrase: 'synthetic decision check', backend, json: true });
         const found = JSON.parse(output.mock.calls.map(call => call[0]).join(''));

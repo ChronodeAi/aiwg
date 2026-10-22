@@ -6,12 +6,12 @@
  *
  *   - discover          (cross-type ranked search)
  *   - skill-list        (enumerate canonical skill corpus)
- *   - skill-show        (fetch SKILL.md body)
+ *   - skill-show        (metadata card + drill-ins)
  *   - command-list      (enumerate CLI commands)
- *   - command-show      (fetch command definition)
+ *   - command-show      (metadata card + drill-ins)
  *   - rule-list         (enumerate rules)
- *   - rule-show         (fetch rule body)
- *   - agent-show        (fetch agent definition; agent-list pre-exists)
+ *   - rule-show         (metadata card + drill-ins)
+ *   - agent-show        (metadata card + drill-ins; agent-list pre-exists)
  *   - template-list     (enumerate templates)
  *   - template-show     (fetch raw template body)
  *
@@ -25,6 +25,28 @@ import { z } from 'zod';
 import { runAiwgCli, mcpError, mcpJson, AIWG_ROOT } from '../helpers.mjs';
 import path from 'node:path';
 import { pinContainedRoot, readContainedFile, listContainedFiles, validateContainedPath } from '../../utils/contained-filesystem.mjs';
+
+/** Shared CLI/MCP drill-in vocabulary for all discovery cards. */
+export const showDrillInSchema = {
+  body: z.boolean().optional().describe('Fetch the full authored body'),
+  section: z.array(z.string()).optional().describe('Exact headings (case-insensitive fallback); repeatable'),
+  rules: z.boolean().optional().describe('Show governing rule summaries and required checks'),
+  with_rule_bodies: z.boolean().optional().describe('Include full governing rule bodies'),
+  bound_rule_bodies: z.boolean().optional().describe('Legacy alias for with_rule_bodies'),
+  resources: z.boolean().optional().describe('List companion resources'),
+  resource: z.string().optional().describe('Fetch one resource path from the card'),
+};
+export function showDrillInArgs(input) {
+  return [
+    ...(input.body ? ['--body'] : []),
+    ...(input.section ?? []).flatMap(heading => ['--section', heading]),
+    ...(input.rules ? ['--rules'] : []),
+    ...(input.with_rule_bodies ? ['--with-rule-bodies'] : []),
+    ...(input.bound_rule_bodies ? ['--bound-rule-bodies'] : []),
+    ...(input.resources ? ['--resources'] : []),
+    ...(input.resource ? ['--resource', input.resource] : []),
+  ];
+}
 
 /**
  * Register discovery tools on the MCP server.
@@ -83,15 +105,15 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
 
   server.registerTool('skill-show', {
     title: 'Show AIWG Skill',
-    description: 'Fetch the full body of an AIWG SKILL.md by name. Returns path + content envelope.',
+    description: 'Return the AIWG metadata card with governing rules, outline, resources, and drill-in guidance. Use body/section for authored content.',
     inputSchema: {
-      bound_rule_bodies: z.boolean().optional().describe('Include full bound rule bodies'),
+      ...showDrillInSchema,
       name: z.string().describe('Skill name (slug; e.g. "intake-wizard")'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ name, bound_rule_bodies }) => {
+  }, async ({ name, ...drillIn }) => {
     try {
-      const { stdout, code, stderr } = await runAiwgCli(['show', 'skill', name, '--json', ...(bound_rule_bodies ? ['--bound-rule-bodies'] : [])]);
+      const { stdout, code, stderr } = await runAiwgCli(['show', 'skill', name, '--json', ...showDrillInArgs(drillIn)]);
       if (code !== 0) return mcpError(`skill-show failed: ${stderr}`);
       return mcpJson(stdout);
     } catch (err) {
@@ -122,14 +144,15 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
 
   server.registerTool('command-show', {
     title: 'Show AIWG CLI Command Definition',
-    description: 'Fetch the full spec/help text for a specific `aiwg` CLI command.',
+    description: 'Return the AIWG metadata card with governing rules, outline, resources, and drill-in guidance. Use body/section for authored content.',
     inputSchema: {
+      ...showDrillInSchema,
       name: z.string().describe('Command name (e.g. "use", "discover", "ralph")'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ name }) => {
+  }, async ({ name, ...drillIn }) => {
     try {
-      const { stdout, code, stderr } = await runAiwgCli(['show', 'command', name, '--json']);
+      const { stdout, code, stderr } = await runAiwgCli(['show', 'command', name, '--json', ...showDrillInArgs(drillIn)]);
       if (code !== 0) return mcpError(`command-show failed: ${stderr}`);
       return mcpJson(stdout);
     } catch (err) {
@@ -182,14 +205,15 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
 
   server.registerTool('rule-show', {
     title: 'Show AIWG Rule',
-    description: 'Fetch the full body of a specific AIWG rule by name.',
+    description: 'Return the AIWG metadata card with governing rules, outline, resources, and drill-in guidance. Use body/section for authored content.',
     inputSchema: {
+      ...showDrillInSchema,
       name: z.string().describe('Rule name (e.g. "no-attribution", "anti-laziness")'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ name }) => {
+  }, async ({ name, ...drillIn }) => {
     try {
-      const { stdout, code, stderr } = await runAiwgCli(['show', 'rule', name, '--json']);
+      const { stdout, code, stderr } = await runAiwgCli(['show', 'rule', name, '--json', ...showDrillInArgs(drillIn)]);
       if (code !== 0) return mcpError(`rule-show failed: ${stderr}`);
       return mcpJson(stdout);
     } catch (err) {
@@ -202,15 +226,15 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
   // ============================================================
   server.registerTool('agent-show', {
     title: 'Show AIWG Agent Definition',
-    description: 'Fetch the full agent definition (system prompt + frontmatter) by name.',
+    description: 'Return the AIWG metadata card with governing rules, outline, resources, and drill-in guidance. Use body/section for authored content.',
     inputSchema: {
-      bound_rule_bodies: z.boolean().optional().describe('Include full bound rule bodies'),
+      ...showDrillInSchema,
       name: z.string().describe('Agent name (e.g. "test-engineer", "security-auditor")'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ name, bound_rule_bodies }) => {
+  }, async ({ name, ...drillIn }) => {
     try {
-      const { stdout, code, stderr } = await runAiwgCli(['show', 'agent', name, '--json', ...(bound_rule_bodies ? ['--bound-rule-bodies'] : [])]);
+      const { stdout, code, stderr } = await runAiwgCli(['show', 'agent', name, '--json', ...showDrillInArgs(drillIn)]);
       if (code !== 0) return mcpError(`agent-show failed: ${stderr}`);
       return mcpJson(stdout);
     } catch (err) {

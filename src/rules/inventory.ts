@@ -112,7 +112,7 @@ export async function ruleInventory(cwd: string, root: string, options: Inventor
       canonical_activation: canonical, effective_activation: installed ? effective : null,
       enforcement, pin_reasons: pin?.matches ?? [],
       bindings: relation ? relation[1].targets : null, binding_evidence: relation ? 'relationship-index' : 'unknown', bound_to: parsed.rule.bound_to, paths: parsed.rule.paths ?? [],
-      fetch_command: stableId ? `aiwg show rule ${stableId}` : null,
+      fetch_command: stableId ? `aiwg show rule ${stableId} --body` : null,
       configured_providers: configuredProviders, delivery_evidence: configuredProviders.length ? 'capability deployment recorded; per-rule delivery unverified' : 'none', delivery: 'unknown', session_loaded: 'unknown',
       ...(options.bodies ? { content } : {}) }];
   }).sort((a, b) => a.capability.localeCompare(b.capability) || a.source.localeCompare(b.source));

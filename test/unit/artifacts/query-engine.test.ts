@@ -62,6 +62,7 @@ describe('Artifact Query Engine', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-query-test-'));
+    for (const key of ['HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME']) vi.stubEnv(key, path.join(tmpDir, key));
     // Resolution consults the USER-GLOBAL framework index as well as the fixture
     // index below. Unsandboxed, a real `aiwg-steward` entry there changes which
     // duplicate wins, so the outcome depends on whatever another test happened to
@@ -117,6 +118,7 @@ describe('Artifact Query Engine', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     consoleSpy.mockRestore();
     consoleErrorSpy.mockRestore();
+    vi.unstubAllEnvs();
   });
 
   it.each(['hermes', 'openhuman', 'antigravity', 'future-agent'])(
@@ -142,7 +144,7 @@ describe('Artifact Query Engine', () => {
           const found = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
           expect(found.results).toHaveLength(1);
           consoleSpy.mockClear();
-          await showArtifact(tmpDir, { name: found.results[0].id, typeFilter: [type], graph: 'project', backend: 'local', json: true });
+          await showArtifact(tmpDir, { body: true, name: found.results[0].id, typeFilter: [type], graph: 'project', backend: 'local', json: true });
           const shown = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
           expect(shown.content).toContain(`# Portable ${type} body`);
         }
@@ -258,7 +260,7 @@ describe('Artifact Query Engine', () => {
     const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     let output = '';
     try {
-      await showArtifact(tmpDir, { typeFilter: ['skill'], name: 'project-status', graph: 'project' });
+      await showArtifact(tmpDir, { body: true, typeFilter: ['skill'], name: 'project-status', graph: 'project' });
       output = stdoutSpy.mock.calls.map(c => String(c[0])).join('');
     } finally {
       stdoutSpy.mockRestore();
@@ -295,7 +297,7 @@ describe('Artifact Query Engine', () => {
     const prevRoot = process.env.AIWG_ROOT;
     process.env.AIWG_ROOT = tmpDir;
     try {
-      await showArtifact(tmpDir, { typeFilter: ['agent'], name: 'aiwg-steward', json: true });
+      await showArtifact(tmpDir, { body: true, typeFilter: ['agent'], name: 'aiwg-steward', json: true });
       const parsed = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
       expect(parsed.path).toBe(path.join(tmpDir, canonicalPath));
       expect(parsed.content).toContain('# Canonical Steward');
@@ -349,7 +351,7 @@ describe('Artifact Query Engine', () => {
         } satisfies ArtifactIndex),
       );
 
-      await showArtifact(projectRoot, {
+      await showArtifact(projectRoot, { body: true,
         typeFilter: ['skill'],
         name: 'kb-ingest',
         graph: 'framework',
@@ -455,7 +457,7 @@ describe('Artifact Query Engine', () => {
       } satisfies ArtifactIndex),
     );
 
-    await showArtifact(tmpDir, {
+    await showArtifact(tmpDir, { body: true,
       typeFilter: ['skill'],
       name: 'local-status',
       graph: 'project',
@@ -512,7 +514,7 @@ describe('Artifact Query Engine', () => {
       expect(queryOutput.results[0].matched).toContain('heliotrope');
 
       consoleSpy.mockClear();
-      await showArtifact(tmpDir, {
+      await showArtifact(tmpDir, { body: true,
         typeFilter: ['skill'],
         name: 'portable-status',
         graph: 'project',
@@ -561,7 +563,7 @@ describe('Artifact Query Engine', () => {
     const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     let output = '';
     try {
-      await showArtifact(tmpDir, { typeFilter: ['agent'], name: 'aiwg-writer', graph: 'project' });
+      await showArtifact(tmpDir, { body: true, typeFilter: ['agent'], name: 'aiwg-writer', graph: 'project' });
       output = stdoutSpy.mock.calls.map(c => String(c[0])).join('');
     } finally {
       stdoutSpy.mockRestore();

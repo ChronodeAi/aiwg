@@ -12,7 +12,7 @@ When users request SDLC work in natural language or through an adapter command:
 
    ```bash
    aiwg discover "<SDLC capability or workflow>"
-   aiwg show skill <name>
+   aiwg show skill <name> --body
    ```
 
 4. Follow the selected skill's inputs, outputs, gates, references, and executable playbook where present.

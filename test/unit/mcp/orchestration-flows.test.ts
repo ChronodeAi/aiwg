@@ -20,6 +20,9 @@ vi.mock('../../../src/mcp/helpers.mjs', async importOriginal => ({
 // @ts-expect-error — .mjs untyped
 import { registerFlowToolset, registerMissionToolset } from '../../../src/mcp/tools/orchestration.mjs';
 
+// @ts-expect-error — .mjs untyped
+import { registerDiscoveryTools } from '../../../src/mcp/tools/discovery.mjs';
+
 const frameworks = path.join(fixture.root, 'agentic/code/frameworks');
 const yaml = 'apiVersion: workflow.aiwg.io/v1\nkind: WorkflowPlaybook\nmetadata:\n  name: alpha\n  labels:\n    audience: test\nspec:\n  steps:\n    - id: prepare\n      kind: command\n      capability: synthetic-prepare\n    - id: check\n      kind: gate\n      depends_on: [prepare]\n';
 const alphaPath = path.join(frameworks, 'first/flows/nested/recipe.playbook.yaml');
@@ -54,7 +57,7 @@ beforeEach(() => {
     if (!fixture.files.has(file)) throw new Error(`Missing file: ${file}`);
     return fixture.files.get(file);
   });
-  fixture.cli.mockResolvedValue({ code: 0, stdout: '{}', stderr: '' });
+  fixture.cli.mockImplementation(async (args: string[]) => ({ code: 0, stdout: JSON.stringify({ type: args[1], name: 'alpha', path: alphaPath, outline: [], bound_rules: [], ...(args.includes('--body') ? { content: yaml } : {}) }), stderr: '' }));
   // Insert reverse lexical order to make sorting independently observable.
   addFile(path.join(frameworks, 'second/flows/zeta.playbook.yaml'), 'metadata:\n  name: zeta\n');
   addFile(alphaPath, yaml);
@@ -67,6 +70,7 @@ function invoke(name: string, input: Record<string, unknown> = {}) {
   const tools = new Map<string, any>();
   registerFlowToolset({ registerTool(key: string, config: any, handler: any) { tools.set(key, { config, handler }); } });
   registerMissionToolset({ registerTool(key: string, config: any, handler: any) { tools.set(key, { config, handler }); } });
+  registerDiscoveryTools({ registerTool(key: string, config: any, handler: any) { tools.set(key, { config, handler }); } }, { corpusStore: {} });
   const tool = tools.get(name);
   return tool.handler(z.object(tool.config.inputSchema).parse(input));
 }
@@ -107,7 +111,7 @@ describe('MCP flow tools with a controlled corpus', () => {
   });
 
   it.each(['alpha', 'recipe.playbook.yaml', 'recipe'])('resolves flow-show by %s and returns exact source', async name => {
-    const result = await invoke('flow-show', { name, framework: 'first' });
+    const result = await invoke('flow-show', { name, framework: 'first', body: true });
     expect(result.isError).not.toBe(true);
     expect(decode(result).content).toBe(yaml);
     expect(decode(result).path).toBe(alphaPath);
@@ -122,11 +126,33 @@ describe('MCP flow tools with a controlled corpus', () => {
     expect(body.bound_rules).toEqual(bound_rules);
     expect(body.required_rule_checks).toEqual(required_rule_checks); expect(body.rule_stats).toEqual(rule_stats);
     expect(body.rule_check_obligation).toBe('Fetch before work.');
-    expect(fixture.cli).toHaveBeenCalledWith(['show', 'flow', alphaPath, '--json', '--bound-rule-bodies']);
+    expect(fixture.cli).toHaveBeenCalledWith(['show', 'flow', 'alpha', '--json', '--bound-rule-bodies']);
+  });
+
+  it.each(['skill', 'agent', 'flow', 'command', 'rule'])('%s-show preserves the CLI card and all drill-in parameters', async type => {
+    const card = { id: `aiwg:${type}:synthetic`, type, name: 'alpha', description: 'Synthetic card',
+      bound_rules: [{ name: 'policy', enforcement: 'high' }], rule_stats: { required_checks: 1 },
+      outline: [{ heading: 'Steps', bytes: 20 }], resources: [], drill_in: { body: 'synthetic --body' } };
+    fixture.cli.mockResolvedValue({ code: 0, stdout: JSON.stringify(card), stderr: '' });
+    expect(decode(await invoke(`${type}-show`, { name: 'alpha' }))).toEqual(card);
+    expect(decode(await invoke(`${type}-show`, { name: 'alpha', body: true, section: ['Steps', 'Notes'], rules: true,
+      with_rule_bodies: true, resources: true, resource: 'references/guide.md' }))).toEqual(card);
+    expect(fixture.cli.mock.calls.at(-1)?.[0]).toEqual(['show', type, 'alpha', '--json',
+      '--body', '--section', 'Steps', '--section', 'Notes', '--rules', '--with-rule-bodies', '--resources', '--resource', 'references/guide.md']);
+    expect(decode(await invoke(`${type}-show`, { name: 'alpha' })).content).toBeUndefined();
+  });
+
+  it('forwards project flow names to the shared card resolver without scanning the bundled corpus', async () => {
+    fixture.files.set(alphaPath, 'metadata: [');
+    const card = { type: 'flow', name: 'project-flow', outline: [], bound_rules: [] };
+    fixture.cli.mockResolvedValue({ code: 0, stdout: JSON.stringify(card), stderr: '' });
+    expect(decode(await invoke('flow-show', { name: 'project-flow' }))).toEqual(card);
+    expect(fixture.cli).toHaveBeenCalledWith(['show', 'flow', 'project-flow', '--json']);
+    expect(fixture.readdir).not.toHaveBeenCalled();
   });
 
   it.each(['flow-show', 'flow-run'])('%s reports a missing flow rather than a success envelope', async tool => {
-    const result = await invoke(tool, { name: 'missing', confirmed: true });
+    const result = await invoke(tool, { name: 'missing', framework: 'first', confirmed: true });
     expect(result.isError).toBe(true);
     expect(decode(result)).toEqual({ error: `${tool}: flow not found: missing` });
   });
@@ -165,7 +191,7 @@ describe('MCP flow tools with a controlled corpus', () => {
 
   it.each(['flow-list', 'flow-show', 'flow-run'])('%s reports malformed YAML as an MCP error', async tool => {
     fixture.files.set(alphaPath, 'metadata: [');
-    const result = await invoke(tool, { name: 'alpha', confirmed: true });
+    const result = await invoke(tool, { name: 'alpha', framework: 'first', confirmed: true });
     expect(result.isError).toBe(true);
     expect(decode(result).error).toMatch(new RegExp(`^${tool}:`));
     expect(decode(result).error).toContain('Flow sequence');

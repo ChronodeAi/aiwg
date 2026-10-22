@@ -175,7 +175,7 @@ reject under the same project policy.
 
 ```bash
 aiwg discover "issue create" --type skill
-aiwg show skill issue-create
+aiwg show skill issue-create --body
 aiwg run skill issue-create -- "<title>" --provider gitea --labels "bug"
 ```
 

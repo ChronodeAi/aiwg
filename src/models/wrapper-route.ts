@@ -82,7 +82,7 @@ export function buildWrapperRouteEnvelope(request: WrapperRouteRequest): Wrapper
     ? [
         `Run this assignment through ${wrapper}.`,
         `Selected capability: ${request.capability.type} ${request.capability.name} (${request.capability.id}).`,
-        `Load it with aiwg show ${request.capability.type === 'workflow' ? 'metadata' : request.capability.type} ${request.capability.id} after discover-first validation.`,
+        `Load it with aiwg show ${request.capability.type === 'workflow' ? 'metadata' : request.capability.type} ${request.capability.id}${request.capability.type === 'workflow' ? '' : ' --body'} after discover-first validation.`,
         `Assignment: ${request.assignment.trim()}`,
         'Return capability evidence, changed artifacts, validation results, and remaining risks.',
       ].join('\n')

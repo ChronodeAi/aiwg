@@ -167,7 +167,30 @@ describe('compound action discovery (#3292)', () => {
     const row = actual.results.find((row: any) => row.name === 'work');
     expect(row.bound_rules.map((rule: any) => rule.name)).toEqual(['bound', 'paths', 'trigger']);
     expect(row.rule_stats).toEqual(expected.results.find((row: any) => row.name === 'work').rule_stats);
-    expect(row.required_rule_checks.every((check: any) => check.fetch_command.endsWith(check.rule_id))).toBe(true);
+    expect(row.required_rule_checks.every((check: any) => check.fetch_command.endsWith(`${check.rule_id} --body`))).toBe(true);
+  });
+  it('offline U5-style card follow-up fetches a section and required rule before work', async () => {
+    put('skills/work/SKILL.md', '---\nname: work\n---\n# Work\n## Steps\nPerform synthetic work after the policy check.\n## Notes\nUnneeded detail.\n');
+    await showArtifact(root, { name: 'work', typeFilter: ['skill'], graph: 'project', backend: 'local', json: true });
+    const card = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+    expect(card.content).toBeUndefined();
+    const sectionCommand = card.drill_in.sections.find((command: string) => command.endsWith('--section "Steps"'));
+    expect(sectionCommand).toBeTruthy();
+    await showArtifact(root, { name: card.id, graph: 'project', backend: 'local', sections: ['Steps'], json: true });
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0])).content).not.toContain('Unneeded detail');
+    const check = card.required_rule_checks[0];
+    await showArtifact(root, { name: check.rule_id, graph: 'project', backend: 'local', body: true, json: true });
+    const rule = String(log.mock.calls.at(-1)?.[0]);
+    const events = (command: string, output: string) => [
+      { type: 'item.started', item: { id: 'fetch', type: 'command_execution' } },
+      { type: 'item.completed', item: { id: 'fetch', type: 'command_execution', command, aggregated_output: output, exit_code: 0, status: 'completed' } },
+      { type: 'item.started', item: { id: 'action', type: 'command_execution' } },
+      { type: 'item.completed', item: { id: 'action', type: 'command_execution', command: 'perform-governed-work', exit_code: 0, status: 'completed', aggregated_output: 'Synthetic action' } },
+    ];
+    const evaluate = (command: string, output: string) => evaluateRequiredRuleChecks([check],
+      parseTrace(events(command, output).map(event => JSON.stringify(event)).join('\n'), 'codex'), 'perform-governed-work')[0].pass;
+    expect(evaluate(check.fetch_command, rule)).toBe(true);
+    expect(evaluate(check.fetch_command.replace(' --body', ''), JSON.stringify(card))).toBe(false);
   });
 
 });

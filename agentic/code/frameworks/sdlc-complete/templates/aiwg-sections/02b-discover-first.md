@@ -1,4 +1,4 @@
 ## Capability Routing
 
-Routing authority: `aiwg show rule skill-discovery` (kernel). Capability phrases:
-`aiwg show skill aiwg-utils-quickref`.
+Routing authority: `aiwg show rule skill-discovery --body` (kernel). Capability phrases:
+`aiwg show skill aiwg-utils-quickref --body`.

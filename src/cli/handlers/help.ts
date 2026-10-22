@@ -102,7 +102,7 @@ function displayHelp(): void {
 
   helpGroup('DISCOVERY', [
     ['discover "<phrase>"', 'Find skills/agents/commands/rules by capability'],
-    ['show <type> <name>', 'Stream the body of an indexed artifact'],
+    ['show <type> <name>', 'Show a metadata card; --body fetches instructions'],
     ['versions <list|resolve|show>', 'Browse and resolve signed AIWG web resource releases'],
     ['auth <login|status|logout>', 'Authenticate for paid AIWG web resources'],
     ['corpus <subcommand>', 'Research corpus tools (snapshot, radar, profiles, curator)'],
@@ -191,7 +191,7 @@ function displayHelp(): void {
   console.log(`    aiwg use cockpit                ${ui.dimText('Install opt-in Cockpit package')}`);
   console.log(`    aiwg cockpit                    ${ui.dimText('Launch Cockpit after install')}`);
   console.log(`    aiwg discover "deploy"          ${ui.dimText('Find skills by capability')}`);
-  console.log(`    aiwg show skill intake-wizard   ${ui.dimText('Stream a skill body')}`);
+  console.log(`    aiwg show skill intake-wizard   ${ui.dimText('Show a skill metadata card')}`);
   console.log(`    aiwg doctor                     ${ui.dimText('Check installation health')}`);
   console.log(`    aiwg refresh                    ${ui.dimText('Pull latest + redeploy frameworks')}`);
   maybePrintCommunityFooter();
