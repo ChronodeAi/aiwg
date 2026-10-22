@@ -195,6 +195,133 @@ and `rlm-context-management.md` Rule 8 — the smallest cap wins.
 9. **Integrate only the verified artifact digest.** A later edit to the artifact invalidates the acceptance that was verified; the worker never merges, publishes, or rewrites acceptance/policy itself. Optional receipts append to the existing activity log and may link a `file.digest`; missing optional logging is a visible limitation, never a launch gate. `verifyWorkerArtifact()`'s `accepted` result binds to the exact artifact digest it just computed (`workerDirectVerification.artifactDigest`); it has no merge/integrate/publish export and never touches git — integrating the accepted digest elsewhere remains a separate, explicit step the conductor takes, never an automatic one.
 10. **Fallback or escalate deliberately.** A 429 cools the whole upstream account/quota domain. Confirm the old worker actually stopped (a sent signal or lease expiry is not termination proof — only a confirmed exit is), honor reset/backoff, and only then resolve an eligible fallback. **Never silently unpin**: moving off an exact pin requires an explicit, rationale-carrying substitution to a declared fallback member (`request.substitution`), and a member can be marked unavailable for a cooldown window via the resolver's own `constraints.unavailableMembers` input — a bare re-request for the original pin is denied outright while it is unavailable. Quality failure may justify effort/model escalation only within the configured ladder and remaining attempt budget; `ultra`, mixtures, and hidden fan-out stay denied. A timeout or MCP disconnect means uncertain until reconciled — not permission for a second writer.
 
+#### Shell-only conductor check-in walkthrough (UC-OG-12)
+
+Use the existing efficiency/coding/reasoning wrapper and Rule 9 authority throughout.
+This procedure uses the conductor's shell only; it needs no MCP, Mission/MC session,
+daemon, native Monitor tool, or optional receipt store. Run the commands from the
+configured project. Replace the example absolute paths and `qualified-group` with
+the authorized paths and an enabled shell group in that project.
+
+Before resolving, prepare the brief and unique worker worktree at a recorded base
+revision under steps 4–5. Reserve its files/resources and count native and external
+workers against every applicable cap. For example, three independent tasks with a
+cap of two and one native worker already active admit only one external worker;
+queue the others. Prepare a private conductor-owned capture root outside the worker's
+writable tree, an empty `runs/attempt-1` directory, and fresh plan/final paths. Grant
+only the qualified output leaves. Keep task-chain attempt, time and step accounting
+in conductor context even when receipts are off.
+
+1. **Resolve.** Save the complete JSON plan; resolving does not launch a worker.
+   Inspect readiness, exclusions, selected model/effort/profile, pins, limits and
+   `invocation.health` including `origins` and `truncatedWindows`. Proceed only with
+   a launchable shell invocation. A blocked plan requires diagnosis before launch.
+
+   ```sh
+   aiwg models resolve --role coding --task implementation --group qualified-group \
+     --brief /absolute/private/conductor/brief.json --workdir /absolute/worker-tree \
+     --final-output /absolute/private/conductor/final-1.json --transport shell \
+     --format json > /absolute/private/conductor/plan-1.json
+   ```
+
+2. **Launch once within the remaining caps.** The attached one-shot launcher rechecks
+   the saved plan, gates host resources, and creates an owned isolation scope. Keep
+   its shell job handle and eventual exit status; background-launch success alone
+   proves neither startup nor completion. The launcher remains alive to supervise
+   this attempt; it does not create a daemon or managed session.
+
+   ```sh
+   aiwg ralph-external --launch-worker --invocation /absolute/private/conductor/plan-1.json \
+     --run-dir /absolute/private/conductor/runs/attempt-1 \
+     > /absolute/private/conductor/launch-1.json 2> /absolute/private/conductor/launch-1.err &
+   ```
+
+3. **Confirm startup.** Sample immediately, then at the resolved check cadence until
+   `health.handshakeAt` is present and the owned identity is observed. Inspect
+   `health.handshake`: `process-only` discloses that semantic acceptance is unavailable.
+   The default startup allowance is 60s. A missing run record, an empty worker list,
+   or a launch job that exited early requires checking the bounded launcher error
+   and resource/isolation findings; none confirms startup.
+
+   ```sh
+   aiwg ralph-external --status --workers --run-dir /absolute/private/conductor/runs/attempt-1 --json
+   ```
+
+4. **Poll in short bounded windows.** Repeat this watch while the attempt is active,
+   returning to other conductor work between windows. Watch uses the resolved
+   `thresholds.checkSeconds` (default 15s); its 45s deadline ends only the watch.
+   Read `nextCheckAt`, `health.lastProgressAt`, `ages`, `thresholds.origins`,
+   `observerCoverage`, `health.unavailableSignals` and `health.maxCheckGapSeconds`.
+   Report any stale observer or check-in gap and restore observation before drawing
+   a failure conclusion. This read-only watch needs no observer scratch writer.
+
+   ```sh
+   aiwg ralph-external --status --workers --run-dir /absolute/private/conductor/runs/attempt-1 --watch --deadline-seconds 45 --json
+   ```
+
+5. **Diagnose quiet/stalled work before a stop.** Take a fresh sample and compare
+   bounded, sanitized output deltas, owned-worktree changes and qualified progress
+   events. Repeated identical errors/keepalives, growing log bytes and busy CPU alone
+   do not prove progress. Distinguish 429/reset/shared-quota, crash, EPERM and
+   disk-full signatures from useful silent work. Default quiet/stall windows are
+   90s/300s; reasoning or xhigh/max effort can extend them. Honor the resolved
+   windows and diagnostic grace (default 60s). `quiet` keeps waiting; `stalled`
+   opens diagnosis; live connected `hung` after grace authorizes a no-progress stop.
+   Observer loss or degraded/unobserved coverage remains unknown.
+
+   ```sh
+   aiwg ralph-external --status --workers --run-dir /absolute/private/conductor/runs/attempt-1 --json
+   ```
+
+6. **Confirm the owned stop and quarantine partial work.** The launcher's health
+   observer stops only its own attempt on `hung` or `failed-to-start`, and also
+   enforces `HARD_DEADLINE` and `STEP_LIMIT`. Continue short polls until the launch
+   settles and the matching worker reports `terminal: true` with
+   `termination: confirmed`. A requested stop, supervisor exit, or watch exit alone
+   is insufficient. Uncertain descendant termination blocks another writer.
+   Quarantine by retaining the old worktree, captures and candidate final as
+   unaccepted, excluding them from integration and reuse; do not delete partial edits.
+   Inspect the diff and verify any salvaged artifact independently through step 8
+   before integration, even if exit zero and a final claim completion. Missing,
+   malformed, error or truncated finals remain failed/incomplete.
+
+   ```sh
+   aiwg ralph-external --status --workers --run-dir /absolute/private/conductor/runs/attempt-1 --json
+   ```
+
+   Only after confirmed stop may the conductor consider one corrected startup
+   relaunch or an eligible fallback: re-resolve into fresh plan, final, run and
+   worktree paths, preserve model/effort pins and cumulative maxAttempts/time/step
+   limits, and honor declared substitution authority. This walkthrough grants no
+   permission, messaging or model escalation and performs no automatic retry or
+   integration. A snapshot cannot itself authorize a stop of an unrelated process.
+
+   If a retry is authorized, repeat resolution for the fresh paths first, then
+   link the launch to its predecessor with both retry flags. Replace
+   `PREDECESSOR_INVOCATION_ID` with the actual invocation ID from the predecessor's
+   launcher-written evidence. The launcher verifies that evidence before dispatch;
+   this linkage does not reset the conductor's cumulative allowance.
+
+   ```sh
+   aiwg ralph-external --launch-worker --invocation /absolute/private/conductor/plan-2.json \
+     --run-dir /absolute/private/conductor/runs/attempt-2 \
+     --retry-of PREDECESSOR_INVOCATION_ID --retry-of-run-dir /absolute/private/conductor/runs/attempt-1 \
+     > /absolute/private/conductor/launch-2.json 2> /absolute/private/conductor/launch-2.err &
+   ```
+
+7. **Pause the common cause.** Compare all this conductor's attempts in the private
+   runs root. Correlated 429/reset/quota or host failures pause further launches
+   sharing that account/quota/host scope, including queued tasks. Record affected
+   scope, sanitized signature, remaining budgets and the reset/backoff or operator
+   condition for resumption. Status is diagnostic; the conductor owns this pause.
+   Keep supervising existing owned attempts and quarantine their partial work as
+   needed. Resolve any uncertain stop before retry/fallback; never broaden authority
+   or silently change pins to bypass a common-cause pause.
+
+   ```sh
+   aiwg ralph-external --status --workers --runs-root /absolute/private/conductor/runs --json
+   ```
+
 **Tier 0 brief/result/receipt templates** (extend the existing Mission/Ralph brief definitions — `workerDirectBrief`/`workerClaims`/`workerDirectVerification`/`workerDirectResult` in `schemas/mission-v1.schema.json`; this is not a new template product):
 
 ```text
