@@ -104,6 +104,11 @@ import { ProviderAdapter } from '../../../tools/ralph-external/lib/provider-adap
 // block below; never by production code.
 import { SessionLauncher as SessionLauncherBaseline, planDirectWorkerLaunch as planDirectWorkerLaunchBaseline }
   from '../../fixtures/ralph-recovery-baseline/session-launcher.mjs';
+// The frozen launcher revalidates a saved plan with the frozen resolver, so a
+// baseline-side plan must be resolved by that same resolver. Its catalogDigest
+// algorithm predates GH #364 (which drops discovery.fetchedAt on the branch).
+import { resolveWorkerInvocation as resolveWorkerInvocationBaseline }
+  from '../../fixtures/ralph-recovery-baseline/src/serve/worker-invocation.ts';
 
 const { installation: recoveryInstallation } = await loadRecoveryModuleGraph();
 const { getWorkerRecoveryCapabilities, registerWorkerRecoveryCapabilities } = recoveryInstallation;
@@ -4807,14 +4812,15 @@ async function equivFixtureRoot() {
     // launches of "the same task" never collide on output files, matching
     // how every other test in this suite (e.g. `enoentFixtureRoot` above)
     // runs repeated attempts of one logical task.
-    const freshPlan = async ({ scenario = 'success', forgeRealExitCode } = {}) => {
+    const freshPlan = async ({ scenario = 'success', forgeRealExitCode, side = 'branch' } = {}) => {
       planSeq += 1;
       const attemptFinal = path.join(root, `final-${planSeq}.json`);
       const configPath = path.join(root, `fake-${planSeq}.json`);
       const recordPath = path.join(root, `record-${planSeq}.json`); // unconditionally written by ralph-worker-cli.mjs
       await writeFile(configPath, JSON.stringify({ scenario, recordPath, ...(forgeRealExitCode !== undefined ? { forgeRealExitCode } : {}) }));
       const request = { role: 'coding', task: 'implementation', group: 'workers', brief, workdir: cwd, final_output: attemptFinal };
-      const plan = await resolveWorkerInvocation(f.snapshot, request, drivers, f.request.now);
+      const resolve = side === 'baseline' ? resolveWorkerInvocationBaseline : resolveWorkerInvocation;
+      const plan = await resolve(f.snapshot, request, drivers, f.request.now);
       expect(plan.invocation, JSON.stringify({ diagnostics: plan.diagnostics })).toBeDefined();
       const invocationPath = path.join(root, `plan-${planSeq}.json`);
       await writeFile(invocationPath, JSON.stringify(plan));
@@ -4874,7 +4880,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
       it('clean success: identical result, origin/main taskDigest algorithm on both sides, identical exit.json shape', async () => {
         const fx = await build();
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const baseline = await runOneLauncher(SessionLauncherBaseline, fx, baselineAttempt, trigger.extraOptions);
           const branch = await runOneLauncher(SessionLauncher, fx, branchAttempt, trigger.extraOptions);
@@ -4904,7 +4910,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
       it('non-zero exit: identical result and identical exit.json shape', async () => {
         const fx = await build();
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'forge-exit', forgeRealExitCode: 9 });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'forge-exit', forgeRealExitCode: 9 });
           const branchAttempt = await fx.freshPlan({ scenario: 'forge-exit', forgeRealExitCode: 9 });
           const baseline = await runOneLauncher(SessionLauncherBaseline, fx, baselineAttempt, trigger.extraOptions);
           const branch = await runOneLauncher(SessionLauncher, fx, branchAttempt, trigger.extraOptions);
@@ -4918,7 +4924,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
       it('spawn ENOENT: identical result, confirmed termination, no child identity', async () => {
         const fx = await build();
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const baseline = await runOneLauncher(SessionLauncherBaseline, fx, baselineAttempt, { ...trigger.extraOptions, launchIsolated: enoentSpawn });
           const branch = await runOneLauncher(SessionLauncher, fx, branchAttempt, { ...trigger.extraOptions, launchIsolated: enoentSpawn });
@@ -5106,7 +5112,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
       const keysAfterNotGatedOnSameInstance = Object.keys(launcher).sort();
 
       // --- True frozen-baseline run, on an INDEPENDENT instance. ---
-      const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+      const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
       const baselineCalls = [];
       const baselineRecordingSpawn = (options) => { baselineCalls.push(options); return directSpawn(options); };
       const baselineLauncher = new SessionLauncherBaseline();
@@ -5272,6 +5278,11 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
     // a #2915 decision):
     'paths', 'captures', 'path', 'cwd', 'worktree', 'prompt', 'argv', 'commandDisplay',
     'taskDigest', 'argvDigest', 'placeholderArgvDigest', 'executedArgvDigest',
+    // Resolver-algorithm-derived: each side pins its plan with its own
+    // resolver, and GH #364 dropped load-time discovery.fetchedAt from the
+    // branch's catalogDigest. Each launcher still revalidates it against its
+    // own saved plan before launch, so a mismatch fails that side's run.
+    'catalogDigest',
   ]);
   function stripVolatile(value) {
     if (Array.isArray(value)) return value.map(stripVolatile);
@@ -5488,7 +5499,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         const fx = await build();
         fx.f.snapshot.config.parallelism.health = { hardTimeoutSeconds: 1, terminateGraceSeconds: 1 };
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const baseline = await runTimedFakeUnitScenario(SessionLauncherBaseline, fx, baselineAttempt, trigger.extraOptions);
           const branch = await runTimedFakeUnitScenario(SessionLauncher, fx, branchAttempt, trigger.extraOptions);
@@ -5504,7 +5515,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         const fx = await build();
         fx.f.snapshot.config.parallelism.health = { hardTimeoutSeconds: 1, terminateGraceSeconds: 1 };
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           // Neither child ever exits on its own; only the hard-deadline
           // timer (armed for ~1s, plus the bounded stop-escalation grace
@@ -5527,7 +5538,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
       it('cancellation mid-run, systemd-unit isolation: owner.workerStop() triggers the SAME stop escalation as HARD_DEADLINE, identical result and run-dir content', async () => {
         const fx = await build();
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const run = async (LauncherClass, attempt) => {
             vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
@@ -5564,7 +5575,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
       it('cancellation mid-run, degraded isolation: owner.workerStop() triggers the SAME stop escalation as HARD_DEADLINE, identical result and run-dir content', async () => {
         const fx = await build();
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const run = async (LauncherClass, attempt) => {
             vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
@@ -5608,7 +5619,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         const fx = await build();
         trigger.setup?.(fx);
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const throwingDrivers = { codex: copyRecoveryDriver(fx.drivers.codex, { createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } }) };
           const spawnedChildren = [];
@@ -5646,7 +5657,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         const fx = await build();
         trigger.setup?.(fx);
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const run = (LauncherClass, attempt) => runFakeUnitLauncher(LauncherClass, fx, attempt, {
             extraOptions: { ...trigger.extraOptions },
@@ -5672,7 +5683,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         const fx = await build();
         trigger.setup?.(fx);
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const baselineSaved = JSON.parse(await readFile(baselineAttempt.invocationPath, 'utf8'));
           const branchSaved = JSON.parse(await readFile(branchAttempt.invocationPath, 'utf8'));
@@ -5724,7 +5735,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
   it('listener attachment: identical child/stdout/stderr listener counts at the moment of launch, on both sides', async () => {
     const fx = await equivFixtureRoot();
     try {
-      const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+      const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
       const branchAttempt = await fx.freshPlan({ scenario: 'success' });
       const snapshotListeners = (child) => ({
         child: { error: child.listenerCount('error'), exit: child.listenerCount('exit'), close: child.listenerCount('close') },
@@ -5767,7 +5778,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
   it('injected callback call order and argument shapes are identical on both sides', async () => {
     const fx = await equivFixtureRoot();
     try {
-      const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+      const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
       const branchAttempt = await fx.freshPlan({ scenario: 'success' });
       const shapeOf = (value) => {
         if (value === null || value === undefined) return value;

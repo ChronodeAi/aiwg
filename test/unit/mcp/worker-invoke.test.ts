@@ -34,6 +34,11 @@ import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecut
 // equivalence tests only; never a production import.
 // @ts-expect-error — .mjs untyped
 import * as workerInvokeBaseline from '../../fixtures/ralph-recovery-baseline/worker-invoke.mjs';
+// The frozen side revalidates a brief's pins with its own frozen resolver, so
+// a baseline-side brief must be resolved by that resolver. Its catalogDigest
+// predates GH #364 (the branch drops load-time discovery.fetchedAt).
+import { resolveWorkerInvocation as resolveWorkerInvocationBaseline }
+  from '../../fixtures/ralph-recovery-baseline/src/serve/worker-invocation.ts';
 
 /** These lifecycle fixtures start at canary execution. Complete the required
  * relevant preliminary probe explicitly before entering that phase. */
@@ -1521,9 +1526,9 @@ function buildFixture(root: string, transport: 'shell' | 'mcp') {
 async function buildStructuredBrief(f: ReturnType<typeof buildFixture>, request: {
   role: 'efficiency' | 'coding' | 'reasoning'; task: string; group: string;
   brief: string; workdir: string; final_output: string; transport: 'mcp';
-}) {
+}, resolve: (...args: any[]) => Promise<any> = resolveWorkerInvocation) {
   await writeFile(request.brief, 'placeholder-before-structured-brief');
-  const probe = await resolveWorkerInvocation(f.snapshot, request as any, f.drivers, new Date(f.now).toISOString());
+  const probe = await resolve(f.snapshot, request as any, f.drivers, new Date(f.now).toISOString());
   if (probe.invocation?.readiness !== 'launchable') {
     throw new Error(`buildStructuredBrief probe did not launch: ${JSON.stringify(probe.diagnostics)}`);
   }
@@ -4409,6 +4414,11 @@ describe('review 9 bounded recovery regressions', () => {
 // interleavings on one server instance) are NOT covered here; see the
 // final report.
 // ---------------------------------------------------------------------------
+/** Each side of an equivalence pair resolves its brief with its own resolver. */
+function briefResolverFor(registerFn: unknown) {
+  return registerFn === workerInvokeBaseline.registerWorkerInvokeToolset ? resolveWorkerInvocationBaseline : resolveWorkerInvocation;
+}
+
 describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs current branch with dispatch disabled', () => {
   async function runOnce(registerFn: any, callMcpWorker: any, { throwOnLoad = false }: { throwOnLoad?: boolean } = {}) {
     const root = await tempRoot();
@@ -4422,7 +4432,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs current
       // entry) is what the resolver PROBE below needs to succeed; swap in
       // the "not registered" double only AFTER the brief is built.
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' }, briefResolverFor(registerFn));
       f.drivers.codex.mcpRegistry = { get: async () => null };
     } else {
       await writeFile(briefPath, 'placeholder');
@@ -4467,7 +4477,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs current
       registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
       f.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: 'unused-never-spawned' }) };
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' }, briefResolverFor(registerFn));
       const calls: any[] = [];
       const tools = new Map<string, any>();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
@@ -4616,7 +4626,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const f = buildFixture(root, 'mcp');
       applyGating(f, gating);
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' }, briefResolverFor(registerFn));
       const registry = createInvocationRegistry({ maxActive: 4 });
       const tools = new Map<string, any>();
       const ledgerSpies = spyOnLedger();
@@ -4873,7 +4883,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
             },
           };
           await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-            brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+            brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' }, briefResolverFor(registerFn));
           failFromCall = calls + 1;
           const registry = createInvocationRegistry({ maxActive: 4 });
           const tools = new Map<string, any>();
@@ -5034,7 +5044,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       f.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
         args: [path.resolve('test/fixtures/ralph-recovery-baseline/oversized-whitespace-worker.mjs')] }) };
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' }, briefResolverFor(registerFn));
       const registry = createInvocationRegistry({ maxActive: 4 });
       const tools = new Map<string, any>();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
@@ -5085,9 +5095,9 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
           args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: configPath } }),
       };
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefA, workdir: workA, final_output: path.join(workA, 'final.json'), transport: 'mcp' });
+        brief: briefA, workdir: workA, final_output: path.join(workA, 'final.json'), transport: 'mcp' }, briefResolverFor(registerFn));
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefB, workdir: workB, final_output: path.join(workB, 'final.json'), transport: 'mcp' });
+        brief: briefB, workdir: workB, final_output: path.join(workB, 'final.json'), transport: 'mcp' }, briefResolverFor(registerFn));
       const registry = createInvocationRegistry({ maxActive: 4 });
       const tools = new Map<string, any>();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
