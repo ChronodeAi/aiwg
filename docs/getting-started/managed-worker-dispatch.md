@@ -3,7 +3,8 @@
 Managed dispatch is opt-in: `parallelism.worker_dispatch=true` and
 `parallelism.worker_mode="managed"`. Mission/MC, Flow and Ralph keep completion,
 verification and supervision ownership. They share `SharedHostScheduler` and
-`FileAdmissionStore`; no additional scheduling service is needed. Read the
+`FileAdmissionStore`; no additional scheduling service is needed. Start from a working
+[install, connect and verify](install-connect-verify.md) setup, then read the
 [direct guide](worker-dispatch.md) for installation, qualification and exact
 command rendering, and the [admission contract](../contracts/shared-host-admission.v1.md)
 for the trusted-owner APIs.
