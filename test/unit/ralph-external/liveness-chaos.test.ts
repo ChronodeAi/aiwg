@@ -3,8 +3,8 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
-import { resolveWorkerInvocation } from '../../../src/serve/worker-invocation.js';
-import { SessionLauncher, signalOwnedWorker, stopBeforeRetryGate, classifyLaunchOutcomeForRecovery } from '../../../tools/ralph-external/session-launcher.mjs';
+import { resolveWorkerEffectiveHealth, resolveWorkerInvocation } from '../../../src/serve/worker-invocation.js';
+import { SessionLauncher, signalOwnedWorker, stopBeforeRetryGate, classifyLaunchOutcomeForRecovery, resetInProcessAllowanceLedger } from '../../../tools/ralph-external/session-launcher.mjs';
 import { sampleWorkerIdentity, sampleWorkerGroup, sampleWorkerStatus } from '../../../tools/ralph-external/process-monitor.mjs';
 import { CodexAdapter } from '../../../tools/ralph-external/lib/codex-adapter.mjs';
 import { ScopedFailureBreaker, attributeFailureScope } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
@@ -29,6 +29,7 @@ afterEach(async () => {
     await rm(f.root, { recursive: true, force: true });
   }
   vi.unstubAllEnvs();
+  resetInProcessAllowanceLedger();
 });
 
 // Every wait has a failure bound; logical health deadlines never use wall time.
@@ -39,7 +40,8 @@ function bounded<T>(promise: Promise<T>): Promise<T> {
   })]).finally(() => clearTimeout(timer));
 }
 
-async function fixture({ missing = false, effort = 'medium', retained = false } = {}) {
+async function fixture({ missing = false, effort = 'medium', retained = false, scopedBreaker = null as any,
+  beforeSpawn = null as null | (() => Promise<void>) } = {}) {
   vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
   const root = await mkdtemp(path.resolve('test/.tmp-liveness-'));
   const cwd = path.join(root, 'work'); await mkdir(cwd);
@@ -50,7 +52,17 @@ async function fixture({ missing = false, effort = 'medium', retained = false } 
   const f: any = { root, cwd, finalPath, runDir, clock: monotonicClock(), trace: ['launching'], signals: [] };
   fixtures.push(f);
   const base = workerResolutionFixture();
+  if (scopedBreaker) base.snapshot.config.parallelism!.retry = { maxAttempts: 5 };
+  if (effort === 'max') {
+    // The direct task ceiling is 900s; keep diagnostic grace inside it.
+    base.snapshot.config.parallelism!.health = { stallSeconds: 240 };
+    for (const row of base.snapshot.catalog.discovery!.instances!.codex.models) {
+      row.worker!.efforts!.push({ id: 'max', selfDelegates: false });
+      row.reasoningEfforts!.push('max');
+    }
+  }
   base.snapshot.models.defaults.workerSelection!.roleGuidance!.coding.initialEffort = effort;
+  if (effort === 'max') base.snapshot.models.defaults.workerSelection!.roleGuidance!.coding.effortLadder.push('max');
   const adapter = base.snapshot.registry.providers.codex.workerAdapter!;
   const profile = adapter.invocationProfiles!['fixture-shell'];
   profile.health = { version: 1, handshake: 'semantic', outputFraming: 'jsonl', signalParser: 'fixture:codex',
@@ -98,18 +110,25 @@ async function fixture({ missing = false, effort = 'medium', retained = false } 
   const ready = missing ? null : barrier('ready');
   const initialHealth = new Promise(resolve => launcher.once('health', resolve));
   f.result = launcher.launchWorker({ invocationPath, runDir, inputs: { snapshot: base.snapshot, drivers: { codex: driver } },
-    now: base.request.now, scopedBreaker: null, healthArtifacts: ['partial.txt'],
+    now: base.request.now, scopedBreaker, healthArtifacts: ['partial.txt'],
     isolation: { mode: 'degraded', reason: 'fixture-owned group' }, allowDegraded: true,
     checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
     launchIsolated: (options: any) => {
-      const child = spawn(options.command, options.args, { cwd: options.cwd, env: {}, detached: true,
-        stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
-      f.child = child;
-      f.closed = bounded(new Promise<void>(resolve => child.once('close', () => resolve())));
-      f.identity = sampleWorkerIdentity(child.pid);
-      return { mode: 'degraded', child };
+      const launch = () => {
+        const child = spawn(options.command, options.args, { cwd: options.cwd, env: {}, detached: true,
+          stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
+        f.child = child;
+        f.closed = bounded(new Promise<void>(resolve => child.once('close', () => resolve())));
+        f.identity = sampleWorkerIdentity(child.pid);
+        return { mode: 'degraded', child };
+      };
+      return options.onDispatchCommit ? (async () => {
+        await options.onDispatchCommit();
+        await beforeSpawn?.();
+        return launch();
+      })() : launch();
     } });
-  if (ready) await Promise.all([ready, bounded(initialHealth)]);
+  if (ready) [f.ready] = await Promise.all([ready, bounded(initialHealth)]);
   let sequence = 0;
   f.step = async (step: string) => {
     const id = String(++sequence), done = barrier(id);
@@ -130,7 +149,181 @@ async function fixture({ missing = false, effort = 'medium', retained = false } 
   return f;
 }
 
-describe('T-OG-20–22 deterministic direct lifecycle traces', () => {
+describe('T-OG-20–23 deterministic direct lifecycle traces', () => {
+  it('T-OG-21 silent max hand-launch crosses the default 270/900/960 second boundaries', async () => {
+    const root = await mkdtemp(path.resolve('test/.tmp-silent-max-'));
+    const clock = monotonicClock();
+    const effectiveHealth = resolveWorkerEffectiveHealth(undefined, { role: 'reasoning', effort: 'max',
+      modelKey: 'fixture/model', profileRef: 'fixture', wallSeconds: 1800, stepEnforcement: 'unavailable' });
+    const observer = new CodexAdapter().createHealthObserver({ invocationId: 'silent-max', now: clock.now, startedAt: 0,
+      health: { handshake: 'semantic', outputFraming: 'jsonl', progressEvidence: ['item.completed'] }, effectiveHealth });
+    const child = spawn(process.execPath, [path.resolve('test/fixtures/ralph-liveness-cli.mjs'),
+      '--effort', 'max', '--final-output', path.join(root, 'final.json')],
+    { cwd: root, env: {}, detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    const closed = bounded(new Promise<void>(resolve => child.once('close', () => resolve())));
+    const identity = sampleWorkerIdentity(child.pid);
+    let ready!: (row: any) => void, accepted!: () => void, bytes = 0, buffer = '';
+    const started = bounded(new Promise<any>(resolve => { ready = resolve; }));
+    const handshake = new Promise<void>(resolve => { accepted = resolve; });
+    child.stdout!.on('data', chunk => {
+      observer.feed(chunk, { kind: 'stdout', id: 'stdout', generation: 0, offset: bytes }); bytes += chunk.length;
+      buffer += chunk.toString();
+      for (let newline; (newline = buffer.indexOf('\n')) >= 0;) {
+        const row = JSON.parse(buffer.slice(0, newline)); buffer = buffer.slice(newline + 1);
+        if (row.fixtureStep === 'ready') ready(row);
+        if (row.fixtureStep === 'accepted') accepted();
+      }
+    });
+    child.stderr!.resume();
+    try {
+      expect((await started).effort).toBe('max');
+      observer.processStarted(identity);
+      child.send({ step: 'accept', id: 'accepted' }); await bounded(handshake);
+      const trace = ['launching', observer.snapshot().state];
+      const quietBytes = bytes;
+      const tick = (target: number) => {
+        while (clock.now() < target) { clock.advance(Math.min(15_000, target - clock.now())); observer.check(); }
+        const state = observer.snapshot().state;
+        if (state !== trace.at(-1)) trace.push(state);
+        return state;
+      };
+      expect(effectiveHealth).toMatchObject({ quietSeconds: 270, stallSeconds: 900, hardTimeoutSeconds: 1800 });
+      expect(tick(180_001)).toBe('started');
+      expect(observer.shouldStop()).toBe(false);
+      expect(tick(269_999)).toBe('started'); expect(tick(270_000)).toBe('quiet');
+      expect(tick(899_999)).toBe('quiet'); expect(tick(900_000)).toBe('stalled');
+      expect(tick(959_999)).toBe('stalled'); expect(tick(960_000)).toBe('hung');
+      expect(trace).toEqual(['launching', 'started', 'quiet', 'stalled', 'hung']);
+      expect(observer.evidence().gaps).toEqual([]);
+      expect(bytes).toBe(quietBytes); expect(child.exitCode).toBeNull();
+    } finally {
+      if (identity) signalOwnedWorker(identity, 'SIGKILL'); else child.kill('SIGKILL');
+      await closed; await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([true, false])('T-OG-23 observes a shell hand-launch with run directory=%s without managed state', async withDirectory => {
+    const root = await mkdtemp(path.resolve('test/.tmp-hand-launch-'));
+    const runDir = path.join(root, 'run');
+    const child = spawn('/bin/sh', ['-c',
+      'umask 077; if [ "$1" = with-dir ]; then mkdir "$2"; exec >"$2/stdout.log" 2>"$2/stderr.log"; fi; exec "$3" "$4" --hand-launch --final-output "$5"',
+      'fixture-shell', withDirectory ? 'with-dir' : 'no-dir', runDir, process.execPath,
+      path.resolve('test/fixtures/ralph-liveness-cli.mjs'), path.join(root, 'final.json')],
+    { cwd: root, env: {}, detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    const closed = bounded(new Promise<void>(resolve => child.once('close', () => resolve())));
+    const barriers = new Map<string, () => void>();
+    const barrier = (id: string) => bounded(new Promise<void>(resolve => barriers.set(id, resolve)));
+    const ready = barrier('ready');
+    child.on('message', (message: any) => { barriers.get(message.fixtureStep)?.(); barriers.delete(message.fixtureStep); });
+    child.stdout!.resume(); child.stderr!.resume();
+    let identity: any;
+    try {
+      await ready;
+      identity = sampleWorkerIdentity(child.pid);
+      expect(identity).toMatchObject({ pid: child.pid, pgid: child.pid });
+      const launcher = new SessionLauncher();
+      const trace: string[] = [];
+      if (withDirectory) await writeFile(path.join(runDir, 'process.json'), JSON.stringify({
+        invocationId: 'hand-launch', origin: 'manual', worker: identity,
+      }), { mode: 0o600 });
+      const evidence = async () => Promise.all((await readdir(root, { recursive: true })).sort().map(async name => {
+        const filename = path.join(root, name), stat = await lstat(filename);
+        return { name, mode: stat.mode, mtime: stat.mtimeMs, bytes: stat.isFile() ? await readFile(filename, 'utf8') : null };
+      }));
+      const sample = async () => {
+        if (!withDirectory) {
+          const observed = await launcher.adoptWorker({ worker: identity });
+          expect(observed).toMatchObject({ runDir: null, coverage: 'conductor-context-only', ownership: 'unknown',
+            termination: 'uncertain', health: { coverage: 'unobserved', lastProgressAt: null,
+              startupDeadlineAt: null, hardDeadlineAt: null } });
+          return observed.observedWorker ? 'live-unobserved' : 'absent-uncertain';
+        }
+        const report = await sampleWorkerStatus({ runDir });
+        expect(report).toMatchObject({ complete: true, observerCoverage: 'unobserved', breakers: [] });
+        expect(report.workers).toHaveLength(1);
+        const row = report.workers[0];
+        expect(row).toMatchObject({ invocationId: 'hand-launch', transport: 'shell', terminal: false,
+          elapsedSeconds: null, remainingSeconds: null, thresholds: null,
+          health: { coverage: 'unobserved', lastProgressAt: null, hardDeadlineAt: null }, counters: { exitCode: null } });
+        return row.termination === 'running' ? 'live-unobserved' : 'absent-uncertain';
+      };
+      let before = await evidence();
+      trace.push(await sample());
+      expect(await evidence()).toEqual(before);
+      const accepted = barrier('accepted'); child.send({ step: 'accept', id: 'accepted' }); await accepted;
+      before = await evidence();
+      trace.push(await sample());
+      expect(await evidence()).toEqual(before);
+      child.send({ step: 'exit' }); await closed;
+      before = await evidence();
+      trace.push(await sample());
+      expect(trace).toEqual(['live-unobserved', 'live-unobserved', 'absent-uncertain']);
+      expect(await evidence()).toEqual(before);
+      expect((await readdir(root)).sort()).toEqual(withDirectory ? ['run'] : []);
+      if (withDirectory) expect((await readdir(runDir)).sort()).toEqual(['process.json', 'stderr.log', 'stdout.log']);
+    } finally {
+      if (identity) signalOwnedWorker(identity, 'SIGKILL');
+      else if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await closed;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('T-OG-21 silent max executable crosses exact quiet, stall and hung boundaries', async () => {
+    const f = await fixture({ effort: 'max' });
+    expect(f.plan.invocation.selected.effort.value).toBe('max');
+    expect(f.ready.effort).toBe('max');
+    expect(f.plan.invocation.health).toMatchObject({ quietSeconds: 270, stallSeconds: 720, diagnosticGraceSeconds: 60, hardTimeoutSeconds: 900 });
+    await f.step('accept');
+    const activity = f.observer.snapshot().lastActivityAt;
+    expect(f.tick(180001).state).toBe('started');
+    expect(f.observer.shouldStop()).toBe(false);
+    expect(f.tick(89998).state).toBe('started');
+    expect(f.tick(1).state).toBe('quiet');
+    expect(f.tick(449999).state).toBe('quiet');
+    expect(f.tick(1)).toMatchObject({ state: 'stalled', reasonCode: 'NO_PROGRESS' });
+    expect(f.tick(59999).state).toBe('stalled');
+    expect(f.tick(1).state).toBe('hung');
+    expect(f.child.exitCode).toBeNull();
+    expect(f.observer.snapshot().lastActivityAt).toBe(activity);
+    expect(f.observer.evidence().gaps).toEqual([]);
+    expect(f.trace).toEqual(['launching', 'started', 'quiet', 'stalled', 'hung']);
+    f.launcher.workerStop('NO_PROGRESS');
+    expect((await bounded(f.result)).health.state).not.toBe('completed');
+  });
+
+  it('T-OG-22 admits five executable failures before dispatch and pauses subsequent launches', async () => {
+    const clock = monotonicClock();
+    const breaker = new ScopedFailureBreaker({ nowMs: clock.now, jitterMs: () => 0 });
+    const trace = ['closed'];
+    breaker.on('transition', (event: any) => { if (event.scopeKey === 'installation:codex') trace.push(event.to); });
+    let release!: () => void, entered!: () => void, count = 0;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const allDispatched = new Promise<void>(resolve => { entered = resolve; });
+    const workers: any[] = [];
+    try {
+      workers.push(...await Promise.all(Array.from({ length: 5 }, () => fixture({ missing: true, retained: true,
+        scopedBreaker: breaker, beforeSpawn: async () => { if (++count === 5) entered(); await pending; } }))));
+      await bounded(allDispatched);
+      expect(breaker.snapshot()).toMatchObject({ attemptsObserved: 0, reservationsOutstanding: 5 });
+      release();
+      const results = await bounded(Promise.all(workers.map(f => f.result)));
+      for (const [index, result] of results.entries()) {
+        expect(result).toMatchObject({ exitCode: null, errorCode: 'ENOENT', attemptOutcome: 'failed' });
+        expect(workers[index].trace).toEqual(['launching', 'failed-to-start', 'failed']);
+        expect(await readFile(path.join(workers[index].cwd, 'partial.txt'), 'utf8')).toBe('retained partial\n');
+      }
+      expect(trace).toEqual(['closed', 'open']);
+      expect(breaker.getState('installation:codex')).toMatchObject({ state: 'open', distinctFailures: 5 });
+      expect(breaker.snapshot()).toMatchObject({ attemptsObserved: 5, reservationsOutstanding: 0 });
+      const denied = await fixture({ missing: true, scopedBreaker: breaker });
+      await expect(bounded(denied.result)).rejects.toMatchObject({ code: 'RECOVERY_SCOPE_OPEN' });
+      denied.result = Promise.resolve();
+      expect(denied.child).toBeUndefined();
+      expect(breaker.snapshot().attemptsObserved).toBe(5);
+    } finally { release(); await Promise.allSettled(workers.map(f => f.result)); breaker.destroy(); }
+  });
+
   it('never executes a missing CLI and records failed start without exit zero', async () => {
     const f = await fixture({ missing: true });
     const result = await bounded(f.result);
