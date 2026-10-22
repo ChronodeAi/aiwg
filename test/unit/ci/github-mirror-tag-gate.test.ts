@@ -221,7 +221,7 @@ describe('GitHub mirror tag gate', () => {
       const directory = mkdtempSync(join(tmpdir(), 'aiwg-mirror-push-'))
       temporaryDirectories.add(directory)
       writeExecutableSync(join(directory, 'git'), `#!/bin/sh\necho "${pushStderr}" >&2\nexit ${pushStatus}\n`)
-      return spawnSync('bash', ['-c', script], {
+      return spawnSync('bash', ['-c', script], { timeout: 30_000,
         encoding: 'utf8',
         env: {
           ...process.env,
