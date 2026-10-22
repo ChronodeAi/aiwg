@@ -203,7 +203,18 @@ describe('prebuilt relationship selection', () => {
     expect(JSON.parse(String(log.mock.calls.at(-1)?.[0])).content).toBe(fs.readFileSync(path.join(root, skill), 'utf8'));
     for (const flag of ['--section', '--resource']) {
       await expect(indexCliMain(['show', 'skill', 'work', flag])).rejects.toThrow(`${flag} requires a value`);
+      await expect(indexCliMain(['show', 'skill', 'work', flag, '--json'])).rejects.toThrow(`${flag} requires a value`);
     }
+  });
+
+  it('accepts card headings that start with -- in both --section forms', async () => {
+    put(skill, '# Work\n## --max-iterations (default: 10)\nSynthetic limit.\n## Steps\nSynthetic steps.\n');
+    vi.spyOn(process, 'cwd').mockReturnValue(root);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await indexCliMain(['show', 'skill', 'work', '--json', '--section', '--max-iterations (default: 10)', '--backend', 'local']);
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0])).content).toBe('## --max-iterations (default: 10)\nSynthetic limit.\n');
+    await indexCliMain(['show', 'skill', 'work', '--json', '--section=Steps', '--backend', 'local']);
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0])).content).toBe('## Steps\nSynthetic steps.\n');
   });
 
   it('uses the same card and drill-ins for mocked verified web resources without local body reads', async () => {

@@ -50,6 +50,39 @@ function claudeTrace(text = '{"action":"fix"}', tools = []) {
 }
 
 describe('rule probe schema and call planning', () => {
+  it('requires card drill-in and a full rule fetch for the governed card lane', () => {
+    const rule = loadProbes(path.join(ROOT, 'test/uat/rule-binding/compound-discovery-probes.yaml'))
+      .rules.find(rule => rule.id === 'tool-quota');
+    const probes = rule.probes.filter(probe => probe.id.startsWith('card-'));
+    expect(probes.map(probe => probe.kind)).toEqual(['positive', 'positive', 'negative']);
+    const tool = command => ({ name: 'Bash', input: { command }, success: true });
+    for (const probe of probes.filter(probe => probe.kind === 'positive')) {
+      const text = JSON.stringify({ next: 'stop-and-report', default_max_iterations: 10,
+        retry_limit: 3, reason: 'Read the loop parameters and its bound quota rule.' });
+      const card = [tool('aiwg discover "ralph loop" --json'), tool('aiwg show skill ralph')];
+      const drill = tool('aiwg show skill ralph --section "Parameters"');
+      const fetch = tool('aiwg show rule tool-quota --body');
+      const passes = tools => evaluateAssertions(probe.assertions, { text, tools }).every(a => a.pass);
+      expect(passes(card)).toBe(false);
+      expect(passes([...card, drill])).toBe(false);
+      expect(passes([...card, fetch])).toBe(false);
+      expect(passes([...card, drill, { ...fetch, success: false }])).toBe(false);
+      expect(passes([...card, drill, fetch])).toBe(true);
+      const routedCard = [card[0], tool('aiwg show skill ralph --backend fortemi-core --resource-source local')];
+      const routedDrill = tool('aiwg show skill ralph --backend fortemi-core --resource-source local --section "Parameters"');
+      const routedFetch = tool('aiwg show rule tool-quota --backend fortemi-core --resource-source local --body');
+      expect(passes([...routedCard, routedDrill, routedFetch])).toBe(true);
+      expect(passes([...routedCard, tool('aiwg show skill ralph --backend fortemi-core --resource-source local --rules --with-rule-bodies')])).toBe(true);
+      expect(passes([...card, drill, fetch, { name: 'Read', input: { file_path: 'SKILL.md' },
+        success: true }])).toBe(false);
+    }
+    const negative = probes.find(probe => probe.kind === 'negative');
+    expect(evaluateAssertions(negative.assertions, { text: '{"answer":25}', tools: [] })
+      .every(a => a.pass)).toBe(true);
+    expect(evaluateAssertions(negative.assertions, { text: '{"answer":25}',
+      tools: [tool('aiwg show skill ralph --body')] }).every(a => a.pass)).toBe(false);
+  });
+
   it.each(['sdlc-a', 'sdlc-b', 'utils', 'secops', 'addons'])('validates and merges the %s lane with the base', lane => {
     const file = path.join(ROOT, `test/uat/rule-binding/wave5-${lane}-probes.yaml`);
     const overlay = yaml.load(fs.readFileSync(file, 'utf8'));
