@@ -163,15 +163,17 @@ recording.
 The existing Ralph command can supervise one resolved shell invocation:
 
 ```sh
-install -d -m 700 /private/attempt
+install -d -m 700 /private/attempt /absolute/worktree/.handoff
 aiwg models resolve --role coding --task implementation --group qualified-group \
-  --brief /private/brief.json --workdir /absolute/worktree \
-  --final-output /private/attempt/final.json --format=json > /private/plan.json
+  --brief /absolute/worktree/.handoff/brief.md --workdir /absolute/worktree \
+  --final-output /absolute/worktree/.handoff/final.json --format=json > /private/plan.json
 aiwg ralph-external --launch-worker --invocation /private/plan.json \
   --run-dir /private/attempt
 ```
 
-`FILE` is the complete JSON plan from `models resolve`, including its invocation
+The brief must be inside the qualified input roots (by default `--workdir`) and the
+final output inside the worker-writable roots; write the brief as plain text unless it
+is a complete, matching `workerDirectBrief`. `FILE` is the complete JSON plan from `models resolve`, including its invocation
 and input digests. The launcher rechecks it against current trusted configuration,
 catalog, installation and brief inputs before spawning; a bare argv array or an
 edited shell command cannot grant launch authority. Prepare fresh invocation and
