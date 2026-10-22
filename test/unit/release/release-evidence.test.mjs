@@ -576,7 +576,9 @@ z.close()`, fixture.directory, fixture.archivePath], { timeout: 30000, killSigna
       for (const assertion of scenario.assertions) if (assertion.type === 'json-equals') assign(assertion.path, assertion.value);
       for (const assertion of scenario.assertions) if (assertion.type === 'json-matches') assign(assertion.path, witness, true);
       const trace = { text: JSON.stringify(decision), completed: true, failed: false,
-        tools: [{ name: 'synthetic-contract-tool', input: { command: 'README.md src/probe.ts package.json CONTRIBUTING.md aiwg discover src/login.ts aiwg show skill' }, success: true }] };
+        tools: [{ name: 'synthetic-contract-tool', input: { command: 'README.md src/probe.ts package.json CONTRIBUTING.md aiwg discover src/login.ts aiwg show skill' },
+          // Body-fetch assertions require authored skill content, not a metadata card (#3436).
+          output: { content: '# Synthetic skill body' }, success: true }] };
       expect(evaluateAssertions(scenario.assertions, trace).every(assertion => assertion.pass), scenario.id).toBe(true);
       return trace;
     };
