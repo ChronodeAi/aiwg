@@ -13,6 +13,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { validateDecisionAskInput, DecisionAskUsageError } from '../../../src/decision/ask.js';
 import { parseRuleFrontmatter } from '../../../src/rules/activation.mjs';
+import { parseWorkerCommandArgs, resolveWorkerEffectiveHealth } from '../../../src/serve/worker-invocation.js';
+import { parseWorkerLaunchArgs, parseWorkerStatusArgs } from '../../../tools/ralph-external/index.mjs';
 
 const ROOT = process.cwd();
 const read = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
@@ -26,6 +28,81 @@ const CODING_WRAPPER = 'agentic/code/addons/aiwg-utils/agents/aiwg-model-coding-
 const REASONING_WRAPPER = 'agentic/code/addons/aiwg-utils/agents/aiwg-model-reasoning-worker.md';
 
 describe('Tier 0 check-in guidance (#2914)', () => {
+  const walkthrough = () => read(SCOPING).split('#### Shell-only conductor check-in walkthrough (UC-OG-12)')[1]
+    .split('**Tier 0 brief/result/receipt templates**')[0];
+
+  it('shell-only walkthrough commands parse through the current CLI grammars (UC-OG-12)', () => {
+    // These examples use single-token paths; strip only shell continuations and
+    // capture/job operators, then pass the documented argv to the real parsers.
+    const commands = [...walkthrough().matchAll(/```sh\n([\s\S]*?)```/g)].map((match) =>
+      match[1].replace(/\\\n/g, ' ').trim().split(/\s+(?:>|2>|&)/)[0].split(/\s+/));
+    expect(commands).toHaveLength(8);
+    const [resolve, launch, startup, watch, diagnosis, stop, retry, commonCause] = commands;
+    expect(resolve.slice(0, 3)).toEqual(['aiwg', 'models', 'resolve']);
+    expect(parseWorkerCommandArgs(resolve.slice(3))).toEqual({
+      role: 'coding', task: 'implementation', group: 'qualified-group',
+      brief: '/absolute/private/conductor/brief.json', workdir: '/absolute/worker-tree',
+      final_output: '/absolute/private/conductor/final-1.json', transport: 'shell', format: 'json',
+    });
+    expect(launch.slice(0, 2)).toEqual(['aiwg', 'ralph-external']);
+    expect(parseWorkerLaunchArgs(launch.slice(2))).toEqual({
+      invocationPath: '/absolute/private/conductor/plan-1.json',
+      runDir: '/absolute/private/conductor/runs/attempt-1',
+    });
+    expect(retry.slice(0, 2)).toEqual(['aiwg', 'ralph-external']);
+    expect(parseWorkerLaunchArgs(retry.slice(2))).toEqual({
+      invocationPath: '/absolute/private/conductor/plan-2.json',
+      runDir: '/absolute/private/conductor/runs/attempt-2',
+      retryOf: { invocationId: 'PREDECESSOR_INVOCATION_ID', runDir: '/absolute/private/conductor/runs/attempt-1' },
+    });
+    const statuses = [startup, watch, diagnosis, stop, commonCause].map(command => {
+      expect(command.slice(0, 2)).toEqual(['aiwg', 'ralph-external']);
+      return parseWorkerStatusArgs(command.slice(2));
+    });
+    expect(statuses).toEqual([
+      { runDir: '/absolute/private/conductor/runs/attempt-1', watch: false, observe: false, json: true },
+      { runDir: '/absolute/private/conductor/runs/attempt-1', watch: true, observe: false, json: true, deadlineSeconds: 45 },
+      { runDir: '/absolute/private/conductor/runs/attempt-1', watch: false, observe: false, json: true },
+      { runDir: '/absolute/private/conductor/runs/attempt-1', watch: false, observe: false, json: true },
+      { runsRoot: '/absolute/private/conductor/runs', watch: false, observe: false, json: true },
+    ]);
+  });
+
+  it('walkthrough allowances match effective health defaults and retain resolved-window authority', () => {
+    const text = walkthrough();
+    const health = resolveWorkerEffectiveHealth(undefined, {
+      role: 'coding', effort: null, modelKey: 'fixture/model', profileRef: 'fixture',
+      wallSeconds: 1800, stepEnforcement: 'unavailable',
+    });
+    expect(text).toContain(`default ${health.checkSeconds}s`);
+    expect(text).toContain(`startup allowance is ${health.startupSeconds}s`);
+    expect(text).toContain(`${health.quietSeconds}s/${health.stallSeconds}s`);
+    expect(text).toContain(`diagnostic grace (default ${health.diagnosticGraceSeconds}s)`);
+    expect(text).toContain('Honor the resolved');
+    expect(text).toContain('thresholds.origins');
+    expect(text).toContain('truncatedWindows');
+    expect(text).toContain('xhigh/max');
+  });
+
+  it('walkthrough orders diagnosis, owned stop, quarantine and common-cause pause without expanding authority', () => {
+    const text = walkthrough();
+    const stages = ['**Resolve.', '**Launch once', '**Confirm startup.', '**Poll in short',
+      '**Diagnose quiet/stalled', '**Confirm the owned stop', '**Pause the common cause.'];
+    const positions = stages.map(stage => text.indexOf(stage));
+    expect(positions.every(position => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    for (const requirement of [
+      'no MCP, Mission/MC session', 'process-only', 'health.handshakeAt',
+      'maxCheckGapSeconds', 'do not prove progress', 'stale observer',
+      '`quiet` keeps waiting', '`stalled`', '`hung` after grace',
+      '`termination: confirmed`', 'Uncertain descendant termination blocks another writer',
+      'Quarantine by retaining the old worktree', 'verify any salvaged artifact independently',
+      'preserve model/effort pins and cumulative maxAttempts/time/step',
+      'one corrected startup', 'no automatic retry', 'account/quota/host scope',
+      'Status is diagnostic; the conductor owns this pause',
+    ]) expect(text, requirement).toContain(requirement);
+  });
+
   it('subagent-scoping Rule 9 states concrete cadence and thresholds', () => {
     const text = read(SCOPING);
     expect(text).toContain('Check every 15s');
