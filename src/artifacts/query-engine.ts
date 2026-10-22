@@ -2433,6 +2433,7 @@ async function emitShowCard(
   }
   const localPin = extra.local_pin as { canonical_activation: string; matches: Array<{ source: string }> } | undefined;
   const pinNote = localPin ? `Pinned locally: kernel (canonical ${localPin.canonical_activation}; ${localPin.matches.map(match => match.source).join(', ')}).` : '';
+  const contentNotice = 'This is a metadata card. The component body has not been fetched. Before deciding or applying its workflow, read the needed sections or --body using the drill-in commands below. Read full governing rules before governed work; --rules alone lists checks.';
   const card = {
     id: discoveryIdForEntry(entry), type: entry.type, name: entry.name ?? String(data.name ?? entry.title),
     title: entry.title, path: filePath, description: String(data.description ?? data.summary ?? flow?.description ?? entry.capability ?? entry.ruleSummary ?? entry.summary ?? ''),
@@ -2444,6 +2445,7 @@ async function emitShowCard(
     bound_rules: [], rule_stats: emptyRuleStats(), required_rule_checks: [], rule_check_obligation: RULE_CHECK_OBLIGATION,
     ...bindings.fields,
     outline: sections.map(({ text: _text, ...metadata }) => metadata), resources,
+    ...(!params.body && !selected.length ? { content_notice: contentNotice } : {}),
     drill_in: {
       sections: sections.map(section => `${command} --section ${quote(section.heading)}`),
       rules: `${command} --rules`, rule_bodies: `${command} --rules --with-rule-bodies`,
@@ -2468,7 +2470,7 @@ async function emitShowCard(
     `Owner: ${card.capability ? `${card.capability.kind}:${card.capability.name}` : 'project/unowned'} | installed: ${card.installed}`, statsText(card.rule_stats as RuleStats)];
   if (pinNote) lines.push(pinNote);
   if ('activation' in card) lines.push(`Activation: ${card.activation} | enforcement: ${card.enforcement}`, `Bound targets: ${JSON.stringify(card.bound_to)}`);
-  lines.push(bindings.text || RULE_CHECK_OBLIGATION, '\n## Outline', ...card.outline.map(section => `- ${section.heading} (${section.bytes} bytes, ${section.lines} lines)`),
+  lines.push(contentNotice, bindings.text || RULE_CHECK_OBLIGATION, '\n## Outline', ...card.outline.map(section => `- ${section.heading} (${section.bytes} bytes, ${section.lines} lines)`),
     '\n## Resources', ...resources.map(resource => `- ${resource.path} (${resource.bytes} bytes)`), '\n## Drill in',
     ...Object.values(card.drill_in).flat().map(command => `- ${command}`));
   if (card.resource) lines.push(`\n## Resource: ${card.resource.path}`, card.resource.body);

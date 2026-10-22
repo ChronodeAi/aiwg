@@ -89,11 +89,17 @@
                 "tool-not-matches"
               ]
             },
+            "body": {
+              "const": true,
+              "description": "Require authored component content on the successful matching tool result; metadata cards and bound-rule bodies alone do not count. Only valid for tool-matches."
+            },
             "pattern": {
               "type": "string",
               "minLength": 1
             }
-          }
+          },
+          "if": { "properties": { "body": {} }, "required": ["body"] },
+          "then": { "properties": { "type": { "const": "tool-matches" } } }
         }
       ]
     },

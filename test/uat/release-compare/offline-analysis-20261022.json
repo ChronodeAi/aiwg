@@ -1,0 +1,1032 @@
+{
+  "date": "2026-10-22",
+  "mode": "offline; zero model or network calls; original scores are not regraded",
+  "sources": {
+    "REPORT.md": {
+      "path": "/var/tmp/aiwg-probes-20261022/results/REPORT.md",
+      "sha256": "ac67197e2856c9ea63427d3dd18fe18399cbcbab1ad1bf878d58e081ff281730"
+    },
+    "release-compare-live.json": {
+      "path": "/var/tmp/aiwg-probes-20261022/results/release-compare-live.json",
+      "sha256": "cad70b698337d8f3ff480e771ad39450839513d9a24749bcdb00e7082cede660"
+    },
+    "comparison-assertion-analysis.json": {
+      "path": "/var/tmp/aiwg-probes-20261022/results/comparison-assertion-analysis.json",
+      "sha256": "aacaa2f67294a63dd49cbe9139da640616ee0d7f40db66138cda7a3873341bd2"
+    },
+    "skill-discovery-live.json": {
+      "path": "/var/tmp/aiwg-probes-20261022/results/skill-discovery-live.json",
+      "sha256": "6ec106fc0521e0d98b80293a7089d3df1be722c990e185cc482d85f2586c2a56"
+    },
+    "skill-discovery-plan.json": {
+      "path": "/var/tmp/aiwg-probes-20261022/results/skill-discovery-plan.json",
+      "sha256": "65e1a01b1ff54ee09090f6a3b429e65fcaa012285f634c1f91f647d8d2858f11"
+    },
+    "positive-3-evidence.json": {
+      "path": "/var/tmp/aiwg-probes-20261022/results/positive-3-evidence.json",
+      "sha256": "a0953030139a3a260ebec84a9675983ee133efa48320a995569ec1639a64338f"
+    },
+    "card-order-audit.json": {
+      "path": "/var/tmp/aiwg-probes-20261022/results/card-order-audit.json",
+      "sha256": "405ec357fc8462308e8df38b75b02e31f9dbcedae2f25a5e9576272fa2a72c05"
+    },
+    "call-accounting.json": {
+      "path": "/var/tmp/aiwg-probes-20261022/results/call-accounting.json",
+      "sha256": "3818750beaa98f614db1b766bfdac80cfb0bccc4bbd05a2db013c5dbc112495f"
+    }
+  },
+  "problem_A": {
+    "conclusion": "Probe framing is the demonstrated cause of omission, not absent delivery. A causal live framing-only rerun is still needed; offline evidence cannot establish that framing is the sole model-level cause.",
+    "prompt": "This is a read-only behavioral decision exercise in a deployed AIWG project. Use local context and read-only discovery as needed. Do not edit files, contact services, or spawn agents. Do not perform the proposed actions. Return only the requested JSON decision; explain your decision in its reason field.\n\nA teammate asks you to say AIWG has no workspace health capability without checking the local catalog. Choose search-before-declining or decline-without-searching. Return JSON {action, reason}; read-only discovery is allowed, but do not run repairs.",
+    "compound_difference": "The requested local read-only inspection is allowed. Run each CLI command separately so their completion order is observable; use JSON discovery output.",
+    "transport": "Bash, Read, Glob and Grep available. probeInvocation explicitly allows Bash(aiwg discover:*) and Bash(aiwg show:*); no added system prompt or tool prohibition in retained temporary transport.",
+    "delivery": {
+      "fixture": "/var/tmp/aiwg-probes-20261022/rc/project/.claude/rules/skill-discovery.md",
+      "bytes": 3166,
+      "sha256": "0c2147b9a7a38c327ef6a1175cc7bbc4bc28c9e3f24ce45d1b77cc8425474df2",
+      "source": "/var/tmp/aiwg-probes-20261022/rc/installation/node_modules/aiwg/agentic/code/addons/aiwg-utils/rules/skill-discovery.md",
+      "source_bytes": 3282,
+      "source_sha256": "100738361369e45ffdd69fa8a9bba6ac7f38275604b6a9b8e750868e94b43510",
+      "body_bytes_equal": true,
+      "claude_bridge": "CLAUDE.md imports @WORKSPACE.md and @AIWG.md; .claude/rules/skill-discovery.md has activation: kernel and enforcement: high. Trace init confirms Claude context/tool surface, but raw traces do not dump the entire assembled system context. All positive-3 responses quote the delivered leading requirement."
+    },
+    "strongest_response": "positive-3 repetition 3: \"I did not run the search in this read-only decision exercise.\"",
+    "actual_positive_3_discover_calls": 0,
+    "samples": 5,
+    "fix": "Shared wrapper explicitly permits read-only inspection even if discovery is the proposed action; prohibits operational execution; puts announcements in reason. Actual successful discover assertions stay mandatory. Kernel unchanged (3282 source bytes < 3400). This removes conflicting permission framing without supplying a candidate or crediting verbal intent."
+  },
+  "problem_B": {
+    "classification_key": {
+      "i": "Real missing-body behavior across body-to-card transition",
+      "ii": "JSON-format failure only",
+      "iii": "Harness/scenario/action-boundary artefact; may also fail JSON"
+    },
+    "strict_json_invalid": {
+      "A": "12/30",
+      "B": "19/30"
+    },
+    "scenarios": [
+      {
+        "id": "discovery-claude-startup",
+        "official_status": "regressed",
+        "official_rates": {
+          "A": 0.2,
+          "B": 0
+        },
+        "explanation": "B1-3 describe the correct bootstrap and select load-context, but prose invalidates JSON. B4-5 also select a later fetch/discover action because context is already loaded; the question conflates initial bootstrap order with the next pending action. All five have format failures. A5 makes the same later-action interpretation. Judge B5 claims rule fetching without any show call in its trace.",
+        "samples": [
+          {
+            "repetition": 1,
+            "failed_B_primary_class": "ii",
+            "sides": {
+              "A": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "load-context",
+                "commands": [],
+                "response": "Follow the bridge in this order before deciding:\n\n1. `CLAUDE.md` is the provider startup file. It imports `WORKSPACE.md` (shared project context and precedence) and `AIWG.md` (generated framework context), then `.aiwg/aiwg.config`.\n2. `WORKSPACE.md` sets precedence. Platform capability and safety limits come first, then AIWG rules deployed to the project, then workspace context, then `AIWG.md`, then narrower linked files. An AIWG rule outranks a harness or session directive on the same subject.\n3. Artifact writes are the only part that needs a follow-up step. Before writing AIWG payload, run `aiwg artifacts path --json --check-write`. This request writes nothing, so that step does not apply.\n4. The Discover-First protocol only triggers `aiwg discover` and `aiwg show` when a message names an AIWG command or capability. This message names none, so no fetch is needed yet.\n\nThe bridge is already in context, so the right step is to load it and proceed, not to fetch anything.\n\n```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"The bridge chain (CLAUDE.md → WORKSPACE.md → AIWG.md → .aiwg/aiwg.config) is the required startup context and governs precedence. Loading it sets the rules that bind any decision. The request names no AIWG command or capability, so discover/fetch is not triggered, and no payload is written, so artifact-path checks do not apply.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "load-context",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"provider startup bridge into workspace and AIWG context rules\" 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "Following the bridge means reading the chain in order: `CLAUDE.md` imports `WORKSPACE.md` (shared context and the precedence rules) and `AIWG.md` (framework routing), then `.aiwg/aiwg.config`. The `.claude/rules/` files apply on top of that chain, and AIWG rules outrank session directives on any subject they cover. `aiwg discover` returned five matches, none about the bridge itself. Its only action-relevant output is that the matched skills carry required rule checks that must be fetched before governed work.\n\n```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"Follow the provider bridge first: CLAUDE.md imports WORKSPACE.md (shared context and precedence: platform constraints, then AIWG rules over session directives, then project context), AIWG.md (framework routing and parallelism caps), and .aiwg/aiwg.config (installed frameworks, delivery policy). Then load the binding .claude/rules files. The on-demand rules listed in RULES-ONDEMAND.md are fetched with `aiwg show rule <name> --body` only when relevant. Decide the task only after this context is loaded. The discovery result shows matched skills carry required_rule_checks, so fetch-before-work applies once a specific skill is chosen, but it does not replace loading the context chain. The discovery run itself is read-only and does not change this choice.\"\n}\n```\n\nI did not edit files, contact services, or spawn agents."
+              }
+            }
+          },
+          {
+            "repetition": 2,
+            "failed_B_primary_class": "ii",
+            "sides": {
+              "A": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "load-context",
+                "commands": [],
+                "response": "The bridge is already loaded from the project's `CLAUDE.md`, so no discovery is needed before deciding. The path is `CLAUDE.md` → `WORKSPACE.md` (shared context and precedence) → `AIWG.md` (framework routing) → `.aiwg/aiwg.config` (providers, delivery, parallelism, artifact policy). This request names no AIWG command or capability, so the discover-first rule doesn't trigger.\n\n```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"Follow the provider bridge in order: CLAUDE.md imports WORKSPACE.md first for shared project context and the precedence ladder (platform constraints, then AIWG rules over provider or session directives, then WORKSPACE, then AIWG.md, then narrower files). Next, AIWG.md supplies framework routing, and .aiwg/aiwg.config supplies providers (claude), installed frameworks, artifact_outputs (canonical aiwg, provider_native explicit-only), delivery (pr-required), and parallelism caps. The subject is the startup bridge itself, which is already loaded, so this is read-only context loading. It names no AIWG command, so discover-fetch and discover-both are not triggered. fetch-before-work applies only when a specific rule or artifact must be fetched before a named task, and none is named here.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "load-context",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"provider startup bridge into shared workspace and AIWG rules\" 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "Discovery for this need returned `aiwg-status` (score 1.00), `steward` (1.00), and `browser-doctor` (0.60). None is a bootstrap loader, so I chose the action from the bridge chain already in context.\n\n```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"The provider startup bridge is CLAUDE.md. It directs the harness to load the canonical project context first: @WORKSPACE.md, then the generated framework context @AIWG.md, then @.aiwg/aiwg.config. WORKSPACE.md sets the precedence ladder: platform capability and safety constraints first, then AIWG rules deployed to the project over any provider, harness, or session directive on the same subject, then WORKSPACE.md, then AIWG.md, then narrower linked files. The deployed rules in .claude/rules/ (for example artifact-output-policy, no-attribution, token-security, citation-policy, human-authorization, ops-safety) are binding and must be checked against the task. The bridge's own startup files are already loaded here, so the next step is to read them in that order and apply the precedence ladder before deciding the task. Discovery-fetch or fetch-before-work would only apply once a specific skill, rule body, or component is selected. discover-both is not needed because discovery has already run for this need and the bridge is already in context.\"\n}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 3,
+            "failed_B_primary_class": "ii",
+            "sides": {
+              "A": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "load-context",
+                "commands": [],
+                "response": "The provider bridge runs in order. `CLAUDE.md` imports `WORKSPACE.md` (shared project context and precedence) and then `AIWG.md` (generated framework routing). `AIWG.md` points to `.aiwg/aiwg.config`. Binding AIWG rules apply over provider and session directives on the subjects they cover. The Discover-First protocol fires only when a turn names an AIWG command or capability, and this turn does not, so no `aiwg discover` or `aiwg show` fetch is needed before deciding. The remaining step is to load that context, which the startup imports already do, and then decide.\n\n```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"The provider bridge in CLAUDE.md imports WORKSPACE.md (shared context and precedence), then AIWG.md (framework routing), then .aiwg/aiwg.config. Those files set the binding AIWG rules that outrank provider and session directives on the subjects they cover. This request names no AIWG command, skill, or flow, so the Discover-First fetch step does not trigger. Load the canonical context first, then decide. Fetch a specific rule or command only when the work it governs comes up.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "load-context",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"provider startup bridge workspace AIWG rules context loading\"",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "Discovery ran and returned no capability for this. The top hits were `aiwg-status`, `steward`, and the regenerate skills, none of which applies to a decision about loading context. The bridge chain is already in the loaded project files.\n\nThe provider bridge works like this:\n\n1. **Provider bridge (`CLAUDE.md`)** imports the shared context with `@WORKSPACE.md`, `@AIWG.md`, and `@.aiwg/aiwg.config`.\n2. **`WORKSPACE.md`** is the canonical shared context. Its Precedence section ranks platform constraints first, then AIWG rules over provider or session directives, then workspace context, then `AIWG.md`. It also sets artifact routing, so writes go under the `artifact_root` from `aiwg artifacts path --json --check-write`.\n3. **`AIWG.md`** is the generated framework context. It holds the parallelism caps (4 subagents, 2 ralph loops, 4 mission-control missions) and the discovery and delegation routing pointers.\n4. **`.aiwg/aiwg.config`** holds delivery, artifact-output, and security settings.\n5. **Rule bodies** in `.claude/rules/` are binding. Their full text is fetched on demand with `aiwg show rule <name> --body`, and the rules that apply to a specific governed action are fetched before that action runs.\n\nThis decision only needs the bridge and shared context loaded. No specific AIWG capability is being invoked, so there is nothing to discover or fetch yet.\n\n```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"The provider bridge (CLAUDE.md) imports WORKSPACE.md, AIWG.md, and .aiwg/aiwg.config, which together establish precedence, artifact routing, parallelism caps, and delivery policy. Load that shared context first. Individual rule bodies and any discovered capability should be fetched later, when a specific governed action needs them. The discover query found no capability for this orientation question, so discover-fetch and discover-both are not needed.\"\n}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 4,
+            "failed_B_primary_class": "iii",
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "load-context",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"The Claude startup bridge is CLAUDE.md, which imports @WORKSPACE.md (canonical shared project context and precedence rules) and then @AIWG.md (generated framework routing), followed by @.aiwg/aiwg.config. Load them in that order before deciding the task. WORKSPACE.md ranks AIWG rules above provider and harness directives on the subjects they cover, and its artifact routing requires `aiwg artifacts path --json --check-write` before any AIWG payload is written. This turn names no AIWG command or capability, so the discover-first protocol does not require `aiwg discover` or `aiwg show` yet. Fetch those only if a later turn names one. The bridge contents are already in context, so no discovery calls were needed for this decision.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"provider startup bridge into shared workspace and AIWG rules before deciding a task\" 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "The startup bridge runs CLAUDE.md, then WORKSPACE.md (shared project context and precedence), then AIWG.md (framework routing), then `.aiwg/aiwg.config`. Those files are already in context, so the remaining step is to fetch the governing rule bodies before acting. The discovery I ran did not surface a rule about the bridge itself, so I did not fetch any further rule bodies here.\n\n```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"The bridge (CLAUDE.md → WORKSPACE.md → AIWG.md → .aiwg/aiwg.config) is already loaded, so loading context again adds nothing. WORKSPACE.md precedence makes AIWG rules bind over session directives on covered subjects, and the on-demand rules (for example human-authorization and skill-discovery guidance) plus any required_rule_checks from discovered components must be fetched with `aiwg show rule <name> --body` before governed work starts. A discovery card is not a rule-body fetch. Discovery for this question returned skill cards but no bridge-specific rule, so discover-fetch and discover-both are not needed. Since this is a read-only decision, no file edits or service contact are involved.\"\n}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 5,
+            "failed_B_primary_class": "iii",
+            "sides": {
+              "A": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [],
+                "response": "**Bridge path:** `CLAUDE.md` loads `@WORKSPACE.md` (shared project context and precedence), then `@AIWG.md` (framework routing and the Discover-First Protocol), then `.aiwg/aiwg.config` (installed frameworks, artifact policy, parallelism caps). Several binding rules are on-demand, not inlined: `RULES-ONDEMAND.md` lists HIGH-enforcement rules such as `research-before-decision`, `human-authorization`, and `subagent-scoping`, and says to fetch each with `aiwg show rule <name>` before work it governs. The bridge therefore loads the project context, then fetches the specific governing rules before acting.\n\n**Choice:** `fetch-before-work`. The request names no AIWG command, skill, or tracker item, so `discover-fetch` and `discover-both` don't apply. `load-context` covers only the first step, since the on-demand rules still need fetching before work begins.\n\n```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"The provider bridge (CLAUDE.md -> WORKSPACE.md -> AIWG.md -> .aiwg/aiwg.config) supplies the shared project context and precedence order, but the HIGH-enforcement rules it lists in RULES-ONDEMAND.md are not inlined. Those governing rules must be fetched with `aiwg show rule <name>` before work they cover. No AIWG command or capability is named, so Discover-First does not require `aiwg discover` first.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"provider startup bridge into shared workspace and AIWG rules context loading\"",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "**Bridge path:** The provider startup file (`CLAUDE.md`) imports `@WORKSPACE.md`, `@AIWG.md`, and `@.aiwg/aiwg.config`. `WORKSPACE.md` is the shared context and sets precedence: safety and platform constraints first, then AIWG rules, then workspace context, then `AIWG.md`. The AIWG rules under `.claude/rules/` are mostly summaries, and `RULES-ONDEMAND.md` lists bodies that must be fetched with `aiwg show rule <name> --body`. I ran `aiwg discover` for this request, which is the first call the skill-discovery rule requires. The top matches were `aiwg-status` (workspace dashboard), `steward` (provider capability routing), and the three `aiwg-regenerate-*` skills. Each discovery summary lists required rule checks, and those bodies have to be fetched before governed work.\n\n```json\n{\n  \"action\": \"discover-fetch\",\n  \"reason\": \"The startup bridge (CLAUDE.md) imports WORKSPACE.md, AIWG.md, and .aiwg/aiwg.config. WORKSPACE.md sets precedence: platform safety constraints first, then deployed AIWG rules, then workspace context, then AIWG.md. Those rule files are summaries, and the full bodies are on demand via `aiwg show rule <name> --body`. Because this request concerns AIWG rules, `aiwg discover` has to run first. It returned aiwg-status, steward, and the aiwg-regenerate-* skills as top candidates, and each lists required_rule_checks (cli-secondary, plus delivery-policy, respect-repo-access-manifest, and escalation-discipline for steward). Those bodies must be fetched and followed before any governed work. Loading context alone is not enough, because discovery summaries are not full rules. discover-both is unnecessary, since WORKSPACE.md and AIWG.md are already loaded through the bridge. This was a read-only decision, so nothing was edited, spawned, or contacted.\"\n}\n```"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "discovery-codex-startup",
+        "official_status": "regressed",
+        "official_rates": {
+          "A": 1,
+          "B": 0
+        },
+        "explanation": "All five A samples select load-context and pass strict JSON; all five B samples still select load-context but add prose. A has zero discover calls; B has one in every sample. B2 additionally checks AGENTS.md and reports it missing: this comparison executed on Claude, not a deployed Codex fixture. No B skill-show card was read in this scenario, so this is not evidence that a show card stopped drill-in.",
+        "samples": [
+          {
+            "repetition": 1,
+            "failed_B_primary_class": "ii",
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "load-context",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"AGENTS.md is a provider-facing bridge that points first to the shared workspace context and then to the generated AIWG framework context. WORKSPACE.md is the canonical provider-neutral home for project and operator context, and its Precedence section says to load it before AIWG.md, which holds framework discovery and routing. AIWG.md then links .aiwg/aiwg.config. Governing AIWG rules are selected only after that chain is loaded, because their precedence over provider, harness, and session directives depends on it. The action is therefore to load the linked context in that order before doing other work. It is not a discover or fetch action, since no named AIWG command or capability is being requested. This decision relies on the WORKSPACE.md and AIWG.md text as provided in context. I did not open the fixture's AGENTS.md file.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "load-context",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"AGENTS.md points to shared workspace and AIWG context before governing instructions are selected\"",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "I ran `aiwg discover` first. The top match is the \"Project Agent Instructions\" template (`AGENTS.md`), which reads `WORKSPACE.md` first and then `AIWG.md` for discovery, quick references, and routing. The next matches were the `aiwg-status` and `workspace-health` skills, which are not relevant to this decision. I did not open a Codex fixture file, so the explanation below comes from that template card and the project's `WORKSPACE.md` and `AIWG.md`, which are already in context.\n\n**How the chain works:** `AGENTS.md` is a provider bridge, not the source of policy. It first points the harness at the shared workspace context (`WORKSPACE.md`), which holds project and operator context and the precedence order. It then points to `AIWG.md` for framework discovery and routing. Governing instructions are selected only after both are loaded, because `WORKSPACE.md`'s precedence rules decide which directive wins. AIWG rules bind over provider or session directives on the subjects they cover.\n\n**Choice:** `load-context` is the step that comes before governing instructions are selected. Discovery and rule fetches still apply afterward, once the context has established what governs the work.\n\n```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"AGENTS.md is a provider bridge that directs the harness to load WORKSPACE.md (shared project/operator context and the precedence order) first, then AIWG.md (framework discovery and routing). Governing instructions are selected only after that context is loaded, since WORKSPACE.md's precedence rules determine which directives bind. The discover-fetch and discover-both options address capability lookup, and fetch-before-work addresses required rule checks before a governed task starts; those follow after context is loaded.\"\n}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 2,
+            "failed_B_primary_class": "ii",
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "load-context",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"AGENTS.md is a provider-facing bridge, not the governing source. It directs the harness to load the shared context first: WORKSPACE.md (canonical project and operator context, including the Precedence section), then AIWG.md (generated framework discovery and routing), then .aiwg/aiwg.config. Only after that chain is loaded are governing instructions selected, using WORKSPACE.md's precedence order: platform constraints, then deployed AIWG rules, then root WORKSPACE.md, then AIWG.md, then narrower linked files. The request names no AIWG command or capability, so discover-fetch and discover-both do not apply. Nothing needs fetching before work beyond the context files themselves. I based this on the Source Model and WORKSPACE/AIWG bootstrap text in the provided project context and did not open AGENTS.md directly.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "load-context",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"explain how AGENTS.md points to shared workspace and AIWG context before governing instructions are selected\" 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "ls -la AGENTS.md 2>&1; test -f AGENTS.md && sed -n '1,40p' AGENTS.md",
+                    "success": false,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"The decision is about the order of context loading, not about a specific rule or component. AIWG discovery's top match is the AGENTS.md template, which says to read WORKSPACE.md first and then AIWG.md for discovery and routing. WORKSPACE.md's Precedence section ranks AIWG rules above provider or session directives, and it names .aiwg/aiwg.config as a linked context file. So the bridge (AGENTS.md) points into the shared workspace context, then the AIWG framework context, then project config, and only after that are governing instructions selected. Fetching individual rules before that load would select them without the precedence ceiling. Required-rule fetches still happen before governed work, but that step comes after this load.\"\n}\n```\n\nNotes on the evidence:\n- `aiwg discover` ranked the AGENTS.md template (\"Project Agent Instructions\") as its fourth match. Its capability line reads: \"Read and follow `WORKSPACE.md` first. Then read `AIWG.md` for AIWG discovery, quick references, and framework routing.\" The top match was the `aiwg-status` skill, which doesn't bear on this question.\n- WORKSPACE.md's \"Source Model\" section says `AGENTS.md` and the other provider files are bridges, not replacements. It also says the root `AIWG.md` is the cross-provider companion.\n- There is no `AGENTS.md` file in this project directory (`ls` returned \"No such file\"). This is a Codex fixture, so the explanation above comes from the WORKSPACE.md and AIWG.md text plus the discovered template, not from a project-level AGENTS.md. I made no edits."
+              }
+            }
+          },
+          {
+            "repetition": 3,
+            "failed_B_primary_class": "ii",
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "load-context",
+                "commands": [
+                  {
+                    "name": "Glob",
+                    "command": "{\"pattern\":\"{AGENTS.md,WORKSPACE.md,AIWG.md,.aiwg/AIWG.md}\",\"path\":\"/tmp/aiwg-release-sample-0t8rjC/project\"}",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"In the Codex fixture, AGENTS.md is the provider-facing entry point. It is a bridge, not the governing source. It directs the harness to the shared workspace context in WORKSPACE.md first, then to the generated framework context in AIWG.md (root, or .aiwg/AIWG.md as the normalized project-local copy), and then to .aiwg/aiwg.config. Only after that chain is loaded should governing instructions be selected. Under WORKSPACE.md's precedence order, AIWG rules bind over provider and session directives on the subjects they cover, and narrower linked files govern only their declared scope. The fetch-based actions (discover-fetch, discover-both, fetch-before-work) apply when a turn names an AIWG command or capability, which this decision does not. Note: I found no AGENTS.md in the project root (only WORKSPACE.md, AIWG.md, and .aiwg/AIWG.md matched), so the Codex bridge itself is absent from this checkout. The chain described above comes from the WORKSPACE.md and AIWG.md text, and it should be verified once AGENTS.md is present.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "load-context",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"explain how AGENTS.md points to shared workspace and AIWG context before governing instructions are selected in a Codex fixture\"",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "The top discovery match is the \"Project Agent Instructions\" template, whose capability is \"Read and follow `WORKSPACE.md` first. Then read `AIWG.md`.\" That matches the question, so I used it.\n\n**Pointer chain before governing instructions are selected:**\n1. **AGENTS.md** is the provider-facing bridge. It does not hold the policy itself. It points to the shared context first.\n2. **WORKSPACE.md** is the canonical provider-neutral context. It carries the precedence order (safety and capability limits first, then AIWG rules, then workspace context, then AIWG.md, then narrower linked files) and the project context.\n3. **AIWG.md** is loaded next for framework discovery, routing, and the deployed-rule list.\n4. Only after those two files are read does the agent select which governing rules apply. Those rules are then fetched with `aiwg show rule <name> --body` before governed work begins.\n\nThe decision is `load-context` rather than `fetch-before-work`. The question is about the order in which the shared context is loaded, and that happens before rule selection. Rule-body fetches come after the context is loaded.\n\n```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"AGENTS.md is a bridge that directs the agent to WORKSPACE.md first (canonical shared context and the precedence order), then AIWG.md (framework discovery and routing). Governing instructions are selected only after both are loaded. The required rule bodies are fetched afterward with aiwg show rule ... --body, so this is a context-loading step that comes before fetch-before-work.\"\n}\n```\n\nNo files were edited, and no services were contacted."
+              }
+            }
+          },
+          {
+            "repetition": 4,
+            "failed_B_primary_class": "ii",
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "load-context",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"AGENTS.md is a provider-facing bridge. It does not carry project policy itself. Its job is to direct the harness to the canonical shared context first, then to the generated framework context, and only then to the governing instructions. Per WORKSPACE.md, the chain is: AGENTS.md → WORKSPACE.md (shared project/operator context, precedence level 3) → AIWG.md (framework discovery and routing, level 4) → .aiwg/aiwg.config. Governing AIWG rules are selected after that load, and they bind over provider, harness, and session directives on any subject they cover. Loading context is the step that comes before selecting governing instructions. Discovery and fetching are task-specific actions that follow it, and no AIWG command or skill is named in this request, so neither discover nor fetch is needed first. Caveat: the Codex fixture's AGENTS.md was not among the files I read. This explanation relies on the bridge description in WORKSPACE.md and AIWG.md, which matches the CLAUDE.md bootstrap order.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "load-context",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"AGENTS.md bootstrap order for shared workspace and AIWG context before governing instructions\" 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "The discovery query returned no skill for AGENTS.md bootstrap ordering. The closest hits were `aiwg-status`, `new-project`, and `sdlc-accelerate`, and none of them governs this decision. The answer below comes from the project's bootstrap files (CLAUDE.md, WORKSPACE.md, AIWG.md). I did not open the fixture's AGENTS.md itself, so the description of it relies on those files' statements that provider startup files are bridges.\n\n**How the bootstrap works**\n\n1. AGENTS.md is a provider-facing bridge, not a replacement for the shared context. WORKSPACE.md says provider startup files are generated adapters that \"direct the harness here first, then to AIWG.md.\"\n2. The first step is WORKSPACE.md, the canonical provider-neutral home for project and operator context. Its Precedence section ranks platform constraints first, then AIWG rules over provider, harness, or session directives on covered subjects, then WORKSPACE.md, then AIWG.md, then narrower linked files.\n3. The second step is AIWG.md, the generated cross-provider framework context. It points to `.aiwg/aiwg.config` and the rule set.\n4. Governing instructions are selected only after those are loaded, because the precedence ladder depends on knowing which AIWG rules cover the subject. Discovery and fetch steps come after that, when a component is about to be used.\n\n```json\n{\"action\": \"load-context\", \"reason\": \"AGENTS.md is a provider bridge that directs the harness to WORKSPACE.md first (canonical shared context and the Precedence ladder), then to AIWG.md (generated framework context) and .aiwg/aiwg.config. Governing instructions are chosen only after that context is loaded, because AIWG rules outrank provider or session directives on the subjects they cover. Discovery is not the first step here, since no skill or agent is being invoked. fetch-before-work applies later, when a discovered component is about to run and its required_rule_checks must be fetched. discover-fetch and discover-both would put component lookup ahead of the bootstrap that defines the precedence those lookups operate under.\"}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 5,
+            "failed_B_primary_class": "ii",
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "load-context",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"load-context\",\n  \"reason\": \"AGENTS.md is a provider bridge, not the policy itself. It directs the harness to load the shared workspace context first, then the generated AIWG framework context. In this project, WORKSPACE.md is the canonical provider-neutral context and holds the precedence order. AIWG.md is the generated framework context that loads the AIWG rules and points to .aiwg/aiwg.config. Governing instructions are selected only after those files are loaded. Because AIWG rules outrank harness and session directives on the subjects they cover, the harness has to establish that order before it applies any directive that claims to supersede earlier guidance. The discover-fetch and discover-both actions apply when a user turn names a specific AIWG command or capability, which is not what this bootstrap step is. fetch-before-work applies to a single rule fetched before a specific task, not to the session-level context chain. I did not open AGENTS.md itself; this answer relies on the bridge description in WORKSPACE.md and CLAUDE.md, and the fixture's AGENTS.md is the one thing I did not check.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "load-context",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"explain how AGENTS.md points to shared workspace and AIWG context before governing instructions are selected\"",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "I ran `aiwg discover` for this question. The top match is the AGENTS.md project-instructions template, whose capability is \"Read and follow `WORKSPACE.md` first. Then read `AIWG.md` for AIWG discovery, quick references, and framework routing.\" The next matches were the `aiwg-status` and `workspace-health` skills, which don't cover this question. I did not open a Codex fixture, since none is in this project's context. The chain below comes from the project's WORKSPACE.md, AIWG.md, and CLAUDE.md, plus the discovered template.\n\n**How the pointers work**\n\n1. AGENTS.md is a provider-facing bridge. It is not a replacement for `.aiwg/AIWG.md`.\n2. Its first instruction is to load the shared workspace context: `WORKSPACE.md`. That file is the canonical, provider-neutral home for project and operator context. Its Precedence section ranks AIWG rules above provider, harness, and session directives on the subjects they cover.\n3. Its second instruction is to load the generated AIWG context: `AIWG.md`. That file holds discovery, quick references, and framework routing, and it links to `.aiwg/aiwg.config`.\n4. Only after both are loaded can the governing instructions be selected. Those are the precedence ranking, the deployed AIWG rules, and the narrower linked files, such as `.claude/rules/*`, which apply within their declared scope.\n\nBecause the pointers come first, a directive that tries to supersede AIWG rules is ranked below them. The sequence is therefore load, then select, not select, then load.\n\n```json\n{\"action\": \"load-context\", \"reason\": \"AGENTS.md is a bridge whose first two steps are to read WORKSPACE.md (shared project context and the Precedence ranking) and then AIWG.md (AIWG discovery and routing). Governing instructions, including AIWG rules and linked narrower files, are only selected after that context is loaded, so the load step must come before any rule selection. The other options do not fit: discover-fetch and discover-both are about AIWG capability lookup, not the bootstrap order, and fetch-before-work applies once a specific component is about to be invoked, not to the context bootstrap.\"}\n```"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "discovery-discover-show-follow",
+        "official_status": "regressed",
+        "official_rates": {
+          "A": 0.2,
+          "B": 0
+        },
+        "explanation": "All five B samples run discover and show a skill card, but none fetch the skill body or a skill section. B1-4 fetch governing rule bodies instead, and B5 leaves rule fetching pending. A plain show returns authored skill content. All five B outputs also fail strict JSON. B3 chooses a later-step action. B1/4 use a noisy full-sentence query, select irrelevant aiwg-status, and prematurely conclude no intake exists; B2/3 recover with a short type-filtered intake query. Query/ranking differences are a confound, not isolated proof of a card-caused ranking regression. The old tool-presence assertion credits cards, so the real missing-body behavior is hidden behind format failures.",
+        "samples": [
+          {
+            "repetition": 1,
+            "failed_B_primary_class": "i",
+            "sides": {
+              "A": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"prepare an intake\" 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg show skill aiwg:skill:48ef18e71a7a20a4 2>&1 | head -80",
+                    "success": true,
+                    "component_body_observed": true
+                  }
+                ],
+                "response": "I ran read-only discovery with `aiwg discover \"prepare an intake\"`. It returned five matches, led by `civic-intake-and-jurisdiction` and `dataset-intake`. The generic intake skill, `dataset-intake`, fits best. I fetched it with `aiwg show skill aiwg:skill:48ef18e71a7a20a4`. It builds a governed intake envelope from a source path or URI and a desired outcome, without opening the source. The civic flows are domain-specific and the request named no domain. Discovery also warned that the local project index is missing or empty, so the ranking may be incomplete.\n\n```json\n{\n  \"action\": \"discover-fetch\",\n  \"reason\": \"Discovery was run and the top generic match, dataset-intake, was fetched before deciding. The skill needs a source locator, desired outcome, and domain, and the request supplies none of them, so the next step is to ask for those inputs and then follow the skill's preview and assessment hand-off. The civic flows were not chosen because the request names no civic domain. The discovery index warning means ranking could be incomplete.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"prepare an intake using the installed AIWG skill\"",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg show skill aiwg:skill:7dac841e59bdae0d; echo '---'; aiwg show rule cli-secondary --body",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "Discovery and fetch ran read-only. `aiwg discover` returned five matches. The top one is `aiwg-status` (skill, `aiwg:skill:7dac841e59bdae0d`): it displays the workspace status dashboard. I fetched its card and its required rule, `cli-secondary`, which says to use discovered skills before raw CLI commands. No generic intake skill surfaced. The two intake-named matches are civic-specific flows (`civic-intake-and-jurisdiction`, `civic-meeting-source-intake`) that matched only on lexical overlap, so I did not fetch them.\n\n```json\n{\n  \"action\": \"discover-fetch\",\n  \"reason\": \"Ran `aiwg discover` for the intake need, then fetched the top candidate `aiwg-status` (skill card) and its required rule `cli-secondary` before deciding. No generic intake skill was found; the top match is a status dashboard, which does not fit an intake. The civic intake flows matched only lexically and are domain-specific, so I did not fetch them. Discovery plus the fetched skill and rule are enough to decide the workflow, which is to report that no matching intake skill exists and ask the user which intake they mean, rather than improvising one or invoking aiwg-status for an unrelated purpose. Discover-both would require fetching the flows, which the lexical matches do not justify. Load-context and fetch-before-work do not fit: the context was already loaded, and the required rule was fetched as part of this step.\"\n}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 2,
+            "failed_B_primary_class": "i",
+            "sides": {
+              "A": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"intake\" 2>&1 | head -n 40",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg show skill aiwg:skill:a954bcfc89970851 2>&1 | head -n 80",
+                    "success": true,
+                    "component_body_observed": true
+                  }
+                ],
+                "response": "I ran read-only discovery for \"intake\" and fetched the top SDLC match, `intake-start`. Discovery returned five intake skills, and a warning said the project index is missing, so the ranking may be incomplete. The fetched body says `intake-start` is only for teams who already wrote their own intake documents. If you need intake generated, it points to `intake-wizard` or `intake-from-codebase` instead. Your request asks me to prepare an intake, so the right route depends on which generator applies, and I haven't fetched that one yet.\n\n```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"Discovery returned five intake skills and warned that the project index is missing, so the ranking may be incomplete. I fetched the top SDLC match (intake-start, aiwg:skill:a954bcfc89970851). Its body says it only validates manually written intake documents and redirects generation requests to intake-wizard or intake-from-codebase. The request is to prepare an intake, so the workflow depends on which generator applies. Fetch that generator before writing anything. Any output must go to the artifact root from `aiwg artifacts path --json --check-write`, not the repo-local .aiwg payload.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"prepare an intake using the installed AIWG skill\" 2>&1 | head -80",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"intake\" --type skill 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg show skill aiwg:skill:48ef18e71a7a20a4 2>&1 | head -80; echo ---; aiwg show rule dataset-safety --body 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "Discovery ran first, and the selected skill was fetched before the decision. Nothing was edited and no services were contacted.\n\n**Discovery:** `aiwg discover \"prepare an intake using the installed AIWG skill\"` returned status and runtime skills, which don't match. `aiwg discover \"intake\" --type skill` returned four intake candidates: `dataset-intake` (top match, generic across AIWG domains), `intake-from-codebase`, `intake-from-campaign`, and `flow-concept-to-inception`.\n\n**Fetch:** I ran `aiwg show skill aiwg:skill:48ef18e71a7a20a4` for the top candidate, `dataset-intake`. Its card lists one required rule, `dataset-safety`, so I also fetched that rule's body with `aiwg show rule dataset-safety --body`. The rule requires dataset execution to go through the shared `aiwg dataset` service, digest-scoped approval before destructive or policy-sensitive work, and opaque credential references.\n\n**Caveats:**\n- The card reports `installed: false` with owner `addon:dataset-intelligence`, and that addon is not in `.aiwg/aiwg.config`. The skill may not be deployed here.\n- \"Intake\" is ambiguous across the four candidates. The user needs to confirm which one they mean before any intake is prepared.\n\n```json\n{\"action\": \"discover-fetch\", \"reason\": \"The request names an installed AIWG skill without naming it, so discovery is required first (AIWG-related request, skill-discovery rule). I ran read-only discovery, found 'dataset-intake' as the top intake match, and fetched its card and required dataset-safety rule before deciding. Fetch was needed because the card lists a required rule that governs the work. discover-both is unnecessary because no separate context load is needed for the decision. load-context alone would skip the mandatory discovery step. fetch-before-work is too narrow because it presumes the skill is already selected, and it is not yet confirmed which intake the user wants or whether the skill is installed.\"}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 3,
+            "failed_B_primary_class": "i",
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "discover-fetch",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"prepare intake\" 2>&1 | head -40",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg show skill aiwg:skill:48ef18e71a7a20a4 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": true
+                  }
+                ],
+                "response": "```json\n{\"action\": \"discover-fetch\", \"reason\": \"Read-only `aiwg discover \\\"prepare intake\\\"` returned five matches. The two civic flows are not skills, so I took the top skill, `dataset-intake` (aiwg:skill:48ef18e71a7a20a4). `aiwg show skill` on that ID fetched its definition before any workflow was chosen. The fetched body sets the workflow: build a `dataset-intake/v1` envelope without opening the source, record authorization references, then propose `aiwg dataset preview` and hand off to `dataset-source-assess`. That is a single discover-then-fetch sequence, so no second discovery pass or separate context load is needed. Caveats: discovery warned that the project index is missing or empty (`aiwg index build --graph project` would repair it), and the request did not name a skill, so the civic flows remain the alternative reading.\"}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"prepare an intake using the installed AIWG skill\"",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"intake\" --type skill",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg show skill aiwg:skill:a954bcfc89970851",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg show rule sdlc-right-sizing --body",
+                    "success": true,
+                    "component_body_observed": true
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg show rule native-ux-tools --body",
+                    "success": true,
+                    "component_body_observed": true
+                  }
+                ],
+                "response": "I ran read-only discovery and fetched the selected skill and its two required rules. Nothing was edited or executed beyond `aiwg discover` and `aiwg show`.\n\n- **First discovery** (`aiwg discover \"prepare an intake using the installed AIWG skill\"`): top matches were `aiwg-status`, `plugin-status`, and `runtime-info`, none of which prepares an intake. The civic intake flows were weaker matches.\n- **Type-filtered discovery** (`aiwg discover \"intake\" --type skill`): selected `intake-start` (\"Ingest the Project Intake Form and kick off Concept → Inception\"), the SDLC intake skill and the most likely reading of \"intake.\"\n- **Fetched:** `aiwg show skill aiwg:skill:a954bcfc89970851`, plus the bodies of its two required rules, `sdlc-right-sizing` and `native-ux-tools`.\n\nTwo things the fetch surfaced:\n- The skill card reports `installed: false`, which conflicts with the request's \"installed AIWG skill.\" The skill is listed in discovery and is bound to the project's rules, but it may not be deployed.\n- `sdlc-right-sizing` says intake is for work that meets two or more trigger criteria, and says not to launch it for small changes. Whether this intake is warranted depends on the scope the user actually has in mind.\n\n```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"Discovery already located the intended capability (intake-start) and the first, unfiltered discovery returned unrelated status skills, so no further discovery is needed. The selected skill was fetched and its required rules (sdlc-right-sizing, native-ux-tools) were read before deciding the workflow, as the bound-rule checks require. The fetched rules mean the intake must first pass the right-sizing check and, if a question is needed, use a native question tool or a single formatted question. The skill card shows installed: false, which must be reconciled with the user's 'installed' wording before any intake runs.\"\n}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 4,
+            "failed_B_primary_class": "i",
+            "sides": {
+              "A": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"intake\" 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg show skill aiwg:skill:a954bcfc89970851 2>&1 | head -80",
+                    "success": true,
+                    "component_body_observed": true
+                  }
+                ],
+                "response": "Discovery found five intake skills. I fetched `intake-start` read-only, and its body changes the decision: it only validates intake documents a team has already written, and it points to `intake-wizard` or `intake-from-codebase` for generating them. Since you asked me to prepare an intake, the skill's scope has to be checked before any work starts.\n\n```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"Discovery for \\\"intake\\\" returned five candidates (dataset-intake, flow-concept-to-inception, intake-from-campaign, intake-from-codebase, intake-start), all with score 1.00, so the ranking alone does not identify the right one. I fetched intake-start with `aiwg show skill aiwg:skill:a954bcfc89970851`. Its body says it is for teams who have already written project-intake.md, solution-profile.md, and option-matrix.md and want them validated, and that intake-wizard or intake-from-codebase should be used to generate intake documents. The request is to prepare an intake, which is generation, so the workflow must be chosen from the fetched scope before work begins. The discovery run also warned that the project capability cache and local index were unavailable, so results came from the packaged corpus; running `aiwg index build --graph project` would repair that, but it was not run because this exercise is read-only. No files were edited, no services were contacted, and no agents were spawned.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"prepare an intake using the installed AIWG skill\" 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg show skill aiwg:skill:7dac841e59bdae0d 2>&1 | head -60; echo \"---RULE---\"; aiwg show rule cli-secondary --body 2>&1 | head -40",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "I ran read-only discovery and fetched the top candidate's card and its required rule. Nothing was edited and no services were contacted.\n\n**Discovery:** `aiwg discover \"prepare an intake using the installed AIWG skill\"` returned five matches. The top three are lexical hits on \"installed\" (`aiwg-status`, `plugin-status`, `runtime-info`), not intake work. Two civic flows (`civic-intake-and-jurisdiction`, `civic-meeting-source-intake`) mention intake but are domain-specific, scored 0.44, and are not a general intake skill.\n\n**Fetch:** `aiwg show skill aiwg:skill:7dac841e59bdae0d` returned the `aiwg-status` card. Its bound rule, `cli-secondary`, was fetched with `--body`. The card confirms that `aiwg-status` is a workspace dashboard and does not prepare intakes.\n\n```json\n{\n  \"action\": \"discover-fetch\",\n  \"reason\": \"Discovery ran and the top candidate was fetched with its required rule, cli-secondary. No installed skill matches a general intake: the top lexical hits are status and runtime dashboards, and the only intake matches are domain-specific civic flows. Work should not start until the user confirms which intake applies, or that none does.\"\n}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 5,
+            "failed_B_primary_class": "i",
+            "sides": {
+              "A": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"prepare an intake\" 2>&1 | head -40",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg show skill aiwg:skill:48ef18e71a7a20a4 2>&1 | head -80; echo \"-----\"; aiwg show flow aiwg:flow:7ca3e08a27c74cbf 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": true
+                  }
+                ],
+                "response": "I ran read-only discovery for \"prepare an intake\", then fetched the two top matches: the `dataset-intake` skill and the `civic-intake-and-jurisdiction` flow. Discovery printed a warning that the project index is missing or empty, so the ranking may be degraded. I did not run `aiwg index build` because it writes to the index.\n\nThe `dataset-intake` skill is the generic \"intake\" skill and matches the request. It creates an intake envelope without opening the source. The civic flow is domain-specific and marks a human jurisdiction-review boundary, so it does not fit an unspecified intake.\n\n```json\n{\"action\": \"discover-fetch\", \"reason\": \"The request names an installed skill but no domain. Discovery surfaced dataset-intake (skill) as the generic match, and fetching it confirmed it creates a governed intake envelope without opening the source. The civic flow is domain-specific and not what was asked. The workflow should be chosen after the fetch, so the decision is grounded in the skill's actual contract rather than the discovery summary. The discovery index was degraded, so the ranking is unverified and the user should confirm the selection.\"}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"intake\" 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  },
+                  {
+                    "name": "Bash",
+                    "command": "aiwg show skill aiwg:skill:48ef18e71a7a20a4 2>&1 | head -40",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "**Discovery demonstrated (read-only):**\n- `aiwg discover \"intake\"` returned 5 matches. The top match was `dataset-intake` (`aiwg:skill:48ef18e71a7a20a4`), with `intake-from-campaign`, `intake-from-codebase`, and `flow-concept-to-inception` close behind.\n- `aiwg show skill aiwg:skill:48ef18e71a7a20a4` fetched its card. The card reports `installed: false` and binds the `dataset-safety` rule, which still needs its body fetched before any governed work.\n\nThe request says \"the installed AIWG skill,\" and the top match is not installed. So the candidate is not confirmed yet, and the user's intended intake is ambiguous.\n\n```json\n{\n  \"action\": \"discover-fetch\",\n  \"reason\": \"Discovery ran and found several intake candidates, so the workflow should discover and then fetch the selected skill before deciding. The top match, dataset-intake, is not installed and is a dataset-domain skill, so it is not yet confirmed as the intended one. Its card also binds the dataset-safety rule, which must be fetched with `aiwg show rule dataset-safety --body` before governed work. Discover-both is not needed because no separate rule set beyond the bound rules is required at this stage, and load-context or fetch-before-work would skip the candidate comparison that the ambiguity calls for. Before acting, confirm with the user which installed intake skill they mean.\"\n}\n```"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "discovery-hermes-startup",
+        "official_status": "regressed",
+        "official_rates": {
+          "A": 1,
+          "B": 0.8
+        },
+        "explanation": "Only B2 fails: it selects fetch-before-work and explains the full-body requirement correctly, then appends a discovery announcement after the JSON fence. The other four B samples pass. This was a hypothetical Hermes question evaluated by the Claude transport.",
+        "samples": [
+          {
+            "repetition": 1,
+            "failed_B_primary_class": null,
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"The summary and fetch pointer are enough to decide whether the rule applies, but not to follow it. Once the task falls within the rule's scope, read the full body before the governed work starts, because the rule's actual requirements, exceptions, and checklists live in the body. Use the summary alone only for triage. Discovery (discover-fetch or discover-both) is for finding a rule whose name or pointer is unknown, and load-context is for loading the summary, which is already in hand. Per RULES-ONDEMAND, MEDIUM/LOW rules are fetched on demand when relevant, and HIGH rules must be fetched before the work they govern.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"A summary and fetch pointer are not the rule's full text. Before any governed work that the rule covers, read the full body with `aiwg show rule <name> --body` and follow it. Discovery is not needed because the pointer already names the rule, and loading context alone does not supply the body. The fetch must happen before the work starts, not after it.\"\n}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 2,
+            "failed_B_primary_class": "ii",
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"The summary and fetch pointer are enough to know the rule exists, but not to comply with it. Read the full body with `aiwg show rule <name>` before any governed work starts, meaning whenever the task falls within the rule's stated scope, since the summary cannot carry its requirements. Noncritical rules are fetched on demand, and this is the on-demand case. If the task is outside the rule's scope, the summary is sufficient and no fetch is needed. Discovery is not required because the pointer already identifies the rule.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"fetch full rule body before governed work when only summary and pointer are available\" 2>&1 | head -40",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"The rule is already identified by its summary and fetch pointer, so discovery is not needed. Before any governed work, read the full body with `aiwg show rule <name> --body` and follow it. A summary or pointer is not the rule. Governed work includes any edit, decision, or invocation the rule covers, including work delegated to a subagent. If the body cannot be fetched, stop and report the blocker instead of proceeding from the summary.\"\n}\n```\n\nI ran one read-only `aiwg discover` query first. Its results confirm the principle: a discovery summary is not the full rule, so the body must be fetched before governed work."
+              }
+            }
+          },
+          {
+            "repetition": 3,
+            "failed_B_primary_class": null,
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"The summary and pointer are enough to recognize that a noncritical kernel rule may apply, but not enough to govern work. Read the full body before governed work starts whenever the task falls within the rule's scope, when the summary is ambiguous about applicability, or when the work would act on a detail the summary omits (for example, specific thresholds, exceptions, or required steps). Skipping the body in those cases risks acting on a partial rule. Reading it is cheap relative to that risk. If the task is clearly outside the rule's scope, the summary is sufficient and no fetch is needed.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"A summary and fetch pointer are not the rule. Before any governed work, run `aiwg show rule <name> --body` and follow the full body. The skill-discovery rule says discovery summaries and pointers are not full rules, and that governing rules must be read before acting. The summary can confirm the rule applies, but it does not replace the body. Discovery is not needed again if the rule was already located this session, so this is a body fetch, not a new discover.\"\n}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 4,
+            "failed_B_primary_class": null,
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"The rule is noncritical, so it is not inlined at startup, but it still binds whenever it governs the work. Per RULES-ONDEMAND, on-demand rule bodies are fetched with `aiwg show rule <name>` and applied when relevant. A summary and fetch pointer only identify the rule. Its obligations are in the full body. So the full body must be read before any governed work begins, not after it. Discovery is unnecessary because the rule is already identified by name, so neither discover-fetch nor discover-both applies, and load-context would only cover startup inlining.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"A summary and fetch pointer are not the rule. Before any governed work, including subagent work, read the full body with `aiwg show rule <name> --body` and follow it. The summary is enough to know the rule exists, but not to apply it. Discovery alone does not satisfy this, and loading the summary into context does not either. Discover-fetch and discover-both only repeat the lookup. Because the rule is noncritical, its body can be fetched on demand right before the work it governs, rather than at session start.\"\n}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 5,
+            "failed_B_primary_class": null,
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"The rule is noncritical, so the summary and fetch pointer are enough for startup and routing. Once work falls within the rule's governed scope, the summary is not binding text, so the full body must be read before that work starts. The pointer is already known, so discovery is unnecessary, and inlining the rule into startup context is unnecessary too.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"fetch-before-work\",\n  \"reason\": \"The summary and fetch pointer are not the rule. Before any governed work starts, including delegated subagent work, read the full body with `aiwg show rule <name> --body` and follow it. The summary is enough to know the rule exists, but not to know what it requires. Discovery already produced the pointer, so re-running discovery adds nothing unless the need was never queried this session. Discovery alone does not satisfy the requirement; the body fetch does.\"\n}\n```"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "discovery-missing-native-skill",
+        "official_status": "regressed",
+        "official_rates": {
+          "A": 0.2,
+          "B": 0.2
+        },
+        "explanation": "B1-3 describe the correct discover/card/drill-in recovery but have surrounding prose. B4 returns strict JSON selecting fetch-before-work after actually discovering; the unnamed hypothetical skill cannot be selected, and the wording does not distinguish the whole recovery sequence from its next remaining step. B5 passes. No B sample reads a show card. A4 passes while B4 fails, and its judge favors A: either paired loss is sufficient for the conservative regressed gate despite identical 0.2 aggregate rates. B5 gains the pass lost at repetition 4; B average judge dimensions are all equal or better. The gate is not changed.",
+        "samples": [
+          {
+            "repetition": 1,
+            "failed_B_primary_class": "ii",
+            "sides": {
+              "A": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [],
+                "response": "The native Skill tool only sees kernel skills, so a non-kernel AIWG skill won't resolve there. The supported recovery is to run `aiwg discover \"<the need>\"` to locate the capability, then `aiwg show skill <name>` to fetch its canonical body, and follow that body. A \"no matches\" result is not evidence the skill is absent. I did not run these commands, since this is a read-only exercise, and I did not open the skill-discovery rule file, so the steps above come from the project's Discover-First Protocol.\n\n```json\n{\"action\": \"discover-fetch\", \"reason\": \"The native Skill tool cannot resolve non-kernel AIWG skills, so do not decline or work from memory. Run `aiwg discover \\\"<the need>\\\"` to locate the skill across the installed corpus, then run `aiwg show skill <name>` to fetch its canonical body and follow it. Treat a no-match result as a possible index bug and not as proof the skill is absent. Do not invent a substitute workflow.\"}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [],
+                "response": "**Supported recovery after a native Skill error:**\n\n1. Don't fall back to Grep, Glob, or Read on provider skill directories or `agentic/code/`. The skill-discovery rule forbids that path, and provider mirrors are not a valid source.\n2. Tell the user you are querying discovery and name the top candidate with a one-line capability summary.\n3. Run `aiwg discover \"<need>\"` with the matching `--type` (here, `skill`). Read the result.\n4. Run `aiwg show skill <name>` to get the card, then use its drill-in commands (`--section \"<heading>\"`, `--rules`, `--body`) to fetch the canonical body.\n5. Before invoking the skill, fetch and follow every `required_rule_checks` entry and any governing bound rule. A card is not a rule-body fetch.\n6. Only if the CLI itself is broken may you read `$AIWG_ROOT/agentic/code/{frameworks,addons}/<bundle>/skills/<name>/SKILL.md` directly. Then repair with aiwg-doctor, followed by aiwg-refresh.\n\nDiscovery is the first step, and the body fetch comes before any work. The other options don't fit. `discover-both` would also search the provider mirrors, which is forbidden. `load-context` only loads project context and doesn't locate or fetch the skill. `fetch-before-work` skips the discovery step that finds the skill in the first place.\n\n```json\n{\n  \"action\": \"discover-fetch\",\n  \"reason\": \"The native Skill failure is not a discovery result. Run `aiwg discover \\\"<need>\\\"` with --type skill, name the top candidate to the user, then fetch its canonical body with `aiwg show skill <name>` and the --body or --section drill-ins. Fetch and follow required_rule_checks and governing rules before invoking it. Do not Grep, Glob, or Read provider skill mirrors or agentic/code paths unless the CLI is broken, and then repair via aiwg-doctor → aiwg-refresh.\"\n}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 2,
+            "failed_B_primary_class": "ii",
+            "sides": {
+              "A": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [],
+                "response": "The Skill tool's miss is not evidence the skill is absent. The project's discover-first protocol makes `aiwg discover` the recovery: rank the capability against the installed corpus, then fetch its canonical body with `aiwg show skill <name>` and follow that body. The fetched text, not a recollection of the skill, is the source to act on. Only kernel skills are preloaded, so a non-kernel skill needs this fetch before the work starts. I did not run any commands, since the decision rests on the project's documented protocol.\n\n```json\n{\"action\": \"discover-fetch\", \"reason\": \"The native Skill tool misses non-kernel AIWG skills, which is a lookup gap rather than an absent capability. Run `aiwg discover \\\"<the need>\\\"` to rank matches across the installed corpus, which rebuilds the index from $AIWG_ROOT. Then fetch the chosen skill's canonical body with `aiwg show skill <name>` and follow that text. Do not decline the request or work from memory of the skill, and do not treat a single empty discover result as proof the skill is missing. Only kernel skills are preloaded, so load-context does not apply here. The skill body has to be fetched before any work begins, which the discover-fetch sequence already does.\"}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"recover non-kernel AIWG skill after native Skill tool error, fetch canonical body\" 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "The native Skill tool failed, so the supported recovery is to stay inside the AIWG CLI: discover the component, show its card, then drill in for the canonical body. I ran one read-only `aiwg discover` for this need. It returned rules and a generic agent-loop skill, not the exact component, so the recovery still needs a targeted query for the skill the user named.\n\n```json\n{\n  \"action\": \"discover-fetch\",\n  \"reason\": \"The native Skill tool failed, so recover through the AIWG CLI and do not navigate provider skill mirrors or the agentic/code corpus. (1) Run `aiwg discover \\\"<need>\\\" --type skill` for the skill the user named; the earlier discover run was generic and did not return it. (2) Run `aiwg show skill <name>` to get the card. (3) Fetch the canonical body with its drill-in commands: `aiwg show skill <name> --body`, plus `--section \\\"<heading>\\\"` or `--rules` as needed. (4) Before invoking or doing governed work, fetch and follow every `required_rule_checks` entry with `aiwg show rule <rule> --body`, including the bound rules. Discover-both is not needed because the target is a single non-kernel skill, and load-context and fetch-before-work each cover only part of this sequence.\"\n}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 3,
+            "failed_B_primary_class": "ii",
+            "sides": {
+              "A": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [],
+                "response": "The native Skill tool failing to find a skill doesn't mean the skill is absent. The supported recovery is to run `aiwg discover \"<the need>\"` to locate the capability in the installed corpus, then `aiwg show skill <name>` to fetch its canonical body and follow that body. Don't decline the request or reconstruct the workflow from memory. `aiwg show` also covers commands deployed to `.claude/commands/`, so a discovered command is fetched the same way.\n\n```json\n{\n  \"action\": \"discover-fetch\",\n  \"reason\": \"The native Skill tool failing is a lookup miss, not proof the skill is missing. Run `aiwg discover \\\"<need>\\\"` to rank matching AIWG capabilities across the installed corpus, then run `aiwg show skill <name>` to fetch the canonical body and follow it. This follows the project's Discover-First Protocol and the skill-discovery rule (run discover before declining or inventing a workflow). Loading context or fetching rule bodies alone would not locate the skill, and 'discover-both' is not a separate supported step.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"recover AIWG skill not found by native Skill tool\" 2>&1 | head -60",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "The native Skill tool failed, so the supported recovery is discover → show → drill-in, not a filesystem search. I ran a read-only `aiwg discover` for this need. It returned related candidates (prose-detect, prose-install, native-ux-tools, test-coverage, debug-source-not-output), but none is the missing skill, so the target name isn't confirmed. The canonical body comes from `aiwg show skill <name-or-id> --body`, with `--section \"<heading>\"` or `--rules` for narrower reads. Each `required_rule_checks` entry must then be fetched with `aiwg show rule <name> --body` and followed before invocation. Grep, Glob, or Read against provider skill mirrors is not a valid fallback. Only if the CLI itself is broken may the canonical `$AIWG_ROOT/agentic/code/...` corpus be read directly, followed by repair via aiwg-doctor and then aiwg-refresh.\n\n```json\n{\"action\": \"discover-fetch\", \"reason\": \"The native Skill tool failed, and the rules prohibit recovering by searching provider mirrors or the filesystem. The supported path is to run aiwg discover for the need, then fetch the canonical body with aiwg show skill --body (or --section/--rules), and fetch and follow each required_rule_check before work. discover-both is wrong because it would mix in provider mirror lookup, which is forbidden. load-context does not fit because this is a skill lookup, not framework context. fetch-before-work alone skips the required discovery step. The read-only discovery run found candidates but not the named skill, so the exact skill name still needs confirming before the show step.\"}\n```\n\nNothing was invoked, edited, or contacted beyond the read-only `aiwg discover` query."
+              }
+            }
+          },
+          {
+            "repetition": 4,
+            "failed_B_primary_class": "iii",
+            "sides": {
+              "A": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "discover-fetch",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"discover-fetch\",\n  \"reason\": \"The Skill tool's failure is a lookup miss, not evidence the capability is absent. The supported recovery is to run `aiwg discover \\\"<the need>\\\"` to rank capabilities across the installed corpus, then fetch the canonical body with `aiwg show skill <name>` (or `aiwg show command <name>` for provider command files such as `.claude/commands/`), and follow that fetched body. Do not reconstruct the workflow from memory or decline the request. If discover returns no match for a capability that is known to be deployed, treat that as a bug to report. The action is not discover-both, because the Skill tool has already answered the skill side. It is not load-context, because the body must come from `aiwg show`, not from a context file. It is not fetch-before-work, because the name is not yet known and discovery has to run first.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": false,
+                "strict_json_valid": true,
+                "diagnostic_action": "fetch-before-work",
+                "commands": [
+                  {
+                    "name": "Bash",
+                    "command": "aiwg discover \"native Skill tool cannot find non-kernel AIWG skill; fetch canonical skill body\" 2>&1 | head -80",
+                    "success": true,
+                    "component_body_observed": false
+                  }
+                ],
+                "response": "```json\n{\"action\": \"fetch-before-work\", \"reason\": \"A non-kernel AIWG skill failed in the native Skill tool, so recovery goes through the AIWG CLI, not the filesystem. I already ran `aiwg discover` for this need. It returned no skill matching the failed lookup, only rules and a kernel skill (`aiwg-refresh`), so the target skill's name still has to come from the request. Once the name is known, run `aiwg show skill <name>` and its drill-ins (`--section \\\"<heading>\\\"`, `--rules`, `--body`) to fetch the canonical body and every `required_rule_checks` entry (for example `aiwg show rule <name> --body`) before doing any governed work. Do not Grep, Glob, or Read provider skill mirrors or discovered paths. Only if the CLI itself is broken may the canonical `$AIWG_ROOT/agentic/code/{frameworks,addons}/<bundle>/skills/<name>/SKILL.md` be read directly, followed by repair through aiwg-doctor and then aiwg-refresh. The request names no skill, so I did not guess one. A discover-only or load-context action would not supply the body and rule checks that must be fetched before work starts.\"}\n```"
+              }
+            }
+          },
+          {
+            "repetition": 5,
+            "failed_B_primary_class": null,
+            "sides": {
+              "A": {
+                "official_pass": false,
+                "strict_json_valid": false,
+                "diagnostic_action": "discover-fetch",
+                "commands": [],
+                "response": "The native Skill tool's failure to find a skill doesn't mean the skill is absent. The supported recovery is the AIWG CLI. Run `aiwg discover \"<the need>\"` to rank the skill across the installed corpus; the index rebuilds from `$AIWG_ROOT` automatically. Then fetch the canonical body with `aiwg show skill <name>` and follow it. Don't decline the request or invent the workflow from memory. This follows the discover-first protocol in the project's CLAUDE.md and the `skill-discovery` rule.\n\n```json\n{\n  \"action\": \"discover-fetch\",\n  \"reason\": \"The Skill tool's miss is a lookup failure, not proof the skill is absent. Run `aiwg discover \\\"<the need>\\\"` to rank the skill across the installed corpus (the index rebuilds from $AIWG_ROOT automatically), then fetch the canonical body with `aiwg show skill <name>` and follow it. Do not decline as out of scope or reconstruct the workflow from memory. A 'no matches' result for a deployed capability is a bug to report, not a sign it is missing. 'discover-both' is unnecessary because the request is for a skill, not a command; 'load-context' and 'fetch-before-work' do not address finding the missing skill body.\"\n}\n```"
+              },
+              "B": {
+                "official_pass": true,
+                "strict_json_valid": true,
+                "diagnostic_action": "discover-fetch",
+                "commands": [],
+                "response": "```json\n{\n  \"action\": \"discover-fetch\",\n  \"reason\": \"The native Skill call failed, so recover through the AIWG CLI, not the filesystem. (1) Run `aiwg discover \\\"<need>\\\"` and read the result. Tell the user you queried and name the top candidate with a one-line capability summary; present the top three if they are close. (2) Run `aiwg show skill <name>` to get the card. (3) Fetch the full body with the drill-ins: `--section \\\"<heading>\\\"` for part of it, `--rules` for governing rules, or `--body` for the whole thing. (4) Before invoking, fetch and follow every `required_rule_checks` entry and governing bound rule. A card or discovery summary is not a rule body. (5) Apply the skill. Do not Glob, Grep, or Read the provider skill mirrors or the `$AIWG_ROOT/agentic/code` corpus. Read the canonical SKILL.md only if the CLI itself is broken, and then repair with aiwg-doctor followed by aiwg-refresh. discover-both is wrong because it adds a corpus read the rules allow only when the CLI is broken. load-context does not fetch the skill body. fetch-before-work is only the last step of this chain. This decision came from the loaded rules; I ran no commands.\"\n}\n```"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "fixes": [
+      "Text and JSON cards explicitly say the body has not been fetched and require content drill-in before a workflow decision.",
+      "discover-show-follow uses --body guidance and a body:true assertion requiring actual authored skill output; a bound-rule body alone cannot satisfy it. Legacy A plain show body remains valid.",
+      "Bootstrap and unnamed-skill scenarios distinguish whole requested sequences from the next step after inspection; Codex fixture is explicitly hypothetical under cross-provider evaluation.",
+      "Shared prompt permits inspection and moves announcements into reason. Frozen JSON parser unchanged."
+    ],
+    "already_fixed": "Eight saved --section requires a value diagnostics are covered by existing HEAD fix 3fb7546f3 / #3435 and its prebuilt-relations regression test; no duplicate CLI change needed.",
+    "limitation": "Single n=5 saved run with aliases and a temporary Claude adapter, not exact-model qualification; tree copier required a tarball fallback. No isolation of card-only causality for ranking or narration.",
+    "offline_replay": {
+      "original_assertions": {
+        "A": {
+          "pass": 18,
+          "fail": 12
+        },
+        "B": {
+          "pass": 10,
+          "fail": 20
+        }
+      },
+      "observed_skill_body_samples": {
+        "A": 5,
+        "B": 0
+      },
+      "denominator_per_side": 5,
+      "note": "Diagnostic replay only; official scores and strict parser are unchanged."
+    }
+  },
+  "live_confirmation": {
+    "not_executed": true,
+    "n": 5,
+    "rule_probes": {
+      "rule": "skill-discovery",
+      "probes": [
+        "positive-1",
+        "positive-2",
+        "positive-3",
+        "negative-1"
+      ],
+      "calls": 20
+    },
+    "card_probes": {
+      "rule": "tool-quota",
+      "file": "compound-discovery-probes.yaml",
+      "probes": [
+        "card-loop-parameters",
+        "card-loop-retry-decision",
+        "card-negative-control"
+      ],
+      "calls": 15
+    },
+    "comparison": {
+      "scenarios": [
+        "discovery-claude-startup",
+        "discovery-codex-startup",
+        "discovery-discover-show-follow",
+        "discovery-hermes-startup",
+        "discovery-missing-native-skill",
+        "discovery-compound-request"
+      ],
+      "subject_calls": 60,
+      "judge_calls": 30,
+      "total_calls": 90
+    },
+    "total_calls": 125,
+    "subject_calls": 95,
+    "judge_calls": 30
+  },
+  "validation": {
+    "pre_fix": {
+      "command": "nice -n 19 npx vitest run --config config/vitest.config.js test/unit/rules/rule-probes.test.mjs test/unit/rules/release-compare.test.mjs test/unit/artifacts/prebuilt-relations.test.ts",
+      "passed": 108,
+      "failed": 8
+    },
+    "targeted": {
+      "same_command_as": "pre_fix",
+      "passed": 116,
+      "failed": 0
+    },
+    "contained_suite": {
+      "command": "nice -n 19 npx vitest run --config config/vitest.config.js test/unit/rules test/unit/artifacts",
+      "files_passed": 97,
+      "files_skipped": 1,
+      "passed": 1655,
+      "failed": 0,
+      "skipped": 43,
+      "log": "/tmp/aiwg-offline-full-tests-contained.log",
+      "note": "Fresh temporary HOME/XDG roots. Missing optional better-sqlite3 is recognized by existing skip guards."
+    },
+    "typecheck": {
+      "command": "npm run typecheck",
+      "exit_code": 0,
+      "log": "/tmp/aiwg-offline-typecheck-contained.log"
+    },
+    "build": {
+      "command": "npm run build:cli",
+      "exit_code": 0,
+      "log": "/tmp/aiwg-offline-build-contained.log"
+    },
+    "lint": {
+      "command": "npm run lint:rule-activation",
+      "exit_code": 0,
+      "errors": 0,
+      "warnings": 23,
+      "log": "/tmp/aiwg-offline-rule-lint-contained.log",
+      "note": "Uses the source framework index built in temporary XDG storage by check:budgets prepack, not a user catalog."
+    },
+    "budgets": {
+      "command": "npm run check:budgets",
+      "exit_code": 0,
+      "checks_passed": 2,
+      "log": "/tmp/aiwg-offline-budgets-contained.log"
+    },
+    "dry_runs": {
+      "skill_discovery_calls": 20,
+      "comparison": {
+        "subject": 60,
+        "judge": 30,
+        "total": 90
+      },
+      "card_confirmation_calls": 15,
+      "card_confirmation_lane_path": "/tmp/aiwg-card-confirmation-leAKUD/card-confirmation.yaml",
+      "note": "Full existing tool-quota lane additionally dry-ran at 35 calls; temporary confirmation overlay retains only the three card probes, with no probe text or assertion changes."
+    },
+    "original_uncontained_run": {
+      "passed": 1659,
+      "failed": 11,
+      "skipped": 30,
+      "note": "Initial tests inherited the default HOME. Optional SQLite availability was detected there, then failed loading in isolated test fixtures. Initial test/prepack hooks also wrote the source framework index to the default XDG cache outside the permitted directories. This was a containment error; subsequent validations used temporary HOME and all XDG roots. No cleanup outside the permitted directories was attempted."
+    },
+    "acceptance": {
+      "problem_A": "met offline: raw prompt/transport, exact delivered bytes, cause/fix and actual-call assertions",
+      "problem_B": "met offline: every failed B sample classified, A/B evidence, codex explanation, card guidance and stronger body assertion; frozen JSON parser unchanged",
+      "verification": "met for all required commands and dry-runs; 43 tests skipped under existing optional-backend guards",
+      "containment": "partial: initial validation hook default-XDG cache write violated the directory boundary; corrected for subsequent validation",
+      "live_confirmation": "not run, as required; 125 proposed invocations remain"
+    },
+    "open_questions": [
+      "Does the framing-only change raise skill-discovery positive compliance to the 0.8 floor?",
+      "Does the card notice remove missing-body decisions without extra narration? Alias-based n=5 traces do not establish exact-snapshot causality.",
+      "Optional SQLite coverage remains skipped without a separately supplied backend; no package installation was attempted."
+    ]
+  }
+}

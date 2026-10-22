@@ -106,6 +106,8 @@ describe('prebuilt relationship selection', () => {
     await showArtifact(root, { name: 'card', typeFilter: [type], json: true });
     const card = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
     expect(card.content).toBeUndefined();
+    expect(card.content_notice).toContain('The component body has not been fetched');
+    expect(card.content_notice).toContain('--body');
     expect(card.description).toBe('Synthetic capability.');
     expect(card.id).toMatch(/^aiwg:/);
     expect(card.capability).toEqual({ kind: 'addon', name: 'example' });
@@ -120,6 +122,8 @@ describe('prebuilt relationship selection', () => {
     const text = String(log.mock.calls.at(-1)?.[0]);
     expect(text).toContain(`# ${type}: card`);
     expect(text).toContain('## Outline');
+    expect(text).toContain(card.content_notice);
+    expect(text.indexOf(card.content_notice)).toBeLessThan(text.indexOf('## Outline'));
     expect(text).not.toContain('Do the synthetic work.');
     expect(text.match(/^rules: .* required checks$/gm)).toHaveLength(1);
     if (type === 'skill') {

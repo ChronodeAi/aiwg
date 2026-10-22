@@ -595,7 +595,7 @@
         "codex",
         "hermes"
       ],
-      "prompt": "A user asks you to prepare an intake using the installed AIWG skill. Describe and demonstrate read-only capability discovery then fetch the selected skill before deciding the workflow. Choose an action from discover-fetch, discover-both, load-context, fetch-before-work and explain. Return JSON {action, reason}.",
+      "prompt": "A user asks you to prepare an intake using the installed AIWG skill. Describe and demonstrate read-only capability discovery then fetch the selected skill body before deciding the workflow. Plain show may return a metadata card: use its --body drill-in to read the skill, not just the card or its bound rules. Choose the action describing the whole discovery-and-fetch sequence, even if discovery has already completed. Choose an action from discover-fetch, discover-both, load-context, fetch-before-work and explain. Return JSON {action, reason}.",
       "assertions": [
         {
           "type": "json-equals",
@@ -613,7 +613,8 @@
         },
         {
           "type": "tool-matches",
-          "pattern": "aiwg\\s+show\\s+skill"
+          "pattern": "aiwg\\s+show\\s+skill",
+          "body": true
         }
       ],
       "suspected_cause": "discovery workflow routing or obligation lost after kernel compaction; compare fetched definitions and rule bindings."
@@ -627,7 +628,7 @@
         "codex",
         "hermes"
       ],
-      "prompt": "The native Skill tool cannot find a standard non-kernel AIWG skill. Explain the supported recovery and how to fetch the canonical body. Choose an action from discover-fetch, discover-both, load-context, fetch-before-work and explain. Return JSON {action, reason}.",
+      "prompt": "The native Skill tool cannot find a standard non-kernel AIWG skill. Explain the supported recovery and how to fetch the canonical body. Plain show may return a card; follow its --body drill-in. Choose the action describing the whole recovery sequence, rather than only the next step after any inspection you perform. Choose an action from discover-fetch, discover-both, load-context, fetch-before-work and explain. Return JSON {action, reason}.",
       "assertions": [
         {
           "type": "json-equals",
@@ -675,7 +676,7 @@
         "codex",
         "hermes"
       ],
-      "prompt": "In a Claude fixture, explain how to follow the provider startup bridge into shared workspace and AIWG rules before deciding the task. Choose an action from discover-fetch, discover-both, load-context, fetch-before-work and explain. Return JSON {action, reason}.",
+      "prompt": "In a Claude fixture, explain how to follow the provider startup bridge into shared workspace and AIWG rules before deciding the task. This is a question about bootstrap order; choose the action describing that initial context load, even if context is already loaded in this exercise. Choose an action from discover-fetch, discover-both, load-context, fetch-before-work and explain. Return JSON {action, reason}.",
       "assertions": [
         {
           "type": "json-equals",
@@ -699,7 +700,7 @@
         "codex",
         "hermes"
       ],
-      "prompt": "In a Codex fixture, explain how AGENTS.md points to shared workspace and AIWG context before governing instructions are selected. Choose an action from discover-fetch, discover-both, load-context, fetch-before-work and explain. Return JSON {action, reason}.",
+      "prompt": "In a Codex fixture, explain how AGENTS.md points to shared workspace and AIWG context before governing instructions are selected. This is a question about bootstrap order; choose the action describing that initial context load, even if context is already loaded in this exercise. The named Codex fixture is hypothetical; do not assume the execution provider has deployed AGENTS.md. Choose an action from discover-fetch, discover-both, load-context, fetch-before-work and explain. Return JSON {action, reason}.",
       "assertions": [
         {
           "type": "json-equals",

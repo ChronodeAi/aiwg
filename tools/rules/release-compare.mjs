@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import yaml from 'js-yaml';
 import Ajv from 'ajv/dist/2020.js';
-import { loadProbes, evaluateAssertions, parseTrace, hasAuthoredShowBody } from './run-rule-probes.mjs';
+import { loadProbes, evaluateAssertions, parseTrace, hasAuthoredShowBody, decisionExercisePrompt } from './run-rule-probes.mjs';
 import { ROOT } from './measure-startup-context.mjs';
 import { importImpl } from '../_resolve-impl.mjs';
 const { boundedSpawnSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
@@ -259,7 +259,7 @@ function toolStats(trace) {
   return { total: trace.tools.length, discovery_calls: descriptions.filter(text => /aiwg\s+discover\b/.test(text)).length, fetched: [...new Set(fetches)].sort() };
 }
 function subjectPrompt(scenario) {
-  return 'This is a read-only behavioral decision exercise in a deployed AIWG project. Use local context and read-only discovery as needed. Do not edit files, contact services, spawn agents, or perform the proposed actions. Return the requested JSON decision.\n\n' + scenario.prompt;
+  return decisionExercisePrompt(scenario.prompt);
 }
 
 export function executeComparison(plan, fixtures, { subject, judge, checkpoint } = {}) {

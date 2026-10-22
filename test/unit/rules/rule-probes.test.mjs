@@ -50,6 +50,29 @@ function claudeTrace(text = '{"action":"fix"}', tools = []) {
 }
 
 describe('rule probe schema and call planning', () => {
+  it('allows discovery before a decision while keeping proposed operations forbidden', () => {
+    const plan = buildPlan(loadProbes(), { rules: ['skill-discovery'], n: 1 });
+    for (const call of plan.calls) {
+      expect(call.prompt).toContain('Read-only inspection commands, including aiwg discover and aiwg show, are explicitly allowed before the decision');
+      expect(call.prompt).toContain('Do not execute the proposed workflow, repairs, or other operational actions');
+      expect(call.prompt).toContain('Put discovery announcements, candidates, and explanations inside the JSON reason field');
+      expect(call.prompt).not.toContain('Do not perform the proposed actions.');
+    }
+  });
+
+  it('can require authored output on a matching successful show without crediting a card', () => {
+    const assertions = [{ type: 'tool-matches', pattern: 'aiwg\\s+show\\s+skill', body: true }];
+    const tool = (output, success = true) => ({ name: 'Bash', input: { command: 'aiwg show skill intake' }, output, success });
+    const passes = tools => evaluateAssertions(assertions, { text: '{}', tools }).every(a => a.pass);
+    expect(passes([tool('# skill: intake\nID: aiwg:skill:fake\n## Outline\n- Steps\n## Drill in\n- aiwg show skill intake --body')])).toBe(false);
+    expect(passes([tool(JSON.stringify({ name: 'intake', outline: [], drill_in: { body: 'aiwg show skill intake --body' } }))])).toBe(false);
+    expect(passes([tool(JSON.stringify({ name: 'intake', bound_rules: [{ content: '# Safety\nSynthetic governing rule.' }] }))])).toBe(false);
+    expect(passes([tool('')])).toBe(false);
+    expect(passes([tool('# Intake\n\n## Steps\nRead synthetic input.', false)])).toBe(false);
+    expect(passes([tool('# Intake\n\n## Steps\nRead synthetic input.')])).toBe(true); // Legacy plain show.
+    expect(passes([tool(JSON.stringify({ content: '# Intake\n\n## Steps\nRead synthetic input.' }))])).toBe(true);
+  });
+
   it('requires card drill-in and a full rule fetch for the governed card lane', () => {
     const rule = loadProbes(path.join(ROOT, 'test/uat/rule-binding/compound-discovery-probes.yaml'))
       .rules.find(rule => rule.id === 'tool-quota');
