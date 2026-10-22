@@ -370,7 +370,7 @@ Section 2 defines risk assessment methodology; Section 3 inventories legal risks
 3. **Deliverable**: ECCN classification (likely 5D002 with exception)
 4. **Timeline**: 30 days (self-classify) or 90 days (BIS review)
 5. **Requirements**: Submit annual self-classification report to BIS, maintain export compliance program
-6. **Restrictions**: Generally exportable except to embargoed countries (Cuba, Iran, North Korea, Syria, Sudan)
+6. **Restrictions**: Generally exportable except to embargoed countries (Cuba, Iran, North Korea, Sudan); Syria is no longer an OFAC embargo but remains subject to EAR license requirements (15 CFR 746.9)
 
 **Residual Risk**: Low (4) - Once classified, export legal with compliance program
 
