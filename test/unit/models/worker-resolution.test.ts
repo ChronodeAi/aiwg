@@ -379,6 +379,48 @@ describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => 
     expect(resolve(f).status).toBe('blocked');
   });
 
+  it('R16b scopes required-role qualification gaps to the groups a request considers', () => {
+    const f = workerResolutionFixture();
+    const groups = f.snapshot.config.parallelism!.groups!;
+    groups.unqualified = { maxParallel: 1, requiredRoles: ['coding'], members: [
+      { id: 'other', cli: 'muse', model: 'synthetic-unobserved', roles: ['coding'] },
+    ] };
+    const gapFor = (plan: ReturnType<typeof resolve>, source: 'diagnostics' | 'exclusions') =>
+      (source === 'diagnostics' ? plan.diagnostics : plan.exclusions.flatMap(e => e.diagnostics))
+        .filter(d => d.code === 'OG_ADAPTER_UNQUALIFIED' && d.pointer === '/parallelism/groups/unqualified/requiredRoles');
+    // A configured group outside the role guidance never blocks the request.
+    let plan = resolve(f);
+    expect(plan.status).toBe('eligible');
+    expect(gapFor(plan, 'diagnostics')).toEqual([]);
+    expect(gapFor(plan, 'exclusions')).toEqual([]);
+    // A pinned qualified group is unaffected by another guidance group's gap.
+    f.snapshot.models.defaults.workerSelection!.roleGuidance!.coding.groups = ['workers', 'unqualified'];
+    f.request = { ...f.request, group: 'workers' };
+    plan = resolve(f);
+    expect(plan.status).toBe('eligible');
+    expect(plan.selected?.group).toBe('workers');
+    // Unpinned: the unqualified group is skipped visibly, not silently.
+    f.request = { ...f.request, group: undefined };
+    plan = resolve(f);
+    expect(plan.status).toBe('eligible');
+    expect(plan.eligible.every(t => t.group === 'workers')).toBe(true);
+    expect(plan.exclusions).toContainEqual(expect.objectContaining({ group: 'unqualified', member: 'other', effort: null }));
+    expect(gapFor(plan, 'exclusions')[0].message).toContain('aiwg doctor --probe-workers --qualify');
+    // Pinning the unqualified group still blocks with the actionable gap.
+    f.request = { ...f.request, group: 'unqualified' };
+    plan = resolve(f);
+    expect(plan.status).toBe('blocked');
+    expect(gapFor(plan, 'diagnostics')).toHaveLength(1);
+    // When no considered group is qualified the role still blocks.
+    f.request = { ...f.request, group: undefined };
+    rows(f).forEach(row => { row.worker!.qualification.status = 'unqualified'; });
+    groups.workers.requiredRoles = ['coding'];
+    plan = resolve(f);
+    expect(plan.status).toBe('blocked');
+    expect(gapFor(plan, 'diagnostics')).toHaveLength(1);
+    expect(plan.diagnostics.some(d => d.pointer === '/parallelism/groups/workers/requiredRoles')).toBe(true);
+  });
+
   it('R17 intersects all current ceilings and exposes default permissions as guidance', () => {
     const f = workerResolutionFixture();
     f.snapshot.config.parallelism!.admission = { modelCaps: { [workerModelKey('vendor', 'synthetic/a%b')]: 1 } };

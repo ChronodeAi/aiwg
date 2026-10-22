@@ -526,9 +526,12 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
         ? observed.qualification.roles.filter(role => policy.roleGuidance?.[role]?.groups.includes(groupId)) : [];
     }
   }
-  plan.diagnostics.push(...validateWorkerGroupQualifications(parallelism, qualifiedRoles).map(diagnostic => ({
+  // Qualification gaps are group-scoped: an unqualified group must not block a
+  // request that never considers it. Gaps are applied once the candidates are known.
+  const qualificationGaps = validateWorkerGroupQualifications(parallelism, qualifiedRoles).map(diagnostic => ({
     ...diagnostic, message: `${diagnostic.message}. Run aiwg doctor --probe-workers --qualify.`,
-  })));
+  }));
+  const gapGroup = (diagnostic: WorkerPolicyDiagnostic): string => diagnostic.pointer.split('/')[3] ?? '';
   const taskRole = request.taskClass ? policy.taskClasses?.[request.taskClass] : undefined;
   const role = request.role ?? taskRole;
   plan.role = role ?? null;
@@ -542,9 +545,23 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
     || hasSelectionRelevantConflicts(request.reviewOf) || !request.reviewOf.family || request.reviewOf.family === 'unknown')) {
     block('OG_MODEL_UNAPPROVED', '/request/reviewOf', 'Required review needs unambiguous observed source lineage');
   }
+  const candidateGroups = request.group ? [request.group] : guidance?.groups ?? [];
+  const unqualifiedGroups = new Set(qualificationGaps.map(gapGroup));
+  const qualifiedGroups = candidateGroups.filter(groupId => !unqualifiedGroups.has(groupId));
+  if (!qualifiedGroups.length) {
+    plan.diagnostics.push(...qualificationGaps.filter(gap => candidateGroups.includes(gapGroup(gap))));
+  } else {
+    // Unpinned requests skip an unqualified guidance group visibly instead of failing the role.
+    for (const groupId of candidateGroups.filter(groupId => unqualifiedGroups.has(groupId))) {
+      const gaps = qualificationGaps.filter(gap => gapGroup(gap) === groupId);
+      for (const member of parallelism.groups?.[groupId]?.members ?? []) {
+        plan.exclusions.push({ group: groupId, member: member.id, model: member.model, effort: null, diagnostics: gaps });
+      }
+    }
+  }
   if (plan.diagnostics.length || !role || !guidance) return plan;
   const wrapperPin = snapshot.models.agentOverrides[MODEL_WRAPPERS[role as keyof typeof MODEL_WRAPPERS]]?.['model-override'];
-  const groups = request.group ? [request.group] : guidance.groups;
+  const groups = qualifiedGroups;
   for (const groupId of groups) {
     const group = parallelism.groups![groupId];
     const permissions = { ...group.execution, transport: group.execution?.transport ?? 'shell' };
