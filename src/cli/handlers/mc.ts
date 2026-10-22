@@ -56,6 +56,9 @@ export async function createMcAdmissionScheduler(projectRoot: string, cfg: AiwgC
     }
     const authority = projectAdmissionAuthority(projectRoot);
     const authorityRef = parallelism.admission?.authorityRef ?? 'project';
+    if (authorityRef.startsWith('host:') && process.env['AIWG_EXECUTOR_IDENTITY_STORE']) {
+      ui.warn('AIWG_EXECUTOR_IDENTITY_STORE is ignored for host admission authority lookup.');
+    }
     const policy = managedProjectAdmissionPolicy(projectRoot, { ...parallelism,
       admission: { ...parallelism.admission, authorityRef: 'project' },
     }, workerConfigDigest(activation), parallelism.max_parallel_subagents);
