@@ -208,4 +208,42 @@ describe('GitHub mirror tag gate', () => {
     expect(workflow).toContain('--verify-tag')
     expect(workflow).toContain('steps.release.outcome')
   })
+
+  it('fails the main push on GitHub auth errors but tolerates other rejections', () => {
+    const workflow = readFileSync(join(root, '.gitea/workflows/github-mirror.yml'), 'utf8')
+    const start = workflow.indexOf('- name: Push main to GitHub mirror')
+    const end = workflow.indexOf('- name: Resolve release body')
+    const block = workflow.slice(start, end)
+    const script = block.slice(block.indexOf('run: |') + 'run: |'.length)
+      .split('\n').map(line => line.replace(/^ {10}/, '')).join('\n')
+
+    const runPush = (pushStderr: string, pushStatus: number) => {
+      const directory = mkdtempSync(join(tmpdir(), 'aiwg-mirror-push-'))
+      temporaryDirectories.add(directory)
+      writeExecutableSync(join(directory, 'git'), `#!/bin/sh\necho "${pushStderr}" >&2\nexit ${pushStatus}\n`)
+      return spawnSync('bash', ['-c', script], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${directory}:${process.env.PATH}`,
+          GH_TOKEN: 'fixture-mirror-token',
+          GH_MIRROR_TOKEN_VAULT_PATH: 'kv/ci/mirror',
+          GH_MIRROR_TOKEN_VAULT_FIELD: 'token',
+        },
+      })
+    }
+
+    const auth = runPush("fatal: Authentication failed for 'https://github.com/jmagly/aiwg.git/'", 128)
+    expect(auth.status).toBe(1)
+    expect(auth.stderr).toContain('GitHub rejected the mirror token')
+    expect(auth.stdout + auth.stderr).not.toContain('fixture-mirror-token')
+
+    const rejected = runPush('! [rejected] HEAD -> main (non-fast-forward)', 1)
+    expect(rejected.status).toBe(0)
+    expect(rejected.stdout).toContain('main push declined')
+
+    const ok = runPush('Everything up-to-date', 0)
+    expect(ok.status).toBe(0)
+    expect(ok.stdout).not.toContain('main push declined')
+  })
 })

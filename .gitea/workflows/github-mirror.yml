@@ -120,8 +120,21 @@ jobs:
           # operator's job; this workflow's job is to create the Release.
           # Best-effort main push (idempotent — operator usually already pushed
           # main; rejected/​protected pushes are fine, the tag drives the release).
-          git push "$MIRROR" "HEAD:refs/heads/main" \
-            || echo "main push declined (already pushed, non-fast-forward, or protected — fine; the operator-pushed tag drives the release)."
+          # An auth failure is not fine: it means the vault token is dead, and
+          # every later GitHub call in this job would fail too. Fail here with
+          # a clear message instead of hiding it.
+          set +e
+          PUSH_OUTPUT="$(git push "$MIRROR" "HEAD:refs/heads/main" 2>&1)"
+          PUSH_STATUS=$?
+          set -e
+          printf '%s\n' "${PUSH_OUTPUT//${GH_TOKEN}/***}"
+          if [ "$PUSH_STATUS" -ne 0 ]; then
+            if grep -qiE 'authentication failed|invalid username or password|could not read username|bad credentials|permission to .* denied|returned error: 40[13]' <<<"$PUSH_OUTPUT"; then
+              echo "ERROR: GitHub rejected the mirror token (vault ${GH_MIRROR_TOKEN_VAULT_PATH}#${GH_MIRROR_TOKEN_VAULT_FIELD}). Rotate it in vault and re-run." >&2
+              exit 1
+            fi
+            echo "main push declined (already pushed, non-fast-forward, or protected — fine; the operator-pushed tag drives the release)."
+          fi
 
       - name: Resolve release body
         id: body
