@@ -1,9 +1,10 @@
 import * as sessionReaders from '../../../src/sessions/readers.js';
 import { resolve } from 'node:path';
 import { requireFeaturePackage } from '../../../src/features/runtime.js';
-import { mkdtemp, rm } from 'node:fs/promises';
+import fsPromises, { mkdtemp } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type MockInstance } from 'vitest';
 import {
   IncrementalSessionImporter,
   DEVIN_DESKTOP_ADAPTER_VERSION,
@@ -150,144 +151,207 @@ describe('Devin Desktop (Windsurf compatibility) session adapter', () => {
 });
 
 describeWithSqlite('Devin Desktop adapter repository conformance', () => {
-  it('redacts searchable content and makes identical replay a no-op', async () => {
-    const adapter = new DevinDesktopSessionAdapter();
-    const selectedSource = selected('redaction.jsonl');
-    const source: SessionSource = {
-      contractVersion: SESSION_CONTRACT_VERSION,
-      sourceId: selectedSource.sourceId,
-      provider: 'devin-desktop',
-      providerProfile: 'devin-desktop-cascade-transcript-hook',
-      locatorClass: selectedSource.locatorClass,
-      redactedLocator: '<session-source>/redaction.jsonl',
-      adapterVersion: WINDSURF_ADAPTER_VERSION,
-      sourceSchemaVersion: WINDSURF_TRANSCRIPT_SCHEMA_VERSION,
-      disposition: 'implemented',
-      operationalState: 'available',
-      consistency: 'provisional',
-      authorizedAt: '2026-07-27T00:00:00.000Z',
-      extensions: {
-        'native.devin-desktop': {
-          product: 'Devin Desktop',
-          compatibilityProviderId: 'windsurf',
-        },
-      },
-    };
-    const repository = new SessionRepository();
-    try {
-      const importer = new IncrementalSessionImporter(repository);
-      const request = {
-        source, selectedSource, adapter, workspaceId: 'workspace-fixture', policyVersion: '1.0.0',
-      };
-      expect((await importer.import(request))
-        .reduce((sum, receipt) => sum + receipt.eventsInserted, 0)).toBe(1);
-      const stored = JSON.stringify(repository.authorizedSearchDocuments({
-        workspaceId: 'workspace-fixture', limit: 10,
-      }));
-      expect(stored).not.toContain('redaction-canary-1920');
-      expect(stored).not.toContain('devin-synthetic@example.test');
-      expect(await importer.import(request)).toEqual([]);
-    } finally {
-      repository.close();
-    }
-  });
-
-  it('migrates a Windsurf catalog in place without duplicating stable rows', async () => {
-    const root = await mkdtemp(resolve(tmpdir(), 'aiwg-devin-migration-'));
-    try {
-      const databasePath = resolve(root, 'catalog.sqlite');
-      const adapter = new DevinDesktopSessionAdapter();
-      const selectedSource = selected('redaction.jsonl');
-      const source: SessionSource = {
-        contractVersion: SESSION_CONTRACT_VERSION,
-        sourceId: selectedSource.sourceId,
-        provider: 'devin-desktop',
-        providerProfile: 'devin-desktop-cascade-transcript-hook',
-        locatorClass: 'devin-desktop-cascade-hook-jsonl',
-        redactedLocator: '<session-source>/redaction.jsonl',
-        adapterVersion: DEVIN_DESKTOP_ADAPTER_VERSION,
-        sourceSchemaVersion: DEVIN_DESKTOP_TRANSCRIPT_SCHEMA_VERSION,
-        disposition: 'implemented',
-        operationalState: 'available',
-        consistency: 'provisional',
-        authorizedAt: '2026-07-27T00:00:00.000Z',
-        extensions: { 'native.devin-desktop': { product: 'Devin Desktop' } },
-      };
-      const repository = new SessionRepository(databasePath);
-      const request = {
-        source,
-        selectedSource,
-        adapter,
-        workspaceId: 'workspace-fixture',
-        policyVersion: '1.0.0',
-      };
-      const original = await (async () => {
+  it.each(['success', 'repository opened', 'import completed'])(
+    'redacts searchable content and makes identical replay a no-op with cleanup (%s)', async failureAt => {
+      await checkFixtureCleanup(failureAt, async checkpoint => {
+        const adapter = new DevinDesktopSessionAdapter();
+        const selectedSource = selected('redaction.jsonl');
+        const source: SessionSource = {
+          contractVersion: SESSION_CONTRACT_VERSION,
+          sourceId: selectedSource.sourceId,
+          provider: 'devin-desktop',
+          providerProfile: 'devin-desktop-cascade-transcript-hook',
+          locatorClass: selectedSource.locatorClass,
+          redactedLocator: '<session-source>/redaction.jsonl',
+          adapterVersion: WINDSURF_ADAPTER_VERSION,
+          sourceSchemaVersion: WINDSURF_TRANSCRIPT_SCHEMA_VERSION,
+          disposition: 'implemented',
+          operationalState: 'available',
+          consistency: 'provisional',
+          authorizedAt: '2026-07-27T00:00:00.000Z',
+          extensions: {
+            'native.devin-desktop': {
+              product: 'Devin Desktop',
+              compatibilityProviderId: 'windsurf',
+            },
+          },
+        };
+        const repository = new SessionRepository();
         try {
-          await new IncrementalSessionImporter(repository).import(request);
-          return repository.listSessions({
-            workspaceId: 'workspace-fixture',
-            limit: 10,
-          }).items[0];
+          checkpoint('repository opened', repository);
+          const importer = new IncrementalSessionImporter(repository);
+          const request = {
+            source, selectedSource, adapter, workspaceId: 'workspace-fixture', policyVersion: '1.0.0',
+          };
+          expect((await importer.import(request))
+            .reduce((sum, receipt) => sum + receipt.eventsInserted, 0)).toBe(1);
+          checkpoint('import completed');
+          const stored = JSON.stringify(repository.authorizedSearchDocuments({
+            workspaceId: 'workspace-fixture', limit: 10,
+          }));
+          expect(stored).not.toContain('redaction-canary-1920');
+          expect(stored).not.toContain('devin-synthetic@example.test');
+          expect(await importer.import(request)).toEqual([]);
         } finally {
           repository.close();
         }
-      })();
+      });
+    },
+  );
 
-      const Database = requireFeaturePackage('better-sqlite3') as new (path: string) => any;
-      const raw = new Database(databasePath);
-      try {
-        const sourceRow = raw.prepare('SELECT source_id, data FROM session_sources').get();
-        const oldSource = JSON.parse(sourceRow.data);
-        oldSource.provider = 'windsurf';
-        oldSource.locatorClass = 'windsurf-cascade-hook-jsonl';
-        oldSource.extensions = { 'native.windsurf': { product: 'Devin Desktop' } };
-        raw.prepare(
-          'UPDATE session_sources SET provider=?, data=? WHERE source_id=?',
-        ).run('windsurf', JSON.stringify(oldSource), sourceRow.source_id);
-        const sessionRow = raw.prepare('SELECT session_id, data FROM sessions').get();
-        const oldSession = JSON.parse(sessionRow.data);
-        oldSession.provider = 'windsurf';
-        raw.prepare('UPDATE sessions SET data=? WHERE session_id=?')
-          .run(JSON.stringify(oldSession), sessionRow.session_id);
-        const eventRow = raw.prepare('SELECT event_id, data FROM session_events').get();
-        const oldEvent = JSON.parse(eventRow.data);
-        oldEvent.kind = oldEvent.kind.replace('devin-desktop.', 'windsurf.');
-        oldEvent.extensions = { 'native.windsurf': oldEvent.extensions['native.devin-desktop'] };
-        raw.prepare('UPDATE session_events SET data=? WHERE event_id=?')
-          .run(JSON.stringify(oldEvent), eventRow.event_id);
-        raw.prepare('DELETE FROM session_catalog_meta').run();
-      } finally {
-        raw.close();
-      }
+  it.each(['success', 'directory created', 'initial repository opened', 'initial import completed',
+    'raw database opened', 'legacy rows written', 'repository reopened', 'replay completed'])(
+    'migrates a Windsurf catalog in place without duplicating stable rows with cleanup (%s)', async failureAt => {
+      await checkFixtureCleanup(failureAt, async checkpoint => {
+        const root = await mkdtemp(resolve(tmpdir(), 'aiwg-devin-migration-'));
+        try {
+          checkpoint('directory created', undefined, root);
+          const databasePath = resolve(root, 'catalog.sqlite');
+          const adapter = new DevinDesktopSessionAdapter();
+          const selectedSource = selected('redaction.jsonl');
+          const source: SessionSource = {
+            contractVersion: SESSION_CONTRACT_VERSION,
+            sourceId: selectedSource.sourceId,
+            provider: 'devin-desktop',
+            providerProfile: 'devin-desktop-cascade-transcript-hook',
+            locatorClass: 'devin-desktop-cascade-hook-jsonl',
+            redactedLocator: '<session-source>/redaction.jsonl',
+            adapterVersion: DEVIN_DESKTOP_ADAPTER_VERSION,
+            sourceSchemaVersion: DEVIN_DESKTOP_TRANSCRIPT_SCHEMA_VERSION,
+            disposition: 'implemented',
+            operationalState: 'available',
+            consistency: 'provisional',
+            authorizedAt: '2026-07-27T00:00:00.000Z',
+            extensions: { 'native.devin-desktop': { product: 'Devin Desktop' } },
+          };
+          const repository = new SessionRepository(databasePath);
+          const request = {
+            source,
+            selectedSource,
+            adapter,
+            workspaceId: 'workspace-fixture',
+            policyVersion: '1.0.0',
+          };
+          const original = await (async () => {
+            try {
+              checkpoint('initial repository opened', repository);
+              await new IncrementalSessionImporter(repository).import(request);
+              checkpoint('initial import completed');
+              return repository.listSessions({
+                workspaceId: 'workspace-fixture',
+                limit: 10,
+              }).items[0];
+            } finally {
+              repository.close();
+            }
+          })();
 
-      const reopened = new SessionRepository(databasePath);
-      try {
-        const migrated = reopened.listSessions({
-          workspaceId: 'workspace-fixture',
-          limit: 10,
-        }).items;
-        expect(migrated).toHaveLength(1);
-        expect(migrated[0]).toMatchObject({
-          sessionId: original.sessionId,
-          provider: 'devin-desktop',
-        });
-        expect(reopened.listEvents(original.sessionId)[0]).toMatchObject({
-          kind: 'devin-desktop.user_input',
-          rawReference: { locatorClass: 'devin-desktop-cascade-hook-jsonl' },
-          extensions: { 'native.devin-desktop': expect.any(Object) },
-        });
-        expect(await new IncrementalSessionImporter(reopened).import(request)).toEqual([]);
-      } finally {
-        reopened.close();
-      }
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+          const Database = requireFeaturePackage('better-sqlite3') as new (path: string) => any;
+          const raw = new Database(databasePath);
+          try {
+            checkpoint('raw database opened', raw);
+            const sourceRow = raw.prepare('SELECT source_id, data FROM session_sources').get();
+            const oldSource = JSON.parse(sourceRow.data);
+            oldSource.provider = 'windsurf';
+            oldSource.locatorClass = 'windsurf-cascade-hook-jsonl';
+            oldSource.extensions = { 'native.windsurf': { product: 'Devin Desktop' } };
+            raw.prepare(
+              'UPDATE session_sources SET provider=?, data=? WHERE source_id=?',
+            ).run('windsurf', JSON.stringify(oldSource), sourceRow.source_id);
+            const sessionRow = raw.prepare('SELECT session_id, data FROM sessions').get();
+            const oldSession = JSON.parse(sessionRow.data);
+            oldSession.provider = 'windsurf';
+            raw.prepare('UPDATE sessions SET data=? WHERE session_id=?')
+              .run(JSON.stringify(oldSession), sessionRow.session_id);
+            const eventRow = raw.prepare('SELECT event_id, data FROM session_events').get();
+            const oldEvent = JSON.parse(eventRow.data);
+            oldEvent.kind = oldEvent.kind.replace('devin-desktop.', 'windsurf.');
+            oldEvent.extensions = { 'native.windsurf': oldEvent.extensions['native.devin-desktop'] };
+            raw.prepare('UPDATE session_events SET data=? WHERE event_id=?')
+              .run(JSON.stringify(oldEvent), eventRow.event_id);
+            raw.prepare('DELETE FROM session_catalog_meta').run();
+            checkpoint('legacy rows written');
+          } finally {
+            raw.close();
+          }
+
+          const reopened = new SessionRepository(databasePath);
+          try {
+            checkpoint('repository reopened', reopened);
+            const migrated = reopened.listSessions({
+              workspaceId: 'workspace-fixture',
+              limit: 10,
+            }).items;
+            expect(migrated).toHaveLength(1);
+            expect(migrated[0]).toMatchObject({
+              sessionId: original.sessionId,
+              provider: 'devin-desktop',
+            });
+            expect(reopened.listEvents(original.sessionId)[0]).toMatchObject({
+              kind: 'devin-desktop.user_input',
+              rawReference: { locatorClass: 'devin-desktop-cascade-hook-jsonl' },
+              extensions: { 'native.devin-desktop': expect.any(Object) },
+            });
+            expect(await new IncrementalSessionImporter(reopened).import(request)).toEqual([]);
+            checkpoint('replay completed');
+          } finally {
+            reopened.close();
+          }
+        } finally {
+          await fsPromises.rm(root, { recursive: true, force: true });
+        }
+      });
+    },
+  );
 });
 
 async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   const values: T[] = [];
   for await (const value of iterable) values.push(value);
   return values;
+}
+
+type FixtureCheckpoint = (stage: string, handle?: { close(): void }, root?: string) => void;
+
+async function checkFixtureCleanup(
+  failureAt: string,
+  run: (checkpoint: FixtureCheckpoint) => Promise<void>,
+): Promise<void> {
+  const failure = new Error(`synthetic fixture failure: ${failureAt}`);
+  const handles: Array<{ close(): void }> = [];
+  const closes: MockInstance<() => void>[] = [];
+  const roots: string[] = [];
+  const removals: Array<{ root: string; handlesClosed: boolean }> = [];
+  const originalRemove = fsPromises.rm;
+  const remove = vi.spyOn(fsPromises, 'rm').mockImplementation(async (path, options) => {
+    if (typeof path === 'string' && roots.includes(path)) {
+      removals.push({ root: path, handlesClosed: closes.every(close => close.mock.calls.length === 1) });
+    }
+    return originalRemove(path, options);
+  });
+  const checkpoint: FixtureCheckpoint = (stage, handle, root) => {
+    if (root) roots.push(root);
+    if (handle) {
+      handles.push(handle);
+      closes.push(vi.spyOn(handle, 'close'));
+      // A migration must release each connection before opening the next one.
+      for (const close of closes.slice(0, -1)) expect(close).toHaveBeenCalledTimes(1);
+    }
+    if (stage === failureAt) throw failure;
+  };
+  try {
+    if (failureAt === 'success') await run(checkpoint);
+    else await expect(run(checkpoint)).rejects.toBe(failure);
+    for (const close of closes) expect(close).toHaveBeenCalledTimes(1);
+    expect(removals).toEqual(roots.map(root => ({ root, handlesClosed: true })));
+    for (const root of roots) expect(existsSync(root)).toBe(false);
+  } finally {
+    remove.mockRestore();
+    // Rescue only this invocation's resources if the cleanup oracle fails.
+    for (let index = handles.length - 1; index >= 0; index--) {
+      if (closes[index].mock.calls.length === 0) handles[index].close();
+      closes[index].mockRestore();
+    }
+    for (const root of roots) await fsPromises.rm(root, { recursive: true, force: true });
+  }
 }
