@@ -267,38 +267,39 @@ describe('project memory registry (#1750)', () => {
 
   it('looks up project memory by active workspace path and git remote', async () => {
     const { lookupProjectMemory, registerProjectMemory } = await import('../../../src/memory/project-registry.js');
-    await registerProjectMemory({
+    const entry = await registerProjectMemory({
       id: 'demo',
       workspaceRoot: workspace,
       gitRemotes: ['https://git.integrolabs.net/roctinam/demo.git'],
     });
 
     const byPath = await lookupProjectMemory({ workspaceRoot: path.join(workspace, 'nested') });
-    expect(byPath.status).toBe('found');
-    if (byPath.status === 'found') expect(byPath.matchedBy).toBe('workspaceRoot');
+    expect(byPath).toEqual({ status: 'found', entry, matchedBy: 'workspaceRoot' });
 
     const byRemote = await lookupProjectMemory({ gitRemote: 'git@git.integrolabs.net:roctinam/demo.git' });
-    expect(byRemote.status).toBe('found');
-    if (byRemote.status === 'found') expect(byRemote.matchedBy).toBe('gitRemote');
+    expect(byRemote).toEqual({ status: 'found', entry, matchedBy: 'gitRemote' });
   });
 
   it('reports missing and ambiguous mappings', async () => {
     const { lookupProjectMemory, registerProjectMemory } = await import('../../../src/memory/project-registry.js');
-    expect((await lookupProjectMemory({ workspaceRoot: workspace })).status).toBe('missing');
+    expect(await lookupProjectMemory({ workspaceRoot: workspace })).toEqual({ status: 'missing',
+      reason: 'No project memory entry matched the supplied workspace or remote metadata' });
 
-    await registerProjectMemory({
+    const one = await registerProjectMemory({
       id: 'one',
       workspaceRoot: workspace,
       gitRemotes: ['git@example.test:org/repo.git'],
     });
-    await registerProjectMemory({
+    const two = await registerProjectMemory({
       id: 'two',
       workspaceRoot: workspace,
       gitRemotes: ['git@example.test:org/repo.git'],
     });
 
-    expect((await lookupProjectMemory({ workspaceRoot: workspace })).status).toBe('ambiguous');
-    expect((await lookupProjectMemory({ gitRemote: 'https://example.test/org/repo.git' })).status).toBe('ambiguous');
+    expect(await lookupProjectMemory({ workspaceRoot: workspace })).toEqual({ status: 'ambiguous',
+      reason: `Multiple project memory entries match workspace '${workspace}'`, entries: [one, two] });
+    expect(await lookupProjectMemory({ gitRemote: 'https://example.test/org/repo.git' })).toEqual({ status: 'ambiguous',
+      reason: "Multiple project memory entries match remote 'https://example.test/org/repo.git'", entries: [one, two] });
   });
 
   it('selects the nearest workspace and reports only equally near candidates', async () => {
@@ -375,6 +376,9 @@ describe('project memory registry (#1750)', () => {
 
     const manifestBytes = await fs.readFile(projectMemoryManifestPath());
     const indexBytes = await fs.readFile(projectMemoryIndexPath());
+    expect(await removeProjectMemory('unknown', { deleteFiles: true })).toBeNull();
+    expect(await fs.readFile(projectMemoryManifestPath())).toEqual(manifestBytes);
+    expect(await fs.readFile(projectMemoryIndexPath())).toEqual(indexBytes);
     expect(await removeProjectMemory('selected', { deleteFiles: true })).toBeNull();
     expect(await fs.readFile(projectMemoryManifestPath())).toEqual(manifestBytes);
     expect(await fs.readFile(projectMemoryIndexPath())).toEqual(indexBytes);
@@ -484,11 +488,17 @@ describe('project memory registry (#1750)', () => {
 
   it.each(['unique', 'ambiguous', 'unmatched'])('resolves a local Git remote with %s mapping', async mode => {
     const { resolveProjectMemoryRoot, registerProjectMemory } = await import('../../../src/memory/project-registry.js');
+    const actual = await vi.importActual<typeof import('../../../src/process/bounded-child-process.mjs')>(
+      '../../../src/process/bounded-child-process.mjs');
     const remote = 'https://example.test/org/fixture.git';
-    // Exercise discovery/parsing without invoking Git or contacting the remote.
-    vi.mocked(boundedExecFileSync).mockReturnValue(
-      `origin\t${remote} (fetch)\norigin\t${remote} (push)\n\n`,
-    );
+    const env = { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
+      GIT_CONFIG_COUNT: '0', GIT_CONFIG_PARAMETERS: '', GIT_TERMINAL_PROMPT: '0' };
+    const options = { cwd: workspace, encoding: 'utf-8' as const, stdio: ['ignore', 'pipe', 'ignore'] as const, env };
+    actual.boundedExecFileSync('git', ['init', '--quiet', '--template=', '.'], 'quick', options);
+    actual.boundedExecFileSync('git', ['remote', 'add', 'origin', remote], 'quick', options);
+    const config = await fs.readFile(path.join(workspace, '.git/config'));
+    vi.mocked(boundedExecFileSync).mockImplementation((command, args, tier, callOptions) =>
+      actual.boundedExecFileSync(command, args, tier, { ...callOptions, env }));
     const entry = await registerProjectMemory({ id: 'one', workspaceRoot: path.join(tmp, 'registered-elsewhere'),
       gitRemotes: [mode === 'unmatched' ? 'git@example.test:org/other.git' : 'git@example.test:org/fixture.git'] });
     if (mode === 'ambiguous') await registerProjectMemory({ id: 'two', workspaceRoot: path.join(tmp, 'second-elsewhere'),
@@ -498,7 +508,8 @@ describe('project memory registry (#1750)', () => {
       : { source: 'default', root: path.join(workspace, '.aiwg/memory'), reason: mode === 'ambiguous'
         ? `Multiple project memory entries match remote '${remote}'` : 'no registered user-level project memory entry' };
     expect(await resolveProjectMemoryRoot(workspace)).toEqual(expected);
-    expect(await fs.readdir(workspace)).toEqual([]);
+    expect(await fs.readdir(workspace)).toEqual(['.git']);
+    expect(await fs.readFile(path.join(workspace, '.git/config'))).toEqual(config);
     expect(boundedExecFileSync).toHaveBeenCalledWith('git', ['remote', '-v'], 'quick', {
       cwd: workspace, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'],
     });
@@ -509,9 +520,11 @@ describe('project memory registry (#1750)', () => {
     const { initStorage, resolveStorage, resetStorage } = await import('../../../src/storage/index.js');
     const entry = await registerProjectMemory({ id: 'demo', workspaceRoot: workspace });
 
-    expect(await resolveProjectMemoryRoot(workspace)).toMatchObject({
+    expect(await resolveProjectMemoryRoot(workspace)).toEqual({
       source: 'user',
       root: path.join(entry.memoryRoot, 'memory'),
+      entry,
+      reason: 'matched workspace path',
     });
 
     await initStorage(workspace);
@@ -521,9 +534,10 @@ describe('project memory registry (#1750)', () => {
 
     resetStorage();
     await fs.mkdir(path.join(workspace, '.aiwg'), { recursive: true });
-    expect(await resolveProjectMemoryRoot(workspace)).toMatchObject({
+    expect(await resolveProjectMemoryRoot(workspace)).toEqual({
       source: 'project-local',
       root: path.join(workspace, '.aiwg', 'memory'),
+      reason: 'configured project AIWG artifact root exists',
     });
   });
 });
