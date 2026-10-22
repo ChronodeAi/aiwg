@@ -4593,6 +4593,13 @@ non-zero if any graph failed. With `--json`, the multi-graph report contains `ma
 `failures` with each failed graph's error. Exports serialize and hash bounded chunks, preserving the JSON format and
 checksums without constructing a single export-sized string.
 
+`index sync` warns when a graph is empty or at least 80% of its exported items contain fewer than 200
+characters of indexed text after trimming whitespace. The warning includes the short-text count, filename-title
+count, scan directories, and node strategy. This advisory also appears for unchanged caches and with `--all`;
+it does not change the sync exit status. With `--json`, each manifest instead includes `text_quality` with
+`short_text_threshold_chars`, `short_text_count`, `filename_title_count`, and `degenerate`. These metrics describe
+the exported text, including metadata fallbacks; they do not verify whether source text extraction succeeded.
+
 **Incremental mode** (default): Only re-indexes files whose checksum has changed. Use `--force` for a full rebuild.
 
 The same `--index-workers <n>` / `AIWG_INDEX_WORKERS` control applies to `aiwg index refresh`.

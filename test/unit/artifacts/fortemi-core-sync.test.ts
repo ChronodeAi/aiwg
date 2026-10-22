@@ -9,6 +9,7 @@ import {
   getFortemiCoreSyncStatus,
 } from "../../../src/artifacts/fortemi-core-sync.js";
 import { buildAiwgFortemiIndexExport } from "../../../src/artifacts/browser-export.js";
+import * as browserExport from "../../../src/artifacts/browser-export.js";
 import { collectIndexStatus } from "../../../src/artifacts/index-status.js";
 import { loadFortemiCoreExport } from "../../../src/artifacts/fortemi-core-query-adapter.js";
 import { main } from "../../../src/artifacts/cli.js";
@@ -87,6 +88,96 @@ describe("Fortemi Core static index sync (#1687)", () => {
     resetRegistry();
     fs.rmSync(tmp, { recursive: true, force: true });
   });
+
+  it.each([
+    { lengths: [199, 199, 199, 199, 200], short: 4, degenerate: true },
+    { lengths: [199, 199, 199, 200, 200], short: 3, degenerate: false },
+    { lengths: [200, 200], short: 0, degenerate: false },
+    { lengths: [0], short: 1, degenerate: true },
+    { lengths: [], short: 0, degenerate: true },
+  ])("measures exported text quality at the character and ratio boundaries ($lengths)", ({ lengths, short, degenerate }) => {
+    writeProjectIndex(tmp, entry());
+    const exported = buildAiwgFortemiIndexExport(tmp, { graph: "project", schemaVersion: "v2" });
+    const template = exported.items[0];
+    exported.items = lengths.map((length, i) => ({
+      ...template,
+      source: { ...template.source, path: `pdfs/full/item-${i}.pdf` },
+      title: i === 0 ? "item-0.pdf" : `Paper ${i}`,
+      text: `  ${"x".repeat(length)}\n`,
+    }));
+    vi.spyOn(browserExport, "buildAiwgFortemiIndexExport").mockReturnValue(exported);
+    const manifest = syncFortemiCoreIndex(tmp);
+    expect(manifest.text_quality).toEqual({
+      short_text_threshold_chars: 200,
+      short_text_count: short,
+      filename_title_count: lengths.length ? 1 : 0,
+      degenerate,
+    });
+    const saved = JSON.parse(fs.readFileSync(path.join(tmp, path.dirname(manifest.export_path), "manifest.json"), "utf-8"));
+    expect(saved.text_quality).toEqual(manifest.text_quality);
+  });
+
+  it("warns for created, unchanged, and updated metadata-only graph syncs with source context", async () => {
+    vi.spyOn(process, "cwd").mockReturnValue(tmp);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writeProjectIndex(tmp, entry({ path: "pdfs/full/sample.pdf", title: "sample.pdf" }));
+    fs.writeFileSync(path.join(tmp, ".aiwg", "aiwg.config"), JSON.stringify({
+      index: { graphs: { papers: {
+        scanDirs: ["pdfs/full"], extensions: [".pdf"], nodeStrategy: "filename-metadata",
+        filenamePattern: "(?<name>.+)\\.pdf",
+      } } },
+    }));
+    const papersDir = getGraphIndexDir(tmp, "papers");
+    fs.mkdirSync(papersDir, { recursive: true });
+    const projectIndex = path.join(getGraphIndexDir(tmp, "project"), "metadata.json");
+    const papersIndex = path.join(papersDir, "metadata.json");
+    fs.copyFileSync(projectIndex, papersIndex);
+    const previousExitCode = process.exitCode;
+    for (const status of ["created", "unchanged", "updated"]) {
+      if (status === "updated") {
+        const index = JSON.parse(fs.readFileSync(papersIndex, "utf-8"));
+        index.entries["pdfs/full/sample.pdf"].summary = "Short update.";
+        fs.writeFileSync(papersIndex, JSON.stringify(index));
+      }
+      await main(["sync", "--graph", "papers"]);
+      expect(log).toHaveBeenLastCalledWith(expect.stringContaining(`Fortemi Core ${status}: 1 item(s)`));
+      expect(warn).toHaveBeenLastCalledWith(expect.stringContaining("1/1 items (100%) have <200 chars of indexed text; 1 have a filename as title"));
+      expect(warn).toHaveBeenLastCalledWith(expect.stringContaining("Source: pdfs/full (nodeStrategy: filename-metadata)"));
+      expect(process.exitCode).toBe(previousExitCode);
+    }
+    expect(warn).toHaveBeenCalledTimes(3);
+  });
+
+  it("warns per degenerate graph in sync --all while keeping healthy graphs quiet", async () => {
+    vi.spyOn(process, "cwd").mockReturnValue(tmp);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writeProjectIndex(tmp, entry({ summary: "Substantial indexed text. ".repeat(20) }));
+    const dir = getGraphIndexDir(tmp, "codebase");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "metadata.json"), JSON.stringify({
+      version: "1.0.0", builtAt: "2026-01-03T00:00:00.000Z", buildTimeMs: 1, entries: {},
+    }));
+    await main(["sync", "--all"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("graph 'codebase' contains no indexed items"));
+  });
+
+  for (const all of [false, true]) {
+    it(`reports text quality in sync JSON without console warnings (all=${all})`, async () => {
+      vi.spyOn(process, "cwd").mockReturnValue(tmp);
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      writeProjectIndex(tmp, entry());
+      await main(["sync", "--json", ...(all ? ["--all"] : [])]);
+      expect(log).toHaveBeenCalledTimes(1);
+      const report = JSON.parse(log.mock.calls[0][0]);
+      const manifest = all ? report.manifests[0] : report;
+      expect(manifest.text_quality).toMatchObject({ short_text_count: 1, degenerate: true });
+      expect(warn).not.toHaveBeenCalled();
+    });
+  }
 
   it('reads unchanged exports once across status checks and query loading, without sharing mutable results', () => {
     writeProjectIndex(tmp, entry());

@@ -32,6 +32,12 @@ export interface FortemiCoreSyncManifest {
   export_schema_version: "aiwg.fortemi.index.export.v2";
   export_checksum: string;
   item_count: number;
+  text_quality?: {
+    short_text_threshold_chars: number;
+    short_text_count: number;
+    filename_title_count: number;
+    degenerate: boolean;
+  };
   skos_coverage?: {
     records_with_concepts: number;
     total_records: number;
@@ -278,6 +284,7 @@ export function syncFortemiCoreIndex(
     generatedAt: string;
     checksum: string;
     itemCount: number;
+    textQuality: FortemiCoreSyncManifest["text_quality"];
     skosCoverage: FortemiCoreSyncManifest["skos_coverage"];
   } => {
     const exported = buildAiwgFortemiIndexExport(cwd, {
@@ -291,10 +298,23 @@ export function syncFortemiCoreIndex(
     const recordsWithConcepts = exported.items.filter(
       (item) => (item.skos_concepts?.length ?? 0) > 0,
     ).length;
+    const shortTextThreshold = 200;
+    let shortTextCount = 0;
+    let filenameTitleCount = 0;
+    for (const item of exported.items) {
+      if (item.text.trim().length < shortTextThreshold) shortTextCount++;
+      if (item.title.trim() === path.posix.basename(item.source.path)) filenameTitleCount++;
+    }
     return {
       generatedAt,
       checksum,
       itemCount: exported.items.length,
+      textQuality: {
+        short_text_threshold_chars: shortTextThreshold,
+        short_text_count: shortTextCount,
+        filename_title_count: filenameTitleCount,
+        degenerate: exported.items.length === 0 || shortTextCount / exported.items.length >= 0.8,
+      },
       skosCoverage: {
         records_with_concepts: recordsWithConcepts,
         total_records: exported.items.length,
@@ -333,6 +353,7 @@ export function syncFortemiCoreIndex(
       export_schema_version: "aiwg.fortemi.index.export.v2",
       export_checksum: built.checksum,
       item_count: built.itemCount,
+      text_quality: built.textQuality,
       skos_coverage: built.skosCoverage,
       status,
       source_index_built_at: sourceBuiltAt,
