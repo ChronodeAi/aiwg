@@ -36,6 +36,116 @@ afterEach(async () => {
 });
 
 describe('workspace session discovery and batch import', () => {
+  it('maps Claude subfolder and worktree project keys through nearest workspace ownership', async () => {
+    const fixture = await providerFixture();
+    const subfolder = join(fixture.workspace, 'subfolder');
+    const nested = join(fixture.workspace, 'nested');
+    const worktree = join(fixture.root, 'linked-worktree');
+    await mkdir(subfolder);
+    await mkdir(join(nested, '.aiwg/sessions'), { recursive: true });
+    await createSessionWorktree(fixture.workspace, worktree);
+    const mappings = [subfolder, worktree, nested, join(fixture.root, 'unrelated')];
+    const locators = [];
+    for (const cwd of mappings) {
+      const project = join(fixture.providerHome, '.claude/projects', claudeProjectKey(cwd));
+      await mkdir(project, { recursive: true });
+      const locator = join(project, 'session.jsonl');
+      await writeFile(locator, JSON.stringify({ type: 'user', cwd, sessionId: cwd,
+        uuid: cwd, message: { role: 'user', content: 'safe fixture' } }) + '\n');
+      locators.push(locator);
+    }
+    const manifest = await discoverWorkspaceHistories({ workspace: fixture.workspace,
+      providerHome: fixture.providerHome, expectedProviders: ['claude'] });
+    expect(manifest.sources.map(source => source.locator).sort())
+      .toEqual([join(fixture.providerHome, '.claude/projects', claudeProjectKey(fixture.workspace), 'claude.jsonl'),
+        ...locators.slice(0, 2)].sort());
+    expect(manifest.providers[0]).toMatchObject({ matchedBySubfolder: 1, matchedByWorktree: 1 });
+  });
+
+  itWithSqlite('rebuilds from a saved manifest and read-only catalog after a source disappears', async () => {
+    const fixture = await providerFixture();
+    const manifest = await discoverWorkspaceHistories({ workspace: fixture.workspace,
+      providerHome: fixture.providerHome, expectedProviders: ['claude', 'codex'] });
+    const manifestPath = join(fixture.root, 'saved-manifest.json');
+    await writeDiscoveryManifest(manifestPath, manifest);
+    const oldPath = join(fixture.root, 'old.sqlite');
+    const newPath = join(fixture.root, 'new.sqlite');
+    const old = new SessionRepository(oldPath);
+    await importDiscoveryManifest({ repository: old, manifest });
+    const before = old.listSessions({ workspaceId: fixture.workspace, limit: 100 });
+    const checkpoints = new Map(manifest.sources.map(source => [source.sourceId, old.getCheckpoint(source.sourceId, '1.0.0')]));
+    old.close();
+    const claude = manifest.sources.find(source => source.provider === 'claude')!;
+    await rm(claude.locator);
+    const oldBytes = await readFile(oldPath);
+    const ctx = { cwd: fixture.workspace, rawArgs: [], frameworkRoot: fixture.root };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    for (let iteration = 0; iteration < 2; iteration++) {
+      const result = await sessionsHandler.execute({ ...ctx, args: ['import-discovered', '--workspace', fixture.workspace,
+        '--manifest', manifestPath, '--carry-forward', oldPath, '--db', newPath, '--confirm', '--json'] } as any);
+      expect(result.exitCode).toBe(0);
+      const envelope = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+      expect(envelope.data.receipt.carryForward.byProvider).toMatchObject({
+        claude: { carried: 1, reimported: 0, droppedAsDuplicate: 0, excluded: 0 },
+        codex: { carried: 0, reimported: 1, droppedAsDuplicate: 0, excluded: 0 },
+      });
+      const rebuilt = new SessionRepository(newPath);
+      try {
+        expect(rebuilt.listSessions({ workspaceId: fixture.workspace, limit: 100 }).total).toBe(before.total);
+        expect(rebuilt.getBatchImportRun(envelope.data.receipt.run.runId)?.carryForward)
+          .toEqual(envelope.data.receipt.carryForward);
+        const onDisk = manifest.sources.find(source => source.provider === 'codex')!;
+        expect(rebuilt.getCheckpoint(onDisk.sourceId, '1.0.0')).toEqual(checkpoints.get(onDisk.sourceId));
+      } finally { rebuilt.close(); }
+    }
+    const refused = await sessionsHandler.execute({ ...ctx, args: ['import-discovered', '--workspace', fixture.workspace,
+      '--manifest', manifestPath, '--carry-forward', oldPath, '--db', oldPath, '--dry-run', '--json'] });
+    expect(refused.exitCode).toBe(2);
+    log.mockRestore();
+    expect(await readFile(oldPath)).toEqual(oldBytes);
+  });
+
+  itWithSqlite('retains three large sessions, rereads changed sources, and excludes Lane B before reads', async () => {
+    const fixture = await providerFixture();
+    const sessions = join(fixture.root, 'large-sources');
+    await mkdir(sessions);
+    const ids = ['large-a', 'large-b', 'large-c', 'lane-b'];
+    for (const id of ids) {
+      await writeFile(join(sessions, `${id}.jsonl`), [
+        JSON.stringify({ type: 'session_meta', payload: { id, cwd: fixture.workspace } }),
+        JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user',
+          content: [{ type: 'input_text', text: 'safe history '.repeat(30_000) }] } }),
+      ].join('\n') + '\n');
+    }
+    const manifest = await discoverWorkspaceHistories({ workspace: fixture.workspace,
+      codexRoot: sessions, expectedProviders: ['codex'] });
+    const previous = new SessionRepository();
+    const rebuilt = new SessionRepository();
+    const limited = new SessionRepository();
+    try {
+      await importDiscoveryManifest({ manifest, repository: previous });
+      await rm(join(sessions, 'large-c.jsonl'));
+      await writeFile(join(sessions, 'lane-b.jsonl'), 'invalid synthetic excluded content');
+      const changed = join(sessions, 'large-a.jsonl');
+      await writeFile(changed, await readFile(changed, 'utf8') + JSON.stringify({ type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'current-source-marker' }] } }) + '\n');
+      const receipt = await importDiscoveryManifest({ manifest, repository: rebuilt,
+        carryForward: previous, exclude: ['lane-b'] });
+      expect(receipt.carryForward?.byProvider.codex).toEqual({
+        reimported: 2, carried: 1, droppedAsDuplicate: 0, excluded: 1,
+      });
+      expect(receipt.totals.sessionsAccepted).toBe(3);
+      expect(rebuilt.listSessions({ workspaceId: fixture.workspace, limit: 20 }).items
+        .map(session => session.nativeSessionId).sort()).toEqual(ids.slice(0, 3));
+      expect(rebuilt.search({ workspaceId: fixture.workspace, query: '"current-source-marker"', limit: 20 }).items).toHaveLength(1);
+      const rejected = await importDiscoveryManifest({ manifest, repository: limited,
+        carryForward: previous, exclude: ['lane-b'], limits: { maxRecordBytes: 1024 } });
+      expect(rejected.totals.rejected).toBe(2);
+      expect(limited.listSessions({ workspaceId: fixture.workspace, limit: 20 }).items
+        .map(session => session.nativeSessionId)).toEqual(['large-c']);
+    } finally { previous.close(); rebuilt.close(); limited.close(); }
+  });
+
   itWithSqlite('excludes Codex IDs and globs before discovery reads and reports excluded counts in batch receipts', async () => {
     const fixture = await providerFixture();
     const authorized = join(fixture.root, 'excluded');

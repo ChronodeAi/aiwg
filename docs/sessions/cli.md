@@ -221,6 +221,45 @@ source locators. `import-discovered` reads that exact manifest and refuses a
 workspace or source-content mismatch. `--confirm` is the interactive/scripted
 confirmation; `--yes` is the documented non-interactive equivalent.
 
+For a fresh rebuild, retain both the old catalog and its saved manifest, and
+select a separate destination:
+
+```sh
+aiwg sessions import-discovered --workspace "$PWD" \
+  --manifest /scratch/saved-discovery-manifest.json \
+  --carry-forward /scratch/old-catalog.sqlite \
+  --db /scratch/rebuilt-catalog.sqlite --confirm --json
+```
+
+`--carry-forward` opens the old catalog read-only. It refreshes saved source
+fingerprints and reimports available files using current import limits,
+exclusions, redaction, and provider identity rules. Sessions whose files are
+missing, or whose exact locators are no longer available in the manifest, are
+recovered from committed stored events. Keep the original manifest: catalog
+locators are redacted and cannot locate files by themselves. An available file
+that fails current import policy is reported as rejected; it is never silently
+replaced with its old catalog content. Correct the rejection and repeat the
+same rebuild into the same destination.
+
+Every carried string passes through the current redaction gate. Codex child
+identity is recovered from the first stored rollout metadata and lineage;
+phantom parent rows and duplicate Codex native IDs are consolidated. FTS,
+session intent, and analytics are regenerated from sanitized events, with no
+old search or analytics content copied. Tags also pass through current
+redaction. Repeating the rebuild is idempotent. The JSON receipt includes
+`carryForward.byProvider` session counts for `reimported`, `carried`,
+`droppedAsDuplicate`, and `excluded`. Keep the old copy until rejected sources
+are resolved and counts and redaction scans have been checked.
+
+Claude discovery checks project directories for subfolders and linked
+worktrees using transcript `cwd` and nearest-workspace ownership (#324).
+The exact mapping is `<provider-home>/.claude/projects/<claudeProjectKey(cwd)>`:
+non-alphanumeric characters other than hyphens become hyphens, and long keys
+use the existing 200-character/hash rule. Since these keys are lossy, AIWG
+checks `cwd` rather than decoding the directory name. A nested catalog owns
+its subtree; transcripts without `cwd` retain only the exact-project fallback.
+The saved manifest records the exact selected project directories and sources.
+
 A batch has a deterministic run ID and durable per-source dispositions.
 Sources are staged and remain invisible to list, search, extraction, and
 timeline reads until every source reaches a terminal disposition. One short

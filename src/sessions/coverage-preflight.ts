@@ -6,7 +6,7 @@ import { inspectInstallation } from '../installation/manager.mjs';
 import {
   ExpectedSessionProviderSchema, SESSION_PROVIDER_ALIASES, SESSION_PROVIDER_IDS,
   SessionContractError, SessionCoveragePreflightSchema, SessionRuntimeIdentitySchema,
-  type SessionCoveragePreflight, type SessionRuntimeIdentity,
+  type SessionCoveragePreflight, type SessionRuntimeIdentity, type SessionProviderScopeWarning,
 } from './contracts.js';
 import { createSessionAdapterRegistry } from './adapter-registry.js';
 import type { SessionSourceAdapterRegistry } from './discovery.js';
@@ -26,6 +26,40 @@ export function expectedSessionProviders(values: readonly string[]): string[] {
     throw new SessionContractError('INVALID_ARGUMENT', 'expected providers must not be empty');
   }
   return [...new Set(providers)].sort();
+}
+
+export function providerScopeWarnings(
+  configured: readonly string[],
+  expected: readonly string[],
+  recorded: readonly SessionProviderScopeWarning[] = [],
+): SessionProviderScopeWarning[] {
+  const configuredProviders = configured.length ? expectedSessionProviders(configured) : [];
+  const expectedProviders = expected.length ? expectedSessionProviders(expected) : [];
+  const missingProviders = configuredProviders.filter(provider => !expectedProviders.includes(provider));
+  const current: SessionProviderScopeWarning[] = missingProviders.length ? [{
+    code: 'CONFIGURED_PROVIDERS_OUTSIDE_SCOPE', configuredProviders, expectedProviders, missingProviders,
+    message: `Configured providers outside discovery scope: ${missingProviders.join(', ')}. Rediscover or refresh with current workspace config; verify authorized roots before rebuilding.`,
+  }] : [];
+  return [...recorded, ...current].filter((warning, index, all) =>
+    all.findIndex(item => JSON.stringify(item) === JSON.stringify(warning)) === index);
+}
+
+/** Explicit scope applies once; maintenance combines current config with saved root grants. */
+export function resolveSessionProviderScope(
+  configured: readonly string[],
+  explicit?: readonly string[],
+  authorized?: readonly string[],
+): Pick<SessionCoveragePreflight, 'expectedProviders' | 'expectedProviderBasis' | 'configuredProviders' | 'scopeWarnings'> {
+  const configuredProviders = configured.length ? expectedSessionProviders(configured) : [];
+  const values = [...configuredProviders, ...(authorized ?? [])];
+  const expectedProviders = expectedSessionProviders(explicit ?? (values.length ? values : SESSION_PROVIDER_IDS));
+  return {
+    expectedProviders,
+    expectedProviderBasis: explicit ? 'explicit' : configuredProviders.length ? 'workspace-config'
+      : authorized?.length ? 'explicit' : 'declared-default',
+    configuredProviders,
+    scopeWarnings: providerScopeWarnings(configuredProviders, expectedProviders),
+  };
 }
 
 /** Resolve the code actually loaded, independently of cwd, AIWG_ROOT and corpus redirects. */
@@ -65,6 +99,8 @@ export function sessionRuntimeIdentity(): SessionRuntimeIdentity {
 export function coveragePreflight(options: {
   expectedProviders?: readonly string[];
   expectedProviderBasis?: SessionCoveragePreflight['expectedProviderBasis'];
+  configuredProviders?: readonly string[];
+  scopeWarnings?: SessionProviderScopeWarning[];
   registry?: SessionSourceAdapterRegistry;
   runtime?: SessionRuntimeIdentity;
   reports?: DiscoveryProviderReport[];
@@ -111,6 +147,8 @@ export function coveragePreflight(options: {
   return SessionCoveragePreflightSchema.parse({
     expectedProviders,
     expectedProviderBasis: options.expectedProviderBasis ?? (options.expectedProviders ? 'explicit' : 'declared-default'),
+    ...(options.configuredProviders ? { configuredProviders: options.configuredProviders } : {}),
+    ...(options.scopeWarnings ? { scopeWarnings: options.scopeWarnings } : {}),
     supportedProviders: adapters.map((adapter) => adapter.provider), runtime,
     status: 'partial', unresolvedProviders: expectedProviders, ledger,
   });
@@ -138,7 +176,7 @@ export function reconcileCoveragePreflight(
   const runtimeGap = ['mismatch', 'stale', 'unknown'].includes(preflight.runtime.installationState);
   return {
     ...preflight, ledger, unresolvedProviders,
-    status: unresolvedProviders.length > 0 || runtimeGap || preflight.expectedProviderBasis !== 'explicit'
+    status: unresolvedProviders.length > 0 || runtimeGap || !['explicit', 'workspace-config'].includes(preflight.expectedProviderBasis)
       ? 'partial' : 'complete',
   };
 }

@@ -1,4 +1,6 @@
-import { stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createSessionAdapterRegistry } from './adapter-registry.js';
 import { coveragePreflight, sessionRuntimeIdentity } from './coverage-preflight.js';
 import {
@@ -7,6 +9,11 @@ import {
   schemaIssueDetail,
   SessionSourceSchema,
   sha256,
+  stableSessionId,
+  stableEventId,
+  type Session,
+  type SessionEvent,
+  type SessionProviderId,
   type SelectedSource,
   type SessionSource,
   type SessionSourceAdapter,
@@ -23,7 +30,10 @@ import { IncrementalSessionImporter, SessionImportFailure, type ImportLimits } f
 import { matchImportExclusion, resolveImportExclusions, type SourceExclusion } from './import-exclusions.js';
 import { resolveImportLimits } from './import-limits.js';
 import { fingerprintSourceFile } from './readers.js';
-import type { SessionRepository } from './repository.js';
+import { SessionRepository } from './repository.js';
+import { redactSessionValue, sanitizeSessionEvent } from './policy.js';
+import { deriveSessionIntent } from './origin.js';
+import { recoverCodexRolloutIdentity } from './adapters/codex.js';
 import type {
   DiscoveryManifestSource,
   SessionDiscoveryManifest,
@@ -31,6 +41,8 @@ import type {
 
 export interface BatchImportOptions {
   manifest: SessionDiscoveryManifest;
+  /** Open the previous catalog read-only; never copy its derived indexes. */
+  carryForward?: SessionRepository;
   exclude?: string[];
   limits?: Partial<ImportLimits>;
   runtime?: SessionRuntimeIdentity;
@@ -46,6 +58,7 @@ export interface BatchImportOptions {
 
 export interface BatchImportReceipt {
   schemaVersion: typeof BATCH_IMPORT_VERSION;
+  carryForward?: BatchImportRun['carryForward'];
   run: BatchImportRun;
   coverage: SessionCoverageReport;
   interruptedRuns: Array<{ runId: string; interruptedAt: string }>;
@@ -66,6 +79,7 @@ export interface BatchImportReceipt {
 export async function importDiscoveryManifest(
   options: BatchImportOptions,
 ): Promise<BatchImportReceipt> {
+  if (options.carryForward) return rebuildFromCatalog(options);
   const exclusions = resolveImportExclusions(undefined, options.exclude);
   const limits = { ...resolveImportLimits(undefined, {
     maxRecordBytes: options.limits?.maxRecordBytes, maxSourceBytes: options.limits?.maxTotalBytes,
@@ -89,6 +103,8 @@ export async function importDiscoveryManifest(
   }
   run.schemaVersion = BATCH_IMPORT_VERSION;
   run.preflight = coveragePreflight({
+    configuredProviders: options.manifest.preflight?.configuredProviders,
+    scopeWarnings: options.manifest.preflight?.scopeWarnings,
     expectedProviders: options.manifest.preflight?.expectedProviders,
     expectedProviderBasis: options.manifest.preflight?.expectedProviderBasis ?? 'legacy',
     runtime: options.runtime ?? sessionRuntimeIdentity(),
@@ -252,6 +268,8 @@ export function previewDiscoveryImport(
       return disposition;
     }),
     preflight: coveragePreflight({
+      configuredProviders: manifest.preflight?.configuredProviders,
+      scopeWarnings: manifest.preflight?.scopeWarnings,
       expectedProviders: manifest.preflight?.expectedProviders,
       expectedProviderBasis: manifest.preflight?.expectedProviderBasis ?? 'legacy',
       reports: manifest.providers,
@@ -300,6 +318,7 @@ function receiptFor(run: BatchImportRun, now: Date): BatchImportReceipt {
     run,
     coverage,
     interruptedRuns: [],
+    ...(run.carryForward ? { carryForward: run.carryForward } : {}),
     totals: {
       discovered: coverage.sources.discovered,
       accepted: coverage.sources.accepted,
@@ -421,4 +440,186 @@ function isAccepted(status: BatchSourceDisposition['status']): boolean {
   return status === 'committed'
     || status === 'duplicate'
     || status === 'previously-committed';
+}
+
+/** Reuse source import and normalized repository gates, without copying FTS/analytics. */
+async function rebuildFromCatalog(options: BatchImportOptions): Promise<BatchImportReceipt> {
+  const previous = options.carryForward!;
+  if (previous === options.repository) {
+    throw new SessionContractError('INVALID_ARGUMENT', 'carry-forward requires a separate destination catalog');
+  }
+  const workspaceId = options.manifest.workspaceId;
+  const exclusions = resolveImportExclusions(undefined, options.exclude);
+  const byProvider: NonNullable<BatchImportReceipt['carryForward']>['byProvider'] = {};
+  const counts = (provider: SessionProviderId) => byProvider[provider] ??= {
+    reimported: 0, carried: 0, droppedAsDuplicate: 0, excluded: 0,
+  };
+  const oldSessions = catalogSessions(previous, workspaceId);
+  const available: DiscoveryManifestSource[] = [];
+  const present = new Set<string>();
+  const excludedSources = new Set<string>();
+  for (const source of options.manifest.sources) {
+    if (matchImportExclusion(source, exclusions) ?? source.exclusion) {
+      excludedSources.add(source.sourceId);
+      continue;
+    }
+    let details;
+    try { details = await stat(source.locator); }
+    catch (error) {
+      if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) continue;
+      throw error;
+    }
+    // Refresh the snapshot, but retain the explicitly saved authorization and source identity.
+    const fingerprint = await fingerprintSourceFile({ selectedPath: source.locator,
+      allowedRoots: [source.authorizedRoot] });
+    available.push({ ...source, sizeBytes: details.size, modifiedAt: details.mtime.toISOString(),
+      digest: fingerprint.digest });
+    present.add(source.sourceId);
+  }
+  const manifest = { ...options.manifest, sources: available,
+    manifestId: sha256(JSON.stringify(['carry-forward-v1', options.manifest.manifestId, available])) };
+  const stagingDirectory = await mkdtemp(join(tmpdir(), 'aiwg-session-rebuild-'));
+  let staged: SessionRepository | undefined;
+  try {
+    staged = new SessionRepository(join(stagingDirectory, 'staging.sqlite'));
+    const receipt = await importDiscoveryManifest({ ...options, manifest, repository: staged,
+      carryForward: undefined, fault: undefined });
+    const identities = new Set<string>();
+    const destinationCodex = new Map(catalogSessions(options.repository, workspaceId)
+      .filter(session => session.provider === 'codex').map(session => [session.nativeSessionId, session.sourceId]));
+    const transfer = (repository: SessionRepository, sessions: Session[], category: 'reimported' | 'carried') => {
+      // A legacy Codex rollout may have split replayed parent events into phantom rows.
+      // Recover the first session_meta ID for the whole source before grouping events.
+      const sourceGroups = new Map<string, Session[]>();
+      for (const session of sessions) {
+        const group = sourceGroups.get(session.sourceId) ?? [];
+        group.push(session);
+        sourceGroups.set(session.sourceId, group);
+      }
+      for (const [sourceId, group] of sourceGroups) {
+        if (options.signal?.aborted) throw new SessionContractError('IMPORT_INTERRUPTED', 'catalog rebuild interrupted');
+        const source = repository.getSource(sourceId, workspaceId);
+        if (!source) throw new SessionContractError('IMPORT_CONFLICT', 'catalog session has no authorized source');
+        const allEvents = group.flatMap(session => repository.listEvents(session.sessionId, workspaceId))
+          .sort((a, b) => a.sequence - b.sequence || a.eventId.localeCompare(b.eventId));
+        const rollout = source.provider === 'codex' ? recoverCodexRolloutIdentity(allEvents) : undefined;
+        const childId = rollout?.nativeSessionId;
+        // Prefer the child's aggregate when the legacy source also has phantom parent aggregates.
+        group.sort((a, b) => Number(b.nativeSessionId === childId) - Number(a.nativeSessionId === childId));
+        const canonical = new Map<string, { session: Session; events: SessionEvent[] }>();
+        for (const session of group) {
+          const nativeId = childId ?? session.nativeSessionId;
+          const locator = options.manifest.sources.find(item => item.sourceId === sourceId)?.locator
+            ?? source.redactedLocator;
+          if (excludedSources.has(sourceId) || matchImportExclusion({ provider: session.provider,
+            locator, locatorClass: source.locatorClass, nativeSessionId: nativeId }, exclusions)) {
+            counts(session.provider).excluded++;
+            continue;
+          }
+          const key = session.provider === 'codex' ? `${session.provider}\0${nativeId}` : session.sessionId;
+          if (identities.has(key)) {
+            counts(session.provider).droppedAsDuplicate++;
+            continue;
+          }
+          const existing = canonical.get(key);
+          if (existing) {
+            counts(session.provider).droppedAsDuplicate++;
+            existing.events.push(...repository.listEvents(session.sessionId, workspaceId));
+          } else canonical.set(key, { session: { ...session, nativeSessionId: nativeId },
+            events: repository.listEvents(session.sessionId, workspaceId) });
+        }
+        for (const [key, entry] of canonical) {
+          if (source.provider === 'codex' && destinationCodex.has(entry.session.nativeSessionId)
+            && destinationCodex.get(entry.session.nativeSessionId) !== sourceId) {
+            throw new SessionContractError('IMPORT_CONFLICT', 'destination has a different source for this Codex identity; select a fresh catalog');
+          }
+          const session = redactSessionValue({ ...entry.session,
+            sessionId: stableSessionId(source.provider, sourceId, entry.session.nativeSessionId),
+          }).value;
+          // Hash only sanitized content; receipts and IDs must never retain old plaintext.
+          const sanitized = entry.events.map(sanitizeSessionEvent);
+          const runId = sha256(JSON.stringify(['catalog-carry-v1', session.sessionId, sanitized]));
+          const events = sanitized.map(event => {
+            const digest = event.digest;
+            return { ...event, sessionId: session.sessionId, importRunId: runId, digest,
+              eventId: stableEventId(source.provider, sourceId, {
+                nativeSessionId: session.nativeSessionId, nativeEventId: event.nativeId ?? event.eventId,
+                sequence: event.sequence, kind: event.kind, text: event.searchableText,
+                rawReference: event.rawReference,
+              }, digest) };
+          });
+          if (rollout && Object.keys(rollout.lineage).length > 0) {
+            session.extensions['native.codex'] = { lineage: rollout.lineage };
+          }
+          session.intent = deriveSessionIntent(events);
+          const checkpoint = repository.getCheckpoint(sourceId, source.adapterVersion)
+            ?? { cursor: '', recordsRead: events.length, bytesRead: Buffer.byteLength(JSON.stringify(events)) };
+          options.repository.applyImport({ source, sessions: [session], events,
+            run: { contractVersion: SESSION_CONTRACT_VERSION, importRunId: runId, sourceId,
+              parserVersion: source.adapterVersion, policyVersion: '1.0.0',
+              sourceSchemaVersion: source.sourceSchemaVersion, consistency: source.consistency,
+              status: 'running', checkpoint, startedAt: (options.now?.() ?? new Date()).toISOString(),
+              completedAt: null, errorCode: null } }, checkpoint);
+          for (const old of group.filter(item => (childId ?? item.nativeSessionId) === entry.session.nativeSessionId)) {
+            for (const tag of repository.listTags(old.sessionId, workspaceId)) {
+              options.repository.tagSession(session.sessionId, tag, workspaceId);
+            }
+          }
+          identities.add(key);
+          counts(source.provider)[category]++;
+        }
+      }
+    };
+    const reimported = catalogSessions(staged, workspaceId);
+    transfer(staged, reimported, 'reimported');
+    for (const sourceId of present) {
+      const old = oldSessions.filter(session => session.sourceId === sourceId && session.provider === 'codex');
+      const imported = reimported.filter(session => session.sourceId === sourceId);
+      // Account for phantom rows eliminated by current source parsing, separately from copied duplicates.
+      if (imported.length > 0 && old.length > imported.length) {
+        counts('codex').droppedAsDuplicate += old.length - imported.length;
+      }
+    }
+    transfer(previous, oldSessions.filter(session => !present.has(session.sourceId)), 'carried');
+    options.repository.reindex(workspaceId);
+    const finalSessions = catalogSessions(options.repository, workspaceId);
+    const sourceIds = new Set([...receipt.run.sources.map(item => item.sourceId),
+      ...oldSessions.map(session => session.sourceId)]);
+    for (const sourceId of sourceIds) {
+      const accepted = finalSessions.filter(session => session.sourceId === sourceId);
+      let disposition = receipt.run.sources.find(item => item.sourceId === sourceId);
+      if (!disposition) {
+        const old = oldSessions.find(session => session.sourceId === sourceId)!;
+        const excluded = excludedSources.has(sourceId) || matchImportExclusion({
+          provider: old.provider, nativeSessionId: old.nativeSessionId,
+          locator: previous.getSource(sourceId, workspaceId)?.redactedLocator ?? '', locatorClass: 'catalog',
+        }, exclusions);
+        disposition = { sourceId, provider: old.provider,
+          status: excluded ? 'excluded' : accepted.length > 0 ? 'committed' : 'duplicate',
+          attempts: 1, sessionsAccepted: 0, eventsAccepted: 0,
+          errorCode: null, diagnostic: null, updatedAt: receipt.run.updatedAt };
+        receipt.run.sources.push(disposition);
+      }
+      disposition.sessionsAccepted = accepted.length;
+      disposition.eventsAccepted = accepted.reduce((sum, session) =>
+        sum + options.repository.listEvents(session.sessionId, workspaceId).length, 0);
+    }
+    receipt.run.carryForward = { byProvider };
+    options.repository.saveBatchImportRun(receipt.run);
+    return redactSessionValue(receiptFor(receipt.run, options.now?.() ?? new Date())).value;
+  } finally {
+    staged?.close();
+    await rm(stagingDirectory, { recursive: true, force: true });
+  }
+}
+
+function catalogSessions(repository: SessionRepository, workspaceId: string): Session[] {
+  const sessions: Session[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = repository.listSessions({ workspaceId, limit: 500, cursor });
+    sessions.push(...page.items);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+  return sessions;
 }

@@ -1,5 +1,5 @@
 import type { SourceExclusion } from './import-exclusions.js';
-import type { SessionCoveragePreflight, SessionRejectionDetail, SessionRuntimeIdentity } from './contracts.js';
+import type { SessionCoveragePreflight, SessionRejectionDetail, SessionRuntimeIdentity, SessionProviderId } from './contracts.js';
 import { reconcileCoveragePreflight } from './coverage-preflight.js';
 import type { DiscoveryProviderReport } from './workspace-discovery.js';
 
@@ -30,6 +30,15 @@ export interface BatchSourceDisposition {
   updatedAt: string;
 }
 
+export interface CarryForwardCounts {
+  byProvider: Partial<Record<SessionProviderId, {
+    reimported: number;
+    carried: number;
+    droppedAsDuplicate: number;
+    excluded: number;
+  }>>;
+}
+
 export interface BatchImportRun {
   schemaVersion: '1.0.0' | typeof BATCH_IMPORT_VERSION;
   runId: string;
@@ -41,6 +50,7 @@ export interface BatchImportRun {
   updatedAt: string;
   completedAt: string | null;
   interruptedAt?: string;
+  carryForward?: CarryForwardCounts;
   preflight?: SessionCoveragePreflight;
   discoveryRuntime?: SessionRuntimeIdentity;
   providers: DiscoveryProviderReport[];
@@ -116,7 +126,7 @@ export function coverageFromBatchRun(
   const unresolvedProviders = preflight?.unresolvedProviders
     ?? [...new Set([...unavailable, ...exportRequired, ...notChecked])].sort();
   const acquisitionIncomplete = rejected > 0 || pending > 0 || skipped > 0
-    || (preflight?.expectedProviderBasis === 'explicit' && unresolvedProviders.length > 0);
+    || (preflight && ['explicit', 'workspace-config'].includes(preflight.expectedProviderBasis) && unresolvedProviders.length > 0);
   const incomplete = acquisitionIncomplete || !preflight || preflight.status !== 'complete'
     || unavailable.length > 0 || accepted + duplicated + previouslyCommitted + excluded === 0
     || exportRequired.length > 0 || notChecked.length > 0;

@@ -4558,6 +4558,7 @@ aiwg index build [options]
 **Options:**
 
 - `--force` - Full rebuild (ignore checksums, re-index everything)
+- `--index-workers <n>` - Maximum preparation processes (0 or 1 = serial); overrides `AIWG_INDEX_WORKERS`. Defaults to automatic CPU, available-memory and workload limits, capped at four processes.
 - `--verbose` - Show detailed progress during indexing
 - `--all` - Build all known graphs (built-in + user-defined)
 - `--scope <dir>` - Limit scan to a specific subdirectory (relative to project root)
@@ -4581,6 +4582,16 @@ non-zero if any graph failed. With `--json`, the multi-graph report contains `ma
 checksums without constructing a single export-sized string.
 
 **Incremental mode** (default): Only re-indexes files whose checksum has changed. Use `--force` for a full rebuild.
+
+The same `--index-workers <n>` / `AIWG_INDEX_WORKERS` control applies to `aiwg index refresh`.
+Preparation processes use a 256 MiB old-generation heap with a 512 MiB admission budget per
+process plus 512 MiB reserved for the parent. Files over 1 MiB are prepared serially after
+all preparation processes exit. A process heap failure or early exit stops and reaps the pool,
+then retries unfinished artifacts serially once; recovery diagnostics appear on the refresh
+job's `diagnostics` array in `--json` output. An ordinary extraction error marks that graph
+job as failed, preserves its previous index, and allows later workspace jobs to run and the
+report to be emitted. Refresh exits nonzero if any graph still fails after recovery.
+
 
 **Post-clone bootstrap.** The index output (`.aiwg/.index/`) is a regenerable build artifact and is **gitignored by default** (added to `.gitignore` by `aiwg use`, `aiwg regenerate`, and project scaffolding). It is not committed, so a fresh clone has no index. Rebuild it with:
 

@@ -6,6 +6,7 @@ import {
   basename, dirname, isAbsolute, join, resolve,
 } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { providerScopeWarnings } from '../../sessions/coverage-preflight.js';
 import {
   CLAUDE_ADAPTER_VERSION,
   ClaudeSessionAdapter,
@@ -178,7 +179,7 @@ Commands:
   audit --workspace <id>          Read content-free mutation events
   analytics <view> --workspace <id>  Summary, tool-calls, escalations, or HITL
   forensics <view> --workspace <id>  Authorized timeline, indicators, or evidence
-  doctor                          Check catalog availability and integrity
+  doctor                          Check catalog integrity and configured provider scope
 
 Options:
   --json          Emit the versioned JSON contract
@@ -190,7 +191,8 @@ Options:
                    Catalog defaults to <project-or-cwd>/.aiwg/sessions/catalog.sqlite
                    Imports for other workspaces stay in the selected catalog;
                    use --db to read that catalog from another directory
-  --expected-providers <ids>  Comma-separated authorized scope, independent of runtime inventory
+  --expected-providers <ids>  Explicit scope for this invocation; refresh re-reads workspace config
+  --carry-forward <catalog>  Rebuild from sources plus re-redacted stored history (import-discovered)
   --manifest <path>  Override the discovery manifest path
   --provider-home <path>  Override the provider home root (testing/portable homes)
   --codex-root <path>  Authorize a shared Codex sessions/export root (repeatable)
@@ -903,12 +905,22 @@ async function executeCommand(
           providerLogsModified: false,
         });
       }
-      case 'doctor':
+      case 'doctor': {
+        const workspacePath = resolve(ctx.cwd, args.values.get('--workspace') ?? ctx.cwd);
+        const workspace = existsSync(workspacePath) ? realpathSync(workspacePath) : workspacePath;
+        const config = await readAiwgConfig(workspace);
+        const manifestPath = resolve(ctx.cwd, args.values.get('--manifest') ?? defaultDiscoveryManifestPath(workspace));
+        const preflight = existsSync(manifestPath)
+          ? (await readDiscoveryManifest(manifestPath)).preflight
+          : repository.getCoverage(workspace).preflight;
+        const warnings = providerScopeWarnings(config?.providers ?? [], preflight?.expectedProviders ?? [], preflight?.scopeWarnings);
         return ok(command, {
           database: redactSourceLocator(databasePath(ctx, args)),
           health: repository.doctor(),
+          warnings,
           jsonContractVersion: JSON_CONTRACT_VERSION,
         });
+      }
       default:
         throw new CliError('UNKNOWN_COMMAND', `unknown sessions command: ${command}`, EXIT.usage);
     }
@@ -1529,6 +1541,7 @@ async function discoverWorkspace(
     ],
   });
   const data = {
+    warnings: manifest.preflight?.scopeWarnings ?? [],
     manifest: publicDiscoveryManifest(manifest),
     manifestPath: redactSourceLocator(manifestPath),
     exactManifestRequiredForImport: true,
@@ -1561,7 +1574,20 @@ async function importDiscovered(
       EXIT.contract,
     );
   }
+  const carryPath = args.values.has('--carry-forward')
+    ? resolve(ctx.cwd, args.values.get('--carry-forward')!) : undefined;
+  if (carryPath) {
+    const sourceStat = statSync(carryPath);
+    const target = databasePath(ctx, args);
+    if (existsSync(target)) {
+      const targetStat = statSync(target);
+      if (sourceStat.dev === targetStat.dev && sourceStat.ino === targetStat.ino) {
+        throw new CliError('INVALID_ARGUMENT', 'carry-forward requires a separate destination catalog', EXIT.usage);
+      }
+    }
+  }
   const expected = requestedProviders(args);
+  const warnings = providerScopeWarnings(config?.providers ?? [], manifest.preflight?.expectedProviders ?? [], manifest.preflight?.scopeWarnings);
   if (expected && JSON.stringify(expected) !== JSON.stringify(manifest.preflight?.expectedProviders)) {
     throw new SessionContractError('INVALID_ARGUMENT',
       'expected provider scope differs from the saved manifest; rediscover with --expected-providers');
@@ -1580,10 +1606,12 @@ async function importDiscovered(
       // A preview can still describe the exact manifest before a catalog exists.
     }
     return preview('import-discovered', {
+      warnings,
       manifest: publicDiscoveryManifest(manifest),
       receipt: previewDiscoveryImport(manifest, existing, new Date(), exclude),
       confirmationRequired: !isDryRun(ctx, args),
       wouldPersist: false,
+      ...(carryPath ? { carryForward: redactSourceLocator(carryPath) } : {}),
     });
   }
 
@@ -1601,12 +1629,15 @@ async function importDiscovered(
     },
   );
   try {
-    const repository = openRepository(ctx, args);
+    const previous = carryPath ? new SessionRepository(carryPath, { readonly: true }) : undefined;
+    let repository: SessionRepository | undefined;
     try {
+      repository = openRepository(ctx, args);
       const interruptedRuns = repository.interruptRunningBatchImports();
       const receipt = await importDiscoveryManifest({
         manifest,
         repository,
+        carryForward: previous,
         limits,
         exclude,
         signal: ctx.signal,
@@ -1614,6 +1645,7 @@ async function importDiscovered(
       });
       receipt.interruptedRuns = interruptedRuns;
       return ok('import-discovered', {
+        warnings,
         manifestId: manifest.manifestId,
         receipt,
         resumable: receipt.run.status !== 'complete',
@@ -1624,7 +1656,8 @@ async function importDiscovered(
         },
       });
     } finally {
-      repository.close();
+      repository?.close();
+      previous?.close();
     }
   } finally {
     await lease.release();
@@ -1988,7 +2021,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     '--entity', '--sensitivity', '--extraction-state', '--page-size', '--max-documents',
     '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
     '--consumer', '--actor-class', '--reason-code', '--dependent-action', '--basis',
-    '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--grokbot-root', '--lock-wait-ms', '--min-coverage', '--gap',
+    '--carry-forward', '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--grokbot-root', '--lock-wait-ms', '--min-coverage', '--gap',
     '--inactivity-threshold', '--expected-providers', '--exclude', '--max-record-bytes', '--max-source-bytes',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',

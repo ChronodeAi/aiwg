@@ -1086,9 +1086,14 @@ type: use-case
       const start = performance.now();
       await buildIndex(tmpDir, { graph: 'codebase', force: true, quiet: true });
       const forcedMs = performance.now() - start;
-      const incrementalStart = performance.now();
-      await buildIndex(tmpDir, { graph: 'codebase', quiet: true });
-      const incrementalMs = performance.now() - incrementalStart;
+      // A single ~150 ms sample is dominated by scheduler noise when the suite
+      // runs in parallel; the fastest of three no-op builds measures the work.
+      let incrementalMs = Infinity;
+      for (let run = 0; run < 3; run++) {
+        const incrementalStart = performance.now();
+        await buildIndex(tmpDir, { graph: 'codebase', quiet: true });
+        incrementalMs = Math.min(incrementalMs, performance.now() - incrementalStart);
+      }
 
       const stats = JSON.parse(fs.readFileSync(path.join(tmpDir, INDEX_DIR, 'codebase', 'stats.json'), 'utf8'));
       expect(stats.totalArtifacts).toBe(3000);

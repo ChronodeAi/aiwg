@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { discoverWorkspaceHistories, writeDiscoveryManifest } from '../../../src/sessions/workspace-discovery.js';
+import * as builder from '../../../src/artifacts/index-builder.js';
 import { main } from '../../../src/artifacts/cli.js';
 import { run } from '../../../src/cli/router.js';
 import { SessionRepository } from '../../../src/sessions/repository.js';
@@ -20,7 +21,9 @@ let output: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-refresh-cli-'));
+  vi.stubEnv('AIWG_INDEX_WORKERS', '');
   fs.mkdirSync(path.join(root, '.aiwg'));
+  fs.writeFileSync(path.join(root, '.aiwg/example.md'), '# Example');
   fs.writeFileSync(path.join(root, '.aiwg/aiwg.config'), JSON.stringify({
     command_log: { enabled: true }, skill_usage: { enabled: true },
   }));
@@ -77,11 +80,83 @@ describe('index refresh CLI routing', () => {
     expect(help).toContain('refresh');
     expect(help).toContain('[--root <dir>]...');
     expect(help).toContain('--only graphs|sessions|caches|runtime|models|issues');
-    for (const flag of ['--full', '--workspace', '--root', '--only', '--dry-run', '--json', '--lock-wait-ms', '--max-record-bytes', '--max-source-bytes', '--exclude']) expect(help).toContain(flag);
+    for (const flag of ['--index-workers', '--full', '--workspace', '--root', '--only', '--dry-run', '--json', '--lock-wait-ms', '--max-record-bytes', '--max-source-bytes', '--exclude']) expect(help).toContain(flag);
     expect(help).toContain('1073741824 bytes (1 GiB)');
     expect(help).toContain('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES');
     expect(help).toContain('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES');
     expect(help).toContain('AIWG_SESSIONS_IMPORT_EXCLUDE');
+  });
+
+  it.each(['0', '2'])('passes --index-workers %s through refresh to graph builds', async value => {
+    const build = vi.spyOn(builder, 'buildIndex').mockRejectedValue(new Error('synthetic graph failure'));
+    await main(['refresh', '--workspace', root, '--only', 'graphs', '--json', '--index-workers', value]);
+    expect(build).toHaveBeenCalledWith(root, expect.objectContaining({workers: Number(value)}));
+    expect(JSON.parse(output.mock.calls[0][0]).jobs.some((j: any) => j.error === 'synthetic graph failure')).toBe(true);
+  });
+
+  it('honors the environment and lets an explicit serial flag override it', async () => {
+    vi.stubEnv('AIWG_INDEX_WORKERS', 'invalid');
+    await main(['refresh', '--workspace', root, '--dry-run', '--json']);
+    expect(JSON.parse(output.mock.calls[0][0]).messages[0]).toContain('AIWG_INDEX_WORKERS');
+    output.mockClear();
+    await main(['refresh', '--workspace', root, '--dry-run', '--json', '--index-workers', '0']);
+    expect(JSON.parse(output.mock.calls[0][0]).status).toBe('ok');
+  });
+
+  it.each(['-1', '1.5', 'invalid', ''])('rejects invalid worker flags: %s', async value => {
+    await main(['refresh', '--workspace', root, '--dry-run', '--json', '--index-workers', value]);
+    expect(JSON.parse(output.mock.calls[0][0]).status).toBe('error');
+    expect(process.exitCode).toBe(1);
+  });
+
+  it.each([['0', '3', 0], [undefined, '2', 2], ['2', 'invalid', 2]] as const)(
+    'passes build workers from flag %s and env %s', async (flag, env, expected) => {
+      vi.stubEnv('AIWG_INDEX_WORKERS', env);
+      vi.spyOn(process, 'cwd').mockReturnValue(root);
+      const build = vi.spyOn(builder, 'buildIndex').mockResolvedValue();
+      await main(['build', '--graph', 'project', ...(flag === undefined ? [] : ['--index-workers', flag])]);
+      expect(build).toHaveBeenCalledWith(root, expect.objectContaining({workers:expected}));
+    });
+
+  it('continues to later workspaces after a graph fails and emits the complete JSON report', async () => {
+    const later = path.join(root, 'later');
+    fs.mkdirSync(path.join(later, '.aiwg'), {recursive:true});
+    fs.writeFileSync(path.join(later, '.aiwg/requirement.md'), '# Later workspace');
+    const original = builder.buildIndex;
+    vi.spyOn(builder, 'buildIndex').mockImplementation(async (cwd, options) => {
+      if (cwd === root && options?.graph === 'project') throw new Error('synthetic preparation failure');
+      await original(cwd, options);
+    });
+    await main(['refresh', '--workspace', root, '--workspace', later, '--only', 'graphs', '--json', '--index-workers', '0']);
+    expect(output).toHaveBeenCalledOnce();
+    const report = JSON.parse(output.mock.calls[0][0]);
+    expect(report).toMatchObject({status:'partial', totals:{errors:1}});
+    expect(report.jobs.find((j: any) => j.workspace === root && j.graph === 'project')).toMatchObject({status:'error', error:'synthetic preparation failure'});
+    expect(report.jobs.find((j: any) => j.workspace === later && j.graph === 'project')).toMatchObject({status:'ok'});
+    expect(fs.existsSync(path.join(later, '.aiwg/.index/project/metadata.json'))).toBe(true);
+  });
+
+  it('includes preparation recovery diagnostics in the graph JSON report', async () => {
+    const original = builder.buildIndex;
+    vi.spyOn(builder, 'buildIndex').mockImplementation(async (cwd, options) => {
+      options?.onDiagnostic?.('synthetic worker exited early; retrying unfinished preparation serially');
+      await original(cwd, options);
+    });
+    await main(['refresh', '--workspace', root, '--only', 'graphs', '--json', '--index-workers', '0']);
+    const report = JSON.parse(output.mock.calls[0][0]);
+    expect(report.jobs.find((j: any) => j.graph === 'project')).toMatchObject({status:'ok',
+      diagnostics:['synthetic worker exited early; retrying unfinished preparation serially']});
+    expect(report.totals.errors).toBe(0);
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it.each(['-1', '1.5', 'invalid'])('rejects invalid build worker flags: %s', async value => {
+    const build = vi.spyOn(builder, 'buildIndex').mockResolvedValue();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await main(['build', '--index-workers', value]);
+    expect(build).not.toHaveBeenCalled();
+    expect(error.mock.calls[0][0]).toContain('--index-workers');
+    expect(process.exitCode).toBe(1);
   });
 
   it.each(['MAX_RECORD_BYTES', 'MAX_SOURCE_BYTES'])('rejects invalid env %s during refresh planning', async setting => {
@@ -94,6 +169,7 @@ describe('index refresh CLI routing', () => {
   });
 
   itWithSqlite('reports repeated exclusion flags and counts in refresh JSON and text', async () => {
+    fs.writeFileSync(path.join(root, '.aiwg/aiwg.config'), JSON.stringify({ providers: ['codex'] }));
     const providerRoot = path.join(root, 'authorized');
     fs.mkdirSync(providerRoot);
     for (const id of ['first', 'second']) fs.writeFileSync(path.join(providerRoot, `${id}.jsonl`), JSON.stringify({
@@ -144,7 +220,7 @@ describe('index refresh CLI routing', () => {
     expect(output).toHaveBeenCalledOnce();
     expect(JSON.parse(output.mock.calls[0][0])).toMatchObject({ command: 'index.refresh', status: 'ok' });
     expect(fs.readdirSync(root).sort()).toEqual(['.aiwg']);
-    expect(fs.readdirSync(path.join(root, '.aiwg'))).toEqual(['aiwg.config']);
+    expect(fs.readdirSync(path.join(root, '.aiwg'))).toEqual(['aiwg.config', 'example.md']);
   });
 
   it('propagates refresh errors to the process exit status', async () => {
