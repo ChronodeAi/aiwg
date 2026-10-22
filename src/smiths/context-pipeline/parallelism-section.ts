@@ -14,10 +14,15 @@
  * @implements #1362
  */
 
-import { dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findPackageRoot } from '../../cli/find-package-root.js';
 import { readAiwgConfigCandidate, validateWorkerConfigCandidate, resolveParallelism, PROVIDER_PARALLELISM_DEFAULTS, type AiwgConfig, type ParallelismConfig, type SetupConfig, type WorkerGroup } from '../../config/aiwg-config.js';
+import { ConfigLoader } from '../../models/config-loader.js';
+import type { DynamicModelCatalog } from '../../models/model-discovery.js';
+import { validateWorkerCatalogDiscovery } from '../../models/provider-policy.js';
 
 export const PARALLELISM_BLOCK_START = '<!-- AIWG-PARALLELISM-CAP:START -->';
 export const PARALLELISM_BLOCK_END = '<!-- AIWG-PARALLELISM-CAP:END -->';
@@ -36,6 +41,9 @@ export interface ParallelismSectionDeps {
   readConfig?: (projectPath: string) => Promise<AiwgConfig | null>;
   /** Worker-model defaults validation; only called when `worker_dispatch` is true. */
   validateWorkerConfig?: (projectPath: string, config: AiwgConfig) => Promise<void>;
+  /** Read existing discovery only; context generation never refreshes or probes. */
+  readCatalog?: () => Promise<DynamicModelCatalog | null>;
+  now?: () => Date;
 }
 
 /**
@@ -119,6 +127,58 @@ function groupSummaries(entries: Array<[string, WorkerGroup]>, parallelism: Para
     if (excluded.length) parts.push(`excluded members: ${oneLine(excluded.join(', '), 160)}`);
     return parts.join('; ') + ')';
   });
+}
+
+/** Same cache used by model discovery; absence/corruption cannot invent evidence. */
+async function readCachedCatalog(): Promise<DynamicModelCatalog | null> {
+  try {
+    return JSON.parse(await readFile(join(homedir(), '.cache/aiwg/model-catalog.v1.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function observationSummaries(entries: Array<[string, WorkerGroup]>, deps: ParallelismSectionDeps): Promise<string[]> {
+  const candidate = await (deps.readCatalog ?? readCachedCatalog)();
+  const catalog = candidate?.version && candidate.providers && !validateWorkerCatalogDiscovery(candidate.discovery).length
+    ? candidate : null;
+  const readAt = (deps.now ?? (() => new Date()))();
+  const stamp = (value: string | undefined): string => {
+    const time = value === undefined ? NaN : Date.parse(value);
+    if (!Number.isFinite(time)) return 'unknown';
+    const age = readAt.getTime() - time;
+    return `${new Date(time).toISOString()} (${age < 0 ? 'future timestamp; age unavailable' : `${Math.floor(age / 1000)}s old`})`;
+  };
+  const range = (values: string[]): string => {
+    if (!values.length) return 'unknown';
+    values.sort((a, b) => Date.parse(a) - Date.parse(b));
+    const oldest = stamp(values[0]);
+    return Date.parse(values[0]) === Date.parse(values[values.length - 1]) ? oldest : `${oldest} to ${stamp(values[values.length - 1])}`;
+  };
+  return [
+    `Cached model observations read at ${readAt.toISOString()}; catalog fetchedAt: ${stamp(catalog?.discovery?.fetchedAt)}. Ages are measured at this read and grow afterward. This cache may differ from the resolver's current installation observations; no eligibility read is performed by context generation. Missing or ambiguous observations have unknown age.`,
+    '',
+    ...entries.map(([id, group]) => {
+      const observations = group.members.flatMap(member => {
+        // Mirror the resolver's exact, unambiguous id/API-id lookup per installation.
+        const rows = catalog?.discovery?.instances?.[member.cli]?.models
+          .filter(row => row.id === member.model || row.apiModelId === member.model) ?? [];
+        return rows.length === 1 && rows[0].worker ? [rows[0].worker] : [];
+      });
+      return `- ${oneLine(id, 64)} cached observations: ${observations.length}/${group.members.length} members; observedAt: ${range(observations.map(row => row.observedAt))}; verifiedAt: ${range(observations.map(row => row.verifiedAt))}.`;
+    }),
+    '',
+  ];
+}
+
+function capacitySummary(parallelism: ParallelismConfig): string {
+  const caps = parallelism.admission;
+  const summaries = (['groupCaps', 'memberCaps', 'cliCaps', 'modelCaps', 'quotaCaps'] as const).map(field => {
+    const entries = Object.entries(caps?.[field] ?? {});
+    const shown = entries.slice(0, MAX_SHOWN_GROUPS).map(([key, value]) => `${oneLine(key, 96)}=${value}`).join(', ');
+    return `${field}: ${shown || 'none configured'}${entries.length > MAX_SHOWN_GROUPS ? ` (+${entries.length - MAX_SHOWN_GROUPS} more)` : ''}`;
+  });
+  return `Configured concurrency ceilings (\`parallelism.admission\`): ${summaries.join('; ')}. Local/self-hosted models obey these same ceilings: CLI caps use installation IDs, model caps use canonical inference-provider/API-model keys, and quota caps use the installation's quotaScope. Unset caps add no extra ceiling; a current/request capacity ceiling of zero blocks selection. The resolver returns the minimum applicable ceiling as \`effectiveMaxParallel\`; Tier 0 conductors must self-count active workers, including workers sharing a local server.`;
 }
 
 /**
@@ -278,6 +338,15 @@ export async function buildParallelismSection(projectPath: string, deps: Paralle
     }
     lines.push('');
     lines.push('A group above shown as configured, with excluded members or an uncovered required role listed, is a static config read — not a live eligibility verdict. Eligibility is resolved per (group, member, effort) tuple against the current catalog and request; see `aiwg models resolve` below to check a specific role/task/group.');
+    lines.push('');
+    lines.push(...await observationSummaries(entries.slice(0, MAX_SHOWN_GROUPS), deps));
+    const models = await new ConfigLoader(projectPath, { aiwgHome: resolveAiwgHome() }).load(cfg.parallelism);
+    const freshness = models.defaults.workerSelection!.freshness!;
+    lines.push(`Resolver freshness limits from merged model policy: observation warning after ${freshness.warnHours} hours; observation blocked after ${freshness.blockHours} hours; verification blocked after ${freshness.policyDays} days. Future-dated evidence is blocked. Re-resolve before launch; cached ages do not establish eligibility.`);
+    lines.push('');
+    lines.push('Cross-family review: when required, the reviewer must use a different observed model family from the writer. Different CLI names do not prove different families. The resolver requires unambiguous writer lineage in `reviewOf` with `requireDifferentFamily`; missing, conflicting, unknown, or same-family lineage blocks required review. The direct CLI does not accept review-lineage flags; do not treat an ordinary CLI resolution as proof of independent review.');
+    lines.push('');
+    lines.push(capacitySummary(cfg.parallelism));
     lines.push('');
     lines.push('Tier 0 direct handoff is the default: use your own shell or a qualified MCP worker tool. No Mission/MC session, scheduler, daemon, or activation marker is needed. Self-count active native + CLI + MCP workers, take the minimum of the project, group, CLI, model, and context caps, and launch each writing task once.');
     lines.push('');
