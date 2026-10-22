@@ -361,6 +361,7 @@
         "exploration_quota",
         "budget_stop_policy",
         "project_dir",
+        "worker_dispatch",
         "confirmed"
       ],
       "annotations": {
