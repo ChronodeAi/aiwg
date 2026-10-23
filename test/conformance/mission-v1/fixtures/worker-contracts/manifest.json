@@ -15,7 +15,7 @@
       "source": "05-configuration-spec.md ### 4.1 Existing",
       "owner": "vscode-extension/schemas/aiwg.config.v1.json",
       "target": "properties.parallelism",
-      "sha256": "554a18583b9711955070836de7f304843342d4c1bb89eb04592082422c809696"
+      "sha256": "3a18442bf8e8ac25ae69fc36f616c297ef0acf520a9becc5ce219b77e172ae33"
     },
     {
       "file": "worker-selection.fragment.json",
@@ -50,7 +50,7 @@
       "source": "05-configuration-spec.md ### 5.1 Executable",
       "owner": "schemas/mission-v1.schema.json",
       "target": "$defs",
-      "sha256": "29316d7dc5d8e2b88291c8b97e18a78c3a00b65812c6457bfad3661445d237f0"
+      "sha256": "d95eaa5d3be03dd52c36fa8f2905aefb271afeb66760a337202b2c1f3f2551c0"
     }
   ]
 }

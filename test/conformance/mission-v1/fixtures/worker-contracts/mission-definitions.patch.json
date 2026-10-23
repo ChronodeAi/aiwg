@@ -1746,6 +1746,12 @@
         },
         "health": {
           "$ref": "#/$defs/workerEffectiveHealth"
+        },
+        "isolation": {
+          "enum": [
+            "systemd-unit",
+            "native-sandbox"
+          ]
         }
       },
       "required": [
