@@ -100,7 +100,9 @@ describe('Wave 4 compact kernel and startup deduplication (#2944)', () => {
         }
       }
       expect(surfaces[0]).toContain('# Operator note');
-      expect(surfaces[0]).toContain('@.aiwg/aiwg.config');
+      expect(surfaces[0]).toContain('`.aiwg/aiwg.config`');
+      expect(surfaces[0]).not.toMatch(/^\s*@\S*aiwg\.config/m);
+      expect(surfaces[1]).not.toMatch(/^\s*@\S*(aiwg\.config|WORKSPACE\.md)/m);
       expect(surfaces[0]).toContain('aiwg show rule artifact-output-policy');
       expect(surfaces[1]).toContain('aiwg show rule skill-discovery');
       expect(surfaces[1]).toContain('max_parallel_subagents');

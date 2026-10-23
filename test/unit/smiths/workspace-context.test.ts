@@ -34,6 +34,22 @@ async function project(): Promise<string> {
 }
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
 
+describe('project extraction CI section (#3451)', () => {
+  it('points at the workflow directories with counts instead of listing every workflow file', async () => {
+    const root = await project();
+    await writeFile(join(root, 'package.json'), '{"name":"fx"}');
+    for (const dir of ['.gitea/workflows', '.github/workflows']) {
+      await mkdir(join(root, dir), { recursive: true });
+      for (let i = 0; i < 7; i++) await writeFile(join(root, dir, `wf-${i}.yml`), 'on: push\n');
+    }
+    const { content } = await extractExistingProjectContext(root);
+    const ci = content.slice(content.indexOf('### Continuous Integration'));
+    expect(ci).toContain('[`.gitea/workflows/`](./.gitea/workflows/) (7 workflow files)');
+    expect(ci).toContain('[`.github/workflows/`](./.github/workflows/) (7 workflow files)');
+    expect(ci).not.toContain('wf-0.yml');
+  });
+});
+
 describe('WORKSPACE.md canonical context graph (#1811)', () => {
   it('creates a managed graph and refreshes only the managed region', async () => {
     const root = await project();
