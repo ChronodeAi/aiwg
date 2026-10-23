@@ -390,3 +390,25 @@ describe('T-OG-15 bundled delivery remains byte-identical', () => {
     expect(workerStdinBytes(invocation, brief)).toEqual(bytes);
   });
 });
+
+describe('native sandbox launch boundary qualification', () => {
+  it('refuses an unverified native renderer before building arguments', async () => {
+    const { buildWorkerInvocationTransport } = await import('../../../src/serve/worker-invocation.js');
+    const f = setup();
+    const buildInvocation = vi.fn();
+    await expect(buildWorkerInvocationTransport({ qualification: f.qualification, buildInvocation }, {
+      selected: f.invocation.selected, permissions: { launchMode: 'native-sandbox', sandbox: 'workspace-write' },
+      cwd: '/synthetic/work', briefPath: '/synthetic/brief', brief: 'Synthetic task.', finalPath: '/synthetic/result',
+      limits: f.invocation.limits, health: f.invocation.health,
+    })).rejects.toMatchObject({ code: 'OG_POLICY_RELAXATION' });
+    expect(buildInvocation).not.toHaveBeenCalled();
+  });
+
+  it('refuses an invocation isolation field that disagrees with its execution policy', async () => {
+    const { prepareWorkerInvocation } = await import('../../../src/serve/worker-invocation.js');
+    const f = setup();
+    f.invocation.isolation = 'native-sandbox';
+    f.qualification.adapterId = f.qualification.adapter.id;
+    await expect(prepareWorkerInvocation(f.invocation, f.qualification)).rejects.toMatchObject({ code: 'OG_PIN_MISMATCH' });
+  });
+});

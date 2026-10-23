@@ -14,7 +14,7 @@ import type { WorkerPolicyDiagnostic } from '../models/types.js';
 import { qualificationDigest } from '../models/qualification-digest.mjs';
 import type { WorkerExecution, ParallelismConfig } from '../config/aiwg-config.js';
 import { qualifyWorkerInvocationProfile, isOperatorQualifiedWorkerAdapter, assertOperatorWorkerNativeArgv, assertWorkerSelectionAllowed,
-  requiredWorkerControls, requiresWorkerExternalBoundary, isCanonicalWorkerModelKey, assertWorkerHealthQualification, WorkerPolicyError, DEFAULT_WORKER_SELECTION, type WorkerAdapterMetadata, type WorkerInvocationProfile, type WorkerBoundary } from '../models/provider-policy.js';
+  assertWorkerLaunchMode, requiredWorkerControls, requiresWorkerExternalBoundary, isCanonicalWorkerModelKey, assertWorkerHealthQualification, WorkerPolicyError, DEFAULT_WORKER_SELECTION, type WorkerAdapterMetadata, type WorkerInvocationProfile, type WorkerBoundary } from '../models/provider-policy.js';
 
 /** Frozen per-attempt windows; parent/transport ceilings include time already spent. */
 export function resolveWorkerEffectiveHealth(config: ParallelismConfig['health'], input: {
@@ -135,6 +135,10 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
   }
   if (qualification.adapter.id !== qualification.adapterId) {
     throw new Error('Worker invocation adapter identity mismatch');
+  }
+  assertWorkerLaunchMode(qualification.adapter, qualification.permissions);
+  if (result.isolation !== undefined && result.isolation !== (qualification.permissions?.launchMode ?? 'systemd-unit')) {
+    throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Worker launch mode differs from the execution policy');
   }
   for (const [key, value] of Object.entries(qualification.expectedDigests ?? {})) {
     if (result[key as keyof WorkerResolvedInvocation] !== value) throw new WorkerPolicyError('OG_PIN_MISMATCH', `Worker invocation ${key} changed`);
@@ -295,6 +299,7 @@ export class WorkerInvocationCheckError extends WorkerPolicyError {
 /** Nonlaunching build and native-control check shared by resolution and doctor. */
 export async function buildWorkerInvocationTransport(driver: Pick<WorkerInvocationDriver, 'qualification' | 'buildInvocation'>,
   input: Parameters<WorkerInvocationDriver['buildInvocation']>[0]): ReturnType<WorkerInvocationDriver['buildInvocation']> {
+  assertWorkerLaunchMode(driver.qualification.adapter, input.permissions);
   let transport: Awaited<ReturnType<WorkerInvocationDriver['buildInvocation']>>;
   try { transport = await driver.buildInvocation(input); }
   catch (error) {
@@ -565,6 +570,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       { ...healthInput, transportSeconds: Math.min(healthInput.transportSeconds ?? Infinity, transport.mcp.timeoutSeconds) });
     if (workerConfigDigest(driver.qualification) !== qualificationDigest) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Installation profile digest changed during resolution');
     const invocation: WorkerResolvedInvocation = { version: 1, mode: 'direct', transport: tuple.transport, selected,
+      isolation: tuple.permissions.launchMode ?? 'systemd-unit',
       policyDigest, catalogDigest: plan.digests.catalogDigest, profileDigest: plan.digests.profileDigest,
       expiresAt, cwd: request.workdir, briefPath: request.brief, stdoutPath, stderrPath, finalPath,
       ...(transport.artifacts ? { artifacts: transport.artifacts } : {}),
@@ -640,6 +646,7 @@ export function workerInvocationDiagnostic(error: unknown, pointer: string,
   if (error instanceof WorkerInvocationCheckError) return { code: error.code, reason: error.reason, ...invocationChecks[error.reason] };
   const code = error instanceof WorkerPolicyError ? error.code : fallback;
   const messages: Record<WorkerPolicyDiagnostic['code'], string> = {
+    OG_NATIVE_SANDBOX_UNAVAILABLE: 'Native sandbox unavailable inside systemd user units; select policy launchMode native-sandbox or allow unprivileged user namespaces through host AppArmor policy.',
     OG_CONFIG_REFERENCE: 'Invalid request or configuration reference; check the paths and settings.',
     OG_PIN_MISMATCH: 'Worker selection or pinned evidence changed; resolve again.',
     OG_MODEL_UNAPPROVED: 'The selected model lacks current approved observation evidence.',

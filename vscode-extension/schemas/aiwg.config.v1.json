@@ -1497,6 +1497,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "launchMode": {
+          "enum": ["systemd-unit", "native-sandbox"],
+          "default": "systemd-unit",
+          "description": "Policy-selected worker launch boundary. native-sandbox requires a verified enforcing CLI sandbox and has no cgroup resource limit."
+        },
         "isolation": {
           "enum": [
             "worktree",

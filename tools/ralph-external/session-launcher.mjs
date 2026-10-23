@@ -49,7 +49,7 @@ import { ScopedFailureBreaker, attributeFailureScope } from './lib/consecutive-f
 import { buildSessionEnvironment } from './lib/session-environment.mjs';
 import { launcherRecoveryEvidence, observeLauncherRecoveryOutcome, recordLauncherRecoveryHint } from './lib/launcher-recovery-evidence.mjs';
 export { observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence.mjs';
-import { checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
+import { workerNeedsNativeNamespaces, probeWorkerNativeSandbox, nativeSandboxFailure, nativeSandboxProbeMessage, NATIVE_SANDBOX_UNAVAILABLE, checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
 const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 // Resolve the same installation owner as CLI/MCP inputs in source and packaged layouts.
@@ -501,7 +501,21 @@ async function launchOneWorker(owner, options) {
   let gate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config,
     paths: await Promise.all([invocation.cwd, runDir].map(workerDispatchPath)) });
   if (!gate.ok) throw workerDispatchRefusal(gate);
-  const isolation = options.isolation ?? detectWorkerIsolation();
+  const { WorkerPolicyError, assertWorkerLaunchMode } = await importImpl(import.meta.url, 'models/provider-policy.js');
+  const permissions = inputs.snapshot.config.parallelism?.groups?.[invocation.selected.group]?.execution ?? {};
+  const adapter = inputs.drivers[invocation.selected.cli].qualification.adapter;
+  assertWorkerLaunchMode(adapter, permissions);
+  if (options.isolation?.mode === 'native-sandbox' && invocation.isolation !== 'native-sandbox') {
+    throw new WorkerPolicyError('OG_POLICY_RELAXATION', 'native-sandbox requires the pinned project execution policy');
+  }
+  const isolation = invocation.isolation === 'native-sandbox' ? { mode: 'native-sandbox' }
+    : options.isolation ?? detectWorkerIsolation();
+  if (isolation.mode === 'systemd-unit' && workerNeedsNativeNamespaces(adapter, permissions)) {
+    const probe = await (options.probeNativeSandbox ?? probeWorkerNativeSandbox)({ cwd: invocation.cwd,
+      envNames: invocation.envNames, env: Object.fromEntries(invocation.envNames.filter(name => process.env[name] !== undefined)
+        .map(name => [name, process.env[name]])) });
+    if (!probe.ok) throw new WorkerPolicyError(NATIVE_SANDBOX_UNAVAILABLE, nativeSandboxProbeMessage(probe));
+  }
   if (isolation.mode === 'degraded' && !options.allowDegraded) {
     throw new Error('Worker isolation unavailable; explicitly select --allow-degraded-worker or use manual observation');
   }
@@ -716,7 +730,7 @@ async function launchOneWorker(owner, options) {
       prompt: { path: invocation.briefPath, digest: invocation.briefDigest }, cwd: invocation.cwd,
       worktree: { path: invocation.cwd, baseRevision: null }, paths, captures, outputFraming: profile.health?.outputFraming ?? 'opaque',
       health: invocation.health ?? null, transport: invocation.transport,
-      isolation: { mode: isolation.mode, memoryMaxGb: options.memoryMaxGb ?? 4 },
+      isolation: { mode: isolation.mode, memoryMaxGb: isolation.mode === 'native-sandbox' ? null : options.memoryMaxGb ?? 4 },
       limits: invocation.limits, maxOutputBytes: Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) });
     await publish('process.json', { invocationId, origin: 'launcher', supervisor, worker: null,
       launchTime, monotonicStart, ownership: 'unknown', isolation: isolation.mode });
@@ -791,7 +805,7 @@ async function launchOneWorker(owner, options) {
     // would in production).
     const launchResult = (options.launchIsolated ?? launchIsolatedWorker)({ name: invocationId,
       command: artifacts.argv[0], args: artifacts.argv.slice(1), cwd: invocation.cwd,
-      memoryMaxGb: options.memoryMaxGb ?? 4, gate, config: inputs.snapshot.config, isolation,
+      memoryMaxGb: options.memoryMaxGb ?? 4, gate, config: inputs.snapshot.config, isolation, workerGroup: invocation.selected.group,
       allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
       env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir,
       ...(onDispatchCommit ? { onDispatchCommit } : {}) });
@@ -856,7 +870,7 @@ async function launchOneWorker(owner, options) {
       // canary deadline.
       await settleLedger({ kind: 'uncertain', confirmedStop: true });
       await publish('exit.json', { invocationId, exitCode: null, signal: null,
-        endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
+        endedAt: new Date().toISOString(), isolation: isolation.mode, termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
     } else if (admission.gated) {
       // #2915 review 5 (finding 2a, "leaked capacity"), hardened by #2915
       // review 6 (finding 4, "capture-setup exception after spawn"): a
@@ -1048,9 +1062,15 @@ async function captureOneWorker(owner, ctx) {
     owner.emit('stdout', chunk);
   });
   let stderrBytes = 0;
+  let sandboxStderrTail = '';
   let recoveryReason = null;
   child.stderr.on('data', chunk => {
     observer.feed(chunk, { kind: 'stderr', id: 'stderr', generation: 0, offset: stderrOffset }); stderrOffset += chunk.length;
+    if (workerNeedsNativeNamespaces(driver.qualification.adapter, ctx.inputs.snapshot.config.parallelism?.groups?.[invocation.selected.group]?.execution)) {
+      const observedStderr = sandboxStderrTail + chunk.toString('utf8');
+      if (nativeSandboxFailure(observedStderr)) errorCode = NATIVE_SANDBOX_UNAVAILABLE;
+      sandboxStderrTail = observedStderr.slice(-1024);
+    }
     const hint = classifyWorkerHealthFailure(chunk.toString('utf8'), { source: { kind: 'stderr' } })?.reasonCode;
     if (['RATE_LIMIT', 'NETWORK'].includes(hint)) recoveryReason = hint;
     const remaining = Math.max(0, 10485760 - stderrBytes);
@@ -1534,7 +1554,7 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
       prompt: { path: invocation.briefPath, digest: invocation.briefDigest }, cwd: invocation.cwd,
       worktree: { path: invocation.cwd, baseRevision: null }, paths, captures, outputFraming: profile.health?.outputFraming ?? 'opaque',
       health: invocation.health ?? null, transport: invocation.transport,
-      isolation: { mode: isolation.mode, memoryMaxGb: options.memoryMaxGb ?? 4 },
+      isolation: { mode: isolation.mode, memoryMaxGb: isolation.mode === 'native-sandbox' ? null : options.memoryMaxGb ?? 4 },
       limits: invocation.limits, maxOutputBytes: Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) });
     await publish('process.json', { invocationId, origin: 'launcher', supervisor, worker: null,
       launchTime, monotonicStart, ownership: 'unknown', isolation: isolation.mode });
@@ -1565,6 +1585,7 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
     const launchResult = (options.launchIsolated ?? launchIsolatedWorker)({ name: invocationId,
       command: artifacts.argv[0], args: artifacts.argv.slice(1), cwd: invocation.cwd,
       memoryMaxGb: options.memoryMaxGb ?? 4, gate: localGate, config: inputs.snapshot.config, isolation,
+      workerGroup: invocation.selected.group,
       allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
       env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
     outcome = typeof launchResult?.then === 'function' ? await launchResult : launchResult;
@@ -1574,7 +1595,7 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
       brief: ctx.brief, stdinBytes: ctx.stdinBytes, runDir });
   } catch (error) {
     if (!outcome?.child) await publish('exit.json', { invocationId, exitCode: null, signal: null,
-      endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
+      endedAt: new Date().toISOString(), isolation: isolation.mode, termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
     throw error;
   } finally {
     try { await artifacts?.cleanup(); } finally {
@@ -1682,8 +1703,14 @@ async function captureOneWorkerBaseline(owner, ctx) {
     owner.emit('stdout', chunk);
   });
   let stderrBytes = 0;
+  let sandboxStderrTail = '';
   child.stderr.on('data', chunk => {
     observer.feed(chunk, { kind: 'stderr', id: 'stderr', generation: 0, offset: stderrOffset }); stderrOffset += chunk.length;
+    if (workerNeedsNativeNamespaces(driver.qualification.adapter, ctx.inputs.snapshot.config.parallelism?.groups?.[invocation.selected.group]?.execution)) {
+      const observedStderr = sandboxStderrTail + chunk.toString('utf8');
+      if (nativeSandboxFailure(observedStderr)) errorCode = NATIVE_SANDBOX_UNAVAILABLE;
+      sandboxStderrTail = observedStderr.slice(-1024);
+    }
     const remaining = Math.max(0, 10485760 - stderrBytes);
     streams[1].write(chunk.subarray(0, remaining)); streams[3].write(chunk.subarray(0, remaining)); stderrBytes += chunk.length;
     if (stderrBytes > 10485760) { errorCode = 'OUTPUT_LIMIT'; stop(); }

@@ -15,7 +15,7 @@ import {
 } from '../config/aiwg-config.js';
 import {
   qualifyWorkerInvocationProfile, validateWorkerPolicyRoute, validateWorkerModelObservation,
-  hasOperatorWorkerNativeRenderer, hasSelectionRelevantConflicts, workerContextHeadroom, workerModelKey, isCanonicalWorkerModelKey,
+  assertWorkerLaunchMode, hasOperatorWorkerNativeRenderer, hasSelectionRelevantConflicts, workerContextHeadroom, workerModelKey, isCanonicalWorkerModelKey,
   WorkerSelectionPolicySchema, validateWorkerCatalogDiscovery,
   type ProviderModelCapabilityRegistry, type WorkerInvocationProfile, type WorkerContextEstimate,
   type WorkerBoundary,
@@ -623,6 +623,7 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
             if (policy.guards?.denySelfDelegation !== false && !adapter.capabilities.nestedAgentsControllable) throw new Error('Child-agent control is unqualified. Review models.json defaults.workerSelection.guards.denySelfDelegation; false permits uncontrolled child agents without qualifying their behavior.');
             if (binding.identityEvidence === 'backend-attested' && adapter.capabilities.modelPin !== 'observed') throw new Error('Requested-only mapping cannot attest backend identity');
             if (!hasOperatorWorkerNativeRenderer(adapter) && group.execution?.sandbox && !adapter.capabilities.sandboxModes.includes(group.execution.sandbox)) throw new Error('Requested sandbox mode is unqualified');
+            assertWorkerLaunchMode(adapter, permissions);
             qualifyWorkerInvocationProfile(adapter, { profile: binding.profile, transport, cliVersion: binding.cliVersion,
               policy, permissions, effort, boundary: binding.boundary,
               requiredControls: request.requiredControls, mcp: binding.mcp });

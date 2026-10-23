@@ -978,6 +978,7 @@ export interface WorkerMember {
   priority?: number;
 }
 export interface WorkerExecution {
+  launchMode?: 'systemd-unit' | 'native-sandbox';
   isolation?: 'worktree' | 'snapshot' | 'isolated-copy';
   sandbox?: 'read-only' | 'workspace-write' | 'external';
   approval?: 'never' | 'on-request';
@@ -1059,6 +1060,11 @@ export function validateParallelismConfig(value: unknown): string[] {
     if (installation.adapter.startsWith('providers:') && !builtinIds.has(installation.adapter.slice(10))) error(`clis/${id}/adapter`, 'Unknown provider binding');
   }
   for (const [id, group] of Object.entries(policy.groups ?? {})) {
+    if (group.execution?.launchMode === 'native-sandbox'
+      && (!['read-only', 'workspace-write'].includes(group.execution.sandbox ?? '')
+        || (group.execution.transport ?? 'shell') !== 'shell')) {
+      error(`groups/${id}/execution/launchMode`, 'native-sandbox requires an enforcing read-only or workspace-write shell sandbox');
+    }
     const ids = new Set<string>();
     for (const member of group.members) {
       if (ids.has(member.id)) error(`groups/${id}/members`, 'Duplicate member ID');

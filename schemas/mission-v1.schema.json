@@ -1643,6 +1643,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "isolation": {
+          "enum": ["systemd-unit", "native-sandbox"]
+        },
         "version": {
           "const": 1
         },

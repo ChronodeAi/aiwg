@@ -23,7 +23,7 @@ const repo = process.cwd();
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
-async function fixture(providerless = false, unsetHome = false) {
+async function fixture(providerless = false, unsetHome = false, namespaceProbe = true) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-qualify-workers-'));
   roots.push(root);
   // Installed modules must be outside worker-writable roots with trusted modes,
@@ -46,6 +46,17 @@ async function fixture(providerless = false, unsetHome = false) {
   const config = path.join(root, 'config');
   await mkdir(path.join(project, '.aiwg'), { recursive: true });
   await mkdir(config, { mode: 0o700 });
+  const systemdBin = path.join(root, 'systemd-bin');
+  await mkdir(systemdBin);
+  await writeExecutable(path.join(systemdBin, 'systemd-run'), `#!${process.execPath}
+if (process.argv.includes('--version')) console.log('systemd 255');
+else if (${namespaceProbe}) process.exit(0);
+else { console.error('uid_map: Operation not permitted'); process.exit(1); }
+`);
+  await writeExecutable(path.join(systemdBin, 'systemctl'), `#!${process.execPath}
+if (process.argv.includes('show-environment')) process.exit(0);
+else console.log('255');
+`);
   const binary = path.join(root, 'fake-codex');
   const writeCli = (version: string) => writeExecutable(binary, `#!${process.execPath}\nif (process.argv.includes('--version')) console.log('codex-cli ${version}');\nelse if (process.argv.slice(2).join(' ') === 'debug models') console.log(JSON.stringify({models:[{slug:'synthetic-model',${providerless ? '' : "provider:'synthetic-inference',"}visibility:'listed',context_window:32000,${providerless ? '' : 'output_limit:4096,'}supported_reasoning_levels:['medium']}]}));\nelse process.exit(90);\n`);
   await writeCli(unsetHome ? '0.163.0' : '0.161.0');
@@ -60,7 +71,7 @@ async function fixture(providerless = false, unsetHome = false) {
     guards: { denySelfDelegation: false }, dataPolicy: { allowUnknown: true } } } }));
   const brief = path.join(project, 'brief.txt');
   await writeFile(brief, 'Synthetic implementation brief.');
-  const env = { ...process.env, HOME: root, AIWG_CONFIG: config, AIWG_HOME: repo, AIWG_ROOT: repo,
+  const env = { ...process.env, PATH: `${systemdBin}${path.delimiter}${process.env.PATH}`, HOME: root, AIWG_CONFIG: config, AIWG_HOME: repo, AIWG_ROOT: repo,
     AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', AIWG_RESOLVE_IMPL_FROM: 'src', NODE_OPTIONS: `--import=${path.join(repo, 'node_modules/tsx/dist/loader.mjs')}` };
   if (unsetHome) delete (env as NodeJS.ProcessEnv).AIWG_HOME;
   delete (env as NodeJS.ProcessEnv).VITEST;
@@ -86,6 +97,34 @@ process.exitCode = result.exitCode;
 }
 
 describe('doctor worker qualification through the public CLI (fake CLIs only)', () => {
+  it('reports a blocked namespace probe through doctor JSON and refuses qualification without writing a store', async () => {
+    const f = await fixture(false, false, false);
+    const result = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    expect(result.code, result.stderr).toBe(1);
+    const report = JSON.parse(result.stdout);
+    expect(report.workers[0]).toMatchObject({ ready: false, reason: 'OG_NATIVE_SANDBOX_UNAVAILABLE' });
+    expect(report.sandboxChecks[0]).toMatchObject({ status: 'blocked', probe: {
+      ok: false, detail: 'uid_map: Operation not permitted', code: 'OG_NATIVE_SANDBOX_UNAVAILABLE' } });
+    expect(report.qualification).toMatchObject({ status: 'failed', sandboxChecks: report.sandboxChecks });
+    await expect(access(path.join(f.config, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('qualifies native-sandbox policy without the failing systemd namespace probe', async () => {
+    const f = await fixture(false, false, false);
+    const filename = path.join(f.project, '.aiwg/aiwg.config');
+    const config = JSON.parse(await readFile(filename, 'utf8'));
+    config.parallelism.groups.workers.execution.launchMode = 'native-sandbox';
+    await writeFile(filename, JSON.stringify(config));
+    const result = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout);
+    expect(report.sandboxChecks).toMatchObject([{ isolation: 'native-sandbox', status: 'skipped' }]);
+    expect(report.qualification.status).toBe('recorded');
+    const resolved = await f.resolve();
+    expect(resolved.code, resolved.stdout + resolved.stderr).toBe(0);
+    expect(JSON.parse(resolved.stdout).invocation.isolation).toBe('native-sandbox');
+  });
+
   it('loads and revalidates an eligible plan through the launcher after builtin Codex registration', async () => {
     const f = await fixture(false, true);
     const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
@@ -588,7 +627,9 @@ try {
       const { loadProviderModelCapabilities } = await import('../../../src/models/provider-policy.js');
       const result = await qualifyProbedWorkers({ projectDir: f.project, packageRoot: f.installed,
         config: JSON.parse(await readFile(path.join(f.project, '.aiwg/aiwg.config'), 'utf8')),
-        registry: loadProviderModelCapabilities(), section: { installFindings: [{ cli: 'codex', readiness: 'ready', installedVersion: '0.161.0' }] } });
+        registry: loadProviderModelCapabilities(), section: { installFindings: [{ cli: 'codex', readiness: 'ready', installedVersion: '0.161.0' }] },
+        detectIsolation: () => ({ mode: 'systemd-unit' }),
+        probeNativeSandbox: async () => ({ ok: true, mode: 'systemd-unit' }) });
       expect(result.status).toBe('declined');
       expect(result.accountScopeNotice).toContain('Account switches are not detected');
       expect(terminal.question).toHaveBeenCalledTimes(1);
@@ -611,4 +652,40 @@ try {
     }
   });
 
+});
+
+describe('doctor namespace compatibility through the launcher unit probe', () => {
+  it('reports the unit probe failure and blocks qualification before store changes', async () => {
+    const { checkWorkerSandboxLaunches, qualifyProbedWorkers } = await import('../../../tools/cli/worker-qualification.mjs');
+    const f = workerResolutionFixture();
+    f.snapshot.registry.providers.codex.workerAdapter!.provider = 'codex';
+    f.snapshot.config.parallelism!.groups!.workers.execution = { sandbox: 'workspace-write', transport: 'shell' };
+    const projectDir = await mkdtemp(path.join(os.tmpdir(), 'doctor-sandbox-probe-')); roots.push(projectDir);
+    const probeNativeSandbox = vi.fn(() => ({ ok: false, code: 'OG_NATIVE_SANDBOX_UNAVAILABLE',
+      detail: 'uid_map: Operation not permitted', mode: 'systemd-unit' }));
+    const input = { projectDir, config: f.snapshot.config, registry: f.snapshot.registry,
+      detectIsolation: () => ({ mode: 'systemd-unit' }), probeNativeSandbox };
+    const checks = await checkWorkerSandboxLaunches(input);
+    expect(checks).toHaveLength(1);
+    expect(checks[0]).toMatchObject({ status: 'blocked', isolation: 'systemd-unit',
+      diagnostics: [{ code: 'OG_NATIVE_SANDBOX_UNAVAILABLE', message: expect.stringContaining('AppArmor allowance') }] });
+    const result = await qualifyProbedWorkers({ ...input, packageRoot: repo, yes: true,
+      section: { installFindings: [{ cli: 'codex', readiness: 'ready', executable: '/synthetic/codex', installedVersion: '1.0.0' }] } });
+    expect(result).toMatchObject({ status: 'failed', sandboxChecks: checks });
+  });
+
+  it('reports passing probes and skips them for the policy-selected native sandbox', async () => {
+    const { checkWorkerSandboxLaunches } = await import('../../../tools/cli/worker-qualification.mjs');
+    const f = workerResolutionFixture();
+    f.snapshot.registry.providers.codex.workerAdapter!.provider = 'codex';
+    f.snapshot.config.parallelism!.groups!.workers.execution = { sandbox: 'read-only', transport: 'shell' };
+    const probeNativeSandbox = vi.fn(() => ({ ok: true, mode: 'systemd-unit' }));
+    const input = { projectDir: repo, config: f.snapshot.config, registry: f.snapshot.registry,
+      detectIsolation: () => ({ mode: 'systemd-unit' }), probeNativeSandbox };
+    expect(await checkWorkerSandboxLaunches(input)).toMatchObject([{ status: 'passed', probe: { ok: true } }]);
+    probeNativeSandbox.mockClear();
+    f.snapshot.config.parallelism!.groups!.workers.execution!.launchMode = 'native-sandbox';
+    expect(await checkWorkerSandboxLaunches(input)).toMatchObject([{ status: 'skipped', isolation: 'native-sandbox' }]);
+    expect(probeNativeSandbox).not.toHaveBeenCalled();
+  });
 });

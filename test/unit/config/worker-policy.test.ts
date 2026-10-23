@@ -439,3 +439,27 @@ describe('T-OG-15/17/19 S1 trusted installation mapping; fixture qualification o
     expect(validateParallelismConfig(invalid).join()).toContain('Unknown installation');
   });
 });
+
+describe('worker launch mode config schema', () => {
+  it('accepts explicit systemd-unit and native-sandbox enforcing shell policies', () => {
+    for (const launchMode of ['systemd-unit', 'native-sandbox'] as const) {
+      const config = policy();
+      config.groups!.fixture.execution = { launchMode, sandbox: 'workspace-write', transport: 'shell' };
+      expect(validateParallelismConfig(config)).toEqual([]);
+    }
+  });
+
+  it.each(['external', 'none', 'danger-full-access', undefined])('refuses native-sandbox with sandbox=%s', sandbox => {
+    const config = policy();
+    config.groups!.fixture.execution = { launchMode: 'native-sandbox', sandbox: sandbox as any };
+    expect(validateParallelismConfig(config).length).toBeGreaterThan(0);
+  });
+
+  it('refuses unknown modes and native-sandbox MCP transport', () => {
+    const config = policy();
+    config.groups!.fixture.execution = { launchMode: 'unknown' as any, sandbox: 'workspace-write' };
+    expect(validateParallelismConfig(config).length).toBeGreaterThan(0);
+    config.groups!.fixture.execution = { launchMode: 'native-sandbox', sandbox: 'workspace-write', transport: 'mcp' };
+    expect(validateParallelismConfig(config).length).toBeGreaterThan(0);
+  });
+});

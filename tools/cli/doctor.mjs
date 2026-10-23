@@ -753,6 +753,18 @@ async function runWorkerProbeJson(projectDir, options = {}) {
     workersConfigured: section.workersConfigured,
     workers,
   };
+  if (workerDispatch) {
+    const { checkWorkerSandboxLaunches } = await import('./worker-qualification.mjs');
+    payload.sandboxChecks = await checkWorkerSandboxLaunches({ projectDir, config: workerConfig, registry, cli: options.cli });
+    for (const worker of workers) {
+      const blocked = payload.sandboxChecks.find(check => check.cli === worker.cli && check.status === 'blocked');
+      if (blocked) {
+        worker.ready = false;
+        worker.reason = blocked.diagnostics[0].code;
+        process.exitCode = 1;
+      }
+    }
+  }
   if (!section.workersConfigured) payload.message = WORKER_PROBE_EMPTY_MESSAGE;
   else if (!workerDispatch) payload.message = WORKER_PROBE_DISABLED_MESSAGE;
   if (options.qualify) {
@@ -777,6 +789,7 @@ async function runWorkerProbeJson(projectDir, options = {}) {
   if (options.json !== false) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else {
     for (const worker of workers) console.log(`Direct Worker ${worker.cli}: ${worker.reason}`);
+    if (payload.sandboxChecks?.length) console.log(`Worker sandbox checks: ${JSON.stringify(payload.sandboxChecks)}`);
     if (payload.qualification) console.log(`Worker qualification: ${JSON.stringify(payload.qualification)}`);
     if (payload.invocationChecks?.length) console.log(`Worker invocation checks: ${JSON.stringify(payload.invocationChecks)}`);
   }
@@ -2347,7 +2360,11 @@ export async function runDoctor() {
       });
       for (const line of directSection.lines) check(line.name, line.status, line.message);
       if (probeWorkers && directParallelism?.worker_dispatch) {
-        const { checkRecordedWorkerInvocationBuilds } = await import('./worker-qualification.mjs');
+        const { checkRecordedWorkerInvocationBuilds, checkWorkerSandboxLaunches } = await import('./worker-qualification.mjs');
+        const sandboxChecks = await checkWorkerSandboxLaunches({ projectDir: process.cwd(), config: directConfig, registry });
+        for (const result of sandboxChecks) {
+          check(`Direct Worker Sandbox (${result.cli}/${result.group})`, result.status === 'blocked' ? 'error' : result.status === 'passed' ? 'ok' : 'info', JSON.stringify(result));
+        }
         const invocationChecks = await checkRecordedWorkerInvocationBuilds({ projectDir: process.cwd(), config: directConfig,
           registry, workers: directSection.installFindings.map(toWorkerProbeRecord) });
         for (const result of invocationChecks) {
