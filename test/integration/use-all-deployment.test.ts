@@ -232,7 +232,8 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
     it('reports deployed and indexed skill counts in separate sections', () => {
       expect(result.exitCode, `aiwg use all failed (exit ${result.exitCode}):\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
 
-      expect(result.stdout).toMatch(/Installing complete AIWG surface/);
+      // #3470 names the explicit --copy-all override the full surface.
+      expect(result.stdout).toMatch(/Installing full AIWG surface/);
       expect(result.stdout).toMatch(/Deployed to Claude Code \(claude\)[\s\S]*\bSkills \d+\b/);
       expect(result.stdout).toMatch(/Indexed for discovery[\s\S]*\bskill \d+\b/);
       expect(result.stdout).not.toMatch(/Discoverable skills\s+\d+ deployed/);

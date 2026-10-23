@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, openSync, closeSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -34,6 +34,17 @@ describe('DefaultScriptRunner', () => {
     `);
     expect(await runner.run(file, [], { capture: true, timeout: 10_000, env: childEnv() }))
       .toEqual({ exitCode: 0 });
+  });
+
+  it('captures a preview to the caller-owned stdout file while retaining failure diagnostics', async () => {
+    const output = join(root, 'preview.txt');
+    const fd = openSync(output, 'w');
+    try {
+      const file = script("console.log('[dry-run] Would write /project/skill.md'); console.error('preview failed'); process.exitCode = 3;");
+      const result = await runner.run(file, [], { capture: true, stdoutFd: fd, env: childEnv() });
+      expect(result).toEqual({ exitCode: 3, message: 'preview failed' });
+      expect(readFileSync(output, 'utf8')).toBe('[dry-run] Would write /project/skill.md\n');
+    } finally { closeSync(fd); }
   });
 
   it('bounds failure diagnostics while continuing to drain both pipes', async () => {

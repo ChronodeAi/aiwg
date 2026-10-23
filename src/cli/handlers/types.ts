@@ -134,6 +134,9 @@ export interface ScriptRunnerOptions {
 
   /** Capture stdout/stderr instead of inheriting (for quiet mode) */
   capture?: boolean;
+
+  /** File-backed stdout capture; caller owns and closes the descriptor. */
+  stdoutFd?: number;
 }
 
 /**

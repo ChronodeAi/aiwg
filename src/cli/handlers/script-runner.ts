@@ -10,7 +10,7 @@
  */
 
 import { signalChild } from '../../process/signal-child.mjs';
-import { spawn } from 'child_process';
+import { spawn, type StdioOptions } from 'child_process';
 import path from 'path';
 import { HandlerResult, ScriptRunner, ScriptRunnerOptions } from './types.js';
 
@@ -41,7 +41,9 @@ export class DefaultScriptRunner implements ScriptRunner {
       // quiet-mode callers can suppress output. When not
       // capturing, stdio: 'inherit' lets subprocess output flow directly to
       // the terminal (verbose mode).
-      const stdio = options.capture ? 'pipe' as const : 'inherit' as const;
+      const stdio: StdioOptions = options.capture
+        ? ['pipe', options.stdoutFd ?? 'pipe', 'pipe']
+        : 'inherit';
       const child = spawn('node', [fullPath, ...args], {
         stdio,
         cwd: options.cwd || process.cwd(),
