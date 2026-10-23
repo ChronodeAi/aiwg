@@ -64,6 +64,7 @@ import { redactText } from '../governance/redaction.js';
 import { CanonicalJsonByteEstimator } from './context-plan.js';
 import { resolveActiveProvider, type ProviderResolution } from '../cli/provider-resolution.js';
 import type { DecisionAskInput, DecisionAskResult } from './ask.js';
+import { validateDecisionConfig } from '../config/decision-config.js';
 import { readAiwgConfig } from '../config/aiwg-config.js';
 import { decisionSavingsWeights, estimateDecisionSavings, type DecisionSavingsMethod, type DecisionSavingsWeights } from './savings.js';
 
@@ -324,7 +325,7 @@ export function buildDecisionLedgerRecord(
   const legacy = estimateSavingsV1(input, result);
   const inputTokens = new CanonicalJsonByteEstimator().estimate(contextMessageForEstimate(input)).tokens;
   const savings = estimateDecisionSavings(inputTokens, result.status === 'answered',
-    (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0), context.savingsWeights ?? decisionSavingsWeights());
+    (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0), context.savingsWeights ?? decisionSavingsWeights(), result.usage);
   const caller = context.caller && ATTRIBUTION_FIELD_PATTERN.test(context.caller) ? context.caller : null;
   const rawAnswer = result.answer;
   const answer = typeof rawAnswer === 'string' ? sanitizeField(rawAnswer) : rawAnswer;
@@ -775,6 +776,10 @@ function isDecisionLedgerRecord(value: unknown): value is DecisionLedgerRecord {
     for (const key of ['input_tokens', 'reasoning_tokens', 'output_tokens', 'llm_per_mtok', 'jev_per_mtok']) {
       if (!isFiniteNumber(method[key]) || (method[key] as number) < 0 || (method[key] as number) > 1_000_000) return false;
     }
+    if (validateDecisionConfig({ ask: { cost: Object.fromEntries(
+      ['llm_per_mtok', 'jev_per_mtok', 'jev_input_per_mtok', 'jev_output_per_mtok', 'source', 'checked_at', 'jev_model']
+        .filter(key => method[key] !== undefined).map(key => [key, method[key]])) } }).length) return false;
+    if (method.jev_rate_basis !== undefined && !['split', 'blended'].includes(method.jev_rate_basis as string)) return false;
     if (typeof record.sessionSource !== 'string') return false;
     for (const key of ['llm_tokens_avoided', 'jev_tokens']) {
       if (!isFiniteNumber(record[key]) || (record[key] as number) < 0) return false;
@@ -888,6 +893,7 @@ export interface DecisionLedgerStatsGroup {
   cost_weighted_net_usd: number;
   /** v1 inputs recovered from the legacy credit, using the current config. */
   legacyReestimatedCalls: number;
+  ratesUsed: Array<{ calls: number; method: Omit<DecisionSavingsMethod, 'input_tokens'> }>;
   /** `null` only for the caller group when no record in the group carries a `--caller` tag — distinct from the literal string "unattributed". */
   key: string | null;
   totalCalls: number;
@@ -942,6 +948,7 @@ interface StatsAccumulator {
   llmTokensAvoided: number;
   costWeightedNetUsd: number;
   legacyReestimatedCalls: number;
+  ratesUsed: Array<{ calls: number; method: Omit<DecisionSavingsMethod, 'input_tokens'> }>;
   agreementCount: number;
   agreementSum: number;
   escalatedCalls: number;
@@ -963,7 +970,7 @@ interface StatsAccumulator {
 
 function newAccumulator(): StatsAccumulator {
   return {
-    llmTokensAvoided: 0, costWeightedNetUsd: 0, legacyReestimatedCalls: 0,
+    llmTokensAvoided: 0, costWeightedNetUsd: 0, legacyReestimatedCalls: 0, ratesUsed: [],
     totalCalls: 0, answered: 0, fallback: 0, fallbackCountByReason: {},
     agreementCount: 0, agreementSum: 0, escalatedCalls: 0, passesRun: 0,
     confidenceCount: 0, confidenceSum: 0, confidenceMin: null, confidenceMax: null,
@@ -979,6 +986,16 @@ function accumulate(acc: StatsAccumulator, record: DecisionLedgerRecord, weights
   acc.passesRun += record.passesRun ?? (record.fallbackReason === 'not-configured' ? 0 : 1);
   const inputTokens = record.usage?.inputTokens ?? 0;
   const outputTokens = record.usage?.outputTokens ?? 0;
+  const method = record.schema === DECISION_LEDGER_SCHEMA
+    ? record.estimationMethod as DecisionSavingsMethod
+    : estimateDecisionSavings(0, false, inputTokens + outputTokens, weights, record.usage).estimationMethod;
+  // Input estimates vary per call; group only the recorded rates and provenance.
+  const { input_tokens: _input, ...rateMethod } = method;
+  const canonicalRates = (rates: typeof rateMethod) => JSON.stringify(Object.entries(rates).sort(([a], [b]) => a.localeCompare(b)));
+  const rateKey = canonicalRates(rateMethod);
+  const prior = acc.ratesUsed.find(item => canonicalRates(item.method) === rateKey);
+  if (prior) prior.calls++;
+  else acc.ratesUsed.push({ calls: 1, method: rateMethod });
   if (record.schema === DECISION_LEDGER_SCHEMA) {
     acc.llmTokensAvoided += record.llm_tokens_avoided!;
     acc.costWeightedNetUsd += record.cost_weighted_net_usd!;
@@ -987,7 +1004,7 @@ function accumulate(acc: StatsAccumulator, record: DecisionLedgerRecord, weights
     // per-kind allowance. Digests alone cannot reconstruct caller text.
     const recoveredInput = record.status === 'answered'
       ? Math.max(0, record.estimatedLlmTokensAvoided - DECISION_SAVINGS_REASONING_ALLOWANCE_TOKENS[record.decisionKind]) : 0;
-    const estimate = estimateDecisionSavings(recoveredInput, record.status === 'answered', inputTokens + outputTokens, weights);
+    const estimate = estimateDecisionSavings(recoveredInput, record.status === 'answered', inputTokens + outputTokens, weights, record.usage);
     acc.llmTokensAvoided += estimate.llm_tokens_avoided;
     acc.costWeightedNetUsd += estimate.cost_weighted_net_usd;
     acc.legacyReestimatedCalls += 1;
@@ -1023,6 +1040,7 @@ function finalizeGroup(key: string | null, acc: StatsAccumulator): DecisionLedge
     jev_tokens: acc.jevInputTokens + acc.jevOutputTokens,
     cost_weighted_net_usd: acc.costWeightedNetUsd,
     legacyReestimatedCalls: acc.legacyReestimatedCalls,
+    ratesUsed: acc.ratesUsed,
     totalCalls: acc.totalCalls,
     answered: acc.answered,
     fallback: acc.fallback,

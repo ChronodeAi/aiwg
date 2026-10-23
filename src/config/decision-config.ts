@@ -14,8 +14,16 @@ export interface DecisionConfig {
     /** Omit to disable agreement acceptance. */
     min_agreement?: number;
     agreement_confidence_floor?: number;
-    /** USD per million tokens; blended input/output prices for planning estimates. */
-    cost?: { llm_per_mtok?: number; jev_per_mtok?: number };
+    /** USD per million tokens. A complete split pair takes precedence over blended Jev. */
+    cost?: {
+      llm_per_mtok?: number;
+      jev_per_mtok?: number;
+      jev_input_per_mtok?: number;
+      jev_output_per_mtok?: number;
+      source?: 'typesafe-docs' | 'manual' | 'typesafe-snapshot';
+      checked_at?: string;
+      jev_model?: string;
+    };
     savings?: {
       caller_model_class?: 'standard' | 'reasoning';
       reasoning_tokens?: number;
@@ -89,10 +97,17 @@ export function validateDecisionConfig(value: unknown): string[] {
       sampling.push(`decision.ask.${section} must be an object`);
       continue;
     }
-    const allowed = section === 'cost' ? ['llm_per_mtok', 'jev_per_mtok'] : ['caller_model_class', 'reasoning_tokens', 'output_tokens'];
+    const allowed = section === 'cost' ? ['llm_per_mtok', 'jev_per_mtok', 'jev_input_per_mtok', 'jev_output_per_mtok', 'source', 'checked_at', 'jev_model'] : ['caller_model_class', 'reasoning_tokens', 'output_tokens'];
     for (const [key, value] of Object.entries(settings)) {
       if (!allowed.includes(key)) sampling.push(`unknown decision.ask.${section}.${key}`);
-      else if (key === 'caller_model_class') {
+      else if (key === 'source') {
+        if (!['typesafe-docs', 'manual', 'typesafe-snapshot'].includes(value as string)) sampling.push('decision.ask.cost.source must be typesafe-docs, manual or typesafe-snapshot');
+      } else if (key === 'checked_at') {
+        if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)
+          || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value) sampling.push('decision.ask.cost.checked_at must be an ISO date (YYYY-MM-DD)');
+      } else if (key === 'jev_model') {
+        if (typeof value !== 'string' || !/^jev-\d+\.\d+\.\d+$/.test(value)) sampling.push('decision.ask.cost.jev_model must be a versioned Jev model (jev-X.Y.Z)');
+      } else if (key === 'caller_model_class') {
         if (value !== 'standard' && value !== 'reasoning') sampling.push('decision.ask.savings.caller_model_class must be standard or reasoning');
       } else if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1_000_000
         || (section === 'savings' && !Number.isSafeInteger(value))) {

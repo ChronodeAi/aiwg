@@ -365,7 +365,9 @@ New ledger records use `aiwg-decision-ledger-record/v2`:
   including escalation and fallbacks. Missing usage components count as zero;
   check the original `usage` for unknown measurements.
 - `cost_weighted_net_usd`: `(llm_tokens_avoided * llm_per_mtok - jev_tokens *
-  jev_per_mtok) / 1,000,000`. Positive means estimated dollars saved; negative
+  jev_per_mtok) / 1,000,000` with blended rates. With split rates, subtract
+  `(usage.inputTokens * jev_input_per_mtok + usage.outputTokens *
+  jev_output_per_mtok) / 1,000,000` instead. Positive means estimated dollars saved; negative
   means estimated added cost. A fallback charges Jev once and credits no
   frontier avoidance. These are estimates, not billing measurements.
 
@@ -396,6 +398,45 @@ aiwg decision stats --group-by caller --json
 Prices must be finite numbers from 0 to 1,000,000; allowances must be integers
 in the same range. Zero is supported. The schema, loader, and `config set`
 validate these settings. Omitted keys use the defaults above.
+
+Refresh sourced Jev input/output rates into **the same config** explicitly:
+
+```bash
+aiwg decision pricing
+aiwg decision pricing --refresh --model jev-1.13.0 --dry-run
+aiwg decision pricing --refresh --model jev-1.13.0
+# Explicit offline fallback, dated 2026-10-18:
+aiwg decision pricing --refresh --model jev-1.13.0 --offline
+# Permit that snapshot only if the live refresh fails:
+aiwg decision pricing --refresh --model jev-1.13.0 --allow-snapshot
+```
+
+Refresh reads public TypeSafe documentation without credentials. It writes
+`decision.ask.cost.jev_input_per_mtok`, `jev_output_per_mtok`, `source`,
+`checked_at` (YYYY-MM-DD), and `jev_model` through the existing project config
+writer. It preserves blended weights and other settings. Later refreshes may
+omit `--model` to reuse the selected version. There is no separate price cache.
+Normal `ask` never refreshes prices; only the explicit pricing refresh fetches
+pricing documentation. Plain `pricing`, `stats`, and `history` read offline.
+
+A complete split pair takes precedence when recorded input/output usage is
+available. Unknown output usage is acceptable when its rate is zero. If either
+split rate or required usage is missing, the existing `jev_per_mtok` blended
+weight applies; missing usage components still count as zero as above. A single
+split rate does not override the blended weight. Remove both split keys with
+`aiwg config reset --project decision.ask.cost.jev_input_per_mtok` and the
+corresponding output key to return to blended pricing. Manual split rates use
+`aiwg config set --project` with these same keys; set `source` to `manual` and
+supply the applicable `checked_at` and versioned `jev_model`.
+
+New records capture these rates and provenance in `estimationMethod`, plus
+`jev_rate_basis` (`split` or `blended`). `decision stats` adds `ratesUsed` in
+JSON and prints rates/source/checked date alongside the existing figures.
+Mixed rate histories list each method and its call count. Old records are never
+rewritten. The selected `jev_model` identifies what the configured rates apply
+to; choose rates matching the backend model used for your calls. These remain
+planning estimates using configured rates, not historical invoices or measured
+caller savings. See [pricing details](pricing-and-benchmark.md).
 
 The original `estimatedLlmTokensAvoided` and `estimationMethodV1` remain on new
 records for comparison. Stats retains `estimatedLlmTokensAvoidedTotal` and

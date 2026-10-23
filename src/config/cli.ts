@@ -435,7 +435,7 @@ async function projectConfigSet(key: string, raw: string, args: string[], quiet 
     }
     value = n;
   }
-  if (key === 'decision.ask.cost.llm_per_mtok' || key === 'decision.ask.cost.jev_per_mtok') {
+  if (['decision.ask.cost.llm_per_mtok', 'decision.ask.cost.jev_per_mtok', 'decision.ask.cost.jev_input_per_mtok', 'decision.ask.cost.jev_output_per_mtok'].includes(key)) {
     const n = Number(raw);
     if (!raw.trim() || !Number.isFinite(n) || n < 0 || n > 1_000_000) {
       throw new AiwgError({ code: 'ERR_INVALID_VALUE', message: `${key} must be a non-negative number <= 1000000`, exitCode: EXIT_CODES.USAGE });
