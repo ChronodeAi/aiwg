@@ -168,7 +168,7 @@ Avoid restating content that already exists in rules or other skills. Link inste
 ```markdown
 ## References
 
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md — Never skip tests
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md — Never skip tests
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/executable-feedback.md — Run and verify before completing
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/templates/testing/ — Test artifact templates
 - @.aiwg/testing/ — Project test strategy and coverage baseline

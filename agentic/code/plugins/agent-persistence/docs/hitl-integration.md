@@ -475,7 +475,7 @@ async function beforeFileWrite(file, changes) {
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/hitl-gates.md - HITL gate configuration rules
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/hitl-patterns.md - HITL workflow patterns
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/human-gate-display.md - Gate display format
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md - Anti-laziness enforcement
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md - Anti-laziness enforcement
 
 ### Agents
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/agents/recovery-orchestrator.md - Recovery coordination

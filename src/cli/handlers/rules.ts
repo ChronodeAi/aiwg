@@ -57,7 +57,7 @@ export const rulesHandler: CommandHandler = {
         if (!['workspace', 'user', 'installation', 'catalog'].includes(scope)) throw new Error('Invalid inventory scope');
         const activation = list('--activation');
         const tier = list('--tier');
-        if (activation?.some(value => !['kernel', 'summary', 'bound', 'paths', 'on-demand'].includes(value))) throw new Error('Invalid activation filter');
+        if (activation?.some(value => !['core', 'kernel', 'summary', 'bound', 'paths', 'on-demand'].includes(value))) throw new Error('Invalid activation filter');
         if (tier?.some(value => !['critical', 'high', 'medium', 'low'].includes(value))) throw new Error('Invalid tier filter');
         if (list('--capability')?.some(value => !value)) throw new Error('Invalid capability filter');
         const { ruleInventory } = await import('../../rules/inventory.js');

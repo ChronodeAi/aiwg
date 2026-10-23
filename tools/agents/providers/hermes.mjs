@@ -226,7 +226,7 @@ export function assertContextBudget(content, name = 'AGENTS.md', rules = []) {
  * The full rule bodies are reachable without MCP via `aiwg discover` and
  * `aiwg show rule <name> --body`; MCP exposes the same path through `rule-list` and
  * `rule-show` when configured (#1320). The bodies exceed Hermes's 20K context
- * cap if inlined verbatim (anti-laziness alone is 32K chars), so we inline
+ * cap if inlined verbatim (anti-laziness alone was 32K chars; it now ships as a compact core body, #3450), so we inline
  * compressed directives only and point to CLI/MCP for the full text.
  *
  * Selection criteria: rules tagged CRITICAL/HIGH enforcement level whose
@@ -259,13 +259,6 @@ capability keywords (skill, agent, command, rule, workflow).
 Never add AI-tool attribution to commits, PRs, code, or docs. No \`Co-Authored-By:\`,
 no "Generated with", no "Written by [AI tool]". The AI is a tool; tools don't sign
 their output. Applies to ALL platforms (Claude, Codex, Copilot, Cursor, etc.).
-
-### Rule: anti-laziness
-Never delete tests to make them pass. Never skip/disable tests. Never remove
-features instead of fixing them. Never weaken assertions to be meaningless.
-Never suppress CI/pipeline signals (\`continue-on-error\`, \`|| true\`, \`set +e\`).
-If stuck after 3 honest attempts: escalate with full context, don't shortcut.
-Within scope: leave nothing half-done — code + tests + docs + verification.
 
 ### Rule: citation-policy
 Never fabricate citations, DOIs, URLs, or page numbers. Only cite sources that

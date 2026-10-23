@@ -59,7 +59,7 @@ Before writing code: checked target file LOC; estimated new content; combined un
 ## References
 
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/agent-friendly-code.md — threshold definitions
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/executable-feedback.md
 
 ---

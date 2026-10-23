@@ -159,7 +159,7 @@ loop:
 ## References
 
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/instruction-comprehension.md
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md
 - OpenProse antipatterns guidance (research: #617)
 
 ---

@@ -611,7 +611,7 @@ async function runRule(
     for (const check of rule.checks) {
       if (check.type === 'id-unique') continue; // Already handled
       if (check.type === 'rule-activation') {
-        diagnostics.push(...lintRuleActivation(content, file, projectRoot, artifactEntries));
+        diagnostics.push(...lintRuleActivation(content, file, projectRoot, artifactEntries, absPath));
         continue;
       }
 

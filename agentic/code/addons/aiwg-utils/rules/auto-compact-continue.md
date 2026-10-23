@@ -215,7 +215,7 @@ If none apply: **continue**.
 ## References
 
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/vague-discretion.md, instruction-comprehension.md, human-authorization.md, activity-log.md, context-budget.md, skill-discovery.md
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md — Rule 6: 3-attempts escalation
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md — Rule 6: 3-attempts escalation
 - REF-909 (Anthropic — *Effective Harnesses for Long-Running Agents*) — progress files. https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents
 - REF-910 (Anthropic — *Compaction*) — auto-compact, Compact Instructions. https://platform.claude.com/docs/en/build-with-claude/compaction
 - REF-122 (Verma) — compression 22.7% vs 6%; REF-128 (Zylos) — effective context 30-40% smaller; anchor roctinam/aiwg#1348
