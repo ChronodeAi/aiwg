@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadScenarios, comparisonPlan, executeComparison, prepareFixture, validateSubject, validateJudgment,
-  DIMENSIONS, markdownReport, runnerAdapter, fixtureIdentity } from '../../../tools/rules/release-compare.mjs';
+  DIMENSIONS, markdownReport, runnerAdapter, fixtureIdentity, comparisonReport, signTestP } from '../../../tools/rules/release-compare.mjs';
 import { claudeAdapter } from '../../../tools/rules/release-compare-claude.mjs';
 import { loadProbes } from '../../../tools/rules/run-rule-probes.mjs';
 
@@ -30,6 +30,111 @@ function fixtures() {
   }));
 }
 const plan = (scenarios = [scenario()], extra = {}) => comparisonPlan(scenarios, { model: 'subject', judgeModel: 'judge', n: 2, ...extra });
+
+describe('noise-tolerant release decisions (#3438)', () => {
+  function reportFor(winners, { id = 'test', failedA = [], failedB = [], scoresA = {}, scoresB = {}, ...options } = {}) {
+    const p = plan([scenario(id)], { n: winners.length, ...options });
+    const results = p.pairs.map((pair, index) => ({ id, repetition: pair.repetition, order: pair.order, judge_order: pair.judge_order,
+      runs: Object.fromEntries(['A', 'B'].map(side => [side, { ...subjectResult(), passed: !(side === 'A' ? failedA : failedB).includes(index), assertions: [], error: null }])),
+      judgment: { winner: winners[index], reason: 'Fixture preference', scores: {
+        A: { ...Object.fromEntries(Object.keys(DIMENSIONS).map(key => [key, 2])), ...scoresA },
+        B: { ...Object.fromEntries(Object.keys(DIMENSIONS).map(key => [key, 2])), ...(Array.isArray(scoresB) ? scoresB[index] : scoresB) },
+      } }, judge_error: null }));
+    return comparisonReport(p, results);
+  }
+
+  it.each([
+    [0, 0, 1], [0, 5, 1], [1, 4, 31 / 32], [3, 2, 0.5], [4, 1, 0.1875],
+    [5, 0, 0.03125], [1, 3, 15 / 16], [3, 1, 5 / 16], [10, 0, 1 / 1024],
+    [1000, 1000, 0.5089195055729272],
+  ])('computes exact one-sided binomial tails for %i/%i wins', (a, b, expected) => {
+    expect(signTestP(a, b)).toBeCloseTo(expected, 12);
+  });
+  it.each([[-1, 0], [1.5, 2], [NaN, 0], [0, Infinity], [Number.MAX_SAFE_INTEGER, 1]])('rejects invalid sign-test counts %s/%s', (a, b) => {
+    expect(() => signTestP(a, b)).toThrow(/integer/);
+  });
+
+  it.each([
+    ['hermes-startup', 1, 3, 1, [], 'unchanged', 'none'],
+    ['discover-show-follow', 1, 4, 0, [0], 'regressed', 'assertion-regression'],
+    ['claude-startup', 4, 1, 0, [], 'unchanged', 'none'],
+    ['codex-startup', 4, 1, 0, [], 'unchanged', 'none'],
+    ['missing-native-skill', 3, 2, 0, [], 'unchanged', 'none'],
+    ['compound-request', 0, 5, 0, [], 'improved', 'judge-improvement'],
+    ['unanimous-A', 5, 0, 0, [], 'regressed', 'judge-regression'],
+  ])('classifies issue fixture %s', (id, a, b, tie, failedB, status, rule) => {
+    const winners = [...Array(a).fill('A'), ...Array(b).fill('B'), ...Array(tie).fill('tie')];
+    const report = reportFor(winners, { id, failedB });
+    const result = report.scenarios[0];
+    expect(result.status).toBe(status); expect(result.decision_rule).toBe(rule);
+    expect(result.judge_tally).toEqual({ A: a, B: b, tie });
+    expect(result.B.pass_rate).toBe(failedB.length ? 0.8 : 1);
+    expect(report.pass).toBe(status !== 'regressed');
+    expect(report.judge_alpha).toBe(0.05); expect(report.judge_score_margin).toBe(1);
+  });
+  it('ignores ties in the sign test, including all ties and small non-tie samples', () => {
+    for (const winners of [Array(5).fill('tie'), ['A', 'A', 'A', 'A', 'tie']]) {
+      const result = reportFor(winners).scenarios[0];
+      expect(result.status).toBe('unchanged');
+      expect(result.sign_test_p.A).toBeCloseTo(winners[0] === 'tie' ? 1 : 1 / 16, 12);
+    }
+  });
+  it('uses strict configurable alpha thresholds symmetrically', () => {
+    for (const winner of ['A', 'B']) {
+      const winners = Array(5).fill(winner);
+      expect(reportFor(winners, { judgeAlpha: 1 / 32 }).scenarios[0].status).toBe('unchanged');
+      expect(reportFor(winners, { judgeAlpha: 0.04 }).scenarios[0].status).toBe(winner === 'A' ? 'regressed' : 'improved');
+    }
+    expect(reportFor(['A', 'A', 'A', 'A', 'B'], { judgeAlpha: 0.2 }).scenarios[0].status).toBe('regressed');
+  });
+  it.each([0, 1, -0.1, NaN, Infinity])('rejects invalid alpha %s', judgeAlpha => expect(() => plan(undefined, { judgeAlpha })).toThrow(/judgeAlpha/));
+  it.each([-1, 4.1, NaN, Infinity])('rejects invalid margin %s', judgeScoreMargin => expect(() => plan(undefined, { judgeScoreMargin })).toThrow(/judgeScoreMargin/));
+  it.each([-1.2, -1, -0.2, 0, 0.2, 1, 1.2])('applies strict dimension margin to mean B − A = %s', delta => {
+    // Integer per-pair scores on the actual 0–4 scale, averaging to the requested delta.
+    const total = Math.round((2 + delta) * 5);
+    const scoresB = Array.from({ length: 5 }, (_, index) => ({ safety: Math.floor(total / 5) + (index < total % 5 ? 1 : 0) }));
+    const result = reportFor(Array(5).fill('tie'), { scoresB }).scenarios[0];
+    expect(result.status).toBe(delta < -1 ? 'regressed' : delta > 1 ? 'improved' : 'unchanged');
+    expect(result.dimension_deltas.safety).toBeCloseTo(delta, 12);
+    expect(result.max_dimension_delta).toBeCloseTo(Math.abs(delta), 12);
+  });
+  it('applies the margin to dimension means and supports a custom margin', () => {
+    const p = plan(undefined, { n: 5 });
+    const base = reportFor(Array(5).fill('tie'));
+    const evidence = base.scenarios[0].evidence;
+    evidence[0].judgment.scores.B.safety = 0; // One 2-point loss averages to a 0.4-point drop.
+    expect(comparisonReport(p, evidence).scenarios[0].status).toBe('unchanged');
+    p.judge_score_margin = 0.3;
+    expect(comparisonReport(p, evidence).scenarios[0].decision_rule).toBe('dimension-regression');
+    expect(reportFor(['tie'], { scoresB: { safety: 1 }, judgeScoreMargin: 0 }).scenarios[0].status).toBe('regressed');
+  });
+  it('keeps a paired assertion loss hard even at equal aggregate pass rates and unanimous B wins', () => {
+    const result = reportFor(Array(5).fill('B'), { failedA: [1], failedB: [0] });
+    expect(result.scenarios[0].A.pass_rate).toBe(result.scenarios[0].B.pass_rate);
+    expect(result.scenarios[0].decision_rule).toBe('assertion-regression'); expect(result.pass).toBe(false);
+    expect(result.scenarios[0].triggered_rules).toContain('judge-improvement');
+  });
+  it('prefers regression when dimension and sign-test evidence disagree', () => {
+    const result = reportFor(Array(5).fill('B'), { scoresB: { safety: 0, correctness: 4 } }).scenarios[0];
+    expect(result.status).toBe('regressed'); expect(result.decision_rule).toBe('dimension-regression');
+    expect(result.triggered_rules).toEqual(['dimension-regression', 'judge-improvement', 'dimension-improvement']);
+  });
+  it('mirrors assertion improvements without relying on judge noise', () => {
+    expect(reportFor(Array(5).fill('tie'), { failedA: [0] }).scenarios[0].decision_rule).toBe('assertion-improvement');
+  });
+  it('reports tallies, both p-values, score margins and rules in JSON and Markdown', () => {
+    const report = reportFor(['A', 'A', 'A', 'A', 'B'], { scoresB: { safety: 1 } });
+    expect(report.scenarios[0].sign_test_p.A).toBeCloseTo(0.1875, 12);
+    expect(report.scenarios[0].max_dimension_delta).toBe(1);
+    const markdown = markdownReport(report);
+    for (const text of ['Judge wins A/B/tie: 4/1/0', 'sign-test p (A/B):', 'max absolute delta: 1', 'Rule: none', 'judge A:', 'dimension deltas (B − A):', 'dimension margin: 1']) expect(markdown).toContain(text);
+  });
+  it('exposes configurable thresholds in CLI dry-run plans', () => {
+    const stdout = execFileSync(process.execPath, [path.resolve('tools/rules/release-compare.mjs'), '--model', 'subject', '--judge-model', 'judge',
+      '--scenario', 'discovery-discover-show-follow', '--judge-alpha', '0.1', '--judge-score-margin', '0.5', '--dry-run'], { encoding: 'utf8', timeout: 20000 });
+    expect(JSON.parse(stdout)).toMatchObject({ judge_alpha: 0.1, judge_score_margin: 0.5 });
+  });
+});
 
 describe('release comparison extends rule probes (#3298)', () => {
   it('requires a skill body rather than a metadata card in discover-show-follow', () => {

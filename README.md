@@ -2208,6 +2208,14 @@ cross-platform deployment for project-local and packaged capabilities:
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
 project guidelines.
 
+For release validation, the [release comparison tool](tools/rules/README.md)
+keeps assertion losses as hard regressions and tolerates judge noise with an
+exact sign test (`--judge-alpha 0.05`) and a dimension mean margin
+(`--judge-score-margin 1.0` on the 0–4 scale). At n=5, a judge-only 4/1 split
+does not regress; 5/0 does. Reports retain per-scenario A/B/tie tallies and the
+rule that determined each result. Follow the
+[release checklist](docs/contributing/release-validation-procedure.md).
+
 **Quick contributions:**
 
 - Found a bug or confusing workflow? [Open an issue](https://github.com/jmagly/aiwg/issues/new).

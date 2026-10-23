@@ -163,7 +163,33 @@ The default corpus currently plans 286 scenarios × 5 repetitions = 1,430 pairs 
 
 The harness checkpoints JSON and Markdown after each pair. Every checkpoint and final JSON binds A and B to the installed package version, SHA256 of a local/packed tarball when applicable, deterministic deployed project/home and package-tree digests, and installation-lock digest when present. The corpus digest binds the selected prompts and assertions. These hashes identify the actual tested bytes, including predeployed `fixture:` inputs; a mutable tree path alone is insufficient release evidence. Fresh samples currently copy the installed runtime as well as context; no I/O savings are claimed.
 
-The JSON retains full normalized transcripts, optional native stdout, assertion outcomes, tool calls, optional token counters, presentation mappings, and judge scores. Markdown shows regressions first, excerpts from both responses, tool/assertion evidence, and suspected causes clearly marked as hypotheses. Per-scenario pass rates use every attempted repetition, including failures. A regression includes a lost deterministic pass, a lower dimension score, or a judge preference for A. Improvements cannot cancel a regression in another repetition or dimension. Invalid results hold the gate separately.
+The JSON retains full normalized transcripts, optional native stdout, assertion outcomes, tool calls, optional token counters, presentation mappings, and judge scores. Markdown shows regressions first, excerpts from both responses, tool/assertion evidence, and suspected causes clearly marked as hypotheses. Per-scenario pass rates use every attempted repetition, including failures.
+
+Classification first treats any A-passed/B-failed pair or lower B assertion pass
+rate as a hard regression. Judge preferences use a one-sided exact binomial sign
+test: with `a` baseline wins and `b` candidate wins, regression requires
+`P(X >= a | X ~ Binomial(a+b, 0.5)) < alpha`. Ties are neutral and excluded from
+the test. Alpha defaults to `0.05` (`--judge-alpha`, programmatic option
+`judgeAlpha`, strictly between 0 and 1). At n=5, only 5/0 A wins count as judge
+regression (`p=0.03125`); 4/1 has `p=0.1875`, and 1/3/1 is unchanged absent
+other signals. With no non-tie wins, the p-value is 1.
+
+A judge dimension regresses only when its B mean is below its A mean by
+**more than** `--judge-score-margin` (programmatic option `judgeScoreMargin`).
+The default is `1.0`, one point on the integer 0–4 judge scale; allowed margins
+are 0 through 4. All judged pairs, including ties, contribute to these means.
+The same assertion, sign-test, and dimension tests are mirrored for improvement.
+When both directions trigger, regression wins; otherwise the result is unchanged.
+Invalid evidence holds the gate, and incomplete comparisons cannot pass.
+
+Plans and reports record `judge_alpha` and `judge_score_margin`. Select thresholds
+before running and preserve them with the evidence; verification compares them
+against the trusted plan, and the quarterly producer uses the defaults. Both
+report formats show each scenario's A/B/tie tally, p-values for A and B,
+dimension mean deltas (B minus A), maximum absolute dimension delta, decision
+rule, and all triggered rules. Per-pair winners and scores remain in JSON;
+Markdown also prints each pair's dimension deltas. See the
+[tool README](../../tools/rules/README.md) for the concise rule.
 
 Exit 0 means all planned pairs completed with no measured regression or invalid
 result; exit 1 holds the gate. A small selected smoke run can exit 0 without
