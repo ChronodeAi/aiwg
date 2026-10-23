@@ -74,7 +74,10 @@ describe('decision-engine clean install from the packed tarball', () => {
     const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
       !key.toLowerCase().startsWith('npm_config_') && key !== 'AIWG_ROOT' && key !== 'NODE_OPTIONS'));
 
-    const releasePackLock = await acquireDirectoryLock(path.join(ROOT, 'prebuilt', 'fortemi-core', '.framework-build.lock'));
+    const releasePackLock = await acquireDirectoryLock(
+      path.join(ROOT, 'prebuilt', 'fortemi-core', '.framework-build.lock'),
+      { reclaimDeadOwner: true },
+    );
     let pack: SpawnSyncReturns<string>;
     try {
       pack = run(NPM, ['pack', '--ignore-scripts', '--json', '--pack-destination', tempRoot], { cwd: ROOT, env: cleanEnv, timeout: 120_000 });
