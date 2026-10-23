@@ -1,7 +1,9 @@
 /** Activation checks within the existing lint runner, not a delivery selector. */
+import fs from 'node:fs';
+import path from 'node:path';
 import type { MetadataEntry } from '../artifacts/types.js';
 import { loadLocalCapabilityEntries, resolveRuleBindingTarget } from '../artifacts/query-engine.js';
-import { parseRuleFrontmatter, RULE_BINDING_TYPES } from '../rules/activation.mjs';
+import { parseRuleFrontmatter, RULE_BINDING_TYPES, coreBodyPath, validateCoreBody } from '../rules/activation.mjs';
 import type { LintDiagnostic, LintRuleset } from './types.js';
 
 export const ruleActivationRuleset: LintRuleset = {
@@ -16,16 +18,25 @@ export const ruleActivationRuleset: LintRuleset = {
 };
 
 export function lintRuleActivation(
-  content: string, file: string, projectRoot: string, entries?: MetadataEntry[],
+  content: string, file: string, projectRoot: string, entries?: MetadataEntry[], absolutePath?: string,
 ): LintDiagnostic[] {
   // Generated structural indexes are not authored rules.
   if (/^(?:RULES-INDEX|RULES-ONDEMAND)\.md$/.test(file.split('/').pop()!)) return [];
+  // <rule>.core.md is a delivery body (#3450), validated through its owning rule.
+  if (/\.core\.md$/.test(file)) return [];
   const result = parseRuleFrontmatter(content);
   const diagnostics = result.diagnostics.map(item => ({
     ruleId: 'rules/activation', ruleName: 'Rule activation contract',
     file, severity: item.severity, message: item.message,
   }));
   if (!result.rule) return diagnostics;
+  if (result.rule.activation === 'core') {
+    const body = coreBodyPath(absolutePath ?? (path.isAbsolute(file) ? file : path.resolve(projectRoot, file)));
+    const problems = fs.existsSync(body)
+      ? validateCoreBody(fs.readFileSync(body, 'utf8').trim(), path.basename(body))
+      : [`${path.basename(body)}: activation core requires a compact body file beside the rule`];
+    for (const message of problems) diagnostics.push({ ruleId: 'rules/activation', ruleName: 'Rule activation contract', file, severity: 'error', message });
+  }
   const bindings = result.rule.bound_to;
   if (!Object.values(bindings).some(list => list.length > 0)) return diagnostics;
   // Reuse existing artifact index ownership and show precedence. No title guessing,

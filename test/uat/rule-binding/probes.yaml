@@ -802,7 +802,7 @@ rules:
             path: answer
             value: 24
   - id: anti-laziness
-    source: agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md
+    source: agentic/code/addons/aiwg-utils/rules/anti-laziness.md
     probes:
       - id: positive-1
         kind: positive

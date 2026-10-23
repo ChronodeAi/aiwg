@@ -11,7 +11,7 @@ import {
   addManagedMarker, contentHash, replaceBoundRulesBlock, deployEmulatedBehaviors, filterAgentFiles,
 } from './base.mjs';
 
-const { parseRuleFrontmatter, inferRuleActivation, RULE_BINDING_TYPES } = await importImpl(import.meta.url, 'rules/activation.mjs');
+const { parseRuleFrontmatter, inferRuleActivation, RULE_BINDING_TYPES, readCoreBody, validateCoreSet, CORE_RULES_START, CORE_RULES_END } = await importImpl(import.meta.url, 'rules/activation.mjs');
 const { trackTemporaryDirectory } = await importImpl(import.meta.url, 'utils/temporary-directory.js');
 const { loadRulePinConfigs, installedRuleCapabilities, resolveRulePins } = await importImpl(import.meta.url, 'rules/pins.mjs');
 const { guardRulesInlineBudget } = await importImpl(import.meta.url, 'rules/inline-budget.mjs');
@@ -86,11 +86,15 @@ export async function prepareRuleDelivery(opts) {
     const rule = { ...parsed.rule, file, content, body: parsed.body, behavior,
       name: behavior ? `behavior/${path.basename(path.dirname(file))}` : parsed.data.name || path.basename(file, '.md') };
     if (!rule.tagged) rule.activation = behavior ? 'kernel' : inferRuleActivation(ruleEnforcementLevel(content));
+    // Core rules (#3450) carry a compact body beside the full rule; the full text is never inlined.
+    if (rule.activation === 'core') rule.coreBody = readCoreBody(file);
     for (const diagnostic of parsed.diagnostics) {
       console.warn(`${opts.logicalInputPath ? opts.logicalInputPath(file) : file}: ${diagnostic.code}: ${diagnostic.code === 'missing-activation' ? `Missing activation; inferred ${rule.activation} delivery (migration fallback).` : diagnostic.message}`);
     }
     return rule;
   });
+  const coreErrors = validateCoreSet([...new Map(rules.filter(rule => rule.coreBody !== undefined).map(rule => [rule.name, { name: rule.name, text: rule.coreBody }])).values()]);
+  if (coreErrors.length) throw new Error(coreErrors.join('; '));
   const configs = opts.pinConfigs || loadRulePinConfigs(opts.target, opts.config);
   const installed = installedRuleCapabilities(configs);
   const root = resolveAiwgRoot(opts.srcRoot) || opts.srcRoot;
@@ -110,7 +114,8 @@ export async function prepareRuleDelivery(opts) {
   const pinsByFile = new Map(pinned.rules.map(rule => [rule.file, rule]));
   for (const rule of rules) {
     const pin = pinsByFile.get(rule.file);
-    if (!pin) continue;
+    // A core rule is already delivered in full; a pin must not re-promote it to a kernel body.
+    if (!pin || rule.activation === 'core') continue;
     rule.canonicalActivation = rule.activation;
     rule.pinMatches = pin.matches;
     rule.pinned = true;
@@ -302,6 +307,21 @@ function projectRules(opts, provider) {
       if (/aiwg:managed/.test(read(dest))) fs.rmSync(dest);
     }
   }
+  // Core rules (#3450): compact bodies in the provider's always-loaded surface,
+  // independent of deploy mode. Native providers get one core-<name> file each;
+  // the others get a marked section first in their managed startup block.
+  const cores = [...new Map(tagged.filter(rule => rule.activation === 'core').map(rule => [rule.name, rule])).values()];
+  if (fs.existsSync(rulesDir)) {
+    for (const entry of fs.readdirSync(rulesDir).filter(name => /^core-.+\.(md|mdc)$/.test(name))) {
+      if (/aiwg:managed/.test(read(path.join(rulesDir, entry)))) fs.rmSync(path.join(rulesDir, entry));
+    }
+  }
+  if (nativePaths) {
+    for (const rule of cores) {
+      const body = provider.name === 'cursor' ? `---\nalwaysApply: true\n---\n${rule.coreBody}\n` : `${rule.coreBody}\n`;
+      put(path.join(rulesDir, `core-${path.basename(rule.file, '.md')}${extension}`), managed(body, opts));
+    }
+  }
   for (const rule of tagged) {
     if (rule.activation === 'kernel' || (nativePaths && rule.activation === 'paths')) {
       let content = stripTriggersFromContent(rule.content);
@@ -355,7 +375,8 @@ function projectRules(opts, provider) {
     let startupIndex = index;
     let startupRouting = routing;
     const fetchKernels = deferredKernels.length ? 'Before every task and subagent task, fetch and follow the kernel rules listed below with `aiwg show rule <name> --body` before governed work. Their full rules are binding.' : '';
-    const renderBody = () => [...kernels.map(rule => `## Rule: ${rule.name}\n\n${rule.body.trim()}`), fetchKernels, startupIndex, startupRouting].filter(Boolean).join('\n\n');
+    const coreSection = cores.length ? `${CORE_RULES_START}\n## Core rules\n\n${cores.map(rule => rule.coreBody).join('\n\n')}\n${CORE_RULES_END}` : '';
+    const renderBody = () => [coreSection, ...kernels.map(rule => `## Rule: ${rule.name}\n\n${rule.body.trim()}`), fetchKernels, startupIndex, startupRouting].filter(Boolean).join('\n\n');
     const dest = path.join(opts.target, 'AGENTS.md');
     if (provider.name === 'hermes' && block(read(dest), renderBody()).length > 19_000) {
       // The complete summary/path index and definition routes can themselves

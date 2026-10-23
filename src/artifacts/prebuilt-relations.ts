@@ -36,7 +36,8 @@ export function buildResolvedBindings(root: string, relations: RelationsIndex): 
     for (const target of rule.targets) targets[target.type].push(target.id);
     table.rules[id] = { activation, tagged, summary: parsed.rule?.summary ?? rule.summary, targets };
     for (const [provider, projection] of Object.entries(table.providers)) {
-      if (activation === 'kernel') {
+      if (activation === 'core') projection.kernel.push(id); // core bodies load at startup like kernels
+      else if (activation === 'kernel') {
         const hermesDeferred = provider === 'hermes' && tagged && String(parsed.rule?.enforcement ?? '').toLowerCase() !== 'critical';
         projection[hermesDeferred ? 'summary' : 'kernel'].push(id);
       } else if (activation === 'paths') projection[['claude', 'cursor'].includes(provider) ? 'native_paths' : 'discoverable_paths'].push(id);

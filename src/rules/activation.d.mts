@@ -1,4 +1,4 @@
-export type RuleActivation = 'kernel' | 'summary' | 'bound' | 'paths' | 'on-demand';
+export type RuleActivation = 'core' | 'kernel' | 'summary' | 'bound' | 'paths' | 'on-demand';
 export type RuleBindingKey = 'skills' | 'agents' | 'flows';
 export interface RuleBindings { skills: string[]; agents: string[]; flows: string[] }
 export interface RuleFrontmatter extends Record<string, unknown> {
@@ -19,3 +19,12 @@ export const ruleFrontmatterSchema: Record<string, unknown>;
 export function inferRuleActivation(enforcement: unknown): 'kernel' | 'on-demand';
 export function validateRuleFrontmatter(data: unknown): RuleValidationResult;
 export function parseRuleFrontmatter(content: string): RuleValidationResult & { data: unknown; body: string };
+export const CORE_BODY_MAX_BYTES: number;
+export const CORE_TOTAL_MAX_BYTES: number;
+export const CORE_RULES_START: string;
+export const CORE_RULES_END: string;
+export function coreBodyPath(ruleFile: string): string;
+export function validateCoreBody(text: string, label?: string): string[];
+export function validateCoreSet(bodies: Array<{ name: string; text: string }>): string[];
+export function readCoreBody(ruleFile: string): string;
+export function measureDeployedCoreRules(target: string, provider: string, rulesDir?: string): { bodies: Array<{ name: string; bytes: number }>; bytes: number; limit: number };

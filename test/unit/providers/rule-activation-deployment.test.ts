@@ -343,7 +343,12 @@ describe('activation-selected provider deployment (#2939)', () => {
       } else expect(content).toContain('FIXTURE_KERNEL_BODY');
       expect(content).toContain('Follow the fixture summary policy.');
       expect(content).not.toContain('fixture-bound');
-      if (provider === 'hermes') expect(content).toContain('Never delete tests to make them pass.');
+      // anti-laziness is no longer a hand-condensed Hermes directive; it ships as a core body (#3450),
+      // so this fixture (no core rule) checks that another legacy directive survives regeneration.
+      if (provider === 'hermes') {
+        expect(content).toContain('Never fabricate citations, DOIs, URLs, or page numbers.');
+        expect(content).not.toContain('### Rule: anti-laziness');
+      }
       if (provider === 'codex') expect(Buffer.byteLength(readFileSync(join(root, 'target/AGENTS.md'), 'utf8'))).toBeLessThan(32768);
     }
   }, 90_000);
