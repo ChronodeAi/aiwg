@@ -486,6 +486,10 @@ This mode is off by default and requires the verified Codex native shell rendere
 with an explicit `read-only` or `workspace-write` sandbox. External, disabled,
 unknown, and full-access sandboxes are refused. Environment variables, launch
 flags, and `--allow-degraded-worker` do not opt in.
+Config validation rejects `approval: "on-request"`, `network: "allowlisted"`,
+and any group member whose installation uses a non-Codex adapter in this mode.
+The MCP `worker-invoke` tool's `run` operation refuses pinned `native-sandbox`
+invocations with `OG_POLICY_RELAXATION` until it supports this launch boundary.
 
 The launcher uses its owned process group without a systemd unit and skips the
 unit namespace probe. **There is no cgroup memory limit or cgroup kill scope; the

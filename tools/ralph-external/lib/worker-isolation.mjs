@@ -420,7 +420,8 @@ export function launchIsolatedWorker({
     const execution = config?.parallelism?.groups?.[workerGroup]?.execution;
     if (execution?.launchMode !== 'native-sandbox' || !['read-only', 'workspace-write'].includes(execution.sandbox)
       || (execution.transport ?? 'shell') !== 'shell' || !attached || !ownedGroup) {
-      throw new Error('native-sandbox requires policy opt-in and an owned attached process group with an enforcing native sandbox');
+      throw Object.assign(new Error('native-sandbox requires policy opt-in and an owned attached process group with an enforcing native sandbox'),
+        { code: 'OG_POLICY_RELAXATION' });
     }
   }
   if (detected.mode === 'degraded' && !allowDegraded) {

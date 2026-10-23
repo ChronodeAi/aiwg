@@ -1065,11 +1065,19 @@ export function validateParallelismConfig(value: unknown): string[] {
         || (group.execution.transport ?? 'shell') !== 'shell')) {
       error(`groups/${id}/execution/launchMode`, 'native-sandbox requires an enforcing read-only or workspace-write shell sandbox');
     }
+    if (group.execution?.launchMode === 'native-sandbox') {
+      if (group.execution.approval === 'on-request') error(`groups/${id}/execution/approval`, 'native-sandbox requires approval="never"');
+      if (group.execution.network === 'allowlisted') error(`groups/${id}/execution/network`, 'native-sandbox requires network="deny"');
+    }
     const ids = new Set<string>();
     for (const member of group.members) {
       if (ids.has(member.id)) error(`groups/${id}/members`, 'Duplicate member ID');
       ids.add(member.id);
       if (!policy.clis?.[member.cli] && !builtinIds.has(member.cli)) error(`groups/${id}/members/${member.id}/cli`, 'Unknown installation');
+      if (group.execution?.launchMode === 'native-sandbox'
+        && (policy.clis?.[member.cli]?.adapter ?? `providers:${member.cli}`) !== 'providers:codex') {
+        error(`groups/${id}/members/${member.id}/cli`, 'native-sandbox requires a codex adapter');
+      }
     }
     for (const member of group.fallback ?? []) if (!ids.has(member)) error(`groups/${id}/fallback`, 'Unknown fallback member');
     for (const role of group.requiredRoles ?? []) {

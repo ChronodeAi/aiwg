@@ -1726,6 +1726,12 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       if (plan.invocation?.readiness !== 'launchable') {
         return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: plan.diagnostics ?? [] });
       }
+      if (plan.invocation.isolation === 'native-sandbox') {
+        return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [{
+          code: 'OG_POLICY_RELAXATION', pointer: '/worker/isolation',
+          message: 'MCP worker-invoke run does not support pinned native-sandbox isolation',
+        }] });
+      }
       prefix = { root, snapshot, drivers, invocation: plan.invocation };
     } catch (error) {
       return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [error.message] });

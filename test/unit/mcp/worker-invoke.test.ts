@@ -20,6 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { workerConfigDigest } from '../../../src/config/aiwg-config.js';
+import { WORKER_OPERATOR_APPROVAL } from '../../../src/models/provider-policy.js';
 import { resolveWorkerInvocation, type WorkerInvocationDriver } from '../../../src/serve/worker-invocation.js';
 import { assertValidWorkerPayload } from '../../../src/mission-protocol/index.js';
 import { buildShellStopControl, waitForUnitTermination } from '../../../src/mcp/tools/worker-shell-control.mjs';
@@ -1569,6 +1570,57 @@ async function buildStructuredBrief(f: ReturnType<typeof buildFixture>, request:
 // user manager (CI runs as root with none) or a real provider installation.
 // ---------------------------------------------------------------------------
 describe('run/status/cancel lifecycle (shell transport, injected launch)', () => {
+  it.each(['native-sandbox', 'systemd-unit'] as const)('honors pinned %s isolation before MCP shell dispatch', async launchMode => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.md'); await writeFile(brief, 'Synthetic task.');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'shell');
+    f.snapshot.config.parallelism!.groups!.workers.execution = {
+      launchMode, sandbox: 'workspace-write', approval: 'never', network: 'deny', transport: 'shell',
+    };
+    f.adapter.provider = 'codex';
+    f.adapter.qualification.evidenceRef = WORKER_OPERATOR_APPROVAL;
+    f.profile.envAllowlist = [];
+    f.drivers.codex.buildInvocation = async (input: any) => ({
+      argv: ['/synthetic/codex', '--no-daemon', 'exec', '--ignore-user-config',
+        '-m', input.selected.model, '-s', input.permissions.sandbox,
+        '-c', `model_reasoning_effort=${JSON.stringify(input.selected.effort.value)}`,
+        '-c', 'approval_policy="never"', '-C', input.cwd, '-o', input.finalPath, '--json', '-'],
+      stdin: 'closed', envNames: [],
+    });
+    const launchShellWorker = vi.fn(async invocation => {
+      expect(invocation.isolation).toBe('systemd-unit');
+      const claims = { version: 1, status: 'completed', summary: 'Synthetic result.', claims: [], artifacts: [], checks: [], limitations: [] };
+      await writeFile(invocation.finalPath, JSON.stringify({ type: 'result', result: claims }));
+      return { launched: true, mode: 'systemd-unit', unit: 'synthetic.service' };
+    });
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const tools = await captureTool(undefined, {
+      projectRoot: root, workerWorktreesRoot: work, registry,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      launchShellWorker, now: () => new Date(f.now),
+      waitForUnitTermination: async () => ({ termination: 'confirmed', exitCode: 0 }),
+    });
+    const result = await tools.get('worker-invoke').handler({
+      operation: 'run', request_id: 'pinned-isolation', role: 'coding', task: 'implementation', group: 'workers',
+      brief, workdir: work, final_output: finalOutput, transport: 'shell',
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.termination).toBe('confirmed');
+    expect(registry.canStart()).toBe(true);
+    if (launchMode === 'native-sandbox') {
+      expect(body.status).toBe('blocked');
+      expect(body.diagnostics).toEqual([{ code: 'OG_POLICY_RELAXATION', pointer: '/worker/isolation',
+        message: 'MCP worker-invoke run does not support pinned native-sandbox isolation' }]);
+      expect(launchShellWorker).not.toHaveBeenCalled();
+      expect(existsSync(finalOutput)).toBe(false);
+    } else {
+      expect(launchShellWorker).toHaveBeenCalledOnce();
+      expect(body.status, JSON.stringify(body)).toBe('completed');
+    }
+  });
+
   it('resolves, launches, parses the fixture CLI final, and reports completed', async () => {
     const root = await tempRoot();
     const work = path.join(root, 'work'); await mkdir(work);

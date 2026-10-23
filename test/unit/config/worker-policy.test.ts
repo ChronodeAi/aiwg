@@ -441,6 +441,38 @@ describe('T-OG-15/17/19 S1 trusted installation mapping; fixture qualification o
 });
 
 describe('worker launch mode config schema', () => {
+  it('accepts native-sandbox with non-interactive denied-network codex installations', () => {
+    const config = policy();
+    config.clis = { local: { adapter: 'providers:codex', accountScope: 'synthetic', quotaScope: 'synthetic' } };
+    config.groups!.fixture.members.push({ ...group().members[0], id: 'local', cli: 'local' });
+    config.groups!.fixture.execution = { launchMode: 'native-sandbox', sandbox: 'workspace-write', approval: 'never', network: 'deny' };
+    expect(validateParallelismConfig(config)).toEqual([]);
+  });
+
+  it.each([
+    { field: 'approval', value: 'on-request', message: 'native-sandbox requires approval="never"' },
+    { field: 'network', value: 'allowlisted', message: 'native-sandbox requires network="deny"' },
+  ])('refuses native-sandbox with $field=$value', ({ field, value, message }) => {
+    const config = policy();
+    config.groups!.fixture.execution = { launchMode: 'native-sandbox', sandbox: 'workspace-write', [field]: value };
+    expect(validateParallelismConfig(config)).toEqual([
+      `OG_CONFIG_REFERENCE /parallelism/groups/fixture/execution/${field}: ${message}`,
+    ]);
+  });
+
+  it.each([
+    { cli: 'claude', adapter: undefined },
+    { cli: 'codex', adapter: 'providers:claude' },
+    { cli: 'local', adapter: 'workerAdapters:fixture' },
+  ])('refuses native-sandbox with non-codex adapter $adapter on $cli', ({ cli, adapter }) => {
+    const config = policy();
+    if (adapter) config.clis = { [cli]: { adapter, accountScope: 'synthetic', quotaScope: 'synthetic' } };
+    config.groups!.fixture.members.push({ ...group().members[0], id: 'other', cli, enabled: false });
+    config.groups!.fixture.execution = { launchMode: 'native-sandbox', sandbox: 'workspace-write' };
+    const errors = validateParallelismConfig(config);
+    expect(errors).toContain('OG_CONFIG_REFERENCE /parallelism/groups/fixture/members/other/cli: native-sandbox requires a codex adapter');
+  });
+
   it('accepts explicit systemd-unit and native-sandbox enforcing shell policies', () => {
     for (const launchMode of ['systemd-unit', 'native-sandbox'] as const) {
       const config = policy();

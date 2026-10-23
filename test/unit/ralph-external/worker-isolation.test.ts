@@ -223,6 +223,23 @@ describe('launchIsolatedWorker gate-then-launch', () => {
   // host having a systemd user manager (CI containers have none).
   const managerSpawn = (() => ({ status: 0, stdout: 'LANG=C.UTF-8\nNODE_OPTIONS=--synthetic\nLD_PRELOAD=/synthetic.so\n', stderr: '' })) as never;
 
+  it.each(['policy', 'sandbox', 'transport', 'attached', 'ownedGroup'])('codes native-sandbox precondition refusal for %s', missing => {
+    const execution = { launchMode: 'native-sandbox', sandbox: 'workspace-write', transport: 'shell' };
+    if (missing === 'policy') execution.launchMode = 'systemd-unit';
+    if (missing === 'sandbox') execution.sandbox = 'external';
+    if (missing === 'transport') execution.transport = 'mcp';
+    const spawn = vi.fn();
+    const spawnAsync = vi.fn();
+    expect(() => launchIsolatedWorker({ command: '/synthetic/codex', gate: passingGate,
+      config: { parallelism: { groups: { workers: { execution } } } }, workerGroup: 'workers',
+      isolation: { mode: 'native-sandbox' }, attached: missing !== 'attached', ownedGroup: missing !== 'ownedGroup',
+      spawn, spawnAsync,
+    })).toThrow(expect.objectContaining({ code: 'OG_POLICY_RELAXATION',
+      message: 'native-sandbox requires policy opt-in and an owned attached process group with an enforcing native sandbox' }));
+    expect(spawn).not.toHaveBeenCalled();
+    expect(spawnAsync).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('retains the unit stop authority before a failed trusted launch (attached=%s)', attached => {
     vi.stubEnv('AIWG_UNLISTED_SECRET', 'synthetic-conductor-secret');
     vi.stubEnv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/synthetic/conductor-bus');
