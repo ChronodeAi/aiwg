@@ -45,6 +45,7 @@ describe('[Resumable] Resumable — full suspend/resume cycle', () => {
   const missionId  = fixture.preconditions.mission_running.mission_id;
 
   let registry;
+  let executorToken;
   let fakeWs;
   let fakeWs2; // Second WS connection for reconnect
 
@@ -52,7 +53,7 @@ describe('[Resumable] Resumable — full suspend/resume cycle', () => {
     ({ registry } = await createRegistryForTest());
 
     // Register executor with resumable + hitl capabilities
-    registry.register({
+    const registration = registry.register({
       executor_id: executorId,
       name: 'resumable-executor',
       version: '0.3.0',
@@ -63,6 +64,9 @@ describe('[Resumable] Resumable — full suspend/resume cycle', () => {
       },
       capabilities: fixture.preconditions.executor_registered.capabilities,
     });
+
+    expect(registration).not.toHaveProperty('error');
+    executorToken = registration.token;
 
     fakeWs = new FakeWsConn();
     registry.setConnected(executorId, true, fakeWs);
@@ -126,7 +130,7 @@ describe('[Resumable] Resumable — full suspend/resume cycle', () => {
 
   it('re-register after restart succeeds (same executor_id)', () => {
     const reRegisterBody = fixture.phase_3_executor_restart_and_resync.re_register.request.body;
-    const result = registry.register(reRegisterBody);
+    const result = registry.register(reRegisterBody, executorToken);
     expect(result).not.toHaveProperty('error');
     expect(result.executor_id).toBe(executorId);
   });
@@ -138,9 +142,17 @@ describe('[Resumable] Resumable — full suspend/resume cycle', () => {
       transport_endpoints: { rest: 'http://127.0.0.1:8122', ws: 'ws://127.0.0.1:8121' },
       capabilities: fixture.preconditions.executor_registered.capabilities,
     };
-    const token1 = registry.register(body1).token;
-    const token2 = registry.register(body1).token;
-    expect(token1).toBe(token2);
+    const first = registry.register(body1, executorToken);
+    expect(first).not.toHaveProperty('error');
+    const second = registry.register(body1, first.token);
+    expect(second).not.toHaveProperty('error');
+    expect(first.token).toBe(executorToken);
+    expect(second.token).toBe(executorToken);
+  });
+
+  it('rejects unauthenticated reclaim after reconnect', () => {
+    const body = fixture.phase_3_executor_restart_and_resync.re_register.request.body;
+    expect(registry.register(body)).toEqual({ error: 'Unauthorized', status: 401 });
   });
 
   // Phase 3: executor.resync sent after WS reconnect

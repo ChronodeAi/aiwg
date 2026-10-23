@@ -27,12 +27,18 @@
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import os from 'node:os';
 import { resolve as resolvePath, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = dirname(__filename);
+
+// Workspace sources and installed packages share this implementation.
+const tokenHelper = new URL('../../src/serve/executor-token.mjs', import.meta.url);
+const { executorTokensEqual } = await import(existsSync(tokenHelper)
+  ? tokenHelper.href : new URL('../../dist/src/serve/executor-token.mjs', import.meta.url).href);
 
 // ── HITL detector patterns (pluggable via addHitlPattern) ────────────────────
 
@@ -90,6 +96,8 @@ export class ExecutorShim extends EventEmitter {
    * @param {string} opts.wsBase              WS base URL as seen by aiwg-serve (e.g. ws://127.0.0.1:8200)
    * @param {string} opts.aiwgServeUrl        Registration target URL (e.g. http://127.0.0.1:7337)
    * @param {string[]} [opts.hitlPatterns]    Additional HITL regex patterns
+   * @param {string} [opts.tokenPath]        Private token cache for restart authentication
+   * @param {string} [opts.token]            Existing token, e.g. when migrating an older identity
    */
   constructor(opts) {
     super();
@@ -136,7 +144,15 @@ export class ExecutorShim extends EventEmitter {
      * Token issued by aiwg-serve on register. Stored for reuse.
      * @type {string|null}
      */
-    this._token = null;
+    this._token = opts.token ?? null;
+    this.tokenPath = opts.tokenPath;
+    if (this.tokenPath && !this._token) {
+      try {
+        const saved = JSON.parse(readFileSync(this.tokenPath, 'utf8'));
+        if (saved.executor_id === this.executorId && saved.serve_url === this.aiwgServeUrl
+          && typeof saved.token === 'string' && saved.token) this._token = saved.token;
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
 
     /**
      * Per-mission stdout buffer used for HITL pattern detection.
@@ -185,7 +201,7 @@ export class ExecutorShim extends EventEmitter {
     try {
       const res = await fetch(`${this.aiwgServeUrl}/api/v1/executors/register`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(this._token ? { Authorization: `Bearer ${this._token}` } : {}) },
         body:    JSON.stringify(payload),
       });
 
@@ -196,6 +212,13 @@ export class ExecutorShim extends EventEmitter {
 
       const body = await res.json();
       this._token = body.token;
+      if (this.tokenPath) {
+        mkdirSync(dirname(this.tokenPath), { recursive: true, mode: 0o700 });
+        const tmp = `${this.tokenPath}.${randomUUID()}.tmp`;
+        writeFileSync(tmp, JSON.stringify({ executor_id: this.executorId, serve_url: this.aiwgServeUrl, token: this._token }),
+          { mode: 0o600, flag: 'wx' });
+        renameSync(tmp, this.tokenPath);
+      }
       this.emit('registered', { executorId: this.executorId, token: this._token });
       return this._token;
     } catch (err) {
@@ -684,7 +707,7 @@ export async function startExecutorServer(shim, opts) {
   function checkBearer(req) {
     const auth = req.header('Authorization') ?? '';
     const t = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-    return t === token;
+    return executorTokensEqual(token, t);
   }
 
   // ── Hono app ───────────────────────────────────────────────────────────────
@@ -842,7 +865,7 @@ export async function startExecutorServer(shim, opts) {
       const executorIdParam = match[1];
       const tkParam         = url.searchParams.get('token') ?? '';
 
-      if (executorIdParam !== shim.executorId || tkParam !== token) {
+      if (executorIdParam !== shim.executorId || !executorTokensEqual(token, tkParam)) {
         socket.destroy();
         return;
       }

@@ -124,9 +124,10 @@ Response (`201 Created`):
 ```
 
 Notes:
-- `executor_id` is supplied by the executor and persisted across restarts. Re-registering with the same `executor_id` reclaims the prior identity (same identity store as `sandbox-registry` — `src/serve/sandbox-identity-store.ts`).
+- `executor_id` is supplied by the executor and persisted across restarts. Re-registering an existing identity requires `Authorization: Bearer <token>` with that executor's current token, including after either side restarts or the executor deregisters. Missing or incorrect credentials return 401 without changing the registration or token. Authenticated re-registration preserves the token; a new ID receives a new token.
 - `token` is opaque, returned once. Executor stores it locally and includes it on subsequent calls (`Authorization: Bearer <token>` for REST; `?token=<token>` query param for WS upgrade).
-- Loopback bind is the default. LAN exposure is an explicit operator choice and triggers token rotation on first non-loopback register.
+- The local executor caches its token in a private (0600) file scoped to its executor ID and serve URL. For an identity created before token caching was supported, supply its existing token through `AIWG_EXECUTOR_TOKEN` on the first upgraded start; later restarts use the cache.
+- Loopback bind is the default. LAN exposure is an explicit operator choice. Tokens are not rotated on re-register, so keep the executor token and its cache file private.
 
 ### `DELETE /api/v1/executors/:id`
 

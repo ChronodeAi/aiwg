@@ -16,15 +16,18 @@
  * @see test/conformance/executor-v1/fixtures/dispatch-happy.json
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 import http from 'node:http';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, '..', '..');
+const testState = mkdtempSync(join(tmpdir(), 'serve-executor-flow-'));
+const identityPath = join(testState, 'identities.json');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -149,7 +152,7 @@ class MockExecutorServer {
  */
 async function loadRegistry() {
   // Use a temp identity store so tests don't pollute the real store
-  process.env['AIWG_EXECUTOR_IDENTITY_STORE'] = '/tmp/aiwg-integration-test-executor-ids.json';
+  vi.stubEnv('AIWG_EXECUTOR_IDENTITY_STORE', identityPath);
   const mod = await import('../../src/serve/executor-registry.js');
   return mod;
 }
@@ -162,6 +165,8 @@ describe('executor dispatch flow (integration)', () => {
 
   let ExecutorRegistry;
   let validateDispatchPayload;
+
+  beforeEach(() => rmSync(identityPath, { force: true }));
 
   beforeAll(async () => {
     // Start mock executor on an OS-assigned free port (passes 0 → server
@@ -179,6 +184,8 @@ describe('executor dispatch flow (integration)', () => {
 
   afterAll(() => {
     mockExecutor?.close();
+    vi.unstubAllEnvs();
+    rmSync(testState, { recursive: true, force: true });
   });
 
   it('dispatch payload from fixture is schema-valid', () => {
