@@ -40,8 +40,9 @@ export default defineConfig({
     exclude: [
       // Required serial packaging and corpus lanes run separately in CI.
       ...packagingFiles, ...artifactIndexFiles, ...discoveryFiles, ...deploymentFiles, ...nodeFiles, ...d29SlowFiles, ...d17SlowFiles, ...orchestrationConformanceFiles,
-      'test/evidence/**',
       'test/uat/**',
+      // Evidence traces use their dedicated single-fork lane and change cwd.
+      'test/evidence/**',
       'tools/ralph-external/**',
       'test/unit/ralph/**',
       'vscode-extension/**',

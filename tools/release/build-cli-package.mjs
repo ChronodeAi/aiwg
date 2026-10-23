@@ -94,6 +94,11 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     { recursive: true },
   );
   await mkdir(path.join(outputDir, 'schemas'), { recursive: true });
+  for (const filename of ['lib/runtime.mjs', 'lib/validator.mjs', 'schemas/flow-graph.schema.json']) {
+    const source = path.join('agentic', 'code', 'addons', 'composition-engine', filename);
+    await mkdir(path.dirname(path.join(outputDir, source)), { recursive: true });
+    await cp(path.join(repoRoot, source), path.join(outputDir, source));
+  }
   await cp(path.join(repoRoot, 'schemas', 'mission-v1.schema.json'), path.join(outputDir, 'schemas', 'mission-v1.schema.json'));
   await cp(path.join(repoRoot, 'schemas', 'models'), path.join(outputDir, 'schemas', 'models'), { recursive: true });
   // Installed adapters and the worker-invoke runtime closure. The packaged

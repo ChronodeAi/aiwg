@@ -251,6 +251,7 @@ export function registerMissionToolset(server) {
       exploration_quota: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Require structural variant after this many flat cycles (off unless declared; no default K)'),
       budget_stop_policy: z.enum(['completion-wins', 'budget-wins']).optional().describe('Stop semantics when the completing iteration crosses a ceiling (default: completion-wins)'),
       project_dir: z.string().optional().describe('Project directory for CLI dispatch'),
+      worker_dispatch: z.string().optional().describe('Absolute prepared managed worker dispatch JSON path inside the project'),
       confirmed: z.boolean().default(false).describe('Required for durable/long-running mission dispatch'),
     },
     annotations: { destructiveHint: true, openWorldHint: true },
@@ -266,6 +267,7 @@ export function registerMissionToolset(server) {
     max_wall_clock_minutes,
     exploration_quota,
     budget_stop_policy,
+    worker_dispatch,
     project_dir,
     confirmed,
   }) => {
@@ -285,6 +287,7 @@ export function registerMissionToolset(server) {
       if (max_wall_clock_minutes) cliArgs.push('--max-wall-clock-minutes', String(max_wall_clock_minutes));
       if (exploration_quota) cliArgs.push('--exploration-quota', String(exploration_quota));
       if (budget_stop_policy) cliArgs.push('--budget-stop-policy', budget_stop_policy);
+      if (worker_dispatch) cliArgs.push('--worker-dispatch', worker_dispatch);
       const { stdout, stderr, code } = await runAiwgCli(
         cliArgs,
         { cwd: project_dir, timeoutMs: 30_000 },

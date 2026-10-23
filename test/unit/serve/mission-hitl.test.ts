@@ -16,7 +16,7 @@ afterAll(() => { vi.unstubAllEnvs(); rmSync(testState, { recursive: true, force:
 const promptId = 'ad0eac57-f070-4464-855a-46b60455704b';
 const otherId = 'f2724988-cfa5-4f75-9799-bac165ef92b9';
 function setup() {
-  const registry = new ExecutorRegistry();
+  const registry = new ExecutorRegistry(join(testState, 'trusted', 'executor-identities.json'));
   const registration = registry.register({ executor_id: 'ad0eac57-f070-4464-855a-46b60455704a', name: 'fixture', version: '1.0.0', spec_version: '1.0.0',
     transport_endpoints: { rest: 'http://fixture.test', ws: 'ws://fixture.test' }, capabilities: ['hitl'] });
   expect(registration).not.toHaveProperty('error');

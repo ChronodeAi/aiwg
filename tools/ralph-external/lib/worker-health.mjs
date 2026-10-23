@@ -123,7 +123,7 @@ export function createWorkerHealthObserver(options = {}) {
   const replayedKeys = new Set();
   const events = [];
   const gaps = [];
-  let sequence = 0, generation = 0, steps = null, total = 0, lastCheck = started, maxGap = 0;
+  let sequence = 0, generation = options.observerGeneration ?? 0, steps = null, total = 0, lastCheck = started, maxGap = 0;
   let observed = null, activity = null, progress = null, heartbeat = null, handshakeAt = null, stalledAt = null;
   let state = 'launching', handshake = 'unobserved', confidence = 'unobserved', reasonCode = 'AWAITING_HANDSHAKE';
   let termination = 'running', transitionCount = 0, live = null, disconnected = false, finalized = false;

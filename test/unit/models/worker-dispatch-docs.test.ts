@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readAiwgConfig } from '../../../src/config/aiwg-config.js';
+import { readAiwgConfig, validateParallelismConfig } from '../../../src/config/aiwg-config.js';
 import { ConfigLoader } from '../../../src/models/config-loader.js';
 import { modelsHandler } from '../../../src/cli/handlers/models.js';
 
@@ -47,5 +47,34 @@ describe('worker dispatch getting-started example (#3172)', () => {
       expect(plan.status).toBe('blocked');
       expect(plan.diagnostics).toEqual([expect.objectContaining({ code: 'OG_ADAPTER_UNQUALIFIED' })]);
     }
+  });
+});
+
+describe('managed operator guide configuration', () => {
+  it('loads the documented two groups with quota/budget policy and requires trusted activation', async () => {
+    const doc = await readFile(path.join(frameworkRoot, 'docs/getting-started/managed-worker-dispatch.md'), 'utf8');
+    const examples = [...doc.matchAll(/```json\n([\s\S]*?)\n```/g)].map(match => JSON.parse(match[1]));
+    expect(examples).toHaveLength(2);
+    const [config, models] = examples;
+    root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-managed-docs-'));
+    await mkdir(path.join(root, '.aiwg'));
+    vi.stubEnv('AIWG_CONFIG', path.join(root, 'user-config'));
+    vi.stubEnv('AIWG_HOME', frameworkRoot);
+    await writeFile(path.join(root, '.aiwg/aiwg.config'), JSON.stringify(config));
+    await writeFile(path.join(root, 'models.json'), JSON.stringify(models));
+    expect(validateParallelismConfig(config.parallelism)).toEqual([]);
+    const loaded = (await readAiwgConfig(root))!;
+    const merged = await new ConfigLoader(root).load(loaded.parallelism);
+    expect(Object.keys(loaded.parallelism!.groups!)).toEqual(['coding', 'review']);
+    expect(merged.defaults.workerSelection!.guards!.deniedEfforts).toContain('ultra');
+    expect(loaded.parallelism!.budgets).toMatchObject({ enforcement: 'observed', unknownCost: 'reserve' });
+    expect(loaded.parallelism!.activation).toBeUndefined();
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const brief = path.join(root, 'brief.txt');
+    await writeFile(brief, 'Bounded synthetic implementation.');
+    const args = ['resolve', '--role', 'coding', '--task', 'implementation', '--group', 'coding',
+      '--brief', brief, '--workdir', root, '--final-output', path.join(root, 'result.json'), '--format', 'json'];
+    expect((await modelsHandler.execute({ args, rawArgs: ['models', ...args], cwd: root, frameworkRoot })).exitCode).toBe(2);
+    expect(JSON.parse(String(output.mock.calls.at(-1)![0])).invocation).toBeFalsy();
   });
 });

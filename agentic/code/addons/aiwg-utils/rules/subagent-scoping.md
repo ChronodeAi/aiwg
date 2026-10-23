@@ -209,7 +209,14 @@ workers against every applicable cap. For example, three independent tasks with 
 cap of two and one native worker already active admit only one external worker;
 queue the others. Prepare a private conductor-owned capture root outside the worker's
 writable tree, an empty `runs/attempt-1` directory, and fresh plan/final paths. Grant
-only the qualified output leaves. Keep task-chain attempt, time and step accounting
+only the qualified output leaves. The brief and final output are worker paths, not
+capture paths: by default `--brief` must be inside `--workdir` (the qualified input
+root) and `--final-output` inside the worker-writable roots; anything else is refused
+with `OG_CONFIG_REFERENCE` at `/request/brief` or `/request/finalOutput`. Write the
+brief as plain text (Markdown). A brief starting with `{` is parsed as a complete
+`workerDirectBrief` (`schemas/mission-v1.schema.json`) whose intent, workspace, output,
+selected tuple and policy/catalog digests must already match the request, so an ad hoc
+JSON object is refused; use plain text unless you are re-resolving a prepared brief. Keep task-chain attempt, time and step accounting
 in conductor context even when receipts are off.
 
 1. **Resolve.** Save the complete JSON plan; resolving does not launch a worker.
@@ -219,8 +226,8 @@ in conductor context even when receipts are off.
 
    ```sh
    aiwg models resolve --role coding --task implementation --group qualified-group \
-     --brief /absolute/private/conductor/brief.json --workdir /absolute/worker-tree \
-     --final-output /absolute/private/conductor/final-1.json --transport shell \
+     --brief /absolute/worker-tree/.handoff/brief.md --workdir /absolute/worker-tree \
+     --final-output /absolute/worker-tree/.handoff/final-1.json --transport shell \
      --format json > /absolute/private/conductor/plan-1.json
    ```
 

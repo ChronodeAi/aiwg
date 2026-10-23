@@ -88,6 +88,12 @@ describe("MCP orchestration — missions", () => {
   const required = { session_id: "synthetic-session", objective: "synthetic objective", completion: "synthetic criterion" };
   const baseArgs = ["mc", "dispatch", "synthetic-session", "synthetic objective", "--completion", "synthetic criterion"];
 
+  it("queues managed workers through the same MC eligibility path", async () => {
+    await captureDispatch()({ ...required, confirmed: true, worker_dispatch: "/synthetic/dispatch.json", project_dir: "/synthetic" });
+    expect(runAiwgCliMock).toHaveBeenCalledWith([...baseArgs, "--worker-dispatch", "/synthetic/dispatch.json"],
+      { cwd: "/synthetic", timeoutMs: 30_000 });
+  });
+
   it.each([undefined, false])("refuses dispatch with confirmed=%s before invoking the CLI", async confirmed => {
     const result = await captureDispatch()({ ...required, ...(confirmed === undefined ? {} : { confirmed }) });
     expect(result.isError).toBe(true);

@@ -14,16 +14,65 @@
 
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import * as ui from '../ui.js';
-import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
+import { constants as fsConstants, promises as fs } from 'node:fs';
+import { isAbsolute, join, relative } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
-import { assertMissionWorkerHandoff } from '../../mission-protocol/codecs.js';
+import { assertMissionWorkerHandoff, assertValidWorkerPayload, validateWorkerPayload, workerConsumerSupport } from '../../mission-protocol/codecs.js';
+import { WORKER_BASELINE_FEATURES, type WorkerArtifact, type WorkerBrief, type WorkerDispatch, type WorkerHealthSummary, type WorkerResult, type WorkerSelectionIntent, type WorkerUsage } from '../../mission-protocol/types.js';
+import type { AiwgConfig } from '../../config/aiwg-config.js';
 
 // ── Constants ────────────────────────────────────────────────
 
 const MC_ROOT = '.aiwg/ralph-external/mc';
 const SESSIONS_DIR = join(MC_ROOT, 'sessions');
 const CONTROL_ID_RE = /^[a-zA-Z0-9._-]+$/;
+
+/** Managed callers fail closed on invalid configuration; legacy reads keep their
+ * historical best-effort behavior. No activation is installed by a caller. */
+async function readAdmissionConfig(projectRoot: string): Promise<AiwgConfig | null> {
+  const { readAiwgConfig, readAiwgConfigCandidate } = await import('../../config/aiwg-config.js');
+  try {
+    return await readAiwgConfig(projectRoot);
+  } catch (error) {
+    const candidate = await readAiwgConfigCandidate(projectRoot);
+    if (candidate?.parallelism?.worker_mode === 'managed') throw error;
+    return null;
+  }
+}
+
+/** Shared binding used by MC and the managed Mission/Flow/Ralph caller paths. */
+export async function createMcAdmissionScheduler(projectRoot: string, cfg: AiwgConfig | null,
+  hostRegistry?: Pick<import('../../serve/executor-registry.js').ExecutorRegistry, 'resolveHostAdmissionAuthority'>) {
+  const { resolveParallelism, workerActivationDigests, workerConfigDigest } = await import('../../config/aiwg-config.js');
+  const { FileAdmissionStore, SharedHostScheduler } = await import('../../serve/shared-host-scheduler.js');
+  const provider = cfg?.providers[0] ?? 'unknown';
+  const parallelism = resolveParallelism(cfg?.parallelism, provider);
+  if (parallelism.worker_mode === 'managed') {
+    const { managedProjectAdmissionPolicy, projectAdmissionAuthority } = await import('../../serve/shared-host-scheduler.js');
+    const activation = parallelism.activation;
+    if (!cfg || !activation || activation.configDigest !== workerActivationDigests(cfg).configDigest) {
+      throw new Error('managed admission requires a current activated policy');
+    }
+    const authority = projectAdmissionAuthority(projectRoot);
+    const authorityRef = parallelism.admission?.authorityRef ?? 'project';
+    if (authorityRef.startsWith('host:') && process.env['AIWG_EXECUTOR_IDENTITY_STORE']) {
+      ui.warn('AIWG_EXECUTOR_IDENTITY_STORE is ignored for host admission authority lookup.');
+    }
+    const policy = managedProjectAdmissionPolicy(projectRoot, { ...parallelism,
+      admission: { ...parallelism.admission, authorityRef: 'project' },
+    }, workerConfigDigest(activation), parallelism.max_parallel_subagents);
+    const binding = authorityRef === 'project' ? { store: new FileAdmissionStore(authority.path), policy }
+      : (hostRegistry ?? (await import('../../serve/executor-registry.js')).executorRegistry).resolveHostAdmissionAuthority(authorityRef, policy);
+    const scheduler = new SharedHostScheduler(binding.store, binding.policy);
+    scheduler.reconcileNow();
+    return scheduler;
+  }
+  const maxConcurrent = parallelism.max_parallel_mc_missions;
+  return new SharedHostScheduler(new FileAdmissionStore(join(projectRoot, MC_ROOT, 'admission.json')), {
+    maxConcurrent, leaseTtlMs: 5 * 60_000, agingIntervalMs: 30_000, allowPreemption: false, defaultHostQuota: maxConcurrent,
+  });
+}
 
 type MissionStatus = 'queued' | 'running' | 'done' | 'failed' | 'aborted' | 'paused';
 type SessionState = 'active' | 'paused' | 'stopped';
@@ -60,6 +109,11 @@ interface Mission {
   admissionState?: string;
   admissionLeaseExpiresAt?: string;
   admissionSubmittedAt?: string;
+  admissionGeneration?: number;
+  admissionLaunchClaimed?: boolean;
+  admissionExecution?: { pid: number; startedAt: string };
+  extensions?: Record<string, unknown>;
+  managedWorker?: { invocationPath: string; runDir: string };
 }
 
 interface Session {
@@ -72,6 +126,170 @@ interface Session {
   missions: Mission[];
   /** Idempotency ledger shared by CLI and Cockpit control mutations. */
   mutationKeys?: Record<string, { action: string; target: string; updatedAt: string }>;
+}
+
+const mcWorkerSupport = () => workerConsumerSupport([...WORKER_BASELINE_FEATURES, 'worker-health.v1']);
+
+function workerDispatch(mission: Mission): WorkerDispatch | undefined {
+  const bindings = new Set<WorkerDispatch>();
+  const seen = new Set<object>();
+  function visit(value: unknown): void {
+    if (!value || typeof value !== 'object' || seen.has(value)) return;
+    seen.add(value);
+    const record = value as Record<string, unknown>;
+    if (record['aiwg.worker-dispatch']) bindings.add(record['aiwg.worker-dispatch'] as WorkerDispatch);
+    visit(record.extensions);
+    visit(record.metadata);
+    for (const [key, child] of Object.entries(record)) if (key.startsWith('aiwg.source.')) visit(child);
+  }
+  visit(mission);
+  if (bindings.size > 1) throw new Error('Managed task contains multiple dispatch bindings');
+  return [...bindings][0];
+}
+
+async function readWorkerArtifact<T>(artifact: WorkerArtifact, projectRoot: string): Promise<T> {
+  const filename = artifact.ref.startsWith('file:') ? fileURLToPath(artifact.ref) : artifact.ref;
+  const inside = relative(projectRoot, filename);
+  if (!isAbsolute(filename) || inside.startsWith('..') || isAbsolute(inside)) throw new Error('Managed worker artifacts must be inside the project');
+  const bytes = await readWorkerBytes(filename);
+  if (`sha256:${createHash('sha256').update(bytes).digest('hex')}` !== artifact.digest) throw new Error('Managed worker artifact digest changed');
+  return JSON.parse(bytes.toString('utf8')) as T;
+}
+
+async function readWorkerBytes(filename: string): Promise<Buffer> {
+  const { inspectWorkerPath } = await import('../../serve/worker-invocation.js');
+  if (!await inspectWorkerPath(filename, 'file')) throw Object.assign(new Error('Managed worker artifact is missing'), { code: 'ENOENT' });
+  const handle = await fs.open(filename, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 1048576) throw new Error('Invalid managed worker artifact');
+    const bytes = Buffer.alloc(1048577);
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+    if (bytesRead > 1048576) throw new Error('Managed worker artifact exceeds its size bound');
+    return bytes.subarray(0, bytesRead);
+  } finally { await handle.close(); }
+}
+
+async function readWorkerJson(filename: string) {
+  return JSON.parse((await readWorkerBytes(filename)).toString('utf8'));
+}
+
+async function resolveMcWorker(ctx: HandlerContext, session: Pick<Session, 'id'>, mission: Mission, parentKind: 'mission' | 'flow' = 'mission') {
+  const dispatch = workerDispatch(mission);
+  if (!dispatch) return undefined;
+  const projectRoot = ctx.cwd || process.cwd();
+  const intent = await readWorkerArtifact<WorkerSelectionIntent>(dispatch.intent, projectRoot);
+  assertValidWorkerPayload('workerSelectionIntent', intent);
+  if (!dispatch.brief) throw new Error('Managed worker requires a prepared brief');
+  const brief = await readWorkerArtifact<WorkerBrief>(dispatch.brief, projectRoot);
+  assertValidWorkerPayload('workerBrief', brief);
+  const { workerConfigDigest } = await import('../../config/aiwg-config.js');
+  if (intent.parent.kind !== parentKind || intent.parent.id !== session.id || intent.objective !== mission.objective
+    || intent.taskId !== dispatch.taskId || intent.requestId !== dispatch.requestId
+    || brief.invocationId !== dispatch.invocationId || workerConfigDigest(brief.intent) !== workerConfigDigest(intent)
+    || brief.intentDigest !== workerConfigDigest(intent)) throw new Error('Managed worker task authority differs from its parent');
+  const { loadWorkerInputs } = await import('./models.js');
+  const { resolveWorkerInvocation } = await import('../../serve/worker-invocation.js');
+  const inputs = await loadWorkerInputs(ctx);
+  const plan = await resolveWorkerInvocation(inputs.snapshot, { role: intent.role, task: intent.taskClass, group: intent.group,
+    brief: dispatch.brief.ref.startsWith('file:') ? fileURLToPath(dispatch.brief.ref) : dispatch.brief.ref,
+    workdir: brief.workspace.path, final_output: brief.output.resultPath, managedIntent: intent }, inputs.drivers);
+  if (!plan.invocation || plan.status !== 'eligible' || plan.invocation.readiness !== 'launchable') {
+    throw new Error(`Managed worker is ineligible: ${plan.diagnostics.map(item => item.message).join('; ')}`);
+  }
+  if (parentKind === 'mission' && plan.invocation.transport !== 'shell') throw new Error('Managed Ralph capture requires a qualified shell transport');
+  return { dispatch, intent, brief, plan };
+}
+
+/** Flow adapters use the same eligibility, project authority and allowance owner. */
+export async function createMcFlowAdapter(ctx: HandlerContext, bindings: {
+  prepareNode(request: { runId: string; node: { id: string } }): Promise<{ objective: string; dispatch: WorkerDispatch }>;
+  invokeNode(request: unknown, context: unknown): Promise<unknown>;
+}) {
+  const cfg = await readAdmissionConfig(ctx.cwd);
+  if (!cfg?.parallelism?.worker_dispatch || cfg.parallelism.worker_mode !== 'managed') {
+    throw new Error('OG_CONTRACT_UNSUPPORTED: Flow shared dispatch requires managed mode');
+  }
+  const scheduler = await createMcAdmissionScheduler(ctx.cwd, cfg);
+  const { managedAllowanceFromOwner } = await import('../../serve/shared-host-scheduler.js');
+  const { createManagedCompositionAdapter } = await import(join(ctx.frameworkRoot, 'agentic/code/addons/composition-engine/lib/runtime.mjs'));
+  return createManagedCompositionAdapter({ scheduler, allowanceFromOwner: managedAllowanceFromOwner,
+    invokeNode: bindings.invokeNode,
+    prepareNode: async (request: { runId: string; node: { id: string } }) => {
+      const binding = await bindings.prepareNode(request);
+      const worker = await resolveMcWorker(ctx, { id: request.runId }, {
+        id: request.node.id, objective: binding.objective, status: 'queued', loop: 0,
+        maxIterations: 1, priority: 'normal', mode: 'direct', extensions: { 'aiwg.worker-dispatch': binding.dispatch },
+      }, 'flow');
+      if (!worker || worker.intent.taskId !== request.node.id) throw new Error('Flow task authority differs from node identity');
+      const selected = worker.plan.selected!;
+      return { invocation: worker.plan.invocation, plan: worker.plan, brief: worker.brief,
+        admission: { requestId: worker.dispatch.requestId, orchestratorId: request.runId,
+          environment: process.env.AIWG_ENVIRONMENT ?? 'default', provider: selected.inferenceProvider, runtimeKind: 'host',
+          priority: 10, submittedAt: new Date().toISOString(), queueTimeoutMs: (cfg.parallelism!.admission?.queueTimeoutSeconds ?? 300) * 1000,
+          preemptible: false, metadata: { nodeId: request.node.id, invocationId: worker.dispatch.invocationId },
+          managed: { kind: 'external', group: selected.group, member: selected.member, cli: selected.cli,
+            model: selected.modelKey, quotaScope: cfg.parallelism!.clis![selected.cli].quotaScope },
+          allowance: { runId: request.runId, taskId: request.node.id,
+            taskBudgets: { maxAttempts: worker.intent.limits.maxAttempts, maxTokens: worker.intent.limits.tokens,
+              maxCostUsd: worker.intent.limits.costUsd ?? undefined, timeoutSeconds: worker.intent.limits.wallSeconds },
+            reservation: { tokens: worker.plan.invocation!.limits.tokens, costUsd: worker.plan.invocation!.limits.costUsd } },
+        } };
+    },
+  });
+}
+
+/** Capture completion is evidence for the parent, never an independent gate. */
+async function readManagedWorkerState(mission: Mission, scheduler: Awaited<ReturnType<typeof createMcAdmissionScheduler>>) {
+  const binding = mission.managedWorker!;
+  const observation = await readWorkerJson(join(binding.runDir, 'health.json'));
+  assertValidWorkerPayload('workerHealthSummary', observation.health);
+  const dispatch = workerDispatch(mission)!;
+  if (observation.invocationId !== dispatch.invocationId || observation.health.observerGeneration !== mission.admissionGeneration) {
+    throw new Error('Stale managed worker observation');
+  }
+  let exit;
+  try { exit = await readWorkerJson(join(binding.runDir, 'exit.json')); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  if (!exit) return { status: 'running', health: observation.health };
+  if (exit.invocationId !== dispatch.invocationId || exit.managedAdmission?.requestId !== mission.admissionRequestId
+    || exit.managedAdmission?.generation !== mission.admissionGeneration) throw new Error('Stale managed worker exit evidence');
+  const record = scheduler.snapshot().records[mission.admissionRequestId!]!;
+  const usage: WorkerUsage = { inputTokens: null, outputTokens: null, cacheTokens: null, reasoningTokens: null,
+    costUsd: null, quality: 'unknown', reservedTokens: record.accounting!.reservation.tokens!,
+    reservedUsd: record.accounting!.reservation.costUsd };
+  const plan = await readWorkerJson(binding.invocationPath);
+  const succeeded = exit.exitCode === 0 && !exit.errorCode && !exit.timedOut && !exit.cancelled;
+  const result: WorkerResult = { version: 1, taskId: dispatch.taskId, invocationId: dispatch.invocationId,
+    briefDigest: plan.invocation.briefDigest, worker: null,
+    execution: { status: succeeded ? 'completed' : 'failed', exitCode: exit.exitCode,
+      requested: plan.invocation.selected, observedModel: null, observedFamily: null, observedEffort: null,
+      identityEvidence: [], identityQuality: 'unavailable', startedAt: mission.startedAt!, endedAt: exit.endedAt,
+      termination: exit.termination, usage, failure: null, health: observation.health },
+    verification: { status: 'pending', verifierId: null, runnerRef: null, artifactDigest: null, evidence: [], findings: [] } };
+  try {
+    const claims = await readWorkerJson(plan.invocation.finalPath);
+    assertValidWorkerPayload('workerClaims', claims);
+    result.worker = claims;
+  } catch { /* Invalid or absent claims remain separate from execution evidence. */ }
+  assertValidWorkerPayload('workerResult', result);
+  // Use the checkpoint's own directory; request IDs need not contain a session ID.
+  const destination = `${binding.invocationPath}.result.json`;
+  const bytes = JSON.stringify(result);
+  await fs.writeFile(destination, bytes, { mode: 0o600 });
+  dispatch.result = { ref: pathToFileURL(destination).href, digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` };
+  scheduler.acceptFinal(mission.admissionRequestId!, mission.admissionGeneration!, observation.health, usage);
+  // A surviving or unobservable outer supervisor cannot prove its own stop.
+  let supervisorGone = false;
+  try { process.kill(mission.admissionExecution!.pid, 0); }
+  catch (error) { supervisorGone = (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+  if (supervisorGone && exit.termination === 'confirmed' && exit.descendants === 'stopped') {
+    const settled = scheduler.settle(mission.admissionRequestId!, mission.admissionGeneration!, observation.health, usage, undefined, mission.admissionExecution);
+    mission.admissionState = settled.state;
+  }
+  dispatch.state = mission.admissionState === 'settled' ? succeeded ? 'completed' : 'failed' : 'uncertain';
+  // Verification and original completion criteria remain with the parent.
+  return { status: succeeded && result.worker?.status === 'completed' ? 'paused' : 'failed', health: observation.health };
 }
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -290,6 +508,7 @@ Queue a mission onto a session. Does NOT execute — use 'aiwg mc run' to launch
   --budget-stop-policy P        completion-wins (default) | budget-wins
   --mode pty-orchestrator       PTY-orchestrator mode (requires --target-agent)
   --target-agent <id>           Required for --mode pty-orchestrator
+  --worker-dispatch <path>      Prepared managed worker dispatch JSON (queues only)
   --expected-updated-at <time>  Reject stale state with exit 3
   --request-id <id>             Idempotent dispatch key`,
 
@@ -471,8 +690,10 @@ async function mcDispatch(ctx: HandlerContext): Promise<HandlerResult> {
   // mission-dispatch accepts only the frozen objective envelope. Worker
   // bindings can arrive through its existing session, so inspect that payload.
   try {
-    assertMissionWorkerHandoff(selected, 'mc-cli');
-    for (const mission of selected.missions) assertMissionWorkerHandoff(mission, 'mc-cli');
+    const cfg = await readAdmissionConfig(ctx.cwd || process.cwd());
+    const support = cfg?.parallelism?.worker_dispatch && cfg.parallelism.worker_mode === 'managed' ? mcWorkerSupport() : undefined;
+    assertMissionWorkerHandoff(selected, 'mc-cli', support);
+    for (const mission of selected.missions) assertMissionWorkerHandoff(mission, 'mc-cli', support);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     ui.error(message);
@@ -520,6 +741,21 @@ async function mcDispatch(ctx: HandlerContext): Promise<HandlerResult> {
     mode,
     targetAgent: targetAgent || undefined,
   };
+
+  const dispatchPath = parseFlag(ctx.args, '--worker-dispatch');
+  if (dispatchPath) {
+    try {
+      const cfg = await readAdmissionConfig(ctx.cwd || process.cwd());
+      if (!cfg?.parallelism?.worker_dispatch || cfg.parallelism.worker_mode !== 'managed' || mode !== 'direct') {
+        throw new Error('OG_CONTRACT_UNSUPPORTED: worker dispatch requires the managed MC caller');
+      }
+      if (!isAbsolute(dispatchPath) || relative(ctx.cwd, dispatchPath).startsWith('..')) throw new Error('Worker dispatch path must be inside the project');
+      const dispatch = await readWorkerJson(dispatchPath) as WorkerDispatch;
+      mission.extensions = { 'aiwg.worker-dispatch': dispatch };
+      assertMissionWorkerHandoff(mission, 'mc-cli', mcWorkerSupport());
+      await resolveMcWorker(ctx, selected, mission);
+    } catch (error) { return managedControlFailure(error); }
+  }
 
   const result = await mutateSession(selected.id, 'dispatch', mission.id, flags.expectedUpdatedAt, flags.requestId, session => {
     if (session.state !== 'active') return 'invalid_state';
@@ -689,9 +925,12 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
   }
 
   const queued = session.missions.filter((m) => m.status === 'queued');
+  let cfg: AiwgConfig | null;
   try {
-    assertMissionWorkerHandoff(session, 'mc-cli');
-    for (const mission of queued) assertMissionWorkerHandoff(mission, 'mc-cli');
+    cfg = await readAdmissionConfig(ctx.cwd || process.cwd());
+    const support = cfg?.parallelism?.worker_dispatch && cfg.parallelism.worker_mode === 'managed' ? mcWorkerSupport() : undefined;
+    assertMissionWorkerHandoff(session, 'mc-cli', support);
+    for (const mission of queued) assertMissionWorkerHandoff(mission, 'mc-cli', support);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     ui.error(message);
@@ -712,8 +951,14 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
 
   const projectRoot = ctx.cwd || process.cwd();
   const frameworkRoot = ctx.frameworkRoot;
-  const { readAiwgConfig, resolveParallelism } = await import('../../config/aiwg-config.js');
-  const cfg = await readAiwgConfig(projectRoot).catch(() => null);
+  let scheduler: Awaited<ReturnType<typeof createMcAdmissionScheduler>>;
+  try {
+    scheduler = await createMcAdmissionScheduler(projectRoot, cfg);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ui.error(message);
+    return { exitCode: 1, message };
+  }
   const provider = cfg?.providers[0] ?? 'unknown';
 
   const estimate = estimateMissionRunCost(eligible, provider);
@@ -750,20 +995,17 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
   let launched = 0;
   let skipped = 0;
   let failed = 0;
-  const { FileAdmissionStore, SharedHostScheduler } = await import('../../serve/shared-host-scheduler.js');
-  const maxConcurrent = resolveParallelism(cfg?.parallelism, provider).max_parallel_mc_missions;
-  const scheduler = new SharedHostScheduler(
-    new FileAdmissionStore(join(projectRoot, MC_ROOT, 'admission.json')),
-    {
-      maxConcurrent,
-      leaseTtlMs: 5 * 60_000,
-      agingIntervalMs: 30_000,
-      allowPreemption: false,
-      defaultHostQuota: maxConcurrent,
-    },
-  );
+  const managed = cfg?.parallelism?.worker_dispatch && cfg.parallelism.worker_mode === 'managed';
+  const allowanceOwner = managed ? await import('../../serve/shared-host-scheduler.js') : null;
+
+  // Qualify every worker before admission; one parent retains completion gates.
+  const workers = new Map<string, Awaited<ReturnType<typeof resolveMcWorker>>>();
+  try {
+    for (const mission of queued) if (workerDispatch(mission)) workers.set(mission.id, await resolveMcWorker(ctx, session, mission));
+  } catch (error) { return managedControlFailure(error); }
 
   for (const mission of queued) {
+    const worker = workers.get(mission.id);
     if (mission.mode === 'pty-orchestrator') {
       ui.warn(`Mission ${mission.id} mode=pty-orchestrator is not yet wired to mc run; skipping. Use 'aiwg ralph' directly for PTY-orchestrator workflows.`);
       skipped += 1;
@@ -778,7 +1020,7 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
 
     const admissionRequestId = mission.admissionState === 'released'
       ? `${session.id}.${mission.id}.${Date.now().toString(36)}`
-      : mission.admissionRequestId ?? `${session.id}.${mission.id}`;
+      : mission.admissionRequestId ?? worker?.dispatch.requestId ?? `${session.id}.${mission.id}`;
     const admissionSubmittedAt = mission.admissionState === 'released'
       ? new Date().toISOString()
       : mission.admissionSubmittedAt ?? new Date().toISOString();
@@ -786,18 +1028,34 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
       requestId: admissionRequestId,
       orchestratorId: session.id,
       environment: process.env.AIWG_ENVIRONMENT ?? 'default',
-      provider,
+      provider: worker?.plan.invocation?.selected.inferenceProvider ?? provider,
       runtimeKind: 'host',
       priority: mission.priority === 'critical' ? 100 : mission.priority === 'high' ? 50 : mission.priority === 'low' ? 0 : 10,
       submittedAt: admissionSubmittedAt,
-      queueTimeoutMs: 24 * 60 * 60_000,
+      queueTimeoutMs: managed ? (cfg?.parallelism?.admission?.queueTimeoutSeconds ?? 300) * 1000 : 24 * 60 * 60_000,
       preemptible: false,
-      metadata: { missionId: mission.id },
+      metadata: { missionId: mission.id, ...(worker ? { invocationId: worker.dispatch.invocationId } : {}) },
+      ...(managed ? { managed: worker ? { kind: 'external' as const, group: worker.plan.selected!.group,
+        member: worker.plan.selected!.member, cli: worker.plan.selected!.cli, model: worker.plan.selected!.modelKey,
+        quotaScope: cfg!.parallelism!.clis![worker.plan.selected!.cli].quotaScope } : { kind: 'native' as const },
+        allowance: worker ? { runId: session.id, taskId: worker.intent.taskId,
+          taskBudgets: { maxAttempts: Math.min(worker.intent.limits.maxAttempts, mission.maxIterations),
+            maxTokens: Math.min(worker.intent.limits.tokens, mission.maxTotalTokens ?? Infinity),
+            maxCostUsd: worker.intent.limits.costUsd === null ? mission.maxTotalCost
+              : Math.min(worker.intent.limits.costUsd, mission.maxTotalCost ?? Infinity),
+            timeoutSeconds: Math.min(worker.intent.limits.wallSeconds, (mission.maxWallClockMinutes ?? Infinity) * 60) },
+          reservation: { tokens: worker.plan.invocation!.limits.tokens, costUsd: worker.plan.invocation!.limits.costUsd },
+        } : allowanceOwner!.managedAllowanceFromOwner(session.id, mission.id, {
+          kind: 'ralph', maxIterations: mission.maxIterations, maxTotalTokens: mission.maxTotalTokens,
+          maxTotalCost: mission.maxTotalCost, maxWallClockMinutes: mission.maxWallClockMinutes,
+        }),
+      } : {}),
     });
     mission.admissionRequestId = admissionRequestId;
     mission.admissionSubmittedAt = admissionSubmittedAt;
     mission.admissionState = admission.state;
     mission.admissionLeaseExpiresAt = admission.leaseExpiresAt;
+    if (managed) mission.admissionGeneration = admission.leaseGeneration;
     await writeSession(session);
     if (admission.state !== 'admitted') {
       await appendLog(session.id, {
@@ -812,22 +1070,59 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
     }
 
     try {
+      let maxWallClockMinutes = mission.maxWallClockMinutes;
+      if (managed) {
+        const scopes = scheduler.snapshot().allowances!;
+        const deadlines = [scopes[admission.accounting!.runKey]!.deadlineAt, scopes[admission.accounting!.taskKey]!.deadlineAt]
+          .filter((value): value is string => value !== undefined).map(Date.parse);
+        const remainingMs = Math.min(...deadlines) - Date.now();
+        if (remainingMs <= 0) throw new Error('cumulative allowance deadline elapsed before launch');
+        maxWallClockMinutes = deadlines.length ? remainingMs / 60_000 : undefined;
+      }
+      if (worker) {
+        if (worker.brief.lease.generation !== mission.admissionGeneration || worker.brief.lease.reservationId !== admissionRequestId
+          || worker.brief.lease.authorityRef !== 'project') throw new Error('Managed brief lease differs from current admission');
+        const invocationPath = join(projectRoot, SESSIONS_DIR, session.id, `${mission.id}.invocation.json`);
+        const runDir = join(projectRoot, SESSIONS_DIR, session.id, `${mission.id}.run`);
+        await fs.writeFile(invocationPath, JSON.stringify(worker.plan), { mode: 0o600 });
+        mission.managedWorker = { invocationPath, runDir };
+      }
+      if (managed) {
+        scheduler.claimLaunch(admissionRequestId, mission.admissionGeneration!);
+        mission.admissionLaunchClaimed = true;
+        await writeSession(session);
+      }
       const result = await launchExternalRalph(frameworkRoot, projectRoot, {
         objective: mission.objective,
         completionCriteria: mission.completion,
-        maxIterations: mission.maxIterations,
-        maxTotalTokens: mission.maxTotalTokens,
+        maxIterations: managed ? admission.accounting!.attemptCount : mission.maxIterations,
+        maxTotalTokens: managed ? admission.accounting!.reservation.tokens ?? undefined : mission.maxTotalTokens,
         maxOutputTokens: mission.maxOutputTokens,
         maxToolCalls: mission.maxToolCalls,
-        maxTotalCost: mission.maxTotalCost,
-        maxWallClockMinutes: mission.maxWallClockMinutes,
+        maxTotalCost: managed ? admission.accounting!.reservation.costUsd ?? undefined : mission.maxTotalCost,
+        maxWallClockMinutes,
         explorationQuota: mission.explorationQuota,
         budgetStopPolicy: mission.budgetStopPolicy,
         // Defaults for cycle 1; advanced options can be added per-mission later.
         verbose: false,
+        ...(managed ? { managedAdmission: { requestId: admissionRequestId, generation: mission.admissionGeneration! } } : {}),
+        ...(worker ? { managedWorker: mission.managedWorker } : {}),
       });
 
+      if (managed) {
+        if (!result.execution || result.execution.pid !== result.pid) throw new Error('managed launch requires its OS process birth identity');
+        scheduler.bindExecution(admissionRequestId, mission.admissionGeneration!, result.execution);
+        mission.admissionExecution = result.execution;
+        mission.ralphLoopId = result.loopId;
+        mission.ralphPid = result.pid;
+        const current = scheduler.renew(admissionRequestId, mission.admissionGeneration);
+        if (current.state !== 'admitted') {
+          await cancelManagedMission(ctx, scheduler, mission);
+          throw new Error('managed launch lost admission during execution checkpoint; reconcile uncertain work');
+        }
+      }
       mission.status = 'running';
+      if (worker) worker.dispatch.state = 'running';
       mission.startedAt = new Date().toISOString();
       mission.ralphLoopId = result.loopId;
       mission.ralphPid = result.pid;
@@ -846,8 +1141,11 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
       mission.status = 'failed';
       mission.error = msg;
       mission.completedAt = new Date().toISOString();
-      scheduler.release(admissionRequestId);
-      mission.admissionState = 'released';
+      if (managed) mission.admissionState = scheduler.stop(admissionRequestId, mission.admissionGeneration!, 'observer-loss').state;
+      else {
+        scheduler.release(admissionRequestId);
+        mission.admissionState = 'released';
+      }
       mission.admissionLeaseExpiresAt = undefined;
       await writeSession(session);
       await appendLog(session.id, {
@@ -884,17 +1182,12 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
  */
 async function syncMissionsFromRalph(session: Session, projectRoot: string): Promise<boolean> {
   let mutated = false;
-  const { readAiwgConfig, resolveParallelism } = await import('../../config/aiwg-config.js');
-  const { FileAdmissionStore, SharedHostScheduler } = await import('../../serve/shared-host-scheduler.js');
-  const cfg = await readAiwgConfig(projectRoot).catch(() => null);
-  const provider = cfg?.providers[0] ?? 'unknown';
-  const maxConcurrent = resolveParallelism(cfg?.parallelism, provider).max_parallel_mc_missions;
-  const scheduler = new SharedHostScheduler(
-    new FileAdmissionStore(join(projectRoot, MC_ROOT, 'admission.json')),
-    { maxConcurrent, leaseTtlMs: 5 * 60_000, agingIntervalMs: 30_000, allowPreemption: false, defaultHostQuota: maxConcurrent },
-  );
+  const cfg = await readAdmissionConfig(projectRoot);
+  const scheduler = await createMcAdmissionScheduler(projectRoot, cfg);
+  const managed = cfg?.parallelism?.worker_dispatch && cfg.parallelism.worker_mode === 'managed';
   for (const mission of session.missions) {
-    if (mission.status !== 'running') continue;
+    const wasRunning = mission.status === 'running';
+    if (!wasRunning && !(managed && mission.managedWorker && mission.admissionState === 'uncertain')) continue;
     if (!mission.ralphLoopId) continue;
     const ralphStatePath = join(
       projectRoot,
@@ -904,16 +1197,28 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
       mission.ralphLoopId,
       'session-state.json',
     );
+    if (managed) {
+      const current = mission.admissionRequestId ? scheduler.snapshot().records[mission.admissionRequestId] : undefined;
+      if (!current || !mission.admissionGeneration || current.leaseGeneration !== mission.admissionGeneration) continue;
+    }
     try {
-      const raw = await fs.readFile(ralphStatePath, 'utf-8');
-      const state = JSON.parse(raw);
+      const state = managed && mission.managedWorker
+        ? await readManagedWorkerState(mission, scheduler)
+        : JSON.parse(await fs.readFile(ralphStatePath, 'utf-8'));
       const ralphStatus = String(state.status || '').toLowerCase();
+      if (managed && mission.admissionRequestId && state.health !== undefined) {
+        if (!validateWorkerPayload('workerHealthSummary', state.health).valid) throw new Error('invalid Ralph worker health');
+        const observed = scheduler.observeHealth(mission.admissionRequestId, mission.admissionGeneration!, state.health as WorkerHealthSummary);
+        mission.admissionState = observed.state;
+        mutated = true;
+      }
       // Map ralph status → mc mission status
       let nextStatus: MissionStatus | null = null;
       if (ralphStatus === 'completed') nextStatus = 'done';
       else if (ralphStatus === 'failed' || ralphStatus === 'crashed') nextStatus = 'failed';
       else if (ralphStatus === 'aborted') nextStatus = 'aborted';
       else if (ralphStatus === 'paused') nextStatus = 'paused';
+      if (!wasRunning) nextStatus = null;
       // 'running' stays running
 
       // Reflect iteration count if available
@@ -935,13 +1240,23 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
         }
         mutated = true;
         if (mission.admissionRequestId) {
-          try { scheduler.release(mission.admissionRequestId); } catch { /* already expired or released */ }
-          mission.admissionState = 'released';
+          if (managed) {
+            if (!mission.managedWorker) {
+              if (state.health) scheduler.acceptFinal(mission.admissionRequestId, mission.admissionGeneration!, state.health as WorkerHealthSummary);
+            }
+            if (mission.admissionState !== 'settled') mission.admissionState = scheduler.stop(mission.admissionRequestId, mission.admissionGeneration!, 'observer-loss').state;
+          }
+          else {
+            try { scheduler.release(mission.admissionRequestId); } catch { /* already expired or released */ }
+            mission.admissionState = 'released';
+          }
           mission.admissionLeaseExpiresAt = undefined;
         }
       } else if (mission.admissionRequestId) {
         try {
-          const renewed = scheduler.renew(mission.admissionRequestId);
+          const renewed = managed
+            ? scheduler.renew(mission.admissionRequestId, mission.admissionGeneration)
+            : scheduler.renew(mission.admissionRequestId);
           mission.admissionState = renewed.state;
           mission.admissionLeaseExpiresAt = renewed.leaseExpiresAt;
           mutated = true;
@@ -950,7 +1265,12 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
         }
       }
     } catch {
-      // State file missing/unreadable — leave mission status unchanged.
+      if (managed && mission.admissionRequestId) {
+        mission.admissionState = scheduler.disconnect(mission.admissionRequestId, mission.admissionGeneration!).state;
+        mission.admissionLeaseExpiresAt = undefined;
+        mutated = true;
+      }
+      // Missing supervision preserves the last task status and all artifacts.
     }
   }
   if (mutated) {
@@ -1054,6 +1374,46 @@ async function mcStatus(ctx: HandlerContext): Promise<HandlerResult> {
   return { exitCode: 0 };
 }
 
+async function managedControlScheduler(ctx: HandlerContext, missions: Mission[]) {
+  const projectRoot = ctx.cwd || process.cwd();
+  const cfg = await readAdmissionConfig(projectRoot);
+  if (!cfg?.parallelism?.worker_dispatch || cfg.parallelism.worker_mode !== 'managed') return undefined;
+  const scheduler = await createMcAdmissionScheduler(projectRoot, cfg);
+  const snapshot = scheduler.snapshot();
+  for (const mission of missions) {
+    if (!mission.admissionRequestId) continue;
+    const record = snapshot.records[mission.admissionRequestId];
+    if (!record || !mission.admissionGeneration || record.leaseGeneration !== mission.admissionGeneration) {
+      throw new Error('stale managed Mission checkpoint generation');
+    }
+  }
+  return scheduler;
+}
+
+function managedControlFailure(error: unknown): HandlerResult {
+  const message = error instanceof Error ? error.message : String(error);
+  ui.error(message);
+  return { exitCode: 1, message };
+}
+
+async function cancelManagedMission(
+  ctx: HandlerContext, scheduler: Awaited<ReturnType<typeof createMcAdmissionScheduler>>, mission: Mission,
+): Promise<void> {
+  if (!mission.admissionRequestId) return;
+  const cancelled = scheduler.cancel(mission.admissionRequestId, mission.admissionGeneration);
+  mission.admissionState = cancelled.state;
+  mission.admissionLeaseExpiresAt = undefined;
+  if (cancelled.state !== 'uncertain' || !mission.ralphLoopId || !mission.admissionExecution) return;
+  try {
+    const { cancelManagedRalph } = await import('./ralph-launcher.js');
+    await cancelManagedRalph(ctx.frameworkRoot, ctx.cwd || process.cwd(), mission.ralphLoopId, {
+      requestId: mission.admissionRequestId, generation: mission.admissionGeneration!, execution: mission.admissionExecution,
+    });
+  } catch {
+    // Reservation is already uncertain; unavailable signalling cannot release it.
+  }
+}
+
 async function mcAbort(ctx: HandlerContext): Promise<HandlerResult> {
   const positional = getPositionalArgs(ctx.args);
   const sessionId = positional[0];
@@ -1064,6 +1424,11 @@ async function mcAbort(ctx: HandlerContext): Promise<HandlerResult> {
     return { exitCode: 1 };
   }
 
+  let managedScheduler: Awaited<ReturnType<typeof managedControlScheduler>>;
+  try {
+    const selected = await readSession(sessionId);
+    managedScheduler = await managedControlScheduler(ctx, selected?.missions.filter(mission => mission.id === missionId) ?? []);
+  } catch (error) { return managedControlFailure(error); }
   const flags = mutationFlags(ctx.args);
   const result = await mutateSession(sessionId, 'cancel', missionId, flags.expectedUpdatedAt, flags.requestId, session => {
     const mission = session.missions.find(m => m.id === missionId);
@@ -1079,19 +1444,18 @@ async function mcAbort(ctx: HandlerContext): Promise<HandlerResult> {
     const mission = result.session.missions.find(candidate => candidate.id === missionId);
     if (mission?.admissionRequestId) {
       try {
-        const projectRoot = ctx.cwd || process.cwd();
-        const { readAiwgConfig, resolveParallelism } = await import('../../config/aiwg-config.js');
-        const { FileAdmissionStore, SharedHostScheduler } = await import('../../serve/shared-host-scheduler.js');
-        const cfg = await readAiwgConfig(projectRoot).catch(() => null);
-        const provider = cfg?.providers[0] ?? 'unknown';
-        const maxConcurrent = resolveParallelism(cfg?.parallelism, provider).max_parallel_mc_missions;
-        const scheduler = new SharedHostScheduler(
-          new FileAdmissionStore(join(projectRoot, MC_ROOT, 'admission.json')),
-          { maxConcurrent, leaseTtlMs: 5 * 60_000, agingIntervalMs: 30_000, allowPreemption: false, defaultHostQuota: maxConcurrent },
-        );
-        scheduler.cancel(mission.admissionRequestId);
-      } catch {
-        // The mission state is authoritative; lease expiry provides recovery.
+        if (managedScheduler) {
+          await cancelManagedMission(ctx, managedScheduler, mission);
+          await writeSession(result.session);
+        } else {
+          const projectRoot = ctx.cwd || process.cwd();
+          const cfg = await readAdmissionConfig(projectRoot);
+          const scheduler = await createMcAdmissionScheduler(projectRoot, cfg);
+          scheduler.cancel(mission.admissionRequestId);
+        }
+      } catch (error) {
+        if (managedScheduler) return managedControlFailure(error);
+        // Legacy leases keep their existing best-effort cancellation behavior.
       }
     }
   }
@@ -1109,6 +1473,9 @@ async function mcPause(ctx: HandlerContext): Promise<HandlerResult> {
     ui.error('No active session to pause.');
     return { exitCode: 1 };
   }
+  let managedScheduler: Awaited<ReturnType<typeof managedControlScheduler>>;
+  try { managedScheduler = await managedControlScheduler(ctx, selected.missions.filter(mission => mission.status === 'running')); }
+  catch (error) { return managedControlFailure(error); }
   const flags = mutationFlags(ctx.args);
   const result = await mutateSession(selected.id, 'pause', selected.id, flags.expectedUpdatedAt, flags.requestId, session => {
     if (session.state !== 'active') return 'invalid_state';
@@ -1117,6 +1484,13 @@ async function mcPause(ctx: HandlerContext): Promise<HandlerResult> {
     return undefined;
   });
   if (!result.ok) return mutationFailure(result);
+
+  if (!result.replayed && managedScheduler) {
+    for (const mission of result.session.missions) {
+      if (mission.status === 'paused') await cancelManagedMission(ctx, managedScheduler, mission);
+    }
+    await writeSession(result.session);
+  }
 
   ui.success(`${result.replayed ? 'Replayed pause for' : 'Paused'} session: ${selected.id}`);
   return { exitCode: 0, message: JSON.stringify({ ok: true, replayed: result.replayed, updated_at: result.session.updatedAt }) };
@@ -1130,6 +1504,24 @@ async function mcResume(ctx: HandlerContext): Promise<HandlerResult> {
   if (!selected || selected.state !== 'paused') {
     ui.error('No paused session to resume.');
     return { exitCode: 1 };
+  }
+  try {
+    const cfg = await readAdmissionConfig(ctx.cwd || process.cwd());
+    if (cfg?.parallelism?.worker_dispatch && cfg.parallelism.worker_mode === 'managed') {
+      const scheduler = await createMcAdmissionScheduler(ctx.cwd || process.cwd(), cfg);
+      const snapshot = scheduler.snapshot();
+      for (const mission of selected.missions.filter(candidate => candidate.status === 'paused')) {
+        if (!mission.admissionRequestId) continue;
+        const record = snapshot.records[mission.admissionRequestId];
+        if (!record || record.leaseGeneration !== mission.admissionGeneration || record.state !== 'admitted') {
+          throw new Error('managed resume requires current admission and reconciliation of uncertain work');
+        }
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ui.error(message);
+    return { exitCode: 1, message };
   }
   const flags = mutationFlags(ctx.args);
   const result = await mutateSession(selected.id, 'resume', selected.id, flags.expectedUpdatedAt, flags.requestId, session => {
@@ -1155,6 +1547,12 @@ async function mcStop(ctx: HandlerContext): Promise<HandlerResult> {
     return { exitCode: 1 };
   }
 
+  let managedScheduler: Awaited<ReturnType<typeof managedControlScheduler>>;
+  try {
+    managedScheduler = await managedControlScheduler(ctx, session.missions.filter(mission =>
+      mission.status === 'queued' || (!drain && (mission.status === 'running' || mission.status === 'paused'))));
+  } catch (error) { return managedControlFailure(error); }
+
   if (drain) {
     // Mark queued missions as aborted, let running finish
     for (const m of session.missions) {
@@ -1174,6 +1572,11 @@ async function mcStop(ctx: HandlerContext): Promise<HandlerResult> {
     }
   }
 
+  if (managedScheduler) {
+    for (const mission of session.missions) {
+      if (mission.status === 'aborted') await cancelManagedMission(ctx, managedScheduler, mission);
+    }
+  }
   session.state = 'stopped';
   await writeSession(session);
   await appendLog(session.id, { event: 'session_stopped', drain });
