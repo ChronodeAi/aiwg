@@ -97,16 +97,23 @@ process.exitCode = result.exitCode;
 }
 
 describe('doctor worker qualification through the public CLI (fake CLIs only)', () => {
-  it('reports a blocked namespace probe through doctor JSON and refuses qualification without writing a store', async () => {
+  it('reports a blocked namespace probe as launcher-scoped and still qualifies Tier 0 direct dispatch', async () => {
+    // Tier 0 direct handoff runs the rendered command from the conductor's own
+    // shell under the conductor harness's sandbox; only the systemd-unit
+    // launcher needs the namespace probe, and it fails closed at launch.
     const f = await fixture(false, false, false);
     const result = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
-    expect(result.code, result.stderr).toBe(1);
+    expect(result.code, result.stderr).toBe(0);
     const report = JSON.parse(result.stdout);
-    expect(report.workers[0]).toMatchObject({ ready: false, reason: 'OG_NATIVE_SANDBOX_UNAVAILABLE' });
-    expect(report.sandboxChecks[0]).toMatchObject({ status: 'blocked', probe: {
+    expect(report.workers[0]).toMatchObject({ ready: true,
+      launcherSandbox: { status: 'blocked', code: 'OG_NATIVE_SANDBOX_UNAVAILABLE', scope: 'systemd-launcher' } });
+    expect(report.sandboxChecks[0]).toMatchObject({ status: 'blocked', scope: 'systemd-launcher', probe: {
       ok: false, detail: 'uid_map: Operation not permitted', code: 'OG_NATIVE_SANDBOX_UNAVAILABLE' } });
-    expect(report.qualification).toMatchObject({ status: 'failed', sandboxChecks: report.sandboxChecks });
-    await expect(access(path.join(f.config, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(report.qualification).toMatchObject({ status: 'recorded', sandboxChecks: report.sandboxChecks });
+    await expect(access(path.join(f.config, 'worker-installations.json'))).resolves.toBeUndefined();
+    const resolved = await f.resolve();
+    expect(resolved.code, resolved.stderr).toBe(0);
+    expect(JSON.parse(resolved.stdout).invocation.readiness).toBe('launchable');
   });
 
   it('qualifies native-sandbox policy without the failing systemd namespace probe', async () => {
@@ -655,7 +662,7 @@ try {
 });
 
 describe('doctor namespace compatibility through the launcher unit probe', () => {
-  it('reports the unit probe failure and blocks qualification before store changes', async () => {
+  it('reports the unit probe failure as launcher-scoped without failing qualification', async () => {
     const { checkWorkerSandboxLaunches, qualifyProbedWorkers } = await import('../../../tools/cli/worker-qualification.mjs');
     const f = workerResolutionFixture();
     f.snapshot.registry.providers.codex.workerAdapter!.provider = 'codex';
@@ -667,11 +674,15 @@ describe('doctor namespace compatibility through the launcher unit probe', () =>
       detectIsolation: () => ({ mode: 'systemd-unit' }), probeNativeSandbox };
     const checks = await checkWorkerSandboxLaunches(input);
     expect(checks).toHaveLength(1);
-    expect(checks[0]).toMatchObject({ status: 'blocked', isolation: 'systemd-unit',
+    expect(checks[0]).toMatchObject({ status: 'blocked', isolation: 'systemd-unit', scope: 'systemd-launcher',
       diagnostics: [{ code: 'OG_NATIVE_SANDBOX_UNAVAILABLE', message: expect.stringContaining('AppArmor allowance') }] });
     const result = await qualifyProbedWorkers({ ...input, packageRoot: repo, yes: true,
       section: { installFindings: [{ cli: 'codex', readiness: 'ready', executable: '/synthetic/codex', installedVersion: '1.0.0' }] } });
-    expect(result).toMatchObject({ status: 'failed', sandboxChecks: checks });
+    // The probe is reported with the result, but it no longer short-circuits
+    // qualification: the store is prepared and each CLI is evaluated.
+    expect(result.sandboxChecks).toEqual(checks);
+    expect(result.results.some((entry: { diagnostics?: Array<{ code: string }> }) =>
+      entry.diagnostics?.some(diagnostic => diagnostic.code === 'OG_NATIVE_SANDBOX_UNAVAILABLE'))).toBe(false);
   });
 
   it('reports passing probes and skips them for the policy-selected native sandbox', async () => {

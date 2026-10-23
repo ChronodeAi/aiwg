@@ -481,12 +481,20 @@ dispatch back on later restores the same setup.
 
 ## Worker launch boundary on Linux
 
-Workers use a systemd user unit by default (`execution.launchMode: "systemd-unit"`),
+This section covers AIWG's own launcher: `aiwg ralph-external --launch-worker`
+and managed Mission Control launches. It does not apply to Tier 0 direct
+handoff, the default. In Tier 0 the conductor runs the command rendered by
+`aiwg models resolve --transport shell --format shell` from its own shell, so the
+conductor harness's sandbox applies and no systemd unit is created.
+
+Launcher workers use a systemd user unit by default (`execution.launchMode: "systemd-unit"`),
 with cgroup memory limits and a cgroup kill scope. For Codex `read-only` and
 `workspace-write` sandboxes, the launcher first runs a bounded, non-inference
 user/network namespace probe inside a transient user unit using the worker's
 client environment handling. `aiwg doctor --probe-workers` reports this same
-check in `sandboxChecks`; qualification refuses a failed check.
+check in `sandboxChecks` with `scope: "systemd-launcher"`. A blocked check is a
+warning, not a qualification failure: Tier 0 direct dispatch stays ready, and
+the launcher re-probes and refuses at launch time.
 
 Ubuntu hosts can restrict unprivileged user namespaces inside systemd user units
 through AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`) even when
