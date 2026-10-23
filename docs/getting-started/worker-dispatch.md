@@ -2,6 +2,9 @@
 
 > **First time using AIWG?** Begin with [Install, Connect, and Verify](install-connect-verify.md).
 
+For shared admission, fenced cancellation and recovery, see
+[Operate managed worker dispatch](managed-worker-dispatch.md).
+
 ## What it does
 
 AIWG can dispatch bounded pieces of work directly to other AI CLIs installed on your

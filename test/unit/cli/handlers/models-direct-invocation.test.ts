@@ -14,6 +14,9 @@ import { McpServerRegistry, workerServerDigest } from '../../../../src/mcp/regis
 import { workerResolutionFixture } from '../../../fixtures/worker-resolution.js';
 import { fixtureJson } from '../../../conformance/mission-v1/worker-contract-fixtures.js';
 import { workerInputSchema } from '../../../fixtures/ralph-worker-protocol.mjs';
+import { main as configMain } from '../../../../src/config/cli.js';
+import { readAiwgConfig, workerActivationDigests, workerConfigDigest } from '../../../../src/config/aiwg-config.js';
+import { bindManagedAdmissionPolicy, FileAdmissionStore, managedProjectAdmissionPolicy, projectAdmissionAuthority, SharedHostScheduler } from '../../../../src/serve/shared-host-scheduler.js';
 
 const roots: string[] = [];
 const digest = (v: unknown) => `sha256:${createHash('sha256').update(JSON.stringify(v)).digest('hex')}`;
@@ -85,6 +88,53 @@ async function fixture(provider = 'codex', transport: 'shell' | 'mcp' = 'shell')
   };
   return { ...f, now: f.request.now, root, payload, request, drivers, adapter, binding, profile, call, buildInvocation };
 }
+
+describe('T-OG-12 managed operator rollback to direct', () => {
+  it('restores the exact direct command through the documented config setter without managed prerequisites', async () => {
+    const f = await fixture();
+    vi.stubEnv('AIWG_CONFIG', path.join(f.root, 'user-config'));
+    vi.stubEnv('AIWG_ARTIFACTS_PATH', path.join(f.root, 'artifacts'));
+    await mkdir(path.join(f.root, 'artifacts'));
+    const direct = (await f.call('shell')).stdout;
+    await configMain(['set', '--project', '--target', f.root, 'parallelism.worker_mode', 'managed']);
+    f.snapshot.config = (await readAiwgConfig(f.root))!;
+    expect((await f.call()).result.exitCode).toBe(2);
+    await configMain(['set', '--project', '--target', f.root, 'parallelism.worker_mode', 'direct']);
+    f.snapshot.config = (await readAiwgConfig(f.root))!;
+    expect((await f.call('shell')).stdout).toBe(direct);
+    expect(f.snapshot.config.parallelism!.worker_dispatch).toBe(true);
+    await expect(readFile(projectAdmissionAuthority(f.root).path)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(JSON.parse(await readFile(path.join(f.root, 'artifacts/aiwg.config'), 'utf8')).parallelism.worker_mode).toBe('direct');
+  });
+
+  it('preserves uncertain reservations and evidence when dispatch is disabled and direct mode is restored', async () => {
+    const f = await fixture();
+    vi.stubEnv('AIWG_CONFIG', path.join(f.root, 'user-config'));
+    vi.stubEnv('AIWG_ARTIFACTS_PATH', path.join(f.root, 'artifacts'));
+    f.snapshot.config.parallelism!.worker_mode = 'managed';
+    f.snapshot.config.parallelism!.clis = { codex: { adapter: 'providers:codex', accountScope: 'synthetic', quotaScope: 'synthetic' } };
+    f.snapshot.config.parallelism!.activation = { revision: 1, ...workerActivationDigests(f.snapshot.config), ...f.snapshot.modelDigests,
+      snapshotRef: 'fixture:rollback' };
+    await writeFile(path.join(f.root, '.aiwg/aiwg.config'), JSON.stringify(f.snapshot.config));
+    const policy = managedProjectAdmissionPolicy(f.root, f.snapshot.config.parallelism!, workerConfigDigest(f.snapshot.config.parallelism!.activation), 1);
+    const authorityPath = projectAdmissionAuthority(f.root).path;
+    const store = new FileAdmissionStore(authorityPath);
+    bindManagedAdmissionPolicy(store, policy);
+    const scheduler = new SharedHostScheduler(store, policy);
+    scheduler.submit({ requestId: 'uncertain-writer', orchestratorId: 'synthetic', environment: 'synthetic', provider: 'codex',
+      runtimeKind: 'host', priority: 1, submittedAt: new Date().toISOString(), queueTimeoutMs: 60000, managed: { kind: 'native' } });
+    scheduler.stop('uncertain-writer', 1, 'disconnect');
+    const before = await readFile(authorityPath, 'utf8');
+    await configMain(['set', '--project', '--target', f.root, 'parallelism.worker_dispatch', 'false']);
+    await configMain(['set', '--project', '--target', f.root, 'parallelism.worker_mode', 'direct']);
+    expect(await readFile(authorityPath, 'utf8')).toBe(before);
+    expect(store.read().records['uncertain-writer']!.state).toBe('uncertain');
+    // Configuration rollback never turns the preserved authority into a legacy capacity pool.
+    const legacy = new SharedHostScheduler(store, { maxConcurrent: 1, defaultHostQuota: 1, leaseTtlMs: 1000,
+      agingIntervalMs: 1000, allowPreemption: false });
+    expect(() => legacy.reconcileNow()).toThrow(/binding/);
+  });
+});
 
 /** Exercise the real #2885 inspector/recheck with frozen synthetic host evidence. */
 async function installedFixture(transport: 'shell' | 'mcp' = 'shell', provider = 'codex') {

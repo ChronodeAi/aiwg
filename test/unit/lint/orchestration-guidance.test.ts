@@ -41,9 +41,16 @@ describe('Tier 0 check-in guidance (#2914)', () => {
     expect(resolve.slice(0, 3)).toEqual(['aiwg', 'models', 'resolve']);
     expect(parseWorkerCommandArgs(resolve.slice(3))).toEqual({
       role: 'coding', task: 'implementation', group: 'qualified-group',
-      brief: '/absolute/private/conductor/brief.json', workdir: '/absolute/worker-tree',
-      final_output: '/absolute/private/conductor/final-1.json', transport: 'shell', format: 'json',
+      brief: '/absolute/worker-tree/.handoff/brief.md', workdir: '/absolute/worker-tree',
+      final_output: '/absolute/worker-tree/.handoff/final-1.json', transport: 'shell', format: 'json',
     });
+    // The resolver only accepts a brief inside the qualified input root (default:
+    // --workdir) and a final output inside the worker-writable roots; an ad hoc
+    // JSON brief is refused, so the documented example must be plain text.
+    const parsed = parseWorkerCommandArgs(resolve.slice(3));
+    expect(parsed.brief.startsWith(`${parsed.workdir}/`)).toBe(true);
+    expect(parsed.final_output.startsWith(`${parsed.workdir}/`)).toBe(true);
+    expect(parsed.brief).not.toMatch(/\.json$/);
     expect(launch.slice(0, 2)).toEqual(['aiwg', 'ralph-external']);
     expect(parseWorkerLaunchArgs(launch.slice(2))).toEqual({
       invocationPath: '/absolute/private/conductor/plan-1.json',

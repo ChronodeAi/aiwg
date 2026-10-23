@@ -318,9 +318,15 @@ describe('@aiwg/cli packaged web distribution', () => {
     for (const prefix of ['docs/', 'prebuilt/', 'templates/', 'apps/']) {
       expect(paths.some((entry) => entry.startsWith(prefix)), `${prefix} must not ship in @aiwg/cli`).toBe(false);
     }
-    expect(paths.filter((entry) => entry.startsWith('agentic/')).every(
-      (entry) => entry.startsWith('agentic/code/providers/'),
-    )).toBe(true);
+    // The composition runtime (not corpus) ships for managed Flow bindings (#2922).
+    const allowedAgenticRuntime = [
+      'agentic/code/addons/composition-engine/lib/runtime.mjs',
+      'agentic/code/addons/composition-engine/lib/validator.mjs',
+      'agentic/code/addons/composition-engine/schemas/flow-graph.schema.json',
+    ];
+    expect(paths.filter((entry) => entry.startsWith('agentic/')).filter(
+      (entry) => !entry.startsWith('agentic/code/providers/') && !allowedAgenticRuntime.includes(entry),
+    )).toEqual([]);
     const allowedToolPrefixes = [
       'tools/_resolve-impl.mjs',
       'tools/cli/decision-offload-report.mjs',

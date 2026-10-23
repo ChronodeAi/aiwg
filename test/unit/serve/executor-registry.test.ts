@@ -5,7 +5,10 @@
  * @see src/serve/executor-registry.ts
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect, beforeEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   ExecutorRegistry,
   validateRegisterPayload,
@@ -53,8 +56,10 @@ const VALID_EVENT_ENVELOPE: EventEnvelope = {
   data: { state: 'assigned' },
 };
 
-// Override identity store path to tmp in tests
-process.env['AIWG_EXECUTOR_IDENTITY_STORE'] = '/tmp/aiwg-test-executor-identities.json';
+const testState = mkdtempSync(join(tmpdir(), 'executor-registry-'));
+const hostIdentityPath = join(testState, 'trusted', 'executor-identities.json');
+beforeAll(() => vi.stubEnv('AIWG_EXECUTOR_IDENTITY_STORE', join(testState, 'identities.json')));
+afterAll(() => { vi.unstubAllEnvs(); rmSync(testState, { recursive: true, force: true }); });
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -62,7 +67,7 @@ describe('ExecutorRegistry', () => {
   let registry: ExecutorRegistry;
 
   beforeEach(() => {
-    registry = new ExecutorRegistry();
+    registry = new ExecutorRegistry(hostIdentityPath);
   });
 
   describe('register', () => {
@@ -363,7 +368,7 @@ describe('ExecutorRegistry', () => {
     });
 
     it('returns null when no executors are connected', () => {
-      const fresh = new ExecutorRegistry();
+      const fresh = new ExecutorRegistry(hostIdentityPath);
       expect(fresh.pickByFilter({})).toBeNull();
     });
 
@@ -389,7 +394,7 @@ describe('ExecutorRegistry', () => {
       registry.setConnected(VALID_EXECUTOR_ID_2, true, { readyState: 1, send() {}, close() {} });
 
       // Create a fresh registry with ONLY the non-resumable executor
-      const fresh = new ExecutorRegistry();
+      const fresh = new ExecutorRegistry(hostIdentityPath);
       fresh.register(reg2);
       fresh.setConnected(VALID_EXECUTOR_ID_2, true, { readyState: 1, send() {}, close() {} });
 

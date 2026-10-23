@@ -13,6 +13,17 @@ function fixture() {
   return { observer, progress(key: string) { now++; observer.observe({ kind: 'progress', key }); }, set(time: number) { now = time; } };
 }
 
+describe('T-OG-24 managed observer fencing', () => {
+  it('starts evidence at the admitted generation and retains continuity gaps', () => {
+    const observer = createWorkerHealthObserver({ health, invocationId: 'synthetic', observerGeneration: 4 });
+    expect(observer.snapshot().observerGeneration).toBe(4);
+    expect(observer.evidence().observerGeneration).toBe(4);
+    observer.gap('OBSERVER_GAP');
+    expect(observer.snapshot().observerGeneration).toBe(5);
+    expect(createWorkerHealthObserver({ health }).snapshot().observerGeneration).toBe(0);
+  });
+});
+
 describe('legacy Grok observer ACP grammar', () => {
   const direct = new GrokBuildAdapter();
   it('replays the documented ACP fixture through the shared observer with chunked framing', () => {

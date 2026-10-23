@@ -170,9 +170,9 @@ export function validateCanonicalMission(value: unknown): CanonicalMission {
   return structuredClone(value as CanonicalMission);
 }
 
-export function decodeMission(input: unknown, source: MissionSource): MissionDecodeResult {
+export function decodeMission(input: unknown, source: MissionSource, workerConsumer?: WorkerConsumerSupport): MissionDecodeResult {
   const record = object(input);
-  assertMissionWorkerHandoff(record, source);
+  assertMissionWorkerHandoff(record, source, workerConsumer);
   if (source === 'canonical') {
     const value = validateCanonicalMission(record);
     return { value, sourceVersion: MISSION_API_VERSION, warnings: [], preservedExtensions: structuredClone(value.extensions ?? {}), lossReport: [] };
@@ -232,8 +232,8 @@ function projectionLosses(value: CanonicalMission, target: MissionTarget): Missi
   return losses;
 }
 
-export function encodeMission(value: CanonicalMission, target: MissionTarget, options: { allowLoss?: boolean } = {}): MissionEncodeResult {
-  assertMissionWorkerHandoff(value, target);
+export function encodeMission(value: CanonicalMission, target: MissionTarget, options: { allowLoss?: boolean; workerConsumer?: WorkerConsumerSupport } = {}): MissionEncodeResult {
+  assertMissionWorkerHandoff(value, target, options.workerConsumer);
   const mission = validateCanonicalMission(value);
   if (target === 'canonical') return { value: mission, targetVersion: MISSION_API_VERSION, warnings: [], lossReport: [] };
   const lossReport = projectionLosses(mission, target);
@@ -564,9 +564,17 @@ function gateRequest(gate: WorkerPayloadGate): WorkerNegotiationRequest {
   };
 }
 
+/** Build registration metadata for the features explicitly qualified by an owner. */
+export function workerConsumerSupport(features: readonly string[]): WorkerConsumerSupport {
+  for (const feature of features) if (!(WORKER_KNOWN_FEATURES as readonly string[]).includes(feature)) {
+    throw new WorkerContractError('OG_CONTRACT_UNSUPPORTED', `OG_CONTRACT_UNSUPPORTED: unknown consumer feature '${feature}'.`);
+  }
+  return { revision: WORKER_CONTRACT_REVISION, bundleDigest: workerDefinitionBundleDigest(), features: [...features], lossless: true };
+}
+
 /** Trusted registration for the codec only; runtime consumers remain unqualified. */
 function canonicalWorkerSupport(): WorkerConsumerSupport {
-  return { revision: WORKER_CONTRACT_REVISION, bundleDigest: workerDefinitionBundleDigest(), features: [...WORKER_KNOWN_FEATURES], lossless: true };
+  return workerConsumerSupport(WORKER_KNOWN_FEATURES);
 }
 
 function workerDispatchRecord(value: unknown): RecordValue {
@@ -578,10 +586,10 @@ function workerDispatchRecord(value: unknown): RecordValue {
 
 /**
  * Existing Mission/native owners call this before cloning, projection or launch.
- * Only the canonical codec has qualified worker preservation. An open native
- * extension map never qualifies an executor, renderer or runtime by itself.
+ * Only the canonical codec is qualified by default. Other owners must provide
+ * explicit support; an open extension map or consumer name is insufficient.
  */
-export function assertMissionWorkerHandoff(input: unknown, consumer: MissionSource | string): void {
+export function assertMissionWorkerHandoff(input: unknown, consumer: MissionSource | string, workerConsumer?: WorkerConsumerSupport): void {
   const seen = new Set<object>();
   const seenRecords = new Set<object>();
   function visitExtensions(value: unknown): void {
@@ -593,8 +601,10 @@ export function assertMissionWorkerHandoff(input: unknown, consumer: MissionSour
       if (dispatch.version !== WORKER_CONTRACT_REVISION) {
         throw new WorkerContractError('OG_CONTRACT_UNSUPPORTED', `OG_CONTRACT_UNSUPPORTED: unsupported worker revision ${String(dispatch.version)}.`);
       }
-      const support = canonicalWorkerSupport();
-      assertWorkerConsumerSupported({ ...support, lossless: consumer === 'canonical', ...(consumer === 'canonical' ? {} : { features: [] }) }, {
+      const support = workerConsumer ?? (consumer === 'canonical' ? canonicalWorkerSupport() : {
+        revision: WORKER_CONTRACT_REVISION, bundleDigest: workerDefinitionBundleDigest(), features: [], lossless: false,
+      });
+      assertWorkerConsumerSupported(support, {
         requiredFeatures: Array.isArray(dispatch.requiredFeatures) ? dispatch.requiredFeatures : [...WORKER_BASELINE_FEATURES],
         bundleDigest: workerDefinitionBundleDigest(),
       });

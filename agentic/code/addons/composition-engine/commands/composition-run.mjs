@@ -93,6 +93,8 @@ export default async function compositionRun(args, context) {
     const report = await executeFlowGraph(manifest, {
       runId: option(args, '--run-id'),
       adapterId: adapter.id ?? 'external',
+      workerMode: adapter.workerMode,
+      workerConsumer: adapter.workerConsumer,
       invokeNode: adapter.invokeNode,
       parallelDispatch: adapter.parallelDispatch,
       evaluatePredicate: adapter.evaluatePredicate,
