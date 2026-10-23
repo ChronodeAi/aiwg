@@ -15,6 +15,7 @@ import { getFrameworkRoot } from '../../channel/manager.mjs';
 import { maybePrintCommunityFooter } from '../../community/footer.js';
 import { buildDeploymentStatusProbe } from '../services/deployment-verification.js';
 import { detectScope } from '../scope-resolver.js';
+import { readNativeSandboxWarnings } from '../../config/native-sandbox-warnings.js';
 
 function statusProjectRoot(args: string[], fallback: string): string {
   const valueFlags = new Set(['--scope', '--provider', '--bundle']);
@@ -62,9 +63,10 @@ export const statusHandler: CommandHandler = {
       });
       const { inspectGrokBuildNative } = await import('../../mcp/grok-build-config.mjs');
       const grokBuildNative = await inspectGrokBuildNative({ projectDir: projectRoot });
+      const nativeSandboxWarnings = await readNativeSandboxWarnings(projectRoot);
       return {
         exitCode: probe.status === 'needs-repair' ? 1 : 0,
-        message: JSON.stringify({ ...probe, grokBuildNative }, null, 2),
+        message: JSON.stringify({ ...probe, grokBuildNative, nativeSandboxWarnings }, null, 2),
         rawOutput: true,
       };
     }
