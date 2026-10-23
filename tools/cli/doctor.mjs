@@ -149,14 +149,15 @@ const PROVIDER_LABELS = {
   openclaw: 'OpenClaw',
   openhuman: 'OpenHuman',
   omp: 'Oh My Pi',
+  pi: 'Pi Coding Agent',
   hermes:   'Hermes',
   grokbot:  'Grok Bot',
   'grok-build': 'Grok Build',
   muse:     'Muse Code',
 };
 
-// Quick-detect dirs (agents-only) — used when no --provider flag is given.
-// Mirrors the agents path each provider exports. Kept literal here so the
+// Quick-detect managed dirs — used when no --provider flag is given.
+// Mirrors agent paths, or .pi for its prompt/skill-only deployment. Kept literal so the
 // check is fast and string-greppable without loading every provider module.
 const PROVIDER_AGENT_DIRS = {
   antigravity: '.agents/agents',
@@ -170,6 +171,7 @@ const PROVIDER_AGENT_DIRS = {
   windsurf: '.windsurf/agents',
   openhuman: '.agents/agents',
   omp: '.omp/agents',
+  pi: '.pi',
   // openclaw/hermes deploy to ~/.{provider}/ — handled separately
 };
 
@@ -681,10 +683,10 @@ function resolveProviderPath(p) {
   return path.isAbsolute(p) ? p : path.join(process.cwd(), p);
 }
 
-async function detectDeployedProviders() {
-  const detected = [];
+async function detectDeployedProviders(config) {
+  const detected = (config?.providers ?? []).filter(name => name in PROVIDER_LABELS);
   for (const [name, dir] of Object.entries(PROVIDER_AGENT_DIRS)) {
-    if (await fileExists(path.join(process.cwd(), dir))) detected.push(name);
+    if (!detected.includes(name) && await fileExists(path.join(process.cwd(), dir))) detected.push(name);
   }
   // Aggregated providers (Windsurf / Hermes) leave a project-root AGENTS.md.
   if (await fileExists(path.join(process.cwd(), 'AGENTS.md')) && !detected.includes('windsurf')) {
@@ -1147,6 +1149,24 @@ export async function runDoctor() {
     check('External Artifact Corpus', 'error', `health audit failed: ${error.message}`);
   }
 
+  // Shared config read for deployment inventory, worker-health (#2913), and
+  // direct-worker (#2894) offline readiness sections: read once so an invalid
+  // `gates` section (or
+  // any other non-fatal read-time warning) is not printed a second time, and
+  // so a project with no workers configured sees byte-identical output
+  // whether the read succeeds, has unrelated warnings, or fails outright —
+  // this feature must never add a finding in that case. `workerSnapshot*`
+  // are populated only when worker_dispatch is on and parallelism validates
+  // cleanly, so the direct-worker dispatch check below can reuse the exact
+  // same offline models/catalog/registry instead of resolving a second one.
+  let workerSectionsConfig = null;
+  let workerSectionsConfigFailed = false;
+  try {
+    workerSectionsConfig = probeWorkers ? workerProbeConfig : await readAiwgConfig(process.cwd());
+  } catch {
+    workerSectionsConfigFailed = true;
+  }
+
   // 4-5. Provider-aware agents + commands check (#1057).
   // Determine which providers to inspect:
   //   --provider <name>  → just that one
@@ -1158,7 +1178,7 @@ export async function runDoctor() {
   } else if (allProviders) {
     providersToCheck = Object.keys(PROVIDER_LABELS);
   } else {
-    providersToCheck = await detectDeployedProviders();
+    providersToCheck = await detectDeployedProviders(workerSectionsConfig);
     // Always include claude as a baseline so existing single-provider users
     // still get the "Claude Code Agents" line they're used to.
     if (!providersToCheck.includes('claude')) providersToCheck.unshift('claude');
@@ -1187,23 +1207,35 @@ export async function runDoctor() {
     // #2506: track the per-class artifact counts so a provider tree that was
     // pruned to a half-deployed shape (commands/rules present, zero agents)
     // is reported instead of rendering as healthy.
-    let deployedAgentCount = null;
+    // Deployment receipts describe the selected surface, including kernel-only
+    // installs. Source/index inventory is not a count of deployed agent files.
+    const deployments = Object.entries(workerSectionsConfig?.installed ?? {})
+      .filter(([, entry]) => entry?.deployedTo?.[provName]);
+    const claimingAgents = deployments
+      .filter(([, entry]) => entry.deployedTo[provName].agents > 0);
+    const expectedZeroAgents = deployments.length > 0 && deployments.every(
+      ([, entry]) => entry.deployedTo[provName].agents === 0,
+    );
+    let deployedAgentCount = 0;
     let deployedCommandCount = null;
     const agentsPathRel = provider.paths.agents;
     const agentsPath = resolveProviderPath(agentsPathRel);
-    if (agentsPath && await fileExists(agentsPath)) {
+    if (!agentsPath) {
+      check(`${label} Agents`, 'ok', '0 agents deployed on disk — no native agent surface; agents are indexed; use `aiwg discover` / `aiwg show`');
+    } else if (await fileExists(agentsPath)) {
       try {
         const stat = await fs.stat(agentsPath);
         if (stat.isDirectory()) {
-          const files = await fs.readdir(agentsPath);
+          const entries = await fs.readdir(agentsPath, { withFileTypes: true });
+          const files = entries.filter(entry => entry.isFile()).map(entry => entry.name);
           const agentCount = files.filter(
-            f => f.endsWith('.md') || f.endsWith('.agent.md') || f.endsWith('.toml'),
+            f => (f.endsWith('.md') && !f.endsWith('.soul.md')) || f.endsWith('.toml'),
           ).length;
           deployedAgentCount = agentCount;
           check(
             `${label} Agents`,
-            agentCount > 0 ? 'ok' : 'info',
-            `${agentCount} agents deployed (${agentsPathRel})`,
+            agentCount > 0 || expectedZeroAgents ? 'ok' : 'info',
+            `${agentCount} agents deployed (${agentsPathRel})${agentCount === 0 && expectedZeroAgents ? ' — expected: installed deployments provide no agents' : ''}`,
           );
 
           // Agent-def size ceiling (#1587). A deployed agent definition is loaded
@@ -1271,16 +1303,16 @@ export async function runDoctor() {
             check(`${label} Agent def sizes`, 'ok', `All ${agentFiles.length} agent defs ≤ 16 KB`);
           }
         } else {
-          // Aggregated single-file (e.g. Hermes/Windsurf AGENTS.md)
-          check(`${label} Agents`, 'ok', `Aggregated at ${agentsPathRel}`);
+          // Context bridges are not standalone agent definitions.
+          deployedAgentCount = null;
+          check(`${label} Agents`, 'ok', `Aggregated context at ${agentsPathRel} (no standalone agent file count)`);
         }
       } catch {
+        deployedAgentCount = null; // Unreadable is unknown, not evidence of missing files.
         check(`${label} Agents`, 'info', `No agents deployed at ${agentsPathRel}`);
       }
-    } else if (provName === 'muse' && (providerArg || allProviders)) {
-      // Muse Code has no file-based agent surface by design: agents, commands,
-      // and rules stay indexed and are reached via `aiwg discover` / `aiwg show`.
-      check(`${label} Agents`, 'info', 'No native agent surface — agents are indexed; use `aiwg discover` / `aiwg show`');
+    } else if (expectedZeroAgents) {
+      check(`${label} Agents`, 'ok', `0 agents deployed (${agentsPathRel}) — expected: installed deployments provide no agents`);
     } else if (providerArg || allProviders) {
       // User explicitly asked about this provider — be explicit when missing.
       check(`${label} Agents`, 'info', `No agents deployed (run: aiwg use sdlc --provider ${provName})`);
@@ -1295,8 +1327,8 @@ export async function runDoctor() {
       const commandsPath = resolveProviderPath(commandsPathRel);
       if (commandsPath && await fileExists(commandsPath)) {
         try {
-          const files = await fs.readdir(commandsPath);
-          const cmdCount = files.filter(f => f.endsWith('.md') || f.endsWith('.prompt.md')).length;
+          const files = await fs.readdir(commandsPath, { withFileTypes: true });
+          const cmdCount = files.filter(f => f.isFile() && f.name.endsWith('.md')).length;
           deployedCommandCount = cmdCount;
           check(`${label} Commands`, 'ok', `${cmdCount} commands deployed (${commandsPathRel})`);
         } catch {
@@ -1315,10 +1347,9 @@ export async function runDoctor() {
     }
 
     // Deployment consistency (#2506). A provider tree holding commands or
-    // rules but no agents is half-deployed: commands and rules reference
-    // agents that are no longer on disk. This is the shape a cross-provider
-    // prune used to leave behind, and a bare "0 agents deployed" check mark
-    // is the line most likely to stop someone investigating.
+    // rules but missing agents may be half-deployed after a cross-provider
+    // prune. Kernel-only receipts explicitly record zero agents and must not
+    // trigger framework advice.
     {
       const rulesPathRel = provider.paths.rules;
       const rulesPath = rulesPathRel ? resolveProviderPath(rulesPathRel) : null;
@@ -1327,8 +1358,8 @@ export async function runDoctor() {
         try {
           const stat = await fs.stat(rulesPath);
           if (stat.isDirectory()) {
-            const files = await fs.readdir(rulesPath);
-            deployedRuleCount = files.filter(f => f.endsWith('.md') || f.endsWith('.mdc')).length;
+            const files = await fs.readdir(rulesPath, { withFileTypes: true });
+            deployedRuleCount = files.filter(f => f.isFile() && (f.name.endsWith('.md') || f.name.endsWith('.mdc'))).length;
           }
         } catch {
           /* unreadable rules dir — treat as unknown */
@@ -1337,7 +1368,8 @@ export async function runDoctor() {
       const companions = [];
       if (deployedCommandCount > 0) companions.push(`${deployedCommandCount} command(s)`);
       if (deployedRuleCount > 0) companions.push(`${deployedRuleCount} rule(s)`);
-      if (deployedAgentCount === 0 && companions.length > 0) {
+      if (agentsPath && deployedAgentCount === 0 && companions.length > 0
+        && !expectedZeroAgents) {
         check(
           `${label} Deployment consistency`,
           'warn',
@@ -1351,11 +1383,9 @@ export async function runDoctor() {
       // #2506: recorded deployment state that claims agents against an empty
       // directory is unambiguous drift. Only the zero-on-disk case is flagged;
       // per-bundle counts legitimately differ from a raw directory listing.
-      if (deployedAgentCount === 0) {
+      if (agentsPath && deployedAgentCount === 0) {
         try {
-          const cfg = await readAiwgConfig(process.cwd());
-          const claiming = Object.entries(cfg?.installed ?? {})
-            .filter(([, entry]) => (entry?.deployedTo?.[provName]?.agents ?? 0) > 0)
+          const claiming = claimingAgents
             .map(([name, entry]) => `${name} (${entry.deployedTo[provName].agents})`);
           if (claiming.length > 0) {
             check(
@@ -2249,26 +2279,10 @@ export async function runDoctor() {
     // Non-fatal — skip silently
   }
 
-  // Shared config read for worker-health (#2913) and direct-worker (#2894)
-  // offline readiness sections: read once so an invalid `gates` section (or
-  // any other non-fatal read-time warning) is not printed a second time, and
-  // so a project with no workers configured sees byte-identical output
-  // whether the read succeeds, has unrelated warnings, or fails outright —
-  // this feature must never add a finding in that case. `workerSnapshot*`
-  // are populated only when worker_dispatch is on and parallelism validates
-  // cleanly, so the direct-worker dispatch check below can reuse the exact
-  // same offline models/catalog/registry instead of resolving a second one.
-  let workerSectionsConfig = null;
-  let workerSectionsConfigFailed = false;
   let workerSnapshotModels = null;
   let workerSnapshotCatalog = null;
   let workerSnapshotDigests = null;
   let workerSnapshotRegistry = null;
-  try {
-    workerSectionsConfig = probeWorkers ? workerProbeConfig : await readAiwgConfig(process.cwd());
-  } catch {
-    workerSectionsConfigFailed = true;
-  }
 
   // #2913 / T-OG-12: offline health readiness, without installing adapters,
   // reading credentials, probing models, or requiring Mission/admission state.

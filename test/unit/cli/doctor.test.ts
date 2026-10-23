@@ -732,7 +732,8 @@ describe('tools/cli/doctor.mjs — context/memory firewall (#2040)', () => {
     // PROVIDERS table must know its layout — otherwise `aiwg doctor
     // --provider muse` degrades to `scan failed: Unknown provider 'muse'`.
     expect(content).toMatch(/'grokbot', 'grok-build', 'muse'\]/);
-    expect(content).toMatch(/provName === 'muse' && \(providerArg \|\| allProviders\)/);
+    expect(content).toContain('if (!agentsPath) {');
+    expect(content).toContain('0 agents deployed on disk — no native agent surface');
   });
 
   it('scans Grok Build through the firewall without an unknown-provider hole (#2640)', () => {
@@ -883,7 +884,7 @@ describe('doctor: direct-worker probes are opt-in (#2894)', () => {
     // every project, not just ones with workers configured. #3452 adds an
     // early probe-mode read; the later shared read must reuse it rather
     // than duplicating diagnostics. The fallback runs only without probes.
-    expect(content.match(/await readAiwgConfig\(process\.cwd\(\)\)/g)?.length).toBe(3);
+    expect(content.match(/await readAiwgConfig\(process\.cwd\(\)\)/g)?.length).toBe(2);
     expect(content).toContain('workerProbeConfig = await readAiwgConfig(process.cwd());');
     expect(content).toContain('workerSectionsConfig = probeWorkers ? workerProbeConfig : await readAiwgConfig(process.cwd());');
     expect(content).toContain('const directConfig = workerSectionsConfig;');
