@@ -346,7 +346,9 @@ try {
     }
   });
 
-  it('qualifies installation and exact model roles, renders a launchable plan, and invalidates changed binary/version', async () => {
+  // Each case runs several fresh CLI processes; they are split so no single case
+  // spends most of the default per-test budget on process startup (#3474 follow-up).
+  it('qualifies installation and exact model roles and renders a launchable plan', async () => {
     const f = await fixture();
     const before = await f.resolve();
     expect(before.code, before.stdout + before.stderr).not.toBe(0);
@@ -368,6 +370,12 @@ try {
     expect(invocation.readiness).toBe('launchable');
     expect(invocation.argv).toEqual(expect.arrayContaining(['-m', 'synthetic-model', '-s', 'workspace-write', '-c', 'model_reasoning_effort="medium"']));
     expect(invocation.shellCommand).toContain("'-s' 'workspace-write'");
+  });
+
+  it('blocks a qualified installation when the group asks for unsupported approval or step controls', async () => {
+    const f = await fixture();
+    const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
     const configPath = path.join(f.project, '.aiwg/aiwg.config');
     const configText = await readFile(configPath, 'utf8');
     const unsupportedApproval = JSON.parse(configText);
@@ -391,6 +399,12 @@ try {
     expect(unsupportedControl.code).not.toBe(0);
     expect(unsupportedControl.stdout).toContain('OG_ADAPTER_UNQUALIFIED');
     await writeFile(configPath, configText);
+  });
+
+  it('records role qualification and invalidates it when the binary version changes', async () => {
+    const f = await fixture();
+    const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
     const stored = JSON.parse(await readFile(path.join(f.config, 'worker-installations.json'), 'utf8'));
     expect(stored.registrations[0].modelObservations.models[0].worker.qualification.roles).toEqual(['coding']);
     expect(stored.registrations[0].installation.evidence.cases).toBeUndefined();
