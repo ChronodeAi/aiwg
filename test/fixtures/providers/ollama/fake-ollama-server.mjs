@@ -19,7 +19,7 @@
  * OS-assigned ephemeral port without a race.
  */
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 
 const config = process.env.AIWG_FAKE_WORKER_CONFIG
   ? JSON.parse(readFileSync(process.env.AIWG_FAKE_WORKER_CONFIG, 'utf8')) : {};
@@ -94,7 +94,12 @@ const server = createServer((req, res) => {
 
 server.listen(0, '127.0.0.1', () => {
   const { port } = server.address();
-  if (portFile) writeFileSync(portFile, String(port));
+  // Write then rename: the reader polls for the file, and a plain
+  // writeFileSync creates it empty before the port lands in it.
+  if (portFile) {
+    writeFileSync(`${portFile}.tmp`, String(port));
+    renameSync(`${portFile}.tmp`, portFile);
+  }
   else process.stdout.write(`${port}\n`);
 });
 
