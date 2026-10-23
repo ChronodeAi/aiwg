@@ -12,7 +12,7 @@ export function sourceRules(root: string, kind: 'addons' | 'frameworks' | 'exten
     if (kind === 'addons' && (manifest.devOnly || manifest.explicitInstall && !includeExplicit)) return [];
     const dir = join(bundle, manifest.entry?.rules || 'rules');
     if (!existsSync(dir)) return [];
-    return readdirSync(dir).filter(name => name.endsWith('.md') && name !== 'README.md').map(name => {
+    return readdirSync(dir).filter(name => name.endsWith('.md') && !name.endsWith('.core.md') && name !== 'README.md').map(name => {
       const file = join(dir, name);
       const content = readFileSync(file, 'utf8');
       const header = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);

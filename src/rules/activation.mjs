@@ -1,9 +1,21 @@
 /** Shared source frontmatter contract for lint, deployment, and show/MCP (#2938). */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import Ajv from 'ajv';
 import { parse } from 'yaml';
 
-export const RULE_ACTIVATIONS = Object.freeze(['kernel', 'summary', 'bound', 'paths', 'on-demand']);
+export const RULE_ACTIVATIONS = Object.freeze(['core', 'kernel', 'summary', 'bound', 'paths', 'on-demand']);
+
+// Core rules (#3450): compact normative bodies delivered to every harness's
+// always-loaded surface regardless of deploy mode. A body is `<rule>.core.md`
+// beside the full rule; the full rule is reachable only by plain path or
+// `aiwg show rule <name>`, never an @ import.
+export const CORE_BODY_MAX_BYTES = 1024;
+export const CORE_TOTAL_MAX_BYTES = 6144;
+export const CORE_RULES_START = '<!-- AIWG:core-rules:start -->';
+export const CORE_RULES_END = '<!-- AIWG:core-rules:end -->';
+const AT_IMPORT = /(?:^|[\s(`"'])@[\w$.\/-]*[\/.][\w$.\/-]*/m;
+
 export const RULE_BINDING_TYPES = Object.freeze({ skills: 'skill', agents: 'agent', flows: 'flow' });
 export const ruleFrontmatterSchema = JSON.parse(readFileSync(new URL('./rule-frontmatter.schema.json', import.meta.url), 'utf8'));
 const ajv = new Ajv({ strict: true, allErrors: true });
@@ -59,4 +71,68 @@ export function parseRuleFrontmatter(content) {
   } catch (error) {
     return { valid: false, diagnostics: [{ severity: 'error', code: 'frontmatter', message: `Invalid rule YAML: ${error.message}` }], data: {}, body: content };
   }
+}
+
+export function coreBodyPath(ruleFile) {
+  return ruleFile.replace(/\.md$/, '.core.md');
+}
+
+/** Validate one core body's text. Returns error strings (empty when valid). */
+export function validateCoreBody(text, label = 'core body') {
+  const errors = [];
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (!text.trim()) errors.push(`${label}: core body is empty`);
+  if (bytes > CORE_BODY_MAX_BYTES) errors.push(`${label}: core body is ${bytes} bytes; the per-body cap is ${CORE_BODY_MAX_BYTES} bytes`);
+  if (/^---\r?\n/.test(text)) errors.push(`${label}: core body must not carry frontmatter`);
+  if (AT_IMPORT.test(text)) errors.push(`${label}: core body must not contain an @ file reference/import; use a plain path or \`aiwg show rule <name>\``);
+  return errors;
+}
+
+/** Validate the whole core set against the reserved budget. */
+export function validateCoreSet(bodies) {
+  const total = bodies.reduce((sum, item) => sum + Buffer.byteLength(item.text, 'utf8'), 0);
+  return total > CORE_TOTAL_MAX_BYTES
+    ? [`Core rules total ${total} bytes; the reserved core budget is ${CORE_TOTAL_MAX_BYTES} bytes (${bodies.map(item => `${item.name}: ${Buffer.byteLength(item.text, 'utf8')}`).join(', ')})`]
+    : [];
+}
+
+/** Read and validate the core body for a rule file; throws with a clear diagnostic. */
+export function readCoreBody(ruleFile) {
+  const file = coreBodyPath(ruleFile);
+  if (!existsSync(file)) throw new Error(`${ruleFile}: activation core requires a compact body file ${path.basename(file)}`);
+  const text = readFileSync(file, 'utf8').trim();
+  const errors = validateCoreBody(text, file);
+  if (errors.length) throw new Error(errors.join('; '));
+  return text;
+}
+
+/**
+ * Measure the core slice already deployed in a project, for `aiwg doctor`.
+ * Native providers write core-<name>.md(c) files; the others carry a marked
+ * section in their startup context file.
+ */
+export function measureDeployedCoreRules(target, provider, rulesDir) {
+  const bodies = [];
+  if (['claude', 'cursor'].includes(provider)) {
+    const dir = rulesDir || path.join(target, `.${provider}`, 'rules');
+    if (existsSync(dir)) for (const name of readdirSync(dir).filter(n => /^core-.+\.(md|mdc)$/.test(n))) {
+      // Count the authored body only, not the managed marker or MDC frontmatter.
+      const text = readFileSync(path.join(dir, name), 'utf8')
+        .replace(/^<!-- aiwg:managed[^\n]*-->\n/, '').replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+      bodies.push({ name, bytes: Buffer.byteLength(text, 'utf8') });
+    }
+  } else {
+    for (const name of ['AIWG.md', 'AGENTS.md', 'WARP.md']) {
+      const file = path.join(target, name);
+      if (!existsSync(file)) continue;
+      const content = readFileSync(file, 'utf8');
+      const start = content.indexOf(CORE_RULES_START);
+      const end = content.indexOf(CORE_RULES_END);
+      if (start >= 0 && end > start) {
+        bodies.push({ name, bytes: Buffer.byteLength(content.slice(start + CORE_RULES_START.length, end).trim(), 'utf8') });
+        break;
+      }
+    }
+  }
+  return { bodies, bytes: bodies.reduce((sum, item) => sum + item.bytes, 0), limit: CORE_TOTAL_MAX_BYTES };
 }

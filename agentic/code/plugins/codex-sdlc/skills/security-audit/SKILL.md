@@ -82,4 +82,4 @@ Use automated security scanning tools when available and provide manual review f
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/human-authorization.md — Report findings with severity levels; await owner authorization before attempting remediation
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/token-security.md — Token security rules that this audit checks for violations
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/security-gate/SKILL.md — Security gate that consumes this audit's findings to produce a pass/fail decision
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md — Never reduce audit scope or skip vulnerability categories to complete faster
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md — Never reduce audit scope or skip vulnerability categories to complete faster

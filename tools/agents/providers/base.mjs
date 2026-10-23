@@ -104,7 +104,7 @@ export function listMdFiles(dir, excludePatterns = []) {
   const excluded = [...defaultExcluded, ...excludePatterns];
   return fs
     .readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md') && !e.name.toLowerCase().endsWith('.soul.md') && !excluded.includes(e.name))
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md') && !e.name.toLowerCase().endsWith('.soul.md') && !e.name.toLowerCase().endsWith('.core.md') && !excluded.includes(e.name))
     .map((e) => path.join(dir, e.name));
 }
 
@@ -2803,7 +2803,9 @@ export function getAddonFiles(srcRoot, options = {}) {
 // ============================================================================
 
 /**
- * Load rules manifest from source directory
+ * Load rules manifest from source directory.
+ * Inventory metadata only: delivery is decided by rule `activation` (rule-delivery.mjs);
+ * the former manifest `tiers` deploy policy was never consulted and was removed (#3450).
  * @param {string} srcRoot - Source root directory
  * @returns {object|null} - Parsed manifest or null if not found
  */

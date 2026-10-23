@@ -30,9 +30,10 @@ describe('Wave 3 canonical orchestration rule delivery (#2943)', () => {
     bundle = path.join(source, 'agentic/code/addons/wave3');
     fs.mkdirSync(path.join(bundle, 'rules'), { recursive: true });
     rules = wave.map(name => {
-      const owner = name === 'anti-laziness' ? 'frameworks/sdlc-complete' : 'addons/aiwg-utils';
+      const owner = 'addons/aiwg-utils';
       const file = path.join(repo, 'agentic/code', owner, 'rules', `${name}.md`);
       fs.copyFileSync(file, path.join(bundle, 'rules', `${name}.md`));
+      if (fs.existsSync(file.replace(/\.md$/, '.core.md'))) fs.copyFileSync(file.replace(/\.md$/, '.core.md'), path.join(bundle, 'rules', `${name}.core.md`));
       return { name, data: metadata(file) };
     });
     // Real indexed names and paths exercise display-name/slugs and canonical
@@ -47,7 +48,7 @@ describe('Wave 3 canonical orchestration rule delivery (#2943)', () => {
     await buildIndex(corpus, { scope: 'agentic/code', includeIgnored: true, outputDir: root, force: true, quiet: true });
     entries = JSON.parse(read(path.join(root, '.aiwg/.index/metadata.json'))).entries;
     const targets = new Map<string, { type: string; id: string; file: string }>();
-    for (const { data } of rules) for (const [kind, ids] of Object.entries(data.bound_to) as Array<[string, string[]]>) {
+    for (const { data } of rules) for (const [kind, ids] of Object.entries(data.bound_to ?? {}) as Array<[string, string[]]>) {
       const type = kind.slice(0, -1) as 'skill' | 'agent' | 'flow';
       for (const id of ids) {
         const target = resolveRuleBindingTarget(Object.values(entries), type, id);
@@ -64,8 +65,13 @@ describe('Wave 3 canonical orchestration rule delivery (#2943)', () => {
   afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
   it('restores all four budget-demoted rules through summary and concrete bindings (U2)', () => {
-    for (const { data } of rules) {
-      expect(data.activation).toBe('summary');
+    // anti-laziness graduated to the always-loaded core class (#3450): it carries a
+    // compact core body instead of summary/bound delivery, so bindings no longer apply.
+    const coreRule = rules.find(rule => rule.name === 'anti-laziness')!.data;
+    expect(coreRule.activation).toBe('core');
+    expect(coreRule.bound_to ?? {}).toEqual({});
+    for (const { name, data } of rules.filter(rule => rule.name !== 'anti-laziness')) {
+      expect(data.activation, name).toBe('summary');
       expect([...data.summary].length).toBeLessThanOrEqual(240);
       expect(Object.values(data.bound_to).flat().length).toBeGreaterThan(0);
       expect(Object.values(data.bound_to).flat().every(id => !String(id).includes('*'))).toBe(true);
@@ -75,7 +81,6 @@ describe('Wave 3 canonical orchestration rule delivery (#2943)', () => {
     expect(scoping.bound_to.flows).toContain('flow-guided-implementation');
     expect(rules.find(rule => rule.name === 'god-session')!.data.bound_to.agents).toContain('agentsmith');
     expect(rules.find(rule => rule.name === 'cli-secondary')!.data.bound_to.agents).toContain('aiwg-finder');
-    expect(rules.find(rule => rule.name === 'anti-laziness')!.data.bound_to.agents).toEqual(expect.arrayContaining(['software-implementer', 'code-reviewer', 'test-engineer']));
   });
 
   it('shows every canonical binding through the actual CLI JSON envelope (U4)', async () => {
@@ -88,7 +93,7 @@ describe('Wave 3 canonical orchestration rule delivery (#2943)', () => {
       AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' };
     // Shipped prebuilt tables cover read gates; cold builds have isolated tests.
     const targets = new Map<string, { type: string; id: string; rules: Array<{ name: string; data: any }> }>();
-    for (const rule of rules) for (const [kind, ids] of Object.entries(rule.data.bound_to) as Array<[string, string[]]>) {
+    for (const rule of rules) for (const [kind, ids] of Object.entries(rule.data.bound_to ?? {}) as Array<[string, string[]]>) {
       for (const id of ids) {
         const key = `${kind}:${id}`;
         const target = targets.get(key) ?? { type: kind.slice(0, -1), id, rules: [] };
@@ -157,6 +162,13 @@ describe('Wave 3 canonical orchestration rule delivery (#2943)', () => {
     const report = JSON.parse(deployed.split('REPORT:')[1].trim());
     const startup = report.contributors.map((file: any) => read(file.path)).join('\n');
     for (const { name, data } of rules) {
+      if (name === 'anti-laziness') {
+        // Core delivery (#3450): the compact body is in startup context; the full rule is not.
+        expect(startup, provider).toContain(read(path.join(bundle, 'rules', 'anti-laziness.core.md')).trim());
+        expect(startup, provider).toContain('aiwg show rule anti-laziness');
+        expect(startup, provider).not.toContain(read(path.join(bundle, 'rules', 'anti-laziness.md')).split('\n').find(line => line.startsWith('# ')) + '\n\n**Enforcement');
+        continue;
+      }
       expect(startup).toContain(data.summary);
       expect(startup).toContain(`aiwg show rule ${name} --body`);
       const heading = read(path.join(bundle, 'rules', `${name}.md`)).split('\n').find(line => line.startsWith('# '));
@@ -168,7 +180,7 @@ describe('Wave 3 canonical orchestration rule delivery (#2943)', () => {
       expect(allFiles.filter(file => file.includes('/rules/') &&
         new RegExp(`/${name}\\.md$`).test(file)), `${provider}: ${name} startup body`).toHaveLength(0);
     }
-    for (const { name, data } of rules) for (const [kind, ids] of Object.entries(data.bound_to) as Array<[string, string[]]>) {
+    for (const { name, data } of rules) for (const [kind, ids] of Object.entries(data.bound_to ?? {}) as Array<[string, string[]]>) {
       for (const id of ids) {
         const definitions = outputs.filter(file => file.includes(`/${kind === 'flows' ? 'skills' : kind}/`) &&
           (kind !== 'agents' ? file.endsWith(`/${id}/SKILL.md`) : new RegExp(`/${id}\\.(?:md|toml)$`).test(file)));

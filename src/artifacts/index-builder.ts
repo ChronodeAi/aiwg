@@ -433,6 +433,8 @@ function inferType(data: Record<string, unknown>, filePath: string): string {
         case 'rules':
           // Rules/RULES-INDEX.md is a curated index file, not a rule.
           if (basename === 'rules-index' || basename === 'index') break;
+          // <rule>.core.md is a delivery body (#3450), not a separate rule.
+          if (/\.core\.md$/i.test(filePath)) break;
           if (isMarkdown) return 'rule';
           break;
         case 'schemas':

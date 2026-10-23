@@ -2177,7 +2177,7 @@ export function compoundGoverningRules(entries: MetadataEntry[], target: Metadat
   const found = new Map<string, GoverningRule>();
   const add = (rule: MetadataEntry, why: string) => {
     const activation = rule.activation ?? (rule.type === 'behavior' ? 'kernel' : inferRuleActivation(rule.ruleEnforcement));
-    if (excludeKernel && (activation === 'kernel' || rule.kernel || relations?.pinnedRuleIds.has(discoveryIdForEntry(rule)))) return;
+    if (excludeKernel && (activation === 'kernel' || activation === 'core' || rule.kernel || relations?.pinnedRuleIds.has(discoveryIdForEntry(rule)))) return;
     const key = `${rule.type}:${rule.path}`, item = found.get(key) ?? { rule, applicability: [] };
     if (!item.applicability.includes(why)) item.applicability.push(why);
     found.set(key, item);

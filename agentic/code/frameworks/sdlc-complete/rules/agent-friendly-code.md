@@ -68,7 +68,7 @@ Target file under 300 LOC (or a plan to keep it under); new functions under 30 l
 ## References
 
 - Codified Context (Vasilopoulos 2026, arxiv:2602.20478); Long-Running AI Agents (Zylos 2026); Context Engineering (Fowler 2025)
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/agent-generation-guardrails.md
 
 ---

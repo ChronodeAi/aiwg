@@ -7,6 +7,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Added
+
+- Core rule class: `activation: core` rules ship a compact `<name>.core.md` body
+  (at most 1024 bytes each, 6144 bytes in total) that every provider loads at
+  startup in every deploy mode, ahead of kernel rules, and that budget pressure
+  never demotes or spills. `anti-laziness` is the first core rule and moved to
+  the always-installed `aiwg-utils` addon; `aiwg doctor` reports the core slice
+  separately. The unused manifest `tiers` deploy block and the hand-condensed
+  Hermes anti-laziness directive are removed, and the rule's enforcement is
+  `high` everywhere (#3450).
+
 ### Changed
 
 - Generated startup context is smaller (#3451). `AIWG.md` no longer `@`-imports

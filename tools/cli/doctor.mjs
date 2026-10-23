@@ -24,6 +24,8 @@ import { scanStartupContext,
 } from '../lint/claude-context-inventory.mjs';
 import { scanContextMemoryFirewall } from '../security/context-memory-firewall.mjs';
 
+const { measureDeployedCoreRules } = await importImpl(import.meta.url, 'rules/activation.mjs');
+
 const { getFrameworkRoot, getPackageRoot, getVersionInfo, loadConfig, resolveMcpServerEntrypointPath } = await importImpl(
   import.meta.url,
   'channel/manager.mjs'
@@ -588,6 +590,18 @@ async function checkSubagentDispatchHeadroom(provName, label) {
       'redeploy so HIGH rules beyond the inline budget move to RULES-ONDEMAND.md (`aiwg use all --provider claude`), ' +
       'lower AIWG_RULES_INLINE_BUDGET_TOKENS, or prune ancestor rule deployments. Run `aiwg context-firewall scan --provider claude` for the attributed breakdown.',
   );
+}
+
+// Core rules slice (#3450): reserved, never-demoted startup budget reported
+// separately from the aggregate startup-context check below.
+function checkCoreRulesSlice(provName, label, provider) {
+  const rulesDir = provider?.paths?.rules
+    ? (path.isAbsolute(provider.paths.rules) ? provider.paths.rules : path.join(process.cwd(), provider.paths.rules))
+    : undefined;
+  const core = measureDeployedCoreRules(process.cwd(), provName, rulesDir);
+  if (core.bodies.length === 0) return;
+  const detail = `${core.bytes} / ${core.limit} bytes used by core rules (${core.bodies.map((b) => b.name).join(', ')})`;
+  check(`${label} Core Rules`, core.bytes > core.limit ? 'warn' : 'ok', detail);
 }
 
 // Startup-context budget (#1673). The skill-listing budget above covers skill
@@ -1361,6 +1375,7 @@ export async function runDoctor() {
       await checkSkillBudgetForProvider(provName, label, budgetPath);
       await checkTotalDeployedSkillBudgetForProvider(provName, label, provider);
       await checkStartupContextBudget(provName, label);
+      checkCoreRulesSlice(provName, label, provider);
       await checkSubagentDispatchHeadroom(provName, label);
     }
 

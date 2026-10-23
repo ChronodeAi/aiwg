@@ -12,6 +12,7 @@
     "activation": {
       "type": "string",
       "enum": [
+        "core",
         "kernel",
         "summary",
         "bound",
@@ -95,6 +96,7 @@
         "properties": {
           "activation": {
             "enum": [
+              "core",
               "kernel",
               "on-demand"
             ]

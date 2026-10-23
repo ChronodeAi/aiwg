@@ -53,20 +53,6 @@
       }
     }
   },
-  "tiers": {
-    "core": {
-      "description": "Universal rules deployed to ALL platforms. Non-negotiable defaults every AIWG user can count on.",
-      "deploy": "always"
-    },
-    "sdlc": {
-      "description": "Rules specific to SDLC workflow enforcement. Deployed with `aiwg use sdlc`.",
-      "deploy": "with-framework"
-    },
-    "research": {
-      "description": "Rules for research corpus management. Deployed when research features are active.",
-      "deploy": "optional"
-    }
-  },
   "rules": [
     {
       "name": "no-attribution",
@@ -102,9 +88,11 @@
     },
     {
       "name": "anti-laziness",
-      "file": "anti-laziness.md",
-      "enforcement": "medium",
+      "file": "../../../addons/aiwg-utils/rules/anti-laziness.md",
+      "enforcement": "high",
       "tier": "core",
+      "activation": "core",
+      "home": "aiwg-utils",
       "description": "Prevent test deletion, feature removal, and premature task abandonment",
       "issue": "#264"
     },

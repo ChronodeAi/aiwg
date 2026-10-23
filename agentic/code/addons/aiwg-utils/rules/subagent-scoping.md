@@ -404,7 +404,7 @@ Before a Tier 0 direct launch (Rule 9): resolved via `aiwg models resolve` (not 
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/context-budget.md — Context budget config and parallel limits
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/instruction-comprehension.md — Understanding requests
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/research-before-decision.md — Informed delegation
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md — Complete work without shortcuts
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md — Complete work without shortcuts
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/tao-loop.md — TAO loop standardization
 - @$AIWG_ROOT/agentic/code/addons/rlm/README.md — RLM mode (overrides depth-2 limit)
 - `.aiwg/research/findings/REF-089-recursive-language-models.md` — RLM depth trade-offs

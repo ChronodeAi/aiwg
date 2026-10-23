@@ -89,6 +89,19 @@ aiwg discover "<the question your rule answers>"
 The build step only works at the install root — the framework graph indexes the
 AIWG corpus, which does not exist in a consumer project.
 
+## Core rules (`activation: core`)
+
+A core rule is injected into every harness's always-loaded surface in every deploy
+mode. Reserve it for non-negotiable behavior; the budget is deliberately small.
+
+- Put the rule in the always-installed `aiwg-utils` addon, set `activation: core`,
+  and omit `bound_to` (a core rule already reaches every agent).
+- Write the compact normative text in `<name>.core.md` beside the rule: plain
+  markdown, no frontmatter, at most 1024 bytes, all core bodies together at most
+  6144 bytes. Deploy and `aiwg lint --ruleset rule-activation` fail above either cap.
+- End the body with a plain pointer, `aiwg show rule <name>`. Never use an `@`
+  import of the full rule; deploy rejects `@` file references in core bodies.
+
 ## Related
 
 - [`skill-creation-guide.md`](skill-creation-guide.md) — the same trigger mechanism for skills

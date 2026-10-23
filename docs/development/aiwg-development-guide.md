@@ -552,7 +552,7 @@ Use a **two-tier approach**: `CLAUDE.md` links to short indices and summaries, w
 **Bad** — loads ~9,000 lines of rule files on every session:
 ```md
 ## Rules
-@agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md
+@agentic/code/addons/aiwg-utils/rules/anti-laziness.md
 @agentic/code/frameworks/sdlc-complete/rules/token-security.md
 @agentic/code/frameworks/sdlc-complete/rules/executable-feedback.md
 ... (31 more files)

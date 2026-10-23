@@ -54,11 +54,22 @@ activation does not install an excluded addon or authorize an operation.
 
 | Mode | Delivery obligation | Incremental global startup cost |
 |---|---|---|
+| `core` | Deliver the compact `<name>.core.md` body (at most 1024 bytes; all core bodies together at most 6144 bytes) to every provider's always-loaded surface in every deploy mode, placed before kernel rules and never demoted or spilled. The full rule stays reachable only by plain path or `aiwg show rule <name>`, never an `@` import. Owned by the always-installed `aiwg-utils` addon. | The compact body only, within the reserved 6144-byte core budget (also counted in the inline budget). |
 | `kernel` | Load the complete canonical rule body in every session and subagent before task execution. | Full body plus framing. |
 | `summary` | Load one imperative summary and a full-rule pointer in the kernel index; deliver it through bindings as well when declared. | Summary (at most 240 characters), identity, and pointer, never the full body. |
 | `bound` | Deliver when a declared skill, agent, or flow is loaded/invoked. | Zero rule text; bound blocks live inside artifact bodies, not their startup listings. |
 | `paths` | Deliver the full rule when any declared project-relative path glob matches a file being read or changed; bindings can also deliver it. | Native loaders: no unmatched body, possibly native description/glob metadata. Emulated loaders: a compact glob/summary/pointer index, never unmatched bodies. |
 | `on-demand` | Discoverable and explicitly fetchable; no automatic delivery. | Zero rule text; use the shared discovery entry point rather than a startup list of every rule. |
+
+Core delivery by provider (#3450): Claude writes `.claude/rules/core-<name>.md`;
+Cursor writes `.cursor/rules/core-<name>.mdc` with `alwaysApply: true`; Codex,
+Hermes, Warp and the other emulated providers put a `## Core rules` section
+first in their managed startup block (`AIWG.md`, `AGENTS.md`, `WARP.md`), inline
+for Hermes even when the rule is not `critical`. A deploy fails with a clear
+diagnostic when a body exceeds 1024 bytes, the core set exceeds 6144 bytes, a
+body is missing, or a body contains an `@` file reference. `aiwg doctor` reports
+the core slice (`bytes used / 6144`) separately from the aggregate startup
+context. Operator pins do not re-promote a core rule.
 
 Provider skill/agent listings have their own cost; `bound` does not promise to
 eliminate that existing cost. Invocation-time retrieval counts as task context.
@@ -94,9 +105,9 @@ against the artifact index before accepting a migrated declaration.
 
 | Field | Shape and validation |
 |---|---|
-| `activation` | Scalar enum: `kernel`, `summary`, `bound`, `paths`, `on-demand`. Required after migration. A sequence, combined string, or unknown mode is an error. |
+| `activation` | Scalar enum: `core`, `kernel`, `summary`, `bound`, `paths`, `on-demand`. Required after migration. A sequence, combined string, or unknown mode is an error. |
 | `summary` | Nonempty single-line imperative string, at most 240 Unicode code points after trimming. Required for `summary`, `bound`, and `paths`; optional for `kernel`/`on-demand`. Never synthesize it by truncating the body. |
-| `bound_to` | Mapping with only `skills`, `agents`, `flows`; each value is a list of nonempty canonical artifact IDs. Missing lists mean empty. At least one target is required for `bound`; optional for `summary`/`paths`. Reject bindings on `kernel`/`on-demand` as contradictory or redundant. |
+| `bound_to` | Mapping with only `skills`, `agents`, `flows`; each value is a list of nonempty canonical artifact IDs. Missing lists mean empty. At least one target is required for `bound`; optional for `summary`/`paths`. Reject bindings on `core`/`kernel`/`on-demand` as contradictory or redundant. |
 | `paths` | Nonempty list of project-relative glob strings, required for `paths` and rejected on other tagged modes. Match normalized `/` paths; reject absolute paths and parent traversal. Match reads and writes, including proposed new filenames. |
 
 Bindings resolve by artifact type and canonical ID, using existing index
