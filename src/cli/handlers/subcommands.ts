@@ -24,7 +24,7 @@ import { feedbackHandler } from "./feedback.js";
 import { handlerResultFromError } from "../errors.js";
 import { getProjectDir } from "../../config/aiwg-config.js";
 import { deployedSkillRoots } from "../../providers/deployed-skill-roots.js";
-import { releaseSkillOwnership } from "../../providers/skill-ownership.mjs";
+import { releaseSkillOwnership, type SkillRemovalPlanEntry } from "../../providers/skill-ownership.mjs";
 import { formatDeployedWorkspaceSignalPlan, readWorkspaceSignalPlan } from "../workspace-signals.js";
 import * as path from "node:path";
 import * as fsSync from "node:fs";
@@ -783,6 +783,27 @@ async function removeUserScopeDeploy(args: ReadonlyArray<string>): Promise<Handl
   };
 }
 
+/** List only unrecorded paths; recorded decisions come from the ownership plan. */
+function previewUnrecordedSkillFiles(skillDir: string, owned: boolean, plan: SkillRemovalPlanEntry[], skillRoots: readonly string[]): void {
+  // Some adapters (Hermes) put the bulk root directly inside the kernel root.
+  if (skillRoots.includes(skillDir)) return;
+  const recorded = new Set(plan.map(entry => entry.path));
+  const visit = (target: string): void => {
+    if (recorded.has(path.resolve(target))) return;
+    let reason = owned ? 'unrecorded operator file' : 'foreign or unverifiable ownership receipt';
+    try {
+      const stat = fsSync.lstatSync(target);
+      if (stat.isDirectory()) {
+        for (const name of fsSync.readdirSync(target).sort()) visit(path.join(target, name));
+        return;
+      }
+      if (owned && stat.isSymbolicLink()) reason = 'symlink preserved';
+    } catch { reason = 'missing or unreadable path; cannot verify'; }
+    plan.push({ path: path.resolve(target), action: 'preserve', reason });
+  };
+  visit(skillDir);
+}
+
 /**
  * Remove framework handler
  *
@@ -794,6 +815,42 @@ export const removeHandler: CommandHandler = {
   description: "Remove installed framework, plugin, or project-local bundle",
   category: "framework",
   aliases: [],
+
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, rawOutput: true, message: [
+      'Usage: aiwg remove <id> [options]',
+      '',
+      'Remove an installed framework, plugin, or project-local bundle by id (for example all or sdlc).',
+      'Project scope is the default; without --provider, process all recorded provider deployments.',
+      '"all" is an installed bundle id, not a wildcard for every installed entry.',
+      'Bundled deployments release skill ownership receipts and delete only unchanged recorded files.',
+      'Project-local removal reverts deployed artifacts using recorded hashes; bundle source is preserved.',
+      '',
+      'Options:',
+      '  --dry-run          List planned removals and preserved paths with reasons; write nothing.',
+      '  --provider <p>     Select one recorded provider deployment.',
+      '  --keep-registry    Keep project installed/deployedTo records after removal. By default,',
+      '                     remove selected deployment records and drop the id when none remain.',
+      '                     Project-local partial reverts retain their registry records.',
+      '  --force            Override project-local mutation refusal or legacy plugin dependency checks;',
+      '                     does not override bundled skill hash/ownership preservation.',
+      '  --scope user       Remove the user-scope mirror using ~/.aiwg/installed.json instead.',
+      '  --user             Alias for --scope user; user mirror removal updates its own registry.',
+      '  --target <d>       Target a project directory (alias: --prefix; default: cwd).',
+      '  --help, -h         Show this help.',
+      '',
+      'Bundled skill removal preserves modified files, unrecorded operator files, foreign skills,',
+      'and symlinks inside skill directories. Project-local bundle source is never deleted.',
+      'User-scope legacy records without artifact manifests require manual file cleanup.',
+      'Unregistered ids fall back to the legacy plugin uninstaller (also supports --keep-data).',
+      '',
+      'Examples:',
+      '  aiwg remove all --dry-run',
+      '  aiwg remove sdlc --provider claude --dry-run',
+      '  aiwg remove my-bundle --keep-registry',
+      '  aiwg remove sdlc --scope user --provider codex --dry-run',
+    ].join('\n') };
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     // Explicit provider removal is separate from framework removal. The native
@@ -887,19 +944,39 @@ export const removeHandler: CommandHandler = {
             return { exitCode: 1, message: `Error: '${positionalArg}' is not deployed for provider '${providerParse.provider}'.` };
           }
           let released = 0;
+          const lines: string[] = [];
           for (const provider of providers) {
-            for (const root of deployedSkillRoots(projectDir, provider)) {
-              for (const name of await fs.readdir(root).catch(() => [] as string[])) {
-                if (releaseSkillOwnership(path.join(root, name), { frameworkSlug }, { dryRun }) !== null) released++;
+            if (dryRun) lines.push(`  Provider ${provider}:`);
+            const providerStart = lines.length;
+            const skillRoots = deployedSkillRoots(projectDir, provider);
+            for (const root of skillRoots) {
+              for (const name of (await fs.readdir(root).catch(() => [] as string[])).sort()) {
+                const skillDir = path.join(root, name);
+                const plan: SkillRemovalPlanEntry[] = [];
+                const owned = releaseSkillOwnership(skillDir, { frameworkSlug }, { dryRun, plan }) !== null;
+                if (owned) released++;
+                if (dryRun) {
+                  previewUnrecordedSkillFiles(skillDir, owned, plan, skillRoots);
+                  for (const entry of plan) {
+                    lines.push(`    Would ${entry.action} ${path.relative(projectDir, entry.path)} — ${entry.reason}`);
+                  }
+                }
               }
             }
+            if (dryRun && lines.length === providerStart) lines.push('    No deployed skill files found.');
             if (!dryRun && !ctx.args.includes('--keep-registry')) delete entry.deployedTo[provider];
           }
           if (!dryRun && !ctx.args.includes('--keep-registry')) {
             if (Object.keys(entry.deployedTo).length === 0) delete config.installed[positionalArg];
             await writeAiwgConfig(projectDir, config);
           }
-          return { exitCode: 0, message: `${dryRun ? 'Would release' : 'Released'} ${released} skill ownership receipt(s); operator files preserved.` };
+          if (dryRun) {
+            lines.push(ctx.args.includes('--keep-registry')
+              ? '  Registry preserved (--keep-registry).'
+              : `  Would update .aiwg/aiwg.config: release ${providers.join(', ')} deployment record(s) for '${positionalArg}'; drop the id if none remain.`);
+          }
+          lines.push(`${dryRun ? 'Would release' : 'Released'} ${released} skill ownership receipt(s); operator files preserved.`);
+          return { exitCode: 0, message: lines.join('\n') };
         }
         if (config && entry?.source === 'project-local') {
           const force = ctx.args.includes('--force');
