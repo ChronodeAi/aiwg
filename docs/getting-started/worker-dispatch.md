@@ -482,7 +482,7 @@ dispatch back on later restores the same setup.
 ## Worker launch boundary on Linux
 
 This section covers AIWG's own launcher: `aiwg ralph-external --launch-worker`
-and managed Mission Control launches. It does not apply to Tier 0 direct
+and managed-tier launches. It does not apply to Tier 0 direct
 handoff, the default. In Tier 0 the conductor runs the command rendered by
 `aiwg models resolve --transport shell --format shell` from its own shell, so the
 conductor harness's sandbox applies and no systemd unit is created.
