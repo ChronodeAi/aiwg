@@ -5821,7 +5821,24 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
       const baselineLog = await run(SessionLauncherBaseline, baselineAttempt);
       const branchLog = await run(SessionLauncher, branchAttempt);
       expect(branchLog.map((entry) => entry.name)).toEqual(baselineLog.map((entry) => entry.name));
-      expect(branchLog).toEqual(baselineLog);
+      // GH #365 intentionally passes the worker's directories to the
+      // resource gate: the branch's `checkDispatch` argument adds exactly
+      // one key, `paths`, that the frozen baseline lacks. Assert that
+      // addition precisely at every gate call, then compare everything
+      // else (including the remaining checkDispatch keys) strictly.
+      const baselineGateCalls = baselineLog.filter((entry) => entry.name === 'checkDispatch');
+      const branchGateCalls = branchLog.filter((entry) => entry.name === 'checkDispatch');
+      expect(branchGateCalls.length).toBeGreaterThan(0);
+      branchGateCalls.forEach((entry, i) => {
+        const baselineKeys = baselineGateCalls[i].args[0];
+        expect(baselineKeys).not.toContain('paths');
+        expect(entry.args[0]).toEqual([...baselineKeys, 'paths'].sort());
+        expect(entry.args.slice(1)).toEqual(baselineGateCalls[i].args.slice(1));
+      });
+      const withoutGatePaths = (log) => log.map((entry) => (entry.name === 'checkDispatch'
+        ? { ...entry, args: [entry.args[0].filter((key) => key !== 'paths'), ...entry.args.slice(1)] }
+        : entry));
+      expect(withoutGatePaths(branchLog)).toEqual(baselineLog);
       expect(baselineLog.length).toBeGreaterThan(0);
     } finally {
       await rm(fx.root, { recursive: true, force: true });

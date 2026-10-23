@@ -107,11 +107,11 @@ import { launchIsolatedWorker } from '../../tools/ralph-external/lib/worker-isol
 // tightened field-by-field by parallelism.admission.hostResources
 // (conservative defaults when unset). worker_dispatch off means legacy:
 // { enabled: false, ok: true } with no signal sampling.
-const gate = checkWorkerDispatch({ config });
+const gate = checkWorkerDispatch({ config, paths: [prepared.cwd, runDir] });
 if (!gate.ok) {
   // Queue, pick another qualified host, or reject with gate.failures
   // (each names its signal: avail-mem, load, mem-psi-avg10, mem-psi-avg60,
-  // workers, platform, thresholds). Never launch.
+  // free-disk, workers, platform, thresholds). Never launch.
 }
 const outcome = launchIsolatedWorker({
   name, memoryMaxGb, command: prepared.argv[0], args: prepared.argv.slice(1),
@@ -127,6 +127,13 @@ const outcome = launchIsolatedWorker({
 The `dispatch` preflight profile exposes the same gate on the command line
 (`node tools/scripts/resource-preflight.mjs --profile dispatch`), and
 `aiwg doctor` reports the live host state plus the isolation mode read-only.
+The saved-plan launcher samples both the worker's working directory and the
+run directory at each resource check. A refusal starts with
+`Worker dispatch resource gate refused launch` and includes bounded failing
+signal names and reasons, for example `free-disk: free 0.5GB < 2GB`.
+For missing directories, the saved-plan launcher samples the nearest existing
+ancestor directory without creating anything. Unreadable paths or missing paths
+with no existing ancestor below `/` fail closed.
 No mandatory enforcement is wired into `prepareWorkerInvocation` or the
 managed dispatch internals here; this section is the consumable API the
 Tier 0 conductor procedure and #2888 dispatch templates must call before launch:
