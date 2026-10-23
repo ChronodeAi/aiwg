@@ -9,7 +9,7 @@
  * @architecture @.aiwg/architecture/decisions/ADR-001-unified-extension-system.md
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { run, initRouter, cachedRegistry } from '../../../src/cli/router.js';
 import type { HandlerContext, HandlerResult, CommandHandler } from '../../../src/cli/handlers/types.js';
 
@@ -165,6 +165,25 @@ describe('router', () => {
     });
 
     describe('help display when no args', () => {
+      it.each(['--help', '-h'])('shows remove help without executing removal: %s', async flag => {
+        const registry = await initRouter();
+        const handler = registry.handlerMap.get('remove')!;
+        const execute = vi.spyOn(handler, 'execute');
+        const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+        try {
+          await run(['remove', flag]);
+          const output = stdout.mock.calls.map(call => String(call[0])).join('');
+          expect(output).toContain('Usage: aiwg remove <id>');
+          expect(output).toContain('--keep-registry');
+          expect(output).not.toContain('No detailed help');
+          expect(execute).not.toHaveBeenCalled();
+          expect(exitCode).toBeUndefined();
+        } finally {
+          stdout.mockRestore();
+          execute.mockRestore();
+        }
+      });
+
       it('should show help when called with no arguments', async () => {
         await run([]);
 
