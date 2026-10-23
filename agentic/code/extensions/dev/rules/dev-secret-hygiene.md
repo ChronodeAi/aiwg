@@ -1,4 +1,6 @@
 ---
+activation: summary
+summary: Protect CI secrets from untrusted code, forked pull requests, logs, and build artifacts.
 enforcement: high
 ---
 

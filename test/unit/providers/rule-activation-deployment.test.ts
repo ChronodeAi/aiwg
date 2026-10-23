@@ -72,11 +72,12 @@ describe('activation-selected provider deployment (#2939)', () => {
       }
       const definitions = [...contents(root)].filter(([file]) => !file.startsWith('source/') && /fixture-(skill|agent|flow)\/(SKILL.md)$|fixture-agent\.(md|toml)$/.test(file));
       expect(definitions.length).toBeGreaterThanOrEqual(3);
-      for (const [, content] of definitions) {
+      for (const [file, content] of definitions) {
         expect(content.match(/<!-- AIWG:bound-rules:start -->/g)).toHaveLength(1);
-        expect(content.indexOf('- fixture-bound')).toBeLessThan(content.indexOf('- fixture-paths'));
-        expect(content.indexOf('- fixture-paths')).toBeLessThan(content.indexOf('- fixture-summary'));
-        expect(content).toContain('aiwg show rule fixture-bound');
+        expect(content).toMatch(/RULES-BOUND\.md#(agent|skill|flow)-fixture-(agent|skill|flow)/);
+        expect(readFileSync(join(root, `target/.${provider}/RULES-BOUND.md`), 'utf8')).toContain('aiwg show rule fixture-bound --body');
+        if (file.endsWith('/SKILL.md')) expect(content).toContain('Follow the fixture bound policy.');
+        else expect(content).not.toContain('Follow the fixture bound policy.');
         expect(content).not.toContain('FIXTURE_BOUND_BODY');
         const description = content.match(/^description\s*[:=].*$/m)?.[0];
         expect(description).not.toContain('Bound rules');
@@ -108,13 +109,14 @@ describe('activation-selected provider deployment (#2939)', () => {
     writeFileSync(file, readFileSync(file, 'utf8').replace('Follow the fixture bound policy.', 'Follow the revised bound policy.'));
     writeFileSync(join(root, 'target/.claude/rules/.aiwg-rules-budget.json'), JSON.stringify({ budgetTokens: 64000, demoted: ['fixture-kernel'] }));
     deploy(root, 'claude');
-    expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).toContain('Follow the revised bound policy.');
+    expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).toContain('RULES-BOUND.md#skill-fixture-skill');
+    expect(readFileSync(join(root, 'target/.claude/RULES-BOUND.md'), 'utf8')).toContain('Follow the revised bound policy.');
     expect(existsSync(join(root, 'target/.claude/rules/.aiwg-rules-budget.json'))).toBe(false);
     rmSync(file);
     deploy(root, 'claude');
-    expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).not.toContain('fixture-bound');
+    expect(readFileSync(join(root, 'target/.claude/RULES-BOUND.md'), 'utf8')).not.toContain('fixture-bound');
   }, 90_000);
-  it('preserves the untagged SDLC/Claude tier fallback and full bodies, including restored demotions', () => {
+  it('keeps untagged SDLC/Claude rules on demand without promoting legacy scope metadata', () => {
     const root = setup();
     // Freeze the legacy delivery input independently of later corpus migrations
     // and #3222's tagged behaviors; this fixture tests untagged tier fallback.
@@ -140,35 +142,23 @@ describe('activation-selected provider deployment (#2939)', () => {
     deploy(root, 'claude', { srcRoot: legacy, mode: 'sdlc', deploySkills: false, deployCommands: false,
       rulesOnly: true, bindingEntries: [], deployVersion: 'fixture', deploySource: 'bundled' });
     const dir = join(root, 'target/.claude/rules');
-    // ADR 258–272 preserves tier selection and native transforms, not byte
-    // hashes of a changing authored corpus. Derive membership independently
-    // from the fixture frontmatter and verify every selected body in full.
-    const rules = [...sourceRules(legacy, 'frameworks').filter(rule => rule.file.includes('/sdlc-complete/')),
-      ...sourceRules(legacy, 'addons').filter(rule => !rule.consolidated)];
-    const bodies = new Map(rules.filter(rule => !rule.structural && rule.fileDelivered).map(rule => [rule.name, rule]));
-    const onDemand = [...new Set([...sourceRules(legacy, 'frameworks'), ...sourceRules(legacy, 'addons'),
-      ...sourceRules(legacy, 'extensions')].filter(rule => rule.legacyOnDemand).map(rule => rule.name))].sort();
-    const expected = [...bodies.keys()].map(name => `${name}.md`);
-    expected.push('RULES-INDEX.md');
-    if (onDemand.length) expected.push('RULES-ONDEMAND.md');
-    expect(readdirSync(dir).filter(name => name.endsWith('.md')).sort()).toEqual(expected.sort());
-    for (const [name, rule] of bodies) {
-      const deployed = readFileSync(join(dir, `${name}.md`), 'utf8');
-      const body = deployed.replace(/^<!-- aiwg:managed[^\n]*-->\n/, '')
-        .replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').trim();
-      expect(body, name).toBe(rule.body);
-      expect(deployed, name).not.toMatch(/^triggers:/m);
+    // Missing activation never authorizes always-on delivery, even for legacy
+    // CRITICAL/HIGH contracts. Only the selected bundle set is discoverable.
+    const selected = [...sourceRules(legacy, 'frameworks').filter(rule => rule.file.includes('/sdlc-complete/')),
+      ...sourceRules(legacy, 'addons').filter(rule => /\/(aiwg-utils|schema-governance|dataset-intelligence)\//.test(rule.file))]
+      .filter(rule => !rule.structural);
+    expect(selected.length).toBeGreaterThan(30);
+    expect(readdirSync(dir).filter(name => name.endsWith('.md')).sort()).toEqual(['RULES-ONDEMAND.md']);
+    const index = readFileSync(join(dir, 'RULES-ONDEMAND.md'), 'utf8');
+    expect([...index.matchAll(/^- `([^`]+)`/gm)].map(match => match[1]).sort())
+      .toEqual(selected.map(rule => rule.name).sort());
+    for (const rule of selected) {
+      expect(existsSync(join(dir, `${rule.name}.md`)), rule.name).toBe(false);
+      expect(index).toContain(`aiwg show rule ${rule.name} --body`);
     }
-    const index = readFileSync(join(dir, 'RULES-INDEX.md'), 'utf8');
-    expect(index).toContain('aiwg:managed');
-    if (onDemand.length) {
-      const index = readFileSync(join(dir, 'RULES-ONDEMAND.md'), 'utf8');
-      expect([...index.matchAll(/^- `([^`]+)`/gm)].map(match => match[1]).sort()).toEqual(onDemand);
-    }
-    // ADR 247–261 explicitly forbids losing these six to the budget guard.
-    for (const name of ['anti-laziness', 'auto-compact-continue', 'cli-secondary',
-      'debug-source-not-output', 'delivery-policy', 'subagent-scoping']) expect(bodies.has(name)).toBe(true);
-    const legacyPaths = parse(readFileSync(join(dir, 'agent-deployment.md'), 'utf8').match(/^---\n([\s\S]*?)\n---/)![1]);
+    // Legacy scope metadata remains intact in source, without becoming an
+    // implicit native path activation or an always-on body.
+    const legacyPaths = parse(readFileSync(join(legacy, 'agentic/code/addons/aiwg-utils/rules/agent-deployment.md'), 'utf8').match(/^---\n([\s\S]*?)\n---/)![1]);
     expect(legacyPaths.paths).toEqual(['.claude/agents/**', '.factory/droids/**', '.codex/agents/**',
       '.opencode/agent/**', 'agentic/**', 'AGENTS.md', 'tools/agents/providers/**']);
   }, 90_000);
@@ -176,7 +166,7 @@ describe('activation-selected provider deployment (#2939)', () => {
   it('resolves concrete bindings through the shared source index on a fresh deployment', () => {
     const root = setup();
     deploy(root, 'claude', { bindingEntries: undefined });
-    expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).toContain('aiwg show rule fixture-bound');
+    expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).toContain('RULES-BOUND.md#');
   }, 90_000);
 
   it('preserves authored flow skill bodies and prunes opt-in projections without deleting operator resources', () => {
@@ -188,7 +178,7 @@ describe('activation-selected provider deployment (#2939)', () => {
     const output = join(root, 'target/.claude/.aiwg/skills/fixture-flow');
     const authored = readFileSync(join(output, 'SKILL.md'), 'utf8');
     expect(authored).toContain('AUTHORED_FLOW_SKILL_BODY');
-    expect(authored).toContain('aiwg show rule fixture-bound');
+    expect(authored).toContain('RULES-BOUND.md#');
     expect(authored).not.toContain('```yaml');
     // Remove the authored representation; --copy-all can now project the flow.
     rmSync(source, { recursive: true });
@@ -212,7 +202,7 @@ describe('activation-selected provider deployment (#2939)', () => {
       { type: 'agent', name: 'fixture-agent', path: join(root, 'source/agents/fixture-agent.md') },
       { type: 'flow', name: 'fixture-flow', path: external },
     ] });
-    expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).toContain('aiwg show rule fixture-bound');
+    expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).toContain('RULES-BOUND.md#');
     expect(walk(join(root, 'target')).filter(file => file.endsWith('/fixture-flow/SKILL.md'))).toEqual([]);
   }, 90_000);
 
@@ -234,10 +224,10 @@ describe('activation-selected provider deployment (#2939)', () => {
     writeFileSync(join(root, 'source/rules/late-rule.md'), '---\nname: late-rule\nactivation: bound\nsummary: Follow the late policy.\nbound_to:\n  agents: [late-agent]\n---\nLATE_RULE_BODY\n');
     deploy(root, 'claude', { bindingEntries: undefined, env });
     const late = readFileSync(join(root, 'target/.claude/agents/late-agent.md'), 'utf8');
-    expect(late).toContain('aiwg show rule late-rule');
+    expect(late).toContain('RULES-BOUND.md#agent-late-agent');
     expect(late.match(/<!-- AIWG:bound-rules:start -->/g)).toHaveLength(1);
     expect(readFileSync(join(root, 'target/.claude/agents/fixture-agent.md'), 'utf8'))
-      .toContain('aiwg show rule fixture-bound');
+      .toContain('RULES-BOUND.md#');
   }, 90_000);
 
   it('rebuilds a stale non-empty source index when a bound agent is missing', () => {
@@ -260,7 +250,7 @@ describe('activation-selected provider deployment (#2939)', () => {
     } });
     const agent = readFileSync(join(root, 'target/.claude/agents/fixture-agent.md'), 'utf8');
     expect(agent.match(/<!-- AIWG:bound-rules:start -->/g)).toHaveLength(1);
-    expect(agent).toContain('aiwg show rule fixture-bound');
+    expect(agent).toContain('RULES-BOUND.md#');
     expect(agent).not.toContain('FIXTURE_BOUND_BODY');
   }, 90_000);
 
@@ -277,7 +267,7 @@ describe('activation-selected provider deployment (#2939)', () => {
     expect(JSON.parse(readFileSync(join(cache, files[0]), 'utf8'))).toEqual(expect.any(Array));
     expect(readdirSync(cache)).toEqual(files);
     expect(readFileSync(join(root, 'target/.claude/agents/fixture-agent.md'), 'utf8'))
-      .toContain('aiwg show rule fixture-bound');
+      .toContain('RULES-BOUND.md#');
   }, 90_000);
 
   it('enforces provider hard caps even with a disabled configurable budget', () => {
@@ -329,7 +319,7 @@ describe('activation-selected provider deployment (#2939)', () => {
     expect(contents(root)).toEqual(before);
   }, 90_000);
 
-  it('retains activation and legacy provider directives when the final context owner regenerates startup', async () => {
+  it('retains selected activation and provider bootstrap when the final context owner regenerates startup', async () => {
     const { generate } = await import('../../../src/smiths/context-pipeline/index.js');
     for (const provider of ['codex', 'hermes', 'warp'] as const) {
       const root = setup();
@@ -343,10 +333,11 @@ describe('activation-selected provider deployment (#2939)', () => {
       } else expect(content).toContain('FIXTURE_KERNEL_BODY');
       expect(content).toContain('Follow the fixture summary policy.');
       expect(content).not.toContain('fixture-bound');
-      // anti-laziness is no longer a hand-condensed Hermes directive; it ships as a core body (#3450),
-      // so this fixture (no core rule) checks that another legacy directive survives regeneration.
+      // Legacy compressed directives cannot promote rules from uninstalled
+      // bundles. The provider bootstrap and selected contracts still survive.
       if (provider === 'hermes') {
-        expect(content).toContain('Never fabricate citations, DOIs, URLs, or page numbers.');
+        expect(content).not.toContain('Never fabricate citations, DOIs, URLs, or page numbers.');
+        expect(content).toContain('Read and follow [WORKSPACE.md]');
         expect(content).not.toContain('### Rule: anti-laziness');
       }
       if (provider === 'codex') expect(Buffer.byteLength(readFileSync(join(root, 'target/AGENTS.md'), 'utf8'))).toBeLessThan(32768);
@@ -359,7 +350,8 @@ describe('activation-selected provider deployment (#2939)', () => {
     const extra = join(root, 'extra');
     mkdirSync(join(extra, 'rules'), { recursive: true });
     writeFileSync(join(extra, 'rules/extra-summary.md'), '---\nname: extra-summary\nactivation: summary\nsummary: Follow the later-pass summary.\n---\nEXTRA_SUMMARY_BODY');
-    deploy(root, 'claude', { srcRoot: extra, rulesOnly: true, deploySkills: false, deployCommands: false });
+    deploy(root, 'claude', { srcRoot: extra, rulesOnly: true, deploySkills: false, deployCommands: false,
+      config: { installed: { fixture: { localPath: join(root, 'source') }, extra: { localPath: extra } } } });
     const index = readFileSync(join(root, 'target/.claude/rules/RULES-INDEX.md'), 'utf8');
     expect(index).toContain('Follow the fixture summary policy.');
     expect(index).toContain('Follow the later-pass summary.');
@@ -384,7 +376,7 @@ describe('activation-selected provider deployment (#2939)', () => {
     const startup = readFileSync(join(root, 'target/AGENTS.md'), 'utf8');
     expect(startup).toContain('.codex/agents/fixture-agent.toml');
     expect(startup).not.toContain('Bound rules');
-    expect(readFileSync(join(root, 'target/.codex/agents/fixture-agent.toml'), 'utf8')).toContain('aiwg show rule fixture-bound');
+    expect(readFileSync(join(root, 'target/.codex/agents/fixture-agent.toml'), 'utf8')).toContain('RULES-BOUND.md#');
     expect(Buffer.byteLength(startup)).toBeLessThan(32768);
   }, 90_000);
 
@@ -425,11 +417,11 @@ describe('activation-selected provider deployment (#2939)', () => {
     const root = setup();
     const behavior = join(root, 'source/behaviors/fixture-behavior');
     mkdirSync(behavior, { recursive: true });
-    writeFileSync(join(behavior, 'BEHAVIOR.md'), '---\nname: fixture-behavior\n---\n' + 'x'.repeat(12000));
+    writeFileSync(join(behavior, 'BEHAVIOR.md'), '---\nactivation: kernel\nname: fixture-behavior\n---\n' + 'x'.repeat(12000));
     expect(() => deploy(root, 'claude', { strict: true, config: { rules: { inline_budget_tokens: 1000 } }, env: { AIWG_RULES_INLINE_BUDGET_TOKENS: undefined } })).toThrow();
     expect(contents(join(root, 'target')).size).toBe(0);
     deploy(root, 'claude', { strict: true, config: { rules: { inline_budget_tokens: 1000 } }, env: { AIWG_RULES_INLINE_BUDGET_TOKENS: '0' } });
-    expect(readFileSync(join(root, 'target/.claude/rules/behaviors/fixture-behavior.md'), 'utf8')).toContain('AIWG Behavior: fixture-behavior');
+    expect(readFileSync(join(root, 'target/.claude/rules/behaviors/fixture-behavior.md'), 'utf8')).toContain('name: fixture-behavior');
   }, 90_000);
 
   it('preserves large artifact payloads without buffering them during deployment or dry-run', () => {

@@ -21,7 +21,7 @@ export function sourceRules(root: string, kind: 'addons' | 'frameworks' | 'exten
       const structural = /^RULES-(INDEX|ONDEMAND)\.md$/.test(name);
       // ADR 50–61, 265–272: activation overrides severity; only missing
       // activation uses tier fallback. Indexes are structural exceptions.
-      const activation = data.activation ?? (['medium', 'low'].includes(level) ? 'on-demand' : 'kernel');
+      const activation = data.activation ?? 'on-demand';
       return { file, name: name.slice(0, -3), content, data, structural, activation,
         body: content.slice(header?.[0].length || 0).trim(),
         fileDelivered: structural || ['kernel', 'paths'].includes(activation),
@@ -34,8 +34,20 @@ export function sourceRules(root: string, kind: 'addons' | 'frameworks' | 'exten
   });
 }
 
-/** The SDLC deploy selects its framework plus non-explicit, non-dev addons. */
+/** #3460: an SDLC install selects its framework and automatic core addons only. */
 export function sdlcDeploymentRules(root: string) {
+  const automaticAddons = sourceRules(root, 'addons').filter(rule => {
+    const bundle = rule.file.slice(0, rule.file.indexOf('/rules/'));
+    const manifest = JSON.parse(readFileSync(join(bundle, 'manifest.json'), 'utf8'));
+    return manifest.core === true && manifest.autoInstall === true;
+  });
+  return [...automaticAddons, ...sourceRules(root, 'frameworks').filter(rule =>
+    rule.file.startsWith(join(root, 'agentic/code/frameworks/sdlc-complete') + '/'))]
+    .filter(rule => !rule.structural);
+}
+
+/** Legacy non-transactional projectors still enumerate all standard addons. */
+export function legacySdlcDeploymentRules(root: string) {
   return [...sourceRules(root, 'addons'), ...sourceRules(root, 'frameworks').filter(rule =>
     rule.file.startsWith(join(root, 'agentic/code/frameworks/sdlc-complete') + '/'))]
     .filter(rule => !rule.structural);

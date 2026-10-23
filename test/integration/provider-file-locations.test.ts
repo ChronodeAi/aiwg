@@ -1,4 +1,4 @@
-import { sdlcDeploymentRules } from '../unit/providers/rule-source-expectations.js';
+import { sdlcDeploymentRules, sourceRules } from '../unit/providers/rule-source-expectations.js';
 import { mkdtempSync } from '../helpers/temp-dir.js';
 /**
  * Provider File Locations Integration Tests
@@ -29,6 +29,8 @@ import { execFileSync, spawnSync } from 'child_process';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const activationRules = sdlcDeploymentRules(REPO_ROOT);
+const uninstalledRules = sourceRules(REPO_ROOT, 'addons').filter(rule =>
+  !rule.structural && !activationRules.some(selected => selected.file === rule.file));
 function canInitGit(): boolean {
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-provider-git-check-'));
   try {
@@ -509,6 +511,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Consolidated Rules Deployment', () => {
     // ADR: kernel and native path bodies accompany the summary index;
     // bound, summary and on-demand bodies stay outside the startup tree.
     const individualRules = mdFiles.filter(f => f !== 'RULES-INDEX.md');
+    for (const rule of uninstalledRules) expect(individualRules).not.toContain(`${rule.name}.md`);
     for (const rule of activationRules) {
       const assertion = expect(individualRules, `${rule.name} (${rule.activation})`);
       if (rule.fileDelivered) assertion.toContain(`${rule.name}.md`);
@@ -524,8 +527,14 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Consolidated Rules Deployment', () => {
 
     expect(content).toContain('# Rule kernel index');
     const summaries = activationRules.filter(rule => rule.activation === 'summary');
+    // #3460: native path contracts remain in the canonical index too.
+    for (const rule of activationRules.filter(rule => rule.activation === 'paths')) {
+      expect(content).toContain(`- ${rule.data.name || rule.name} |`);
+      expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
+    }
     expect([...content.matchAll(/^- (.*?) —/gm)].map(match => match[1]).sort())
-      .toEqual(summaries.map(rule => rule.data.name || rule.name).sort());
+      .toEqual(activationRules.filter(rule => ['kernel', 'summary'].includes(rule.activation))
+        .map(rule => rule.data.name || rule.name).sort());
     for (const rule of summaries) {
       expect(content).toContain(rule.data.summary);
       expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);

@@ -1,16 +1,15 @@
+import { showBindingEnvelopes } from '../../helpers/show-binding-envelopes.js';
 // Verify canonical SDLC lane bindings through indexing, CLI show and six provider writers.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile, execFileSync } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFileSync } from 'node:child_process';
 import { parse } from 'yaml';
 import { buildIndex } from '../../../src/artifacts/index-builder.js';
 import { resolveRuleBindingTarget } from '../../../src/artifacts/query-engine.js';
 import type { ArtifactIndex } from '../../../src/artifacts/types.js';
 
-const execFileAsync = promisify(execFile);
 const repo = path.resolve(import.meta.dirname, '../../..');
 const owner = 'agentic/code/frameworks/sdlc-complete/rules';
 const wave = ['actionable-feedback', 'agent-fallback', 'agent-friendly-code', 'agent-generation-guardrails',
@@ -167,12 +166,10 @@ describe('Wave 5 SDLC lane a canonical rule delivery (#2945)', () => {
       }
     }
     // Vitest parallelizes files; keep per-file lookups serial to bound resources.
-    for (const target of targets.values()) {
-      const { stdout } = await execFileAsync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
-        'show', target.type, target.id, '--json'], {
-        cwd: repo, env: cliEnv, encoding: 'utf8', timeout: 30_000,
-      });
-      const shown = JSON.parse(stdout);
+    const requests = [...targets.values()];
+    const envelopes = showBindingEnvelopes(repo, cliEnv, requests.map(({ type, id }) => ({ type, id })));
+    for (const [index, target] of requests.entries()) {
+      const shown = envelopes[index];
       for (const { name, data } of target.rules) expect(shown.bound_rules, `${target.type}:${target.id}`).toEqual(
         expect.arrayContaining([expect.objectContaining({ name, activation: data.activation,
           summary: data.summary, show_command: `aiwg show rule ${name} --body` })]));
@@ -199,7 +196,7 @@ describe('Wave 5 SDLC lane a canonical rule delivery (#2945)', () => {
       fs.mkdirSync(home, { recursive: true });
       const deployed = execFileSync(process.execPath, ['--input-type=module', '-e', `
         const { deploy } = await import(${JSON.stringify(path.join(repo, 'tools/agents/providers', `${provider}.mjs`))});
-        const report = await deploy(${JSON.stringify({ srcRoot: workload.source, target: project, provider, mode: 'all',
+        const report = await deploy(${JSON.stringify({ srcRoot: workload.source, target: project, provider, mode: 'all', config: { installed: { [path.basename(bundle)]: {} } },
           deployRules: true, deploySkills: true, deployCommands: true, copyStandardSkills: true,
           force: true, quiet: true })});
         console.log('REPORT:' + JSON.stringify(report));
@@ -248,8 +245,17 @@ describe('Wave 5 SDLC lane a canonical rule delivery (#2945)', () => {
           for (const file of definitions) {
             const content = read(file);
             expect(content.match(/<!-- AIWG:bound-rules:start -->/g), file).toHaveLength(1);
-            expect(content, file).toContain(`aiwg show rule ${name} --body`);
+            const index = read(path.join(project, `.${provider}/RULES-BOUND.md`));
+          const anchors = [...content.matchAll(/RULES-BOUND\.md#([a-z0-9_-]+)/g)];
+          expect(anchors.length, file).toBeGreaterThan(0);
+          const bound = anchors.map(match => index.split(`## ${match[1]}\n`)[1]?.split('\n## ')[0] || '').join('\n');
+          expect(bound, file).toContain(`aiwg show rule ${name} --body`);
+          expect(bound, file).toContain(data.summary);
+          if (file.endsWith('/SKILL.md')) {
             expect(content, file).toContain(data.summary);
+            const invocation = content.split('<!-- AIWG:bound-rules:start -->')[1].split('<!-- AIWG:bound-rules:end -->')[0];
+            expect(invocation.split(`aiwg show rule ${data.name ?? name} --body`), file).toHaveLength(2);
+          } else expect(content, file).not.toContain(data.summary);
           }
         }
       }

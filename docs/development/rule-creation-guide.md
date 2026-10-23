@@ -6,6 +6,25 @@ agent reaches a rule by asking a question ("am I allowed to delete this?"), so a
 rule that declares no trigger phrases is effectively unreachable by the discovery
 protocol that is supposed to surface it.
 
+## Declare activation explicitly
+
+Every shipped rule requires `activation:` frontmatter. Choose `core` for a compact
+universal body, `kernel` for an always-on contract, `summary` for an always-on fetch
+obligation, `bound` for named artifact invocations, `paths` for file scopes, or
+`on-demand` for guidance fetched when needed. Summary, bound, and path rules also
+require an authored `summary`.
+
+Deployment warns about legacy rules without activation and treats them as
+on demand regardless of enforcement. Lint rejects missing activation in shipped
+`agentic/code/` rules. Enforcement severity does not select delivery.
+
+`aiwg use all` delivers kernel skills, selected kernel/core rules, and the rule
+index. Rule membership comes from installed bundles and required dependencies;
+provider adapters change how that set is presented. Agent and skill definitions
+link to their section in `<provider>/RULES-BOUND.md`. This index contains only
+the selected deployment’s bindings and fetch commands for the full contracts.
+Follow that section before governed work.
+
 ## Rules support `triggers`
 
 `rule` is in `OPERATIONAL_DISCOVERY_TYPES`, so the indexer runs the same trigger
@@ -15,6 +34,8 @@ Declare triggers in frontmatter:
 ```markdown
 ---
 enforcement: high
+activation: summary
+summary: Verify authorization before governed actions.
 triggers:
   - "am I allowed to do this"
   - "do I need permission for this"

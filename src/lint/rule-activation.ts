@@ -20,14 +20,15 @@ export const ruleActivationRuleset: LintRuleset = {
 export function lintRuleActivation(
   content: string, file: string, projectRoot: string, entries?: MetadataEntry[], absolutePath?: string,
 ): LintDiagnostic[] {
-  // Generated structural indexes are not authored rules.
-  if (/^(?:RULES-INDEX|RULES-ONDEMAND)\.md$/.test(file.split('/').pop()!)) return [];
+  // Directory documentation and generated indexes are not authored rules.
+  if (/^(?:README|RULES-INDEX|RULES-ONDEMAND)\.md$/.test(file.split('/').pop()!)) return [];
   // <rule>.core.md is a delivery body (#3450), validated through its owning rule.
   if (/\.core\.md$/.test(file)) return [];
+  const shipped = /(?:^|\/)agentic\/code\//.test((absolutePath ?? path.resolve(projectRoot, file)).replaceAll('\\', '/'));
   const result = parseRuleFrontmatter(content);
   const diagnostics = result.diagnostics.map(item => ({
     ruleId: 'rules/activation', ruleName: 'Rule activation contract',
-    file, severity: item.severity, message: item.message,
+    file, severity: item.code === 'missing-activation' && shipped ? 'error' as const : item.severity, message: item.message,
   }));
   if (!result.rule) return diagnostics;
   if (result.rule.activation === 'core') {

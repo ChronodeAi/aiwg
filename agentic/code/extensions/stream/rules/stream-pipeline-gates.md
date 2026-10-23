@@ -1,4 +1,6 @@
 ---
+activation: summary
+summary: Validate stream pipeline, relay, and transcode changes with a test stream before production cutover.
 enforcement: high
 ---
 

@@ -1,4 +1,6 @@
 ---
+activation: summary
+summary: Check certificate expiry thresholds and block deployments when certificate gates fail.
 enforcement: high
 ---
 

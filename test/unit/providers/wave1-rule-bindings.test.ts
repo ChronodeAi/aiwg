@@ -129,7 +129,7 @@ describe('Wave 1 canonical rule delivery (#2941)', () => {
     fs.mkdirSync(home, { recursive: true });
     execFileSync(process.execPath, ['--input-type=module', '-e', `
       const { deploy } = await import(${JSON.stringify(path.join(repo, 'tools/agents/providers', `${provider}.mjs`))});
-      await deploy(${JSON.stringify({ srcRoot: source, target: project, provider, mode: 'all',
+      await deploy(${JSON.stringify({ srcRoot: source, target: project, provider, mode: 'all', config: { installed: { [path.basename(bundle)]: {} } },
         deployRules: true, deploySkills: true, deployCommands: true, copyStandardSkills: true,
         force: true, quiet: true })});
     `], { cwd: repo, env: { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP,
@@ -153,8 +153,17 @@ describe('Wave 1 canonical rule delivery (#2941)', () => {
         for (const file of definitions) {
           const content = read(file);
           expect(content.match(/<!-- AIWG:bound-rules:start -->/g), file).toHaveLength(1);
-          expect(content, file).toContain(`aiwg show rule ${name} --body`);
-          expect(content, file).toContain(data.summary);
+          const index = read(path.join(project, `.${provider}/RULES-BOUND.md`));
+          const anchors = [...content.matchAll(/RULES-BOUND\.md#([a-z0-9_-]+)/g)];
+          expect(anchors.length, file).toBeGreaterThan(0);
+          const bound = anchors.map(match => index.split(`## ${match[1]}\n`)[1]?.split('\n## ')[0] || '').join('\n');
+          expect(bound, file).toContain(`aiwg show rule ${name} --body`);
+          expect(bound, file).toContain(data.summary);
+          if (file.endsWith('/SKILL.md')) {
+            expect(content, file).toContain(data.summary);
+            const invocation = content.split('<!-- AIWG:bound-rules:start -->')[1].split('<!-- AIWG:bound-rules:end -->')[0];
+            expect(invocation.split(`aiwg show rule ${data.name ?? name} --body`), file).toHaveLength(2);
+          } else expect(content, file).not.toContain(data.summary);
         }
       }
     }

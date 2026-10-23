@@ -23,9 +23,9 @@ const validate = ajv.compile(ruleFrontmatterSchema);
 // Legacy paths/applies_to/scope never become activation inputs during migration.
 const validateLegacy = ajv.compile({ type: 'object', properties: ruleFrontmatterSchema.properties });
 
-export function inferRuleActivation(enforcement) {
-  return typeof enforcement === 'string' && ['medium', 'low'].includes(enforcement.trim().toLowerCase())
-    ? 'on-demand' : 'kernel';
+export function inferRuleActivation() {
+  // Missing metadata never grants an always-on policy surface.
+  return 'on-demand';
 }
 
 /** Validate a parsed YAML mapping. Invalid explicit activation never falls back. */
@@ -43,7 +43,7 @@ export function validateRuleFrontmatter(data) {
     });
   }
   if (!tagged) diagnostics.push({ severity: 'warn', code: 'missing-activation',
-    message: `Missing activation; inferred ${inferRuleActivation(data.enforcement)} delivery from legacy enforcement (migration fallback).` });
+    message: `Missing activation; inferred ${inferRuleActivation(data.enforcement)} delivery (migration fallback); add explicit activation frontmatter.` });
   if (Object.hasOwn(data, 'enforcedBy')) diagnostics.push({ severity: 'info', code: 'reserved-enforcedBy',
     message: 'enforcedBy is opaque reserved metadata (#2839); it has no effect.' });
   const valid = !diagnostics.some(item => item.severity === 'error');

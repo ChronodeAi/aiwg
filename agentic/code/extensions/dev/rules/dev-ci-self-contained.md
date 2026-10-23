@@ -1,4 +1,6 @@
 ---
+activation: summary
+summary: Keep CI builders self-contained and pinned; define all build dependencies in the project builder image.
 enforcement: high
 ---
 

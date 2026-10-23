@@ -16,7 +16,7 @@ export type RuleValidationResult =
 export const RULE_ACTIVATIONS: readonly RuleActivation[];
 export const RULE_BINDING_TYPES: Readonly<{ skills: 'skill'; agents: 'agent'; flows: 'flow' }>;
 export const ruleFrontmatterSchema: Record<string, unknown>;
-export function inferRuleActivation(enforcement: unknown): 'kernel' | 'on-demand';
+export function inferRuleActivation(enforcement?: unknown): 'on-demand';
 export function validateRuleFrontmatter(data: unknown): RuleValidationResult;
 export function parseRuleFrontmatter(content: string): RuleValidationResult & { data: unknown; body: string };
 export const CORE_BODY_MAX_BYTES: number;

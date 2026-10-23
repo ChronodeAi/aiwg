@@ -421,10 +421,8 @@ function pruneStaleAiwgArtifacts(provider, target, srcRoot, opts, explicitSource
   }
 
   if (opts.kernelOnly) {
-    // A kernel-only run deploys skills and nothing else (deployCommands /
-    // deployRules / deployBehaviors are all forced false above), so it has no
-    // basis for judging any flat artifact stale. The empty desired set below
-    // exists for one narrow migration: clearing agents/commands/rules left by
+    // Kernel-only delivers skills and rules. The empty desired set below
+    // applies only to bulk agents/commands left by
     // the pre-#152 bulk default, when the bulk install is the only thing this
     // project ever deployed.
     //
@@ -438,7 +436,7 @@ function pruneStaleAiwgArtifacts(provider, target, srcRoot, opts, explicitSource
       }
       return;
     }
-    for (const type of ['agents', 'commands', 'rules']) {
+    for (const type of ['agents', 'commands']) {
       const relPath = provider.paths?.[type];
       if (!relPath || relPath.endsWith('.md')) continue;
       const destDir = path.isAbsolute(relPath) ? relPath : path.join(target, relPath);
@@ -610,7 +608,7 @@ Options:
   --commands-only          Deploy only commands (skip agents)
   --skills-only            Deploy only skills (skip agents)
   --rules-only             Deploy only rules (skip agents)
-  --kernel-only            Deploy kernel skills only and prune managed bulk artifacts
+  --kernel-only            Deploy kernel skills and rules; prune managed bulk agents/commands
   --dry-run                Show what would be deployed without writing
   --force                  Overwrite existing files
   --provider <name>        Target provider (see below)
@@ -1042,7 +1040,7 @@ export async function main(args = process.argv.slice(2), internal = {}) {
     createAgentsMd: cfg.createAgentsMd,
     deployCommands: cfg.kernelOnly ? false : cfg.deployCommands,
     deploySkills: cfg.kernelOnly ? true : cfg.deploySkills,
-    deployRules: cfg.kernelOnly ? false : cfg.deployRules,
+    deployRules: cfg.kernelOnly ? true : cfg.deployRules,
     deployBehaviors: cfg.kernelOnly ? false : cfg.deployBehaviors,
     commandsOnly: cfg.commandsOnly,
     skillsOnly: cfg.skillsOnly || cfg.kernelOnly,
@@ -1106,7 +1104,12 @@ export async function main(args = process.argv.slice(2), internal = {}) {
 
   // Delegate to provider
   try {
-    if (!internal.finalizeOnly) await provider.deploy(opts);
+    if (!internal.finalizeOnly) {
+      if (cfg.kernelOnly && !['claude', 'codex', 'cursor', 'hermes', 'warp', 'openclaw', 'pi'].includes(provider.name)) {
+        const { deployWithRuleDelivery } = await import('./providers/rule-delivery.mjs');
+        await deployWithRuleDelivery(opts, provider, staged => provider.deploy(staged));
+      } else await provider.deploy(opts);
+    }
     if (preparationActive) return;
 
     const mirroredCommandCount = mirrorSkillsAsCommands(provider, cfg.target, srcRoot, opts);
