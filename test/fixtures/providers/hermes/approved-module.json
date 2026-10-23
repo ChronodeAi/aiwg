@@ -7,7 +7,7 @@
     "packageVersion": "1",
     "modulePath": "lib/hermes-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:e6dc54cc9602bf48cbce48912c26e9498d6e5dd04a2d193a5116d19f54952bbc",
+    "sha256": "sha256:aa0d04db65ccac468192c1423bff7ec06a6a8f0ea0f51ad9dbcda2ec60a83a19",
     "adapterIds": ["hermes"],
     "platforms": ["linux"]
   }

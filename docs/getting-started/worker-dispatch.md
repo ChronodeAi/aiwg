@@ -388,6 +388,19 @@ fixed `reason` identifiers (`invocation_build_failed`, `native_argv_invalid`, or
 `invocation_prepare_failed`) and pointers to the failing invocation stage, in both
 JSON plans and shell-mode refusals. Internal error text remains redacted.
 
+Shell commands clear the environment with `env -i` and pass only named variables
+from the qualified profile. Process profiles retain `PATH`; for Codex the rendered
+prefix includes `env -i CODEX_HOME="${CODEX_HOME-}" HOME="${HOME-}" PATH="${PATH-}"`.
+Values are expanded by the conductor's shell and never printed in the plan.
+Keeping `PATH` lets Codex find the system `bwrap` allowed by AppArmor on Ubuntu
+hosts that restrict unprivileged user namespaces. Requalify existing installations
+after updating these profiles.
+
+Codex qualification also runs `codex sandbox` with a sandboxed `/bin/sh -c true`
+under the same cleared, allowlisted environment. A failed sandbox check blocks
+approval without calling a model. This checks shell startup, not full sandbox
+attestation or model behavior.
+
 Qualification preserves observed catalog facts and discovery timestamps. Doctor
 uses the existing read-only Codex/Muse catalog discovery or previously discovered
 observations for other CLIs; it never calls a model. Missing exact inference

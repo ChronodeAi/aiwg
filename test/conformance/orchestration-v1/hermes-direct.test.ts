@@ -502,7 +502,7 @@ describe('T-OG-15 Hermes direct command contract', () => {
   it('HD10 HERMES_YOLO_MODE (and any other HERMES_* bypass env) can never reach the worker: the allowlist excludes it and an ambient copy in the conductor env is stripped', async () => {
     const bundled = loadProviderModelCapabilities().providers.hermes.workerHealthAdapter!;
     expect(bundled.invocation.envAllowlist).not.toContain('HERMES_YOLO_MODE');
-    expect(bundled.invocationProfiles!['direct-shell'].envAllowlist).toEqual([]);
+    expect(bundled.invocationProfiles!['direct-shell'].envAllowlist).toEqual(['PATH']);
     const { plan, root } = await hermesPlan();
     const invocation = plan.invocation!;
     expect(invocation.envNames).not.toContain('HERMES_YOLO_MODE');
