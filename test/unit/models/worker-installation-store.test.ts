@@ -2,7 +2,8 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { prepareWorkerInstallationStore } from '../../../src/models/worker-installation.mjs';
+import { loadRecordedWorkerInstallations, prepareWorkerInstallationStore } from '../../../src/models/worker-installation.mjs';
+import { loadProviderModelCapabilities } from '../../../src/models/provider-policy.js';
 
 vi.mock('node:fs/promises', { spy: true });
 // Node's native homedir ignores thread-local env changes in Vitest's pool.
@@ -18,6 +19,24 @@ afterEach(async () => {
 });
 
 describe('qualification store permission repair', () => {
+  it.each([128, 129])('bounds secret-free registration diagnostics for %s records', async count => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-store-diagnostics-'));
+    roots.push(root);
+    const cwd = path.join(root, 'project');
+    const store = path.join(root, 'store');
+    await fs.mkdir(cwd); await fs.mkdir(store, { mode: 0o700 });
+    vi.stubEnv('AIWG_CONFIG', store);
+    const privateText = 'synthetic-private-content!';
+    await fs.writeFile(path.join(store, 'worker-installations.json'), JSON.stringify({ version: 1,
+      registrations: Array.from({ length: count }, () => ({ cli: privateText })) }), { mode: 0o600 });
+    const error = await loadRecordedWorkerInstallations({ registry: loadProviderModelCapabilities(), cwd }).catch(error => error);
+    const rejections = count === 128
+      ? Array.from({ length: count }, (_, registration) => ({ registration, reason: 'record-identity' }))
+      : [{ registration: null, reason: 'store-record' }];
+    expect(error).toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', details: { rejections } });
+    expect(`${error.stack}${JSON.stringify(error)}`).not.toContain(privateText);
+  });
+
   it.each([0o775, 0o777])('refuses repair beneath a writable ancestor (%s)', async mode => {
     const home = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-store-ancestor-'));
     roots.push(home);

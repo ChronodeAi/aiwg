@@ -502,7 +502,8 @@ export function resolveWorkerInstallation(registry: ProviderModelCapabilityRegis
 
 /** Typed policy failures let public surfaces retain the cause without exposing internal details. */
 export class WorkerPolicyError extends Error {
-  constructor(public readonly code: WorkerPolicyDiagnostic['code'], message: string) {
+  constructor(public readonly code: WorkerPolicyDiagnostic['code'], message: string,
+    public readonly details?: { rejections: { registration: number | null; reason: string }[] }) {
     super(message);
     this.name = 'WorkerPolicyError';
   }

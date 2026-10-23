@@ -34,7 +34,7 @@
 import { StringDecoder } from 'node:string_decoder';
 import { spawn } from 'child_process';
 import { createWriteStream, mkdirSync, existsSync, readFileSync, copyFileSync, constants } from 'fs';
-import { open, mkdir, rename, unlink, lstat, readdir, realpath, link } from 'node:fs/promises';
+import { open, mkdir, rename, unlink, lstat, readdir, realpath, link, access } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, dirname, join, relative, isAbsolute } from 'path';
@@ -452,6 +452,29 @@ export async function assertManagedWorkerLaunch(options, invocation, inputs, pro
   return { ...record, deadlineAtMs };
 }
 
+async function workerDispatchPath(filename) {
+  let candidate = filename;
+  while (dirname(candidate) !== candidate) {
+    try {
+      if (!(await lstat(candidate)).isDirectory()) return filename;
+      await access(candidate, constants.R_OK | constants.X_OK);
+      return candidate;
+    } catch (error) {
+      if (error.code !== 'ENOENT') return filename;
+      candidate = dirname(candidate);
+    }
+  }
+  // Keep an unusable path for fail-closed sampling rather than falling back to /.
+  return filename;
+}
+
+function workerDispatchRefusal(gate) {
+  const bounded = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 256);
+  const reasons = (gate.failures ?? []).slice(0, 8)
+    .map(failure => `${bounded(failure.signal)}: ${bounded(failure.reason)}`).join('; ').slice(0, 1024);
+  return new Error(`Worker dispatch resource gate refused launch${reasons ? `: ${reasons}` : ''}`);
+}
+
 async function launchOneWorker(owner, options) {
   const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validate } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
   const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
@@ -519,8 +542,9 @@ async function launchOneWorker(owner, options) {
   // document on the stdin pipe, never brief text in argv (#2911).
   const { workerStdinBytes } = await importImpl(import.meta.url, 'serve/worker-stdin-frame.mjs');
   const stdinBytes = workerStdinBytes(invocation, brief, inputs.drivers[invocation.selected.cli]);
-  let gate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config });
-  if (!gate.ok) throw new Error('Worker dispatch resource gate refused launch');
+  let gate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config,
+    paths: await Promise.all([invocation.cwd, runDir].map(workerDispatchPath)) });
+  if (!gate.ok) throw workerDispatchRefusal(gate);
   const isolation = options.isolation ?? detectWorkerIsolation();
   if (isolation.mode === 'degraded' && !options.allowDegraded) {
     throw new Error('Worker isolation unavailable; explicitly select --allow-degraded-worker or use manual observation');
@@ -748,8 +772,9 @@ async function launchOneWorker(owner, options) {
     // Recheck policy, prompt, installation and exact bindings after file preparation.
     inputs = await loadInputs();
     await validate(saved, inputs.snapshot, inputs.drivers, clock());
-    gate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config });
-    if (!gate.ok) throw new Error('Worker dispatch resource gate refused launch');
+    gate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config,
+      paths: await Promise.all([invocation.cwd, runDir].map(workerDispatchPath)) });
+    if (!gate.ok) throw workerDispatchRefusal(gate);
     if (bytesDigest(await boundedPrivateRead(invocation.briefPath, 262144, inspect)) !== invocation.briefDigest) throw new Error('Worker prompt changed before spawn');
     const environment = Object.fromEntries(invocation.envNames.filter(name => process.env[name] !== undefined)
       .map(name => [name, process.env[name]]));
@@ -1566,8 +1591,9 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
     // Recheck policy, prompt, installation and exact bindings after file preparation.
     inputs = await loadInputs();
     await validate(saved, inputs.snapshot, inputs.drivers, clock());
-    localGate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config });
-    if (!localGate.ok) throw new Error('Worker dispatch resource gate refused launch');
+    localGate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config,
+      paths: await Promise.all([invocation.cwd, runDir].map(workerDispatchPath)) });
+    if (!localGate.ok) throw workerDispatchRefusal(localGate);
     if (bytesDigest(await boundedPrivateRead(invocation.briefPath, 262144, inspect)) !== invocation.briefDigest) throw new Error('Worker prompt changed before spawn');
     const environment = Object.fromEntries(invocation.envNames.filter(name => process.env[name] !== undefined)
       .map(name => [name, process.env[name]]));

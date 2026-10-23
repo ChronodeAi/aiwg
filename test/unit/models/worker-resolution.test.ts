@@ -17,6 +17,38 @@ const routeInput = (f: ReturnType<typeof workerResolutionFixture>, index = 0) =>
   identityEvidence: 'runtime-configured' as const, observation: rows(f)[index].worker!, now: new Date(f.request.now),
 });
 
+describe('catalog digest facts', () => {
+  it('ignores only discovery fetchedAt without mutating the catalog', () => {
+    const f = workerResolutionFixture();
+    const before = structuredClone(f.snapshot.catalog);
+    const first = resolve(f);
+    expect(f.snapshot.catalog).toEqual(before);
+    f.snapshot.catalog.discovery!.fetchedAt = '2099-01-01T00:00:00Z';
+    expect(resolve(f).digests).toEqual(first.digests);
+  });
+
+  it.each(['efforts', 'availability', 'provider-observedAt', 'worker-observedAt', 'worker-fetchedAt', 'verifiedAt', 'refreshedAt', 'static-role'])(
+    'keeps %s pinned even in a cached catalog', fact => {
+      const f = workerResolutionFixture();
+      const discovery = f.snapshot.catalog.discovery!;
+      discovery.source = 'cache'; discovery.upstreamSource = 'native';
+      const first = resolve(f).digests;
+      const row = rows(f)[0];
+      if (fact === 'efforts') row.reasoningEfforts = ['medium'];
+      if (fact === 'availability') row.credentialState = 'unavailable';
+      if (fact === 'provider-observedAt') discovery.instances!.codex.observedAt = '2099-01-01T00:00:00Z';
+      if (fact === 'worker-observedAt') row.worker!.observedAt = '2099-01-01T00:00:00Z';
+      if (fact === 'worker-fetchedAt') row.worker!.fetchedAt = '2099-01-01T00:00:00Z';
+      if (fact === 'verifiedAt') row.worker!.verifiedAt = '2099-01-01T00:00:00Z';
+      if (fact === 'refreshedAt') f.snapshot.catalog.refreshedAt = '2099-01-01';
+      if (fact === 'static-role') f.snapshot.catalog.providers.codex = { roles: { coding: { id: 'changed-model' } } };
+      expect(resolve(f).digests.catalogDigest).not.toBe(first.catalogDigest);
+      f.request.expectedDigests = first;
+      expect(resolve(f).status).toBe('blocked');
+      expect(codes(resolve(f))).toContain('OG_CONFIG_REFERENCE');
+    });
+});
+
 describe('Consolidated review regressions for #2883', () => {
   it('names the operator data policy key and warns about unreported output', () => {
     const f = workerResolutionFixture();
