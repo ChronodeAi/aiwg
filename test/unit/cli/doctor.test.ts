@@ -880,12 +880,13 @@ describe('doctor: direct-worker probes are opt-in (#2894)', () => {
   it('reuses the shared config read instead of reading aiwg.config a second time', () => {
     // #2894 fix: a second readAiwgConfig() call duplicated non-fatal
     // diagnostics (for example the "Invalid gates section" warning) for
-    // every project, not just ones with workers configured. Baseline
-    // (pre-#2894) has exactly 2 `readAiwgConfig(process.cwd())` call sites
-    // elsewhere in doctor.mjs; worker-health and direct-worker readiness
-    // must share one more of their own, not add a second one.
-    expect(content.match(/await readAiwgConfig\(process\.cwd\(\)\)/g)?.length).toBe(2);
-    expect(content).toContain('workerSectionsConfig = await readAiwgConfig(process.cwd());');
+    // every project, not just ones with workers configured. #3452 adds an
+    // early probe-mode read; the later shared read must reuse it rather
+    // than duplicating diagnostics. The fallback runs only without probes.
+    expect(content.match(/await readAiwgConfig\(process\.cwd\(\)\)/g)?.length).toBe(3);
+    expect(content).toContain('workerProbeConfig = await readAiwgConfig(process.cwd());');
+    expect(content).toContain('workerSectionsConfig = probeWorkers ? workerProbeConfig : await readAiwgConfig(process.cwd());');
+    expect(content).toContain('const directConfig = workerSectionsConfig;');
   });
 
   it('announces each resolved executable before spawning, not through the buffered check() report', () => {

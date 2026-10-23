@@ -735,14 +735,7 @@ function toWorkerProbeRecord(finding) {
 // the binding-level fallback (no resolver snapshot is resolved here) — the
 // records only speak to installation readiness, so the snapshot would add
 // resolution cost without changing them.
-async function runWorkerProbeJson(projectDir, options = {}) {
-  let workerConfig;
-  try {
-    workerConfig = await readAiwgConfig(projectDir);
-  } catch (error) {
-    process.stderr.write(`aiwg doctor: cannot read .aiwg/aiwg.config: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
-  }
+async function runWorkerProbeJson(projectDir, options, workerConfig) {
   const parallelism = workerConfig?.parallelism;
   if (options.cli) {
     const ids = new Set([...Object.keys(parallelism?.clis ?? {}), ...Object.values(parallelism?.groups ?? {}).flatMap(group => group.members.map(member => member.cli))]);
@@ -944,10 +937,27 @@ export async function runDoctor() {
     return;
   }
 
+  // All explicit worker-probe modes require project configuration, including
+  // plain text probes and --cli filters. Reject a missing config before any
+  // probe or qualification can mistake null for usable worker inputs.
+  let workerProbeConfig;
+  if (probeWorkers) {
+    try {
+      workerProbeConfig = await readAiwgConfig(process.cwd());
+      if (!workerProbeConfig) {
+        throw new Error(`OG_CONFIG_REFERENCE: Missing project config at ${path.join(process.cwd(), '.aiwg', 'aiwg.config')}. Run \`aiwg init\` to create it, then rerun doctor.`);
+      }
+    } catch (error) {
+      process.stderr.write(`aiwg doctor: cannot read .aiwg/aiwg.config: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   // Machine-readable worker probes: exactly one JSON document on stdout
   // and nothing else — the full diagnostic run (and its footer) is skipped.
   if (jsonMode || options.qualify || options.cli || options.dryRun) {
-    try { await runWorkerProbeJson(process.cwd(), { ...options, json: jsonMode }); }
+    try { await runWorkerProbeJson(process.cwd(), { ...options, json: jsonMode }, workerProbeConfig); }
     catch (error) {
       process.stderr.write(`aiwg doctor: ${error.message}\n`);
       process.exitCode = 1;
@@ -2255,7 +2265,7 @@ export async function runDoctor() {
   let workerSnapshotDigests = null;
   let workerSnapshotRegistry = null;
   try {
-    workerSectionsConfig = await readAiwgConfig(process.cwd());
+    workerSectionsConfig = probeWorkers ? workerProbeConfig : await readAiwgConfig(process.cwd());
   } catch {
     workerSectionsConfigFailed = true;
   }
