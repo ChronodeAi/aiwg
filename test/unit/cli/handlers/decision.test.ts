@@ -82,9 +82,52 @@ describe('decisionHandler', () => {
     expect(text.message).toContain('session=sess-42');
     expect(text.message).toContain(`llm_tokens_avoided=${record.llm_tokens_avoided} jev_tokens=410 cost_weighted_net_usd=`);
     expect(text.message).toContain('v1 comparison only:');
+    expect(text.message).toContain('rates used (1 calls):');
+    expect(text.message).toContain('source=manual checked_at=unknown');
     const json = await run(['stats', '--group-by', 'caller', '--json']);
     expect(JSON.parse(json.message!).groups[0]).toMatchObject({ key: 'worker', llm_tokens_avoided: record.llm_tokens_avoided,
       jev_tokens: 410, cost_weighted_net_usd: record.cost_weighted_net_usd });
+  });
+
+  it('shows recorded sourced rates and checked date next to existing stats', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'aiwg-pricing-stats-'));
+    cleanup.push(dir);
+    const { decisionSavingsWeights } = await import('../../../../src/decision/savings.js');
+    const cost = { jev_input_per_mtok: 0.042, jev_output_per_mtok: 0, source: 'typesafe-docs' as const,
+      checked_at: '2026-10-23', jev_model: 'jev-1.13.0' };
+    const record = buildDecisionLedgerRecord({ question: 'Proceed?', mode: { kind: 'yes-no' } }, {
+      schema: 'aiwg-decision-ask/v1', status: 'answered', answer: true, confidence: 0.95, probability: 0.95,
+      reason: 'none', fallback: null, model: 'jev-1.13.0', usage: { inputTokens: 400, outputTokens: 10 }, latencyMs: 1,
+    }, { transport: 'cli', projectRoot: dir, provider: 'codex', savingsWeights: decisionSavingsWeights({ cost }) });
+    await appendDecisionLedgerRecord(record, { projectRoot: dir });
+    const run = (args: string[]) => decisionHandler.execute({ args, rawArgs: [], cwd: dir, frameworkRoot: process.cwd() });
+    const text = await run(['stats']);
+    expect(text.exitCode).toBe(0);
+    expect(text.message).toContain('cost_weighted_net_usd=');
+    expect(text.message).toContain('source=typesafe-docs checked_at=2026-10-23');
+    expect(text.message).toContain('jev_input_per_mtok');
+    const json = await run(['stats', '--json']);
+    expect(JSON.parse(json.message!).groups[0].ratesUsed).toEqual([expect.objectContaining({ calls: 1, method: expect.objectContaining(cost) })]);
+  });
+
+  it('previews sourced pricing with a fake fetch and displays current config offline', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'aiwg-pricing-cli-'));
+    cleanup.push(dir);
+    const document = '| Model ID | `jev-1.13.0` |\n| Price (per Btok / per Mtok) | $42 / $0.042 |\nOutput tokens are free.';
+    fetchSpy!.mockImplementation(async () => new Response(document));
+    const run = (args: string[]) => decisionHandler.execute({ args, rawArgs: [], cwd: dir, frameworkRoot: process.cwd() });
+    const preview = await run(['pricing', '--refresh', '--model', 'jev-1.13.0', '--dry-run', '--json']);
+    expect(preview.exitCode).toBe(0);
+    expect(JSON.parse(preview.message!)).toMatchObject({ written: false, current: { source: 'typesafe-docs', jev_input_per_mtok: 0.042 }, diff: expect.any(Array) });
+    await expect(readFile(path.join(dir, '.aiwg/aiwg.config'))).rejects.toThrow();
+    expect((await run(['pricing', '--refresh', '--offline', '--model', 'jev-1.13.0'])).message).toContain('Bundled snapshot dated 2026-10-18');
+    fetchSpy!.mockClear();
+    expect((await run(['pricing'])).message).toContain('typesafe-snapshot');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    for (const args of [['pricing', '--wat'], ['pricing', '--refresh', '--model'], ['pricing', 'refresh']]) {
+      expect((await run(args)).exitCode).toBe(2);
+    }
+    expect((await run(['pricing', '--offline'])).exitCode).toBe(1);
   });
 
   it('returns machine-readable capabilities', async () => {

@@ -96,6 +96,8 @@ describe('aiwg config get|set --project (#1006)', () => {
     const validate = new Ajv({ strict: false }).compile(schema.properties.decision);
     for (const [key, value] of [
       ['cost.llm_per_mtok', '12.5'], ['cost.jev_per_mtok', '0.1'],
+      ['cost.jev_input_per_mtok', '0.042'], ['cost.jev_output_per_mtok', '0'],
+      ['cost.source', 'typesafe-docs'], ['cost.checked_at', '2026-10-23'], ['cost.jev_model', 'jev-1.13.0'],
       ['savings.caller_model_class', 'standard'], ['savings.reasoning_tokens', '512'], ['savings.output_tokens', '64'],
     ]) await main(['set', '--project', `decision.ask.${key}`, value!, '--target', tmp]);
     const decision = (await readAiwgConfig(tmp))!.decision!;
@@ -104,6 +106,8 @@ describe('aiwg config get|set --project (#1006)', () => {
     expect(validate(decision)).toBe(true);
     const before = readConfig(tmp);
     for (const [key, value] of [
+      ['cost.jev_input_per_mtok', '-1'], ['cost.jev_output_per_mtok', 'NaN'],
+      ['cost.source', 'guess'], ['cost.checked_at', '2026-02-30'], ['cost.jev_model', 'jev-latest'],
       ['cost.llm_per_mtok', '-1'], ['cost.jev_per_mtok', 'Infinity'], ['cost.jev_per_mtok', ''],
       ['savings.reasoning_tokens', '1.5'], ['savings.output_tokens', '-1'], ['savings.output_tokens', '1000001'],
       ['savings.reasoning_tokens', ''],
@@ -113,7 +117,9 @@ describe('aiwg config get|set --project (#1006)', () => {
       expect(readConfig(tmp)).toEqual(before);
     }
     for (const ask of [
-      { cost: { llm_per_mtok: -1 } }, { cost: [] }, { savings: { reasoning_tokens: 1.5 } },
+      { cost: { llm_per_mtok: -1 } }, { cost: { jev_input_per_mtok: -1 } },
+      { cost: { jev_output_per_mtok: '0' } }, { cost: { source: 'guess' } },
+      { cost: { checked_at: 'today' } }, { cost: { jev_model: 'jev-latest' } }, { cost: [] }, { savings: { reasoning_tokens: 1.5 } },
       { savings: { caller_model_class: 'imaginary' } }, { savings: { output_tokens: 1000001 } },
     ]) {
       expect(validate({ ask })).toBe(false);

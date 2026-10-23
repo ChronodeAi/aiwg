@@ -182,6 +182,23 @@ describe('decision ledger', () => {
     expect(group.cost_weighted_net_usd).toBeCloseTo(answered.cost_weighted_net_usd! + fallback.cost_weighted_net_usd!, 12);
   });
 
+  it('records split rates and provenance and preserves them after config changes', async () => {
+    const projectRoot = await tempRoot();
+    await mkdir(path.join(projectRoot, '.aiwg'));
+    const cost = { jev_input_per_mtok: 0.042, jev_output_per_mtok: 0, source: 'typesafe-docs',
+      checked_at: '2026-10-23', jev_model: 'jev-1.13.0' };
+    await writeFile(path.join(projectRoot, '.aiwg/aiwg.config'), JSON.stringify({ decision: { ask: { cost } } }));
+    const record = (await recordDecisionAsk(yesNoInput, answeredResult, askOptions(projectRoot)))!;
+    expect(record.estimationMethod).toMatchObject({ ...cost, jev_rate_basis: 'split' });
+    expect(record.cost_weighted_net_usd).toBeCloseTo((record.llm_tokens_avoided! * 15 - answeredResult.usage!.inputTokens! * 0.042) / 1e6, 12);
+    await writeFile(path.join(projectRoot, '.aiwg/aiwg.config'), '{}');
+    const stats = await decisionLedgerStats(projectRoot);
+    expect(stats.skipped).toBe(0);
+    expect(stats.groups[0].ratesUsed).toEqual([expect.objectContaining({ calls: 1, method: expect.objectContaining(cost) })]);
+    expect(stats.groups[0].cost_weighted_net_usd).toBe(record.cost_weighted_net_usd);
+    expect((await decisionLedgerHistory(projectRoot)).records[0].estimationMethod).toMatchObject(cost);
+  });
+
   it('reads mixed v1/v2 ledgers, re-estimates legacy answers and rejects malformed v2 economics', async () => {
     const projectRoot = await tempRoot();
     const answered = buildDecisionLedgerRecord(yesNoInput, answeredResult, buildContext({ projectRoot }));
@@ -193,10 +210,13 @@ describe('decision ledger', () => {
     await mkdir(path.dirname(ledgerFilePath(projectRoot)), { recursive: true });
     const records = [legacy(answered), legacy(fallback), answered,
       { ...answered, llm_tokens_avoided: -1 }, { ...answered, estimationMethod: 'v2' },
-      { ...answered, estimationMethod: { ...answered.estimationMethod as object, jev_per_mtok: -1 } }];
+      { ...answered, estimationMethod: { ...answered.estimationMethod as object, jev_per_mtok: -1 } },
+      { ...answered, estimationMethod: { ...answered.estimationMethod as object, jev_input_per_mtok: -1 } },
+      { ...answered, estimationMethod: { ...answered.estimationMethod as object, source: 'guess' } },
+      { ...answered, estimationMethod: { ...answered.estimationMethod as object, checked_at: '2026-02-30' } }];
     await writeFile(ledgerFilePath(projectRoot), records.map(record => JSON.stringify(record)).join('\n'));
     const stats = await decisionLedgerStats(projectRoot);
-    expect(stats.skipped).toBe(3);
+    expect(stats.skipped).toBe(6);
     expect(stats.groups[0]).toMatchObject({ totalCalls: 3, legacyReestimatedCalls: 2, jev_tokens: 55, llm_tokens_avoided: answered.llm_tokens_avoided! * 2 });
     expect(stats.groups[0].cost_weighted_net_usd).toBeCloseTo(answered.cost_weighted_net_usd! * 2 - 25 * 0.2 / 1e6, 12);
     expect((await decisionLedgerHistory(projectRoot)).records).toHaveLength(3);

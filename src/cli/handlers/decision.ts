@@ -1,3 +1,4 @@
+import { decisionPricing } from '../../decision/pricing.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import {
   ATTRIBUTION_FIELD_PATTERN,
@@ -30,7 +31,7 @@ function jsonResult(value: unknown, exitCode = 0): HandlerResult {
 
 function usage(): string {
   return [
-    'Usage: aiwg decision <capabilities|status|patterns|validate|evaluate|setup|history|stats> [options]',
+    'Usage: aiwg decision <capabilities|status|patterns|validate|evaluate|setup|history|stats|pricing> [options]',
     '       aiwg decision ask --question "<q>" (--yes-no | --choices a,b,c | --scale 1-5) [--context <text> | --context-file <path> | --context-stdin] [--threshold 0.8] [--timeout-ms 15000] [--passes N] [--escalation-passes N] [--provider <id>] [--session <id>] [--caller <tag>] [--record-text] [--json]',
     '',
     'Commands:',
@@ -45,6 +46,7 @@ function usage(): string {
     '  setup jev [--token-stdin] [--region <r>] [--endpoint <url>] [--verify] [--remove]',
     '  ask --question "<q>" (--yes-no | --choices a,b,c | --scale 1-5) [--provider <id>] [--session <id>] [--caller <tag>] [--record-text]',
     '  history [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--json]',
+    '  pricing [--refresh --model jev-X.Y.Z] [--dry-run] [--offline | --allow-snapshot] [--json]',
     '  stats [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--group-by provider|session|kind|caller|passes|escalation] [--json]',
     '',
     'Notes:',
@@ -328,6 +330,7 @@ async function decisionStats(ctx: HandlerContext): Promise<HandlerResult> {
     `  jev usage: input=${group.jevUsage.inputTokens} output=${group.jevUsage.outputTokens}`,
     `  tokens per answered decision=${group.tokensPerAnsweredDecision?.toFixed(2) ?? '-'}`,
     `  llm_tokens_avoided=${group.llm_tokens_avoided} jev_tokens=${group.jev_tokens} cost_weighted_net_usd=${group.cost_weighted_net_usd.toFixed(6)}`,
+    ...group.ratesUsed.map(rate => `  rates used (${rate.calls} calls): ${JSON.stringify(rate.method)} source=${rate.method.source ?? 'manual'} checked_at=${rate.method.checked_at ?? 'unknown'}`),
     `  v1 comparison only: estimated LLM tokens avoided=${group.estimatedLlmTokensAvoidedTotal} net savings=${group.netSavingsTokens}`,
     ...(group.legacyReestimatedCalls ? [`  v1 records re-estimated=${group.legacyReestimatedCalls} weights=${JSON.stringify(result.legacyEstimationWeights)}`] : []),
   ]);
@@ -342,6 +345,20 @@ async function executeDecision(ctx: HandlerContext): Promise<HandlerResult> {
     if (command === 'capabilities' || command === 'status') return jsonResult(decisionCapabilities(options));
     if (command === 'ask') return await decisionAsk(ctx);
     if (command === 'history') return await decisionHistory(ctx);
+    if (command === 'pricing') {
+      const args = ctx.args.slice(1);
+      assertLedgerArgs(args, ['--model'], ['--refresh', '--dry-run', '--offline', '--allow-snapshot', '--json']);
+      const result = await decisionPricing({ cwd: ctx.cwd, refresh: args.includes('--refresh'), dryRun: args.includes('--dry-run'),
+        offline: args.includes('--offline'), allowSnapshot: args.includes('--allow-snapshot'), model: args.includes('--model') ? takeRequiredOption(args, '--model') : undefined });
+      if (args.includes('--json')) return jsonResult(result);
+      return { exitCode: 0, rawOutput: true, message: [
+        `decision.ask.cost: ${JSON.stringify(result.current)}`,
+        `Source URL: ${result.sourceUrl}`,
+        ...('snapshotDate' in result && result.snapshotDate ? [`Bundled snapshot dated ${result.snapshotDate}`] : []),
+        ...('warning' in result && result.warning ? [`Warning: ${result.warning}`] : []),
+        ...('diff' in result ? [`${result.written ? 'Written' : 'Dry run; config unchanged'}: ${JSON.stringify(result.diff)}`] : []),
+      ].join('\n') };
+    }
     if (command === 'stats') return await decisionStats(ctx);
     if (command === 'patterns') {
       if (subcommand === 'list') return jsonResult(listPatterns());
