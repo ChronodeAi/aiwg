@@ -1,5 +1,7 @@
 /** Explicit operator approval of the installed direct CLI baseline (decision 17). */
 import fs from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import { delimiter } from 'node:path';
 import { homedir } from 'node:os';
@@ -52,6 +54,18 @@ export async function checkWorkerSandboxLaunches({ projectDir, config, registry,
     }
   }
   return checks;
+}
+
+/** Model-free Codex check under the exact allowlisted worker environment.
+ * Never expose subprocess output: it may include environment values or paths. */
+export async function checkCodexWorkerSandbox({ executable, environment, cwd }) {
+  try {
+    await promisify(execFile)(executable, ['sandbox', '-c', 'sandbox_mode="workspace-write"',
+      '-c', 'sandbox_workspace_write.network_access=false', '--', '/bin/sh', '-c', 'true'],
+    { cwd, env: environment, timeout: 10_000, maxBuffer: 64 * 1024, killSignal: 'SIGKILL' });
+  } catch {
+    throw new Error('Codex sandbox no-op check failed; verify PATH and host sandbox support before qualifying again');
+  }
 }
 
 async function executablePath(executable) {
@@ -195,7 +209,7 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
   if (!dryRun && !yes) {
     const terminal = createInterface({ input: process.stdin, output: process.stderr });
     try {
-      const answer = await terminal.question(`Record installation and configured model/role approval for ${JSON.stringify(targets)} and apply store changes ${JSON.stringify(storeChanges)}? This trusts the local CLI; no live model or sandbox attestation is performed. ${accountScopeNotice} [y/N]: `);
+      const answer = await terminal.question(`Record installation and configured model/role approval for ${JSON.stringify(targets)} and apply store changes ${JSON.stringify(storeChanges)}? This trusts the local CLI; no live model call is performed; Codex runs a sandboxed shell no-op. ${accountScopeNotice} [y/N]: `);
       if (!/^y(es)?$/i.test(answer.trim())) return { status: 'declined', accountScopeNotice, targets, storeChanges, results: [] };
     } finally { terminal.close(); }
   }
@@ -261,6 +275,8 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
           .filter(name => process.env[name] !== undefined).map(name => [name, process.env[name]])),
         effectiveConfigDigest: workerConfigDigest(policy), accountScope, policy, permissions: {},
         boundary: { kind: 'native', identity: 'operator-approved-cli', digest: workerConfigDigest(adapter.invocation), controls: [] } };
+      if (adapter.provider === 'codex') await checkCodexWorkerSandbox({ executable,
+        environment: installation.environment, cwd: projectDir });
       const scope = await host.inspectWorkerInstallation(driver, installation);
       installation.evidence = { scopeDigest: scope.scopeDigest, fixtureDigest: adapter.qualification.fixtureDigest,
         verifiedAt, evidenceRef: WORKER_OPERATOR_APPROVAL };

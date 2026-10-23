@@ -153,7 +153,7 @@ async function fakeConfig(root: string, scenario: string, extra: Record<string, 
  * exercised; without it the bundled metadata must block. */
 async function codexPlan(options: { qualify?: boolean; effort?: 'ultra'; cliVersion?: string;
   adapterOverride?: (adapter: any) => void; memberModel?: string; discoveryModel?: string; discoveryApiModelId?: string;
-  execution?: Record<string, unknown> } = {}) {
+  execution?: Record<string, unknown>; envNames?: string[] } = {}) {
   const f = workerResolutionFixture();
   const { root, workdir } = await scratch();
   // Quoting torture (quotes/spaces/Unicode/newlines/leading-`--` inside):
@@ -214,7 +214,7 @@ async function codexPlan(options: { qualify?: boolean; effort?: 'ultra'; cliVers
   const drivers: Record<string, WorkerInvocationDriver> = { codex: {
     qualification: { adapter, adapterId: 'codex', cliVersion: binding.cliVersion },
     buildInvocation: async input => ({ argv: [process.execPath, FAKE, ...owner.buildWorkerArgs(input, profile, input.permissions)],
-      stdin: CODEX_DIRECT_STDIN, envNames: ['AIWG_FAKE_WORKER_CONFIG'] }),
+      stdin: CODEX_DIRECT_STDIN, envNames: options.envNames ?? ['PATH', 'AIWG_FAKE_WORKER_CONFIG'] }),
   } };
   const request = { role: 'coding' as const, group: 'workers', task: 'implementation', brief, workdir,
     final_output: path.join(root, "final '雪\n.json"), transport: 'shell' as const };
@@ -241,12 +241,12 @@ describe('Codex version-bound profile (B-OG-07)', () => {
       'approval_policy="${approval}"', '--skip-git-repo-check', '-o', '${final}', '--json', '-']);
     expect(adapter.invocation.argv.join(' ')).not.toMatch(/bypass|dangerous|ultra|--effort|--fallback|--force/);
     expect(adapter.invocation.argv.join(' ')).not.toContain("'\"");
-    expect(adapter.invocation.envAllowlist).toEqual(['CODEX_HOME', 'HOME']);
+    expect(adapter.invocation.envAllowlist).toEqual(['CODEX_HOME', 'HOME', 'PATH']);
     const profile = adapter.invocationProfiles!['direct-shell'];
     expect(profile.supportedVersions).toBe('>=0.161.0 <0.200.0');
     expect(profile.transport).toBe('shell');
     expect(profile.mcp).toBeUndefined();
-    expect(profile.envAllowlist).toEqual(['CODEX_HOME', 'HOME']);
+    expect(profile.envAllowlist).toEqual(['CODEX_HOME', 'HOME', 'PATH']);
     expect(Object.keys(profile.controls).sort()).toEqual(['approval', 'children', 'effort', 'fallback', 'finalOutput', 'model',
       'sandbox', 'stdin', 'stepCap', 'structuredOutput', 'trust', 'workdir']);
     for (const [name, control] of Object.entries(profile.controls)) {
@@ -357,7 +357,7 @@ describe('T-OG-15 Codex direct command contract', () => {
     // The resolved plan carries no brief text either (paths and digests only).
     expect(JSON.stringify(plan)).not.toContain(MARKER);
     const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
-    expect(invocation.shellCommand).toBe(`cd ${quote(workdir)} && env -i AIWG_FAKE_WORKER_CONFIG="\${AIWG_FAKE_WORKER_CONFIG-}"`
+    expect(invocation.shellCommand).toBe(`cd ${quote(workdir)} && env -i PATH="\${PATH-}" AIWG_FAKE_WORKER_CONFIG="\${AIWG_FAKE_WORKER_CONFIG-}"`
       + ` ${invocation.argv.map(quote).join(' ')} < ${quote(brief)} > ${quote(invocation.stdoutPath)} 2> ${quote(invocation.stderrPath)}`);
     expect(invocation.shellCommand).not.toContain('< /dev/null');
     const { file, recordPath } = await fakeConfig(root, 'success');
@@ -371,7 +371,7 @@ describe('T-OG-15 Codex direct command contract', () => {
     expect(record.prompt).toBe(payload);
     expect(record.argv).toEqual(invocation.argv.slice(2));
     expect(JSON.stringify(record.argv)).not.toContain(MARKER);
-    expect(record.envNames.filter((name: string) => !['PWD', 'SHLVL', '_'].includes(name))).toEqual(['AIWG_FAKE_WORKER_CONFIG']);
+    expect(record.envNames.filter((name: string) => !['PWD', 'SHLVL', '_'].includes(name))).toEqual(['AIWG_FAKE_WORKER_CONFIG', 'PATH']);
     expect(existsSync(path.join(root, 'injected'))).toBe(false);
     const final = owner.parseOutput(await readFile(invocation.finalPath, 'utf8'));
     expect(final).toEqual({ response: `synthetic reply (${payload.length} chars)` });
@@ -379,6 +379,12 @@ describe('T-OG-15 Codex direct command contract', () => {
     expect(events.map(event => owner.observeHealthEvent(event, { kind: 'stdout', id: 'stdout', generation: 0, offset: 0 },
       { invocationId: 'cx02', sessionId: THREAD })?.kind ?? null))
       .toEqual(['setup', 'accepted', 'activity', 'activity', 'progress', 'progress', 'terminal']);
+  });
+
+  it('CX02d rejects an environment name outside the Codex profile allowlist', async () => {
+    const { plan } = await codexPlan({ envNames: ['PATH', 'UNRELATED_SECRET'] });
+    expect(plan.invocation?.shellCommand).toBeFalsy();
+    expect(plan.status).not.toBe('resolved');
   });
 
   it('CX02c -c values carry TOML quoting without a shell layer; shell-quoted values are refused', async () => {
@@ -769,6 +775,8 @@ describe('T-OG-20/21/23 Codex run identity, stall and security signals', () => {
       env: { PATH: process.env.PATH, AIWG_FAKE_WORKER_CONFIG: file, CODEX_API_KEY: secret } });
     expect(result.code).toBe(0);
     const record = JSON.parse(await readFile(recordPath, 'utf8'));
+    expect(record.envNames).toContain('PATH');
+    expect(plan.invocation!.shellCommand).toContain('PATH="${PATH-}"');
     expect(record.envNames).not.toContain('CODEX_API_KEY');
     const stdout = await readFile(plan.invocation!.stdoutPath, 'utf8');
     expect(stdout).not.toContain(secret);

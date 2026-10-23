@@ -195,6 +195,10 @@ export class CodexAdapter extends ProviderAdapter {
     };
   }
 
+  // Worker envNames come from the recorded installation environment, filtered
+  // through both registry allowlists. PATH must survive env -i so Codex can
+  // find the host's AppArmor-approved bwrap and system shell tools.
+
   /**
    * Driver-owned argv after the binary for the version-bound direct-shell
    * profile. Every control is explicit: `--ignore-user-config` (user

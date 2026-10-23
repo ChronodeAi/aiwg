@@ -83,7 +83,7 @@
  * the safe built-in defaults: `single_query_mode: deny`, `approvals.mode:
  * smart`, never `off`), so this adapter always emits it. `HERMES_YOLO_MODE`
  * (and any other `HERMES_*` env override) is defeated structurally: the
- * bundled profile's `envAllowlist` is `[]` and the shared shell renderer
+ * bundled profile's `envAllowlist` is `["PATH"]` and the shared shell renderer
  * clears the child environment (`env -i <allowlist-only>`,
  * src/serve/worker-invocation.ts), so an ambient `HERMES_YOLO_MODE` in the
  * conductor's own environment can never reach the child regardless of what
@@ -131,7 +131,7 @@
  *     `model.provider` in config.yaml, then `HERMES_INFERENCE_PROVIDER`,
  *     then the literal string `"auto"`. `--ignore-user-config` (always
  *     emitted by this profile) removes the config.yaml fallback, and the
- *     renderer's empty `envAllowlist` removes the env-var fallback, so an
+ *     renderer's PATH-only `envAllowlist` removes the env-var fallback, so an
  *     omitted `--provider` resolves to `"auto"` — picking whatever
  *     ambient/pooled credential Hermes finds, in violation of this
  *     profile's explicit-selection invariant. The 0.20.6 smoke run

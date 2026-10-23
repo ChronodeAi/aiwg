@@ -219,7 +219,7 @@ describe('OpenClaw version-bound profile (B-OG-42)', () => {
       invocation: { executable: 'openclaw', stdin: 'closed',
         argv: ['agent', 'exec', '--isolated', '--auth-env-only', '--json', '--model', '${model}', '--thinking', '${effort}',
           '--cwd', '${workspace}', '--message-file', '${briefPath}'],
-        envAllowlist: ['OPENROUTER_API_KEY'] },
+        envAllowlist: ['OPENROUTER_API_KEY', 'PATH'] },
       qualification: { status: 'unqualified' } });
     const profile = adapter.invocationProfiles!['direct-shell'];
     expect(profile.supportedVersions).toBe(VERSION);

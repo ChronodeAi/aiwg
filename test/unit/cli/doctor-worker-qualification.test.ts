@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { validateWorkerCatalogDiscovery } from '../../../src/models/provider-policy.js';
 import { writeExecutable } from '../../helpers/write-executable.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
-import { checkWorkerInvocationBuilds, checkRecordedWorkerInvocationBuilds } from '../../../tools/cli/worker-qualification.mjs';
+import { checkCodexWorkerSandbox, checkWorkerInvocationBuilds, checkRecordedWorkerInvocationBuilds } from '../../../tools/cli/worker-qualification.mjs';
 
 const terminal = vi.hoisted(() => ({ question: vi.fn(), close: vi.fn() }));
 vi.mock('node:readline/promises', () => ({ createInterface: () => terminal }));
@@ -58,7 +58,7 @@ if (process.argv.includes('show-environment')) process.exit(0);
 else console.log('255');
 `);
   const binary = path.join(root, 'fake-codex');
-  const writeCli = (version: string) => writeExecutable(binary, `#!${process.execPath}\nif (process.argv.includes('--version')) console.log('codex-cli ${version}');\nelse if (process.argv.slice(2).join(' ') === 'debug models') console.log(JSON.stringify({models:[{slug:'synthetic-model',${providerless ? '' : "provider:'synthetic-inference',"}visibility:'listed',context_window:32000,${providerless ? '' : 'output_limit:4096,'}supported_reasoning_levels:['medium']}]}));\nelse process.exit(90);\n`);
+  const writeCli = (version: string) => writeExecutable(binary, `#!${process.execPath}\nif (process.argv.includes('--version')) console.log('codex-cli ${version}');\nelse if (process.argv.slice(2).join(' ') === 'debug models') console.log(JSON.stringify({models:[{slug:'synthetic-model',${providerless ? '' : "provider:'synthetic-inference',"}visibility:'listed',context_window:32000,${providerless ? '' : 'output_limit:4096,'}supported_reasoning_levels:['medium']}]}));\nelse if (process.argv[2] === 'sandbox' && process.env.PATH && process.argv.slice(-3).join(' ') === '/bin/sh -c true') process.exit(0);\nelse process.exit(90);\n`);
   await writeCli(unsetHome ? '0.163.0' : '0.161.0');
   await writeFile(path.join(project, '.aiwg/aiwg.config'), JSON.stringify({ version: '1', providers: ['codex'],
     parallelism: { worker_dispatch: true, clis: { codex: { adapter: 'providers:codex', executable: binary,
@@ -97,6 +97,35 @@ process.exitCode = result.exitCode;
 }
 
 describe('doctor worker qualification through the public CLI (fake CLIs only)', () => {
+  it('refuses qualification when the model-free Codex sandbox check fails', async () => {
+    const f = await fixture();
+    await writeExecutable(f.binary, `#!${process.execPath}
+if (process.argv.includes('--version')) console.log('codex-cli 0.161.0');
+else if (process.argv[2] === 'sandbox') { console.error('synthetic-secret'); process.exit(1); }
+else console.log(JSON.stringify({models:[]}));
+`);
+    const result = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    const report = JSON.parse(result.stdout);
+    expect(report.qualification.status).toBe('failed');
+    expect(report.qualification.results[0].message).toMatch(/sandbox no-op check failed/);
+    expect(result.stdout + result.stderr).not.toContain('synthetic-secret');
+    await expect(access(path.join(f.config, 'worker-installations.json'))).rejects.toThrow();
+  });
+
+  it('passes only named environment variables to the sandbox no-op', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-sandbox-env-'));
+    roots.push(root);
+    const binary = path.join(root, 'codex');
+    await writeExecutable(binary, `#!${process.execPath}
+if (process.env.UNRELATED_SECRET || process.env.PATH !== '/usr/bin:/bin'
+  || process.argv.slice(-3).join(' ') !== '/bin/sh -c true') process.exit(1);
+`);
+    vi.stubEnv('UNRELATED_SECRET', 'must-not-pass');
+    try {
+      await expect(checkCodexWorkerSandbox({ executable: binary, cwd: root,
+        environment: { PATH: '/usr/bin:/bin' } })).resolves.toBeUndefined();
+    } finally { vi.unstubAllEnvs(); }
+  });
   it('reports a blocked namespace probe as launcher-scoped and still qualifies Tier 0 direct dispatch', async () => {
     // Tier 0 direct handoff runs the rendered command from the conductor's own
     // shell under the conductor harness's sandbox; only the systemd-unit
