@@ -5,11 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { modelsHandler } from '../../../../src/cli/handlers/models.js';
+import { loadWorkerInputs, modelsHandler } from '../../../../src/cli/handlers/models.js';
 import { ConfigLoader } from '../../../../src/models/config-loader.js';
 import { requiredWorkerControls } from '../../../../src/models/provider-policy.js';
 import { resolveWorkerPlan } from '../../../../src/models/resolver.js';
-import { hasProvider as hasInstalledProvider } from '../../../../src/models/worker-installation.mjs';
+import { hasProvider as hasInstalledProvider, registerProvider } from '../../../../src/models/worker-installation.mjs';
 import { qualificationDigest } from '../../../../src/models/qualification-digest.mjs';
 import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuite } from '../../../../tools/ralph-external/lib/provider-adapter.mjs';
 import { workerResolutionFixture } from '../../../fixtures/worker-resolution.js';
@@ -101,7 +101,7 @@ async function productionFixture(adapterFrame = false) {
     const result = await modelsHandler.execute({ args, rawArgs: ['models', ...args], cwd, frameworkRoot });
     const output = String(log.mock.calls.at(-1)?.[0]); log.mockRestore(); return { result, output, plan: JSON.parse(output) };
   };
-  return { ...f, call, record, configDir, finalPath, installed, owner };
+  return { ...f, call, record, configDir, finalPath, installed, owner, cwd, frameworkRoot };
 }
 
 describe('models resolve production installation loading', () => {
@@ -171,8 +171,10 @@ describe('models resolve production installation loading', () => {
     await writeFile(path.join(f.installed, 'driver.mjs'), '// changed');
     expect((await f.call()).result.exitCode).toBe(2);
   });
-  it.each(['boundary', 'expired', 'negative-case', 'duplicate', 'worker-writable-store', 'hardlinked-store'])(
-    'refuses %s host records before loading the installed driver', async kind => {
+  it.each([
+    ['boundary', 'binding-mismatch'], ['expired', 'evidence'], ['negative-case', 'evidence'],
+    ['duplicate', 'record-identity'], ['worker-writable-store', 'store-untrusted'], ['hardlinked-store', 'store-untrusted'],
+  ])('refuses %s host records before loading the installed driver with reason %s', async (kind, reason) => {
       const f = await productionFixture();
       if (kind === 'boundary') f.record.binding.boundary = { ...f.record.binding.boundary!, digest: qualificationDigest('changed') };
       if (kind === 'expired') {
@@ -190,6 +192,35 @@ describe('models resolve production installation loading', () => {
       expect(result.plan.invocation).toBeUndefined();
       expect(hasInstalledProvider(f.record.adapter.id)).toBe(false);
       expect(result.output).toContain('OG_ADAPTER_UNQUALIFIED');
+      const rejections = (kind === 'duplicate' ? [0, 1] : [kind === 'worker-writable-store' || kind === 'hardlinked-store' ? null : 0])
+        .map(registration => ({ registration, reason }));
+      await expect(loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] }))
+        .rejects.toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', message: expect.stringContaining(reason), details: { rejections } });
+    });
+
+  it.each(['environment-name', 'effective-config-digest', 'module-registration', 'binary-identity', 'scope-digest', 'version', 'adapter-conflict'])(
+    'reports a secret-free %s registration refusal', async reason => {
+      const f = await productionFixture();
+      const privateText = 'synthetic-private-content';
+      const installation = f.record.installation;
+      if (reason === 'environment-name') installation.environment = { AIWG_SYNTHETIC_PRIVATE: privateText };
+      if (reason === 'effective-config-digest') installation.effectiveConfigDigest = qualificationDigest(privateText);
+      if (reason === 'module-registration') await writeFile(path.join(f.installed, 'driver.mjs'), privateText);
+      if (reason === 'binary-identity') await rm(installation.executable);
+      if (reason === 'scope-digest') await writeFile(installation.runtimeFiles[0], privateText);
+      if (reason === 'adapter-conflict') registerProvider(f.record.adapter.id, () => f.owner);
+      if (reason === 'version') {
+        f.record.adapter.invocation.versionArgv = ['-e', `console.log(${JSON.stringify(privateText)})`];
+        const scope = await f.owner.inspectWorkerInstallation(installation);
+        installation.evidence.scopeDigest = scope.scopeDigest;
+        f.record.adapter.invocationProfiles![f.record.binding.profile].installationQualification!.scopeDigest = scope.scopeDigest;
+      }
+      await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [f.record] }), { mode: 0o600 });
+      const error = await loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] }).catch(error => error);
+      expect(error).toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', details: { rejections: [{ registration: 0, reason }] } });
+      expect(error.message).toContain(reason);
+      expect(`${error.stack}${JSON.stringify(error)}`).not.toContain(privateText);
+      expect(`${error.stack}${JSON.stringify(error)}`).not.toContain(f.installed);
     });
 
   it('records bounded fake qualification without environment values, then resolves it', async () => {
@@ -233,5 +264,7 @@ describe('models resolve production installation loading', () => {
     expect(result.result.exitCode).toBe(2);
     expect(result.output).toContain('aiwg doctor --probe-workers --qualify');
     expect(result.output).toContain('OG_ADAPTER_UNQUALIFIED');
+    await expect(loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] }))
+      .rejects.toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', details: { rejections: [{ registration: null, reason: 'no-records' }] } });
   });
 });

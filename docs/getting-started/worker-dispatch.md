@@ -324,6 +324,15 @@ configured models and roles qualified. Resolution revalidates the installation
 before using those approvals. After a binary, driver, version, workspace or policy
 change, rerun the qualify action.
 
+When recorded installations are refused, `WorkerPolicyError` keeps the
+`OG_ADAPTER_UNQUALIFIED` code and includes fixed reason codes in its message and
+`details.rejections`. Each rejection identifies the zero-based registration index
+(or `null` for a store-level failure) and a reason such as `store-untrusted`,
+`binding-mismatch`, `effective-config-digest`, `evidence`, `environment-name`,
+`adapter-conflict`, `module-registration`, `binary-identity`, `scope-digest`, or
+`version`. The launcher includes these codes on stderr. Rejection details omit
+underlying error text, environment values, file contents, and filesystem paths.
+
 Doctor checks each observed configured member/role with a synthetic brief through
 the same nonlaunching invocation builder and native argument checks as resolution.
 JSON output includes `invocationChecks` with the model, effort and workdir checked.

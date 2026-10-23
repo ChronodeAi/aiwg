@@ -62,7 +62,8 @@ describe('models resolve dispatch gate before installation qualification (#3070)
     const ctx = await project(true);
     const load = vi.spyOn(workerInstallation, 'loadRecordedWorkerInstallations');
     await expect(loadWorkerInputs(ctx)).rejects.toMatchObject({
-      code: 'OG_ADAPTER_UNQUALIFIED', message: 'Trusted installation qualification is required',
+      code: 'OG_ADAPTER_UNQUALIFIED', message: 'Trusted installation qualification is required (no-records)',
+      details: { rejections: [{ registration: null, reason: 'no-records' }] },
     });
     expect(load).toHaveBeenCalledOnce();
     const output = vi.spyOn(console, 'error').mockImplementation(() => {});
