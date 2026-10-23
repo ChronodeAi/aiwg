@@ -53,17 +53,23 @@ function mkTask(state: Task['status']['state'], overrides: Record<string, unknow
   };
 }
 
+// Retain the credential when this fixture reconnects to its persisted identity.
+let executorToken: string | undefined;
 function setupRegistry(): { registry: ExecutorRegistry; executor: ExecutorRegistration } {
   const registry = new ExecutorRegistry(join(testState, 'trusted', 'executor-identities.json'));
   const executor = mkExecutor();
-  registry.register({
+  const registration = registry.register({
     executor_id: executor.executorId,
     name: executor.name,
     version: executor.version,
     spec_version: executor.specVersion,
     transport_endpoints: executor.transportEndpoints,
     capabilities: executor.capabilities,
-  });
+  }, executorToken);
+  expect(registration).not.toHaveProperty('error');
+  if ('error' in registration) throw new Error(registration.error);
+  executorToken = registration.token;
+  executor.token = registration.token;
   registry.assignMission('mission-1', executor.executorId);
   expect(registry.get(executor.executorId)?.active_mission_count).toBe(1);
   return { registry, executor };

@@ -16,6 +16,9 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ExecutorShim } from '../../../tools/ralph-external/executor-shim.mjs';
 
 // ── Stub DaemonSupervisor ────────────────────────────────────────────────────
@@ -191,6 +194,39 @@ describe('ExecutorShim — register', () => {
     await shim.register();
     expect(events).toHaveLength(1);
     expect(events[0].executorId).toBe('test-executor-uuid-1234');
+  });
+
+  it('sends its current token when registering again', async () => {
+    mockFetch([0, 1].map(() => ({ ok: true, status: 201, json: async () => ({ token: 'prior-token' }) })));
+    const { shim } = makeShim();
+    await shim.register();
+    await shim.register();
+    expect(vi.mocked(fetch).mock.calls[0][1].headers.Authorization).toBeUndefined();
+    expect(vi.mocked(fetch).mock.calls[1][1].headers.Authorization).toBe('Bearer prior-token');
+  });
+
+  it('authenticates an existing identity with an explicitly supplied token', async () => {
+    mockFetch([{ ok: true, status: 201, json: async () => ({ token: 'existing-token' }) }]);
+    await makeShim({ token: 'existing-token' }).shim.register();
+    expect(vi.mocked(fetch).mock.calls[0][1].headers.Authorization).toBe('Bearer existing-token');
+  });
+
+  it('persists a private token and authenticates a restarted shim', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'executor-shim-token-'));
+    const tokenPath = join(root, 'token.json');
+    mockFetch([0, 1].map(() => ({ ok: true, status: 201, json: async () => ({ token: 'restart-token' }) })));
+    try {
+      await makeShim({ tokenPath }).shim.register();
+      expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(readFileSync(tokenPath, 'utf8')).token).toBe('restart-token');
+      chmodSync(tokenPath, 0o644);
+      const restarted = makeShim({ tokenPath }).shim;
+      await restarted.register();
+      expect(vi.mocked(fetch).mock.calls[1][1].headers.Authorization).toBe('Bearer restart-token');
+      expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
+      expect(makeShim({ tokenPath, executorId: 'other-executor' }).shim._token).toBeNull();
+      expect(makeShim({ tokenPath, aiwgServeUrl: 'http://other-server:7337' }).shim._token).toBeNull();
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it('retries on failure up to 8 times then throws', async () => {

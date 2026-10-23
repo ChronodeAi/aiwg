@@ -19,7 +19,7 @@
 
 import path from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { pathToFileURL } from 'node:url';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
@@ -44,7 +44,7 @@ interface ExecutorIdentity {
 /**
  * Resolve or generate-once the executor identity.
  * Written to `.aiwg/local-executor/identity.json` so restarts reuse the same
- * UUID (token reclaim via identity store on the aiwg-serve side).
+ * UUID. The shim separately persists its bearer token to authenticate restarts.
  */
 function resolveExecutorId(override?: string): string {
   if (override) return override;
@@ -117,7 +117,7 @@ function warnIfNonLoopback(bind: string): void {
       '[local-executor] WARNING: binding on non-loopback interface ' + bind + '.\n' +
       '  This executor has isolation:none — agent code runs in the host process.\n' +
       '  Ensure this interface is not reachable by untrusted parties.\n' +
-      '  The executor token will be rotated by aiwg-serve on first non-loopback register.'
+      '  Keep the persisted executor bearer token private.'
     );
   }
 }
@@ -237,6 +237,9 @@ export const localExecutorServeHandler: CommandHandler = {
       restBase,
       wsBase,
       aiwgServeUrl: opts.aiwgServe,
+      token: process.env['AIWG_EXECUTOR_TOKEN'],
+      tokenPath: projectAiwgPath(process.cwd(), 'local-executor', 'tokens',
+        `${createHash('sha256').update(`${opts.aiwgServe}\0${opts.executorId}`).digest('hex')}.json`),
     });
 
     // Register with aiwg-serve

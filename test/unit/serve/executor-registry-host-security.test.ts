@@ -130,7 +130,7 @@ describe('host executor registration security', () => {
     if ('status' in first) throw new Error(first.error);
     expect(filesystem.lstatSync!(sharedPath).mode & 0o077).toBe(0);
     expect(filesystem.lstatSync!(join(root, 'shared')).mode & 0o077).toBe(0);
-    const second = service.register({ ...executor, version: '2' });
+    const second = service.register({ ...executor, version: '2' }, first.token);
     if ('status' in second) throw new Error(second.error);
     expect(second.token === first.token).toBe(true);
     service.installHostAdmissionAuthority(executor.executor_id, '2', store, []);
@@ -149,7 +149,7 @@ describe('host executor registration security', () => {
     // No host binding for this registry: the override must not create one.
     const unbound = new ExecutorRegistry(join(root, 'absent', 'executor-identities.json'));
     registries.push(unbound);
-    expect(unbound.register({ ...executor, version: '2' })).not.toHaveProperty('status');
+    expect(unbound.register({ ...executor, version: '2' }, token)).not.toHaveProperty('status');
     expect(unbound.deregister(executor.executor_id)).toBe(true);
     expect(readFileSync(victimPath, 'utf8')).toBe(before);
     expect(JSON.parse(readFileSync(overridePath, 'utf8'))[0]).not.toHaveProperty('hostAdmission');
@@ -167,7 +167,7 @@ describe('host executor registration security', () => {
 
   it('protects installed in-memory authority from unauthenticated re-registration', () => {
     const service = new ExecutorRegistry(join(root, 'memory', 'executor-identities.json')); registries.push(service);
-    const result = service.register(executor);
+    const result = service.register(executor, token);
     if ('status' in result) throw new Error(result.error);
     const memory = new InMemoryAdmissionStore(); bind(memory);
     service.installHostAdmissionAuthority(executor.executor_id, executor.version, memory, []);

@@ -16,6 +16,7 @@
  */
 
 import { randomBytes } from 'crypto';
+import { executorTokensEqual } from './executor-token.mjs';
 import { EventEmitter } from 'events';
 import { constants, existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, lstatSync, realpathSync, openSync, closeSync, fstatSync, fsyncSync } from 'fs';
 import { homedir } from 'os';
@@ -351,7 +352,7 @@ function saveExecutorIdentityStore(store: Map<string, ExecutorIdentityRecord>, p
     if (strict) {
       const file = openSync(tmp, 'wx', 0o600);
       try { writeFileSync(file, JSON.stringify([...store.values()], null, 2)); fsyncSync(file); } finally { closeSync(file); }
-    } else writeFileSync(tmp, JSON.stringify([...store.values()], null, 2), 'utf-8');
+    } else writeFileSync(tmp, JSON.stringify([...store.values()], null, 2), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
     try {
       renameSync(tmp, path);
       if (strict) {
@@ -538,9 +539,9 @@ export class ExecutorRegistry extends EventEmitter {
 
   /**
    * Register an executor. Validates payload against `register_payload` schema.
-   * Returns a 400 error on invalid payload or 401 for unauthorized host re-registration.
-   * Host-bound IDs require the current bearer token before any update.
-   * Other IDs reclaim the prior token on re-register (per ADR §9; #3439).
+   * Returns a 400 error on invalid payload or 401 for unauthorized re-registration.
+   * Every existing identity requires its current bearer token before any update.
+   * Authenticated re-registration preserves the prior token (per ADR §9; #3439).
    */
   register(req: ExecutorRegisterRequest, bearerToken = ''): ExecutorRegisterResponse | { error: string; status: 400 | 401 } {
     // Validate against JSON Schema
@@ -562,11 +563,13 @@ export class ExecutorRegistry extends EventEmitter {
     if (!view.trusted && (installedAuthority || this.isUntrustedHostBound(view, executorId))) return { error: 'Unauthorized', status: 401 };
     // Host-bound IDs authenticate only against the live executor or the protected
     // host record, never the environment/project-selectable identity store.
-    const hostToken = this.executors.get(executorId)?.token ?? hostRecord?.token;
-    if ((hostAdmission || installedAuthority) && (!bearerToken || !hostToken || hostToken !== bearerToken)) {
+    const priorToken = (hostAdmission || installedAuthority)
+      ? existing?.token ?? hostRecord?.token
+      : existing?.token ?? storedIdentity?.token;
+    if (((hostAdmission || installedAuthority) || priorToken !== undefined) && !executorTokensEqual(priorToken, bearerToken)) {
       return { error: 'Unauthorized', status: 401 };
     }
-    const token = existing?.token ?? storedIdentity?.token ?? issueToken();
+    const token = priorToken ?? issueToken();
     if ((hostAdmission && (hostAdmission.version !== req.version || !req.capabilities.includes('x-admission-policy-revision:1')))
       || (installedAuthority && (installedAuthority.version !== req.version || !req.capabilities.includes('x-admission-policy-revision:1')))) {
       this.revokeHostAdmissionAuthority(executorId);
@@ -659,7 +662,7 @@ export class ExecutorRegistry extends EventEmitter {
    */
   authenticate(executorId: string, token: string): boolean {
     const executor = this.executors.get(executorId);
-    if (executor) return executor.token === token;
+    if (executor) return executorTokensEqual(executor.token, token);
     // A host-bound ID authenticates only against the protected host record,
     // never the environment/project-selectable identity store (#2923 review).
     const view = this.hostView();
@@ -667,11 +670,11 @@ export class ExecutorRegistry extends EventEmitter {
     if (!view.trusted && [...this.admissionAuthorities.values()].some(entry => entry.executorId === executorId)) return false;
     const hostRecord = view.identities.get(executorId);
     if (hostRecord?.hostAdmission || [...this.admissionAuthorities.values()].some(entry => entry.executorId === executorId)) {
-      return !!token && hostRecord?.token === token;
+      return executorTokensEqual(hostRecord?.token, token);
     }
     // Fall back to identity store for executors that registered in a prior server run
     const stored = this.identityStore.get(executorId);
-    return stored !== undefined && stored.token === token;
+    return executorTokensEqual(stored?.token, token);
   }
 
   /**

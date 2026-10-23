@@ -6,7 +6,8 @@
  */
 
 import { afterAll, beforeAll, describe, it, expect, beforeEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { writeFileSync } from 'fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -18,6 +19,11 @@ import {
   type ExecutorRegisterRequest,
   type EventEnvelope,
 } from '../../../src/serve/executor-registry.js';
+
+vi.mock('fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('fs')>();
+  return { ...actual, writeFileSync: vi.fn(actual.writeFileSync) };
+});
 
 // ── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -67,6 +73,7 @@ describe('ExecutorRegistry', () => {
   let registry: ExecutorRegistry;
 
   beforeEach(() => {
+    rmSync(join(testState, 'identities.json'), { force: true });
     registry = new ExecutorRegistry(hostIdentityPath);
   });
 
@@ -89,7 +96,7 @@ describe('ExecutorRegistry', () => {
 
     it('preserves token on re-register with same executor_id', () => {
       const first = registry.register(VALID_REGISTER_REQUEST) as { executor_id: string; token: string; registered_at: string };
-      const second = registry.register({ ...VALID_REGISTER_REQUEST, version: '0.4.0' }) as { executor_id: string; token: string; registered_at: string };
+      const second = registry.register({ ...VALID_REGISTER_REQUEST, version: '0.4.0' }, registry.getRegistration(VALID_EXECUTOR_ID)!.token) as { executor_id: string; token: string; registered_at: string };
       expect(second.executor_id).toBe(VALID_EXECUTOR_ID);
       expect(second.token).toBe(first.token);
       // registry size should remain 1 after upsert
@@ -131,8 +138,53 @@ describe('ExecutorRegistry', () => {
         selected_at: '2026-08-23T12:00:00Z',
       });
 
-      registry.register({ ...VALID_REGISTER_REQUEST, version: '0.4.0' });
+      registry.register({ ...VALID_REGISTER_REQUEST, version: '0.4.0' }, registry.getRegistration(VALID_EXECUTOR_ID)!.token);
       expect(registry.get(VALID_EXECUTOR_ID)?.a2a_protocol).toBeUndefined();
+    });
+
+    it.each(['', 'wrong-token', 'x'.repeat(1000)])('rejects re-registration with invalid token %j without mutation', bearer => {
+      const first = registry.register(VALID_REGISTER_REQUEST) as { token: string };
+      registry.setConnected(VALID_EXECUTOR_ID, true);
+      registry.assignMission('owned-mission', VALID_EXECUTOR_ID);
+      const before = registry.get(VALID_EXECUTOR_ID);
+      const path = join(testState, 'identities.json');
+      const persisted = readFileSync(path, 'utf8');
+      const registered = vi.fn();
+      registry.on('executor:registered', registered);
+      expect(registry.register({ ...VALID_REGISTER_REQUEST, version: 'attacker' }, bearer))
+        .toEqual({ error: 'Unauthorized', status: 401 });
+      expect(registry.get(VALID_EXECUTOR_ID)).toEqual(before);
+      expect(registry.authenticate(VALID_EXECUTOR_ID, first.token)).toBe(true);
+      expect(readFileSync(path, 'utf8')).toBe(persisted);
+      expect(registered).not.toHaveBeenCalled();
+    });
+
+    it('requires the persisted token after shutdown and deregistration', () => {
+      const first = registry.register(VALID_REGISTER_REQUEST) as { token: string };
+      registry.deregister(VALID_EXECUTOR_ID);
+      const restarted = new ExecutorRegistry(hostIdentityPath);
+      for (const service of [registry, restarted]) {
+        for (const bearer of ['', 'wrong-token']) {
+          expect(service.register(VALID_REGISTER_REQUEST, bearer)).toHaveProperty('status', 401);
+          expect(service.size).toBe(0);
+        }
+        expect(service.register(VALID_REGISTER_REQUEST, first.token)).toHaveProperty('token', first.token);
+      }
+      restarted.shutdown();
+    });
+
+    it('creates and replaces the ordinary identity store with mode 0600', () => {
+      const first = registry.register(VALID_REGISTER_REQUEST) as { token: string };
+      const path = join(testState, 'identities.json');
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      chmodSync(path, 0o644);
+      expect(registry.register(VALID_REGISTER_REQUEST, first.token)).toHaveProperty('token', first.token);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      // Check creation options as well as the resulting mode so a restrictive
+      // test runner umask cannot mask an insecure default-mode write.
+      const writes = vi.mocked(writeFileSync).mock.calls.filter(([file]) => String(file).startsWith(`${path}.tmp.`));
+      expect(writes).toHaveLength(2);
+      for (const [, , options] of writes) expect(options).toMatchObject({ mode: 0o600, flag: 'wx' });
     });
 
     it('issues unique tokens for different executor_ids', () => {
@@ -395,7 +447,7 @@ describe('ExecutorRegistry', () => {
 
       // Create a fresh registry with ONLY the non-resumable executor
       const fresh = new ExecutorRegistry(hostIdentityPath);
-      fresh.register(reg2);
+      fresh.register(reg2, registry.getRegistration(VALID_EXECUTOR_ID_2)!.token);
       fresh.setConnected(VALID_EXECUTOR_ID_2, true, { readyState: 1, send() {}, close() {} });
 
       const result = fresh.pickByFilter({}, true);
@@ -433,12 +485,12 @@ describe('ExecutorRegistry', () => {
       'T-OG-10 pinned executor cannot bypass missing %s control', capability => {
         expect(registry.pickByFilter({ executor_id: VALID_EXECUTOR_ID, capabilities: [capability] })).toBeNull();
         expect(registry.pickByFilter({ capabilities: [capability] })).toBeNull();
-        registry.register({ ...VALID_REGISTER_REQUEST, capabilities: [...VALID_REGISTER_REQUEST.capabilities, capability] });
+        registry.register({ ...VALID_REGISTER_REQUEST, capabilities: [...VALID_REGISTER_REQUEST.capabilities, capability] }, registry.getRegistration(VALID_EXECUTOR_ID)!.token);
         registry.setConnected(VALID_EXECUTOR_ID, true, { readyState: 1, send() {}, close() {} });
         expect(registry.pickByFilter({ executor_id: VALID_EXECUTOR_ID, capabilities: [capability] })?.executor.executorId)
           .toBe(VALID_EXECUTOR_ID);
         // Re-registration with weaker controls immediately invalidates the same pin.
-        registry.register(VALID_REGISTER_REQUEST);
+        registry.register(VALID_REGISTER_REQUEST, registry.getRegistration(VALID_EXECUTOR_ID)!.token);
         registry.setConnected(VALID_EXECUTOR_ID, true, { readyState: 1, send() {}, close() {} });
         expect(registry.pickByFilter({ executor_id: VALID_EXECUTOR_ID, capabilities: [capability] })).toBeNull();
       },

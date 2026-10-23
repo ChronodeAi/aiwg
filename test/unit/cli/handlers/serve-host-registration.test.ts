@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExecutorRegistry } from '../../../../src/serve/executor-registry.js';
@@ -32,6 +32,42 @@ afterEach(() => {
 });
 
 describe('host executor registration HTTP authentication', () => {
+  it.each([false, true])('protects ordinary executor registration (restarted: %s)', async restarted => {
+    const { startServer } = await import('../../../../src/cli/handlers/serve.js');
+    const executor = { executor_id: 'b1b2c3d4-e5f6-7890-abcd-ef1234567890', name: 'ordinary', version: '1', spec_version: '1.0.0',
+      transport_endpoints: { rest: 'http://127.0.0.1:8122', ws: 'ws://127.0.0.1:8121' }, capabilities: [] };
+    const app = await startServer({ port: 7337, host: '127.0.0.1', readOnly: false, frameworkRoot: root });
+    const register = (authorization?: string, version = '1') => server.fetch!(new Request(`${app.url}/api/v1/executors/register`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(authorization ? { authorization } : {}) },
+      body: JSON.stringify({ ...executor, version }),
+    }));
+    try {
+      const first = await register();
+      expect(first.status).toBe(201);
+      const identity = await first.json();
+      expect(identity.token).toBeTruthy();
+      if (restarted) {
+        registry.shutdown();
+        const { ExecutorRegistry } = await import('../../../../src/serve/executor-registry.js');
+        registry = new ExecutorRegistry(join(root, 'trusted', 'identities.json'));
+      }
+      const before = registry.get(executor.executor_id);
+      const persisted = readFileSync(join(root, 'identities.json'), 'utf8');
+      for (const bearer of [undefined, 'Bearer wrong-token', `Basic ${identity.token}`]) {
+        const response = await register(bearer, '2');
+        expect(response.status).toBe(401);
+        expect(await response.json()).toEqual({ error: 'Unauthorized' });
+        expect(registry.get(executor.executor_id)).toEqual(before);
+        expect(registry.authenticate(executor.executor_id, identity.token)).toBe(true);
+        expect(readFileSync(join(root, 'identities.json'), 'utf8')).toBe(persisted);
+      }
+      const accepted = await register(`Bearer ${identity.token}`, '2');
+      expect(accepted.status).toBe(201);
+      expect(await accepted.json()).toHaveProperty('token', identity.token);
+      expect(registry.get(executor.executor_id)?.version).toBe('2');
+    } finally { app.close(); }
+  });
+
   it('returns 401 for missing or incorrect bearer tokens and forwards the current token', async () => {
     const { InMemoryAdmissionStore, bindTrustedHostAdmissionPolicy } = await import('../../../../src/serve/shared-host-scheduler.js');
     const { hostname } = await import('node:os');
