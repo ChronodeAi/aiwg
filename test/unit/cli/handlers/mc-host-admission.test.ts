@@ -72,6 +72,34 @@ function install() {
   return result.token;
 }
 
+/** Writes the caller script for this test root and returns a launcher for project `index`. */
+function callers() {
+  const script = join(root, 'caller.mts');
+  writeFileSync(script, `import { createMcAdmissionScheduler } from ${JSON.stringify(resolve('src/cli/handlers/mc.ts'))};
+import { ExecutorRegistry } from ${JSON.stringify(resolve('src/serve/executor-registry.ts'))};
+const [trustedPath, config, project, request] = process.argv.slice(2);
+const registry = new ExecutorRegistry(trustedPath);
+// The store's lock is non-blocking by design: a busy store is retried by
+// the caller's control loop. Retry against a deadline, not a fixed count,
+// so a slow peer (fsync under CI load) cannot exhaust the budget.
+const deadline = Date.now() + 10000;
+for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
+  try {
+    const scheduler = await createMcAdmissionScheduler(project, JSON.parse(config), registry);
+    process.stdout.write(scheduler.submit(JSON.parse(request)).state);
+    break;
+  } catch (error) {
+    if (!error.message.includes('store is busy') || Date.now() > deadline) throw error;
+    await new Promise(resolve => setTimeout(resolve, delay + Math.floor(Math.random() * delay)));
+  }
+}
+`);
+  return (index: number) => promisify(execFile)(process.execPath,
+    [resolve('node_modules/tsx/dist/cli.mjs'), script, join(root, 'trusted', 'executor-identities.json'),
+      JSON.stringify(configs[index]), roots[index]!, JSON.stringify(request('same'))],
+    { cwd: roots[index], timeout: 15000, maxBuffer: 32000 });
+}
+
 describe('T-OG-05/08/10 MC trusted host executor binding', () => {
   it('routes two projects through the existing shared store and protects local member/run IDs', async () => {
     install();
@@ -85,28 +113,22 @@ describe('T-OG-05/08/10 MC trusted host executor binding', () => {
 
   it('shares one trusted authority between two actual project processes with colliding local IDs', async () => {
     install();
-    const script = join(root, 'caller.mts');
-    writeFileSync(script, `import { createMcAdmissionScheduler } from ${JSON.stringify(resolve('src/cli/handlers/mc.ts'))};
-import { ExecutorRegistry } from ${JSON.stringify(resolve('src/serve/executor-registry.ts'))};
-const [trustedPath, config, project, request] = process.argv.slice(2);
-const registry = new ExecutorRegistry(trustedPath);
-for (let attempt = 0; attempt < 20; attempt++) {
-  try {
-    const scheduler = await createMcAdmissionScheduler(project, JSON.parse(config), registry);
-    process.stdout.write(scheduler.submit(JSON.parse(request)).state);
-    break;
-  } catch (error) {
-    if (!error.message.includes('store is busy') || attempt === 19) throw error;
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-}
-`);
-    const child = (index: number) => promisify(execFile)(process.execPath,
-      [resolve('node_modules/tsx/dist/cli.mjs'), script, join(root, 'trusted', 'executor-identities.json'),
-        JSON.stringify(configs[index]), roots[index]!, JSON.stringify(request('same'))],
-      { cwd: roots[index], timeout: 15000, maxBuffer: 32000 });
+    const child = callers();
     const results = await Promise.all([child(0), child(1)]);
     expect(results.map(result => result.stdout.trim().split('\n').at(-1)).sort()).toEqual(['admitted', 'queued']);
+    expect(Object.values(store.read().records)).toHaveLength(2);
+  }, 40000);
+
+  it('callers keep retrying a busy store until a slow peer releases the lock (CI 89141)', async () => {
+    // Regression: the callers gave up after 20 x 10 ms, so a peer holding the
+    // lock longer under load failed the request. Hold the lock for 3 s,
+    // well past child start-up, so both callers must retry the busy store.
+    install();
+    writeFileSync(join(root, 'host.json.lock'), '', { mode: 0o600 });
+    const release = new Promise<void>(done => setTimeout(() => { rmSync(join(root, 'host.json.lock'), { force: true }); done(); }, 3000));
+    const child = callers();
+    const results = await Promise.all([child(0), child(1), release]);
+    expect(results.slice(0, 2).map(result => result!.stdout.trim().split('\n').at(-1)).sort()).toEqual(['admitted', 'queued']);
     expect(Object.values(store.read().records)).toHaveLength(2);
   }, 40000);
 
