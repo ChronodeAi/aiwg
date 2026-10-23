@@ -448,6 +448,14 @@ function findWorkerModelRow(rows: DiscoveredModel[] | undefined, model: string):
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+function workerCatalogDigest(catalog: DynamicModelCatalog): string {
+  if (!catalog.discovery) return workerConfigDigest(catalog);
+  // Offline loads synthesize fetchedAt. Keep catalog facts and persisted
+  // observation/qualification times pinned, independent of the load clock.
+  const { fetchedAt, ...discovery } = catalog.discovery;
+  return workerConfigDigest({ ...catalog, discovery });
+}
+
 /** Pure S1 resolution. No probing, launch, activation, admission, or writes.
  * Recheck against freshly loaded snapshots before preparing an invocation. */
 export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerPlanRequest): WorkerResolutionPlan {
@@ -457,7 +465,7 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
     ...snapshot.modelDigests,
     configDigest: workerActivationDigests(snapshot.config).configDigest,
     resolvedModelsDigest: workerConfigDigest(snapshot.models),
-    catalogDigest: workerConfigDigest(snapshot.catalog),
+    catalogDigest: workerCatalogDigest(snapshot.catalog),
     profileDigest: workerConfigDigest([snapshot.registry, snapshot.installations]),
     constraintsDigest: workerConfigDigest(snapshot.constraints),
   };
