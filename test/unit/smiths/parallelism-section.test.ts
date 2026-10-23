@@ -7,14 +7,16 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import {
   buildParallelismSection,
   replaceOrAppendParallelismBlock,
   MAX_SHOWN_GROUPS,
   PARALLELISM_BLOCK_START,
+  WORKER_HEALTH_DOC_POINTER,
   PARALLELISM_BLOCK_END,
   PARALLELISM_HEALTH_UNRESOLVED_NOTE,
 } from '../../../src/smiths/context-pipeline/parallelism-section.js';
@@ -26,6 +28,11 @@ import { ConfigLoader } from '../../../src/models/config-loader.js';
 import { resolveWorkerPlan } from '../../../src/models/resolver.js';
 import { PROVIDER_IDS } from '../../../src/providers/provider-definitions.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
+
+/** The worker-dispatch doc, whitespace-collapsed so assertions ignore line wrapping. */
+function workerDispatchDoc(): string {
+  return readFileSync(fileURLToPath(new URL('../../../docs/getting-started/worker-dispatch.md', import.meta.url)), 'utf8').replace(/\s+/g, ' ');
+}
 
 vi.mock('node:os', async importOriginal => {
   const actual = await importOriginal<typeof import('node:os')>();
@@ -372,9 +379,9 @@ After changing project parallelism with \`aiwg config set/reset --project\`, fol
     await writeAiwgConfig(tmpDir, cfg);
     const section = await buildParallelismSection(tmpDir);
     expect(section).toContain('check every 7s (project config)');
-    expect(section).toContain('confirm startup within 30s (project config)');
-    expect(section).toContain('quiet limit 45s (project config)');
-    expect(section).toContain('stall limit 120s (project config)');
+    expect(section).toContain('startup 30s (project config)');
+    expect(section).toContain('quiet 45s (project config)');
+    expect(section).toContain('stall 120s (project config)');
     expect(section).toContain('hard stop 600s (project config)');
     expect(section).not.toContain('every 15s');
     expect(section).not.toContain('(default)');
@@ -384,11 +391,11 @@ After changing project parallelism with \`aiwg config set/reset --project\`, fol
     await writeAiwgConfig(tmpDir, groupConfig());
     const section = await buildParallelismSection(tmpDir);
     expect(section).toContain('check every 15s (default)');
-    expect(section).toContain('confirm startup within 60s (default)');
-    expect(section).toContain('quiet limit 90s (default)');
-    expect(section).toContain('stall limit 300s (default)');
+    expect(section).toContain('startup 60s (default)');
+    expect(section).toContain('quiet 90s (default)');
+    expect(section).toContain('stall 300s (default)');
     expect(section).toContain('hard stop 1800s (default)');
-    expect(section).toContain('Resolved values win over these configured values');
+    expect(section).toContain('Resolved values win');
     expect(section).toContain('--format json');
     expect(section).toContain('invocation.health');
   });
@@ -478,23 +485,29 @@ After changing project parallelism with \`aiwg config set/reset --project\`, fol
     expect(observer.shouldStop()).toBe(false);
     await writeAiwgConfig(tmpDir, groupConfig());
     const section = await buildParallelismSection(tmpDir);
-    expect(section).not.toContain('suspect transition');
-    expect(section).toContain('is not a stop');
-    expect(section).toContain('only `hung`');
-    expect(section).toContain('a no-progress stop');
-    expect(section).toContain('only a worker this conductor owns');
-    expect(section).toContain('Confirm the stop');
-    expect(section).toContain('preserve partial work');
-    expect(section).toContain('OBSERVER_GAP');
-    expect(section).toContain('unknown, never worker failure');
-    expect(section).toContain('Heartbeats and log bytes are not progress');
+    // #3451: AIWG.md keeps a one-line summary; the long supervision guidance
+    // lives in the worker-dispatch doc, which the section points to by plain path.
+    expect(section).toContain('only `hung` authorizes a no-progress stop');
+    expect(section).toContain(WORKER_HEALTH_DOC_POINTER);
+    expect(section).not.toContain('Supervise by observer state, never by suspicion');
+    const doc = workerDispatchDoc();
+    expect(doc).not.toContain('suspect transition');
+    expect(doc).toContain('is not a stop');
+    expect(doc).toContain('only `hung`');
+    expect(doc).toContain('a no-progress stop');
+    expect(doc).toContain('only a worker this conductor owns');
+    expect(doc).toContain('Confirm the stop');
+    expect(doc).toContain('preserve partial work');
+    expect(doc).toContain('OBSERVER_GAP');
+    expect(doc).toContain('unknown, never worker failure');
+    expect(doc).toContain('Heartbeats and log bytes are not progress');
     // "only `hung`" is scoped to no-progress diagnosis; the launcher's other
     // independent stop conditions (session-launcher.mjs ~596) are named too.
-    expect(section).toContain('stops independently of progress state');
-    expect(section).toContain('failed-to-start');
-    expect(section).toContain('HARD_DEADLINE');
-    expect(section).toContain('STEP_LIMIT');
-    expect(section).toContain('fatal observer-record failure');
+    expect(doc).toContain('stops independently of progress state');
+    expect(doc).toContain('failed-to-start');
+    expect(doc).toContain('HARD_DEADLINE');
+    expect(doc).toContain('STEP_LIMIT');
+    expect(doc).toContain('fatal observer-record failure');
   });
 
   it('preserves caps and rubric alongside the dispatch block', async () => {
@@ -504,16 +517,20 @@ After changing project parallelism with \`aiwg config set/reset --project\`, fol
     expect(section).toContain('aiwg show rule subagent-scoping');
   });
 
-  it('describes health-window scaling as the largest applicable factor, never a product, and limits only the hard deadline/grace periods by wall-transport ceilings', async () => {
+  it('documents health-window scaling (largest factor, never a product; only the hard deadline is capped) in the worker-dispatch doc, not AIWG.md', async () => {
     await writeAiwgConfig(tmpDir, groupConfig());
     const section = await buildParallelismSection(tmpDir);
-    expect(section).toContain('the single largest applicable role/effort/model factor, never their product');
-    expect(section).toContain('180s/600s from the 90s/300s defaults');
-    expect(section).toContain('112.5s/375s');
-    expect(section).toContain('Only the hard deadline and its diagnostic/termination grace periods are capped by the remaining wall-clock and transport ceilings');
-    expect(section).toContain('startup, quiet, and stall keep their configured or scaled values');
-    expect(section).toContain('truncatedWindows');
-    expect(section).not.toContain('cap every window');
+    expect(section).not.toContain('truncatedWindows');
+    expect(section).not.toContain('112.5s/375s');
+    expect(section).toContain(WORKER_HEALTH_DOC_POINTER);
+    const doc = workerDispatchDoc();
+    expect(doc).toContain('the single largest applicable role/effort/model factor, never their product');
+    expect(doc).toContain('180s/600s from the 90s/300s defaults');
+    expect(doc).toContain('112.5s/375s');
+    expect(doc).toContain('Only the hard deadline and its diagnostic/termination grace periods are capped by the remaining wall-clock and transport ceilings');
+    expect(doc).toContain('startup, quiet, and stall keep their configured or scaled values');
+    expect(doc).toContain('truncatedWindows');
+    expect(doc).not.toContain('cap every window');
   });
 
   it('never writes process.env.AIWG_HOME while resolving the config (no set/delete observed)', async () => {

@@ -98,11 +98,14 @@ async function startFakeServer(root: string, scenario: string) {
   const child = spawn(process.execPath, [FAKE_SERVER, portFile], { env: { ...process.env, AIWG_FAKE_WORKER_CONFIG: configFile }, stdio: ['ignore', 'ignore', 'pipe'] });
   children.add(child);
   const deadline = Date.now() + 5000;
-  while (!existsSync(portFile)) {
+  // The server renames a complete port file into place; still require a
+  // well-formed port so a partial read can never become a bad endpoint.
+  let port = '';
+  while (!/^[1-9][0-9]{0,4}$/.test(port)) {
     if (Date.now() > deadline) throw new Error('fake ollama server did not start in time');
     await new Promise(r => setTimeout(r, 25));
+    port = existsSync(portFile) ? readFileSync(portFile, 'utf8').trim() : '';
   }
-  const port = readFileSync(portFile, 'utf8').trim();
   return { endpoint: `127.0.0.1:${port}`, recordPath, stop: () => { child.kill('SIGTERM'); children.delete(child); } };
 }
 
@@ -195,6 +198,25 @@ describe('Local-http (Ollama backend) text-only HTTP profile (roctinam/aiwg#2899
     expect(() => buildOllamaGenerateBody({ model: MODEL, brief: 'hi', role: 'coding' })).toThrow(/text-only transport.*refuses the 'coding' role/);
     // keep_alive is omitted: server residency defaults apply.
     expect(JSON.parse(buildOllamaGenerateBody({ model: MODEL, brief: 'hi' }))).toEqual({ model: MODEL, prompt: 'hi', stream: false });
+  });
+
+  it('the fake server port file is complete the moment it appears (CI 89131 race)', async () => {
+    // Regression: the reader used to treat existence as readiness, so an
+    // empty, still-being-written file produced the endpoint "127.0.0.1:".
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const root = await scratch();
+      const portFile = path.join(root, `port-race-${attempt}.txt`);
+      const child = spawn(process.execPath, [FAKE_SERVER, portFile], { stdio: ['ignore', 'ignore', 'pipe'] });
+      children.add(child);
+      try {
+        const deadline = Date.now() + 5000;
+        while (!existsSync(portFile)) {
+          if (Date.now() > deadline) throw new Error('fake ollama server did not start in time');
+          await new Promise(r => setImmediate(r));
+        }
+        expect(readFileSync(portFile, 'utf8')).toMatch(/^[1-9][0-9]{0,4}$/);
+      } finally { child.kill('SIGTERM'); children.delete(child); }
+    }
   });
 
   describe('T-OG-15/20 render and execute against a synthetic Ollama HTTP server', () => {

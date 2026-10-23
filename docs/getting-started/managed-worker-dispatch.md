@@ -6,7 +6,7 @@ verification and supervision ownership. They share `SharedHostScheduler` and
 `FileAdmissionStore`; no additional scheduling service is needed. Start from a working
 [install, connect and verify](install-connect-verify.md) setup, then read the
 [direct guide](worker-dispatch.md) for installation, qualification and exact
-command rendering, and the [admission contract](../contracts/shared-host-admission.v1.md)
+command rendering, and the [admission contract](https://github.com/jmagly/aiwg/blob/main/docs/contracts/shared-host-admission.v1.md)
 for the trusted-owner APIs.
 
 This guide documents the implemented interface. Offline fixtures demonstrate
@@ -247,7 +247,7 @@ boundary or use a separate protected service uid.
    the same upstream model/quota consumes shared host capacity. A missing/revoked
    host binding must fail closed; never fall back to an old project file.
 
-Read the [S4 contract](../contracts/shared-host-admission.v1.md#managed-host-authority-s4)
+Read the [S4 contract](https://github.com/jmagly/aiwg/blob/main/docs/contracts/shared-host-admission.v1.md#managed-host-authority-s4)
 for path limits, history validation and recovery. No cross-host authority or automatic
 stale-lock cleanup is supplied.
 

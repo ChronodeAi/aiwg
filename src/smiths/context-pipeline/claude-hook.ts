@@ -26,6 +26,7 @@ import {
   buildProviderBootstrapBlock,
   PROVIDER_BOOTSTRAP_START,
   PROVIDER_BOOTSTRAP_END,
+  dedupeProviderBootstrap,
 } from './workspace-context.js';
 import { dominantLineEnding, withLineEnding } from './line-endings.js';
 import { assertSafeContextFile } from './context-file-safety.js';
@@ -45,7 +46,9 @@ export function buildClaudeHookBlock(_policy: ClaudeArtifactOutputPolicy = {}): 
     CLAUDE_HOOK_START,
     '',
     buildProviderBootstrapBlock('claude'),
-    '@.aiwg/aiwg.config',
+    // Plain-text pointer, deliberately not an `@` import: the raw JSON config
+    // is several KB and would be pulled into every system prompt (#3451).
+    'Project configuration: `.aiwg/aiwg.config` (not auto-loaded; run `aiwg config show --project` to view it).',
     '',
     'Artifact destination authority: `aiwg show rule artifact-output-policy` (kernel).',
     '',
@@ -76,6 +79,26 @@ export interface ClaudeHookResult {
   backupPath?: string;
   /** Non-fatal warnings */
   warnings: string[];
+}
+
+/** Keep the first managed hook block and drop any later complete copies. */
+function collapseExtraHookBlocks(content: string): string {
+  const first = content.indexOf(CLAUDE_HOOK_START);
+  if (first === -1) return content;
+  const firstEnd = content.indexOf(CLAUDE_HOOK_END, first);
+  if (firstEnd === -1) return content;
+  const blockEnd = firstEnd + CLAUDE_HOOK_END.length;
+  let tail = content.slice(blockEnd);
+  const before = tail;
+  for (;;) {
+    const s = tail.indexOf(CLAUDE_HOOK_START);
+    if (s === -1) break;
+    const e = tail.indexOf(CLAUDE_HOOK_END, s);
+    if (e === -1) break;
+    tail = tail.slice(0, s) + tail.slice(e + CLAUDE_HOOK_END.length);
+  }
+  if (tail === before) return content;
+  return content.slice(0, blockEnd) + tail.replace(/(?:\r?\n){3,}/g, '\n\n');
 }
 
 /**
@@ -110,6 +133,12 @@ export async function ensureClaudeMdHook(
     throw err;
   }
 
+  // Repair duplicates left by earlier generations before locating markers, so
+  // regeneration converges on exactly one bootstrap (#3451).
+  const original = existing;
+  existing = collapseExtraHookBlocks(dedupeProviderBootstrap(existing));
+  const repaired = existing !== original;
+
   const lineEnding = dominantLineEnding(existing);
   block = withLineEnding(block, lineEnding);
 
@@ -132,7 +161,7 @@ export async function ensureClaudeMdHook(
         existing.substring(0, bootstrapStartIdx)
         + block
         + existing.substring(bootstrapEndIdx);
-      await fs.writeFile(claudeMdPath, updated, 'utf8');
+      await fs.writeFile(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
       result.action = 'updated';
       return result;
     }
@@ -147,7 +176,7 @@ export async function ensureClaudeMdHook(
     // Ensure the file ends with a single newline before appending.
     const trimmed = existing.replace(/(?:\r?\n)+$/, lineEnding);
     const updated = `${trimmed}${lineEnding}${block}${lineEnding}`;
-    await fs.writeFile(claudeMdPath, updated, 'utf8');
+    await fs.writeFile(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
     result.action = 'inserted';
     return result;
   }
@@ -168,7 +197,7 @@ export async function ensureClaudeMdHook(
     }
     const trimmed = existing.replace(/(?:\r?\n)+$/, lineEnding);
     const updated = `${trimmed}${lineEnding}${block}${lineEnding}`;
-    await fs.writeFile(claudeMdPath, updated, 'utf8');
+    await fs.writeFile(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
     result.action = 'inserted';
     return result;
   }
@@ -178,6 +207,11 @@ export async function ensureClaudeMdHook(
   const currentBlock = existing.substring(startIdx, blockEndOffset);
 
   if (currentBlock === block) {
+    if (repaired) {
+      await fs.writeFile(claudeMdPath, existing, 'utf8');
+      result.action = 'updated';
+      return result;
+    }
     result.action = 'unchanged';
     return result;
   }
@@ -196,7 +230,7 @@ export async function ensureClaudeMdHook(
   }
 
   const updated = existing.substring(0, startIdx) + block + existing.substring(blockEndOffset);
-  await fs.writeFile(claudeMdPath, updated, 'utf8');
+  await fs.writeFile(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
   result.action = 'updated';
   return result;
 }

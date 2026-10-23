@@ -18,6 +18,19 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   Hermes anti-laziness directive are removed, and the rule's enforcement is
   `high` everywhere (#3450).
 
+### Changed
+
+- Generated startup context is smaller (#3451). `AIWG.md` no longer `@`-imports
+  `WORKSPACE.md`, and `.aiwg/aiwg.config` is a plain-path pointer (with
+  `aiwg config show --project`) instead of an `@` import, so each file is reached
+  through at most one `@` path. The `WORKSPACE.md` CI snapshot lists workflow
+  directories with counts, and the `AIWG.md` worker health-window and supervision
+  paragraphs are a one-line summary pointing to `docs/getting-started/worker-dispatch.md`.
+- Regeneration no longer leaves a duplicate `# Provider workspace bootstrap`
+  heading: the whole-file bootstrap wrapper and the managed block each emitted it,
+  and the hook replaced only the block. The wrapper drops its copy, and existing
+  duplicate headings or repeated hook blocks are repaired idempotently.
+
 ## [2026.10.5] - 2026-10-21
 
 ### Added

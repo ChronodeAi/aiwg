@@ -19,6 +19,7 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { projectControlPath } from '../../config/project-artifacts.js';
 import { buildClaudeHookBlock, CLAUDE_HOOK_START, CLAUDE_HOOK_END } from './claude-hook.js';
+import { dedupeProviderBootstrap } from './workspace-context.js';
 import { dominantLineEnding, withLineEnding } from './line-endings.js';
 import { buildParallelismSection, replaceOrAppendParallelismBlock } from './parallelism-section.js';
 import { buildContextFinalizationBlock, replaceOrAppendFinalizationBlock } from './finalization.js';
@@ -73,6 +74,7 @@ export async function buildAiwgMdContent(
     // Regenerate may mirror CLAUDE.md before its hook updater runs. Normalize
     // that managed block here too so legacy duplicate policy never reaches
     // AIWG.md, even on the first refresh. Operator content stays untouched.
+    claudeMdContent = dedupeProviderBootstrap(claudeMdContent);
     const start = claudeMdContent.indexOf(CLAUDE_HOOK_START);
     const end = claudeMdContent.indexOf(CLAUDE_HOOK_END, start);
     if (start >= 0 && end >= start) {
@@ -86,7 +88,22 @@ export async function buildAiwgMdContent(
     // context, so the directive becomes a self-reference when copied through.
     // Match the directive when it appears on its own line (possibly indented).
     const SELF_INCLUDE_PATTERN = /^\s*@AIWG\.md\s*$/;
-    const filtered = lines.filter((line) => !SELF_INCLUDE_PATTERN.test(line));
+    // #3451: CLAUDE.md already `@`-imports WORKSPACE.md; a second `@` path to
+    // the same file would load it twice, so AIWG.md refers to it in plain text.
+    const CONFIG_IMPORT_PATTERN = /^\s*@\S*aiwg\.config\s*$/;
+    const WORKSPACE_IMPORT_PATTERN = /^\s*@(?:\.\.\/)?WORKSPACE\.md\s*$/;
+    const filtered = lines
+      .filter((line) => !SELF_INCLUDE_PATTERN.test(line))
+      .map((line) => {
+        if (WORKSPACE_IMPORT_PATTERN.test(line)) {
+          return 'WORKSPACE.md is the canonical project context (loaded by CLAUDE.md; read it first if your harness did not).';
+        }
+        // Legacy CLAUDE.md files may still `@`-import the raw JSON config.
+        if (CONFIG_IMPORT_PATTERN.test(line)) {
+          return 'Project configuration: `.aiwg/aiwg.config` (not auto-loaded; run `aiwg config show --project` to view it).';
+        }
+        return line;
+      });
 
     const firstLine = filtered[0] ?? '';
     const rest = filtered.slice(1);

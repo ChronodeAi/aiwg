@@ -71,3 +71,21 @@ Transactions and recoverable preimages live under
 
 The authoritative dated details and source URLs live in the provider definition
 registry. A plain Markdown link is never presented as automatic loading.
+
+## Startup context size (#3451)
+
+Generated startup files stay small because harnesses that honor `@` imports pull
+every imported file into the system prompt.
+
+- Each file is reached through at most one `@` path. `CLAUDE.md` imports
+  `WORKSPACE.md` and `AIWG.md`; `AIWG.md` refers to `WORKSPACE.md` in plain text.
+- `.aiwg/aiwg.config` is never `@`-imported (it is raw JSON of several KB).
+  `CLAUDE.md` carries a plain-path pointer; run `aiwg config show --project` to read it.
+- The `WORKSPACE.md` "Continuous Integration" snapshot lists the workflow
+  directories with a file count, not every workflow file.
+- `AIWG.md` keeps a one-line summary of the configured worker health windows. The
+  window-scaling and supervision guidance is in
+  [Worker dispatch](../getting-started/worker-dispatch.md#worker-health-windows-and-supervision).
+- `# Provider workspace bootstrap` appears once. Regeneration repairs files that
+  carry a duplicate heading or a repeated managed bootstrap/hook block, and a
+  second regeneration leaves the file unchanged.
