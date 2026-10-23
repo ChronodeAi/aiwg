@@ -82,3 +82,99 @@ weights. Sourced Jev rates improve its cost basis but do not establish exact inv
 savings. Missing token usage and cached billing can limit precision. See the
 [quickstart savings section](jev-quickstart.md#reading-savings-and-setting-weights)
 for caller assumptions and legacy reporting.
+
+## Offline paired benchmark analysis
+
+The benchmark tool replays saved observations only. It makes no provider or model
+calls, executes no capture content, writes no capture or config, and never hooks
+into `decision ask`. Live paired collection and capture extension are a later stage.
+
+```bash
+npm run build:cli
+node tools/decision/benchmark.mjs analyze --capture captures/paired.json --json
+# A draft-style capture with a separate labeled dataset:
+node tools/decision/benchmark.mjs replay --capture captures/observations.json \
+  --dataset test/fixtures/decision/benchmark-smoke.json --json
+node tools/decision/benchmark.mjs analyze --capture captures/paired.json \
+  --holdout 0.3 --seed experiment-1 --pass-counts 1,3,5 \
+  --thresholds 0.7,0.8,0.9 --agreement 0.67 \
+  --minimum-accuracy 1 --maximum-fallback-rate 0.5
+```
+
+All inputs have flags; missing inputs and unknown flags fail without prompting.
+`plan` validates and reports the same offline sweep as JSON; `replay` aliases
+`analyze`. Omit `--json` for token/cost and scoring-deviation tables plus policy
+measurements. Input files must be regular files inside the current working
+directory; parent traversal and symlinks escaping that directory are rejected.
+Each input is bounded to 4 MiB. No paths inside captures are followed.
+
+The combined file has exactly two fields, `cases` and `capture`. `cases` is the
+array format in `test/fixtures/decision/benchmark-smoke.json`: 2–100 unique IDs
+(letters, digits, hyphens, underscores), explicit tuning/holdout split, decision
+input (`question`, `mode`, optional `context`), and mode-valid `expected` label.
+A standalone capture may instead be supplied with `--dataset`:
+
+```json
+{
+  "schema": "aiwg-decision-benchmark-capture/v1",
+  "datasetDigest": "<sha256 of JSON.stringify(cases), computed by benchmarkDigest>",
+  "capturedAt": "2026-10-23T00:00:00.000Z",
+  "baselineLabel": "saved baseline model and settings",
+  "rows": [
+    {
+      "id": "test-failure",
+      "baseline": {
+        "answer": true, "confidence": 0.9, "status": "answered",
+        "model": "baseline-version", "usage": { "inputTokens": 500, "outputTokens": 20 },
+        "latencyMs": 100
+      },
+      "jev": [
+        {
+          "answer": true, "confidence": 0.9, "status": "answered",
+          "model": "jev-1.13.0", "usage": { "inputTokens": 500, "outputTokens": 20 },
+          "latencyMs": 100
+        }
+      ]
+    }
+  ]
+}
+```
+
+Include one row per case and 1–20 Jev observations per row. Answered values must
+match the case mode. Fallbacks use `status: fallback` and may have a null answer;
+confidence, model and usage can be null. Usage components can be null, and optional
+`cachedInputTokens` must not exceed input tokens. Optional `probability` is a
+0–1 truth probability used for yes/no Brier scores. Unknown fields are rejected.
+The JSON above illustrates a row; a valid dataset needs both splits and matching
+rows for every case.
+
+Use identical questions, contexts, rubrics and independent gold labels for both
+arms. Save model versions, settings and usage when obtaining observations outside
+this tool. Freeze the experiment and split before looking at results. Explicit
+splits are preserved by default. `--holdout <fraction>` deterministically reassigns
+cases by a SHA-256 ranking of seed and ID, independently of outcomes and file
+order; retain the seed and source digest for reproduction. Do not repeatedly
+reseed to improve a holdout score.
+
+Default pass counts are available prefixes from 1, 3, 5, 10, 15, 20, plus the
+minimum available pass count. Thresholds and vote agreement (comma-separated `--agreement` values) are swept on those
+same prefixes. Only tuning accuracy/fallback constraints select a recommendation;
+holdout measurements assess it afterward. Reports include routed and selective
+accuracy, fallback rate, baseline agreement, serial latency, sample confidence and
+scale-score deviation, ordinal MAE and yes/no Brier scores. One pass cannot estimate
+sample SD; categorical answers receive no numeric score. Repeated passes may be
+correlated, and nested prefixes are not independent experiments.
+
+Pricing is optional and comes only from explicit `decision.ask.cost.*` in the
+existing project config, using main's savings helper. `llm_per_mtok` prices the
+saved baseline; Jev uses a complete split pair or explicit `jev_per_mtok`. A
+configured `jev_model` must match the saved model. Defaults are not treated as
+benchmark evidence. Missing rates, incomplete billable usage, or nonzero cached usage
+(which these blended weights cannot price exactly) produce unknown/null costs,
+never an invented zero. Unknown output usage can still be priced with a complete
+split pair whose output rate is explicitly zero. Explicit zero rates remain valid. No pricing refresh runs.
+These are configured planning estimates, not invoices or measured subscription
+savings. Routing scenarios include saved baseline expense and latency on
+fallbacks; acquiring a paired capture pays both arms. A recommendation minimizes
+tuning routed cost when known, otherwise serial latency, subject to quality
+constraints. No policy or production configuration is changed.

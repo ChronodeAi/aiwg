@@ -2632,6 +2632,22 @@
         "JEV-16",
         "#2622"
       ]
+    },
+    {
+      "id": "DEC-BENCHMARK-01",
+      "path": "test/fixtures/decision/benchmark-smoke.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-23",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "unversioned-json",
+      "digest": "sha256:a69eddd515036eacd639e71ef9458901222fc1e028a1953fde27b0c834ca2e35",
+      "expectedOutcome": "Synthetic labelled cases for the offline Jev benchmark analyzer (tuning/holdout splits); no live calls or observations",
+      "links": [
+        "JEV-16",
+        "#3291"
+      ]
     }
   ]
 }
