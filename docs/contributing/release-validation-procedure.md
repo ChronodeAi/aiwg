@@ -16,6 +16,19 @@ After the RC build and full validation, run [release comparison](release-compari
 
 RC build → full tests → release comparison → fix or record acceptance for each regression → ship.
 
+Review the recorded decision thresholds and per-scenario A/B/tie tallies before
+dispositioning regressions. Assertion pass-rate drops and A-passed/B-failed pairs
+always regress. Judge-only regressions require a one-sided exact sign-test
+`p < 0.05` by default (ties excluded; at n=5 only 5/0 A wins qualify), or a
+dimension mean drop greater than 1.0 on the integer 0–4 scale. Improvement uses
+the mirrored tests; conflicting signals favor regression. Thresholds are
+configurable with `--judge-alpha` / `judgeAlpha` and `--judge-score-margin` /
+`judgeScoreMargin`; freeze them in the plan before running. The quarterly
+producer uses defaults, and retained reports must match the trusted plan.
+Check each report's p-values, B-minus-A dimension deltas, maximum absolute delta,
+and fired rule alongside the per-pair evidence. See the
+[decision rule](../../tools/rules/README.md) for bounds and details.
+
 ## 0. Pre-flight (Do once, on the host machine)
 
 Run these checks **before** opening any provider session. They verify your local install is healthy and the version under test is what you expect.

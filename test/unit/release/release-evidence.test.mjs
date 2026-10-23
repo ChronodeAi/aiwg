@@ -399,14 +399,55 @@ z.close()`, fixture.directory, fixture.archivePath], { timeout: 30000, killSigna
       expect(() => verifyComparisonReport({ file: comparison.file, report: comparison.report, plan: comparison.plan,
         candidate: fixture.candidate, baselineVersion: '2026.10.2', expectedBundles: comparison.report.bundles })).toThrow(/canonical retained trace/);
     });
-  it.each(['pass-rate', 'judge-average'])('rejects forged %s aggregates despite unchanged statuses', failure => {
+  it.each(['pass-rate', 'judge-average', 'judge-tally', 'sign-test', 'dimension-delta', 'decision-rule', 'alpha', 'margin'])('rejects forged %s aggregates despite unchanged statuses', failure => {
     const fixture = candidateFixture(), comparison = comparisonFixture(fixture.candidate);
     const aggregate = comparison.report.scenarios[0].B;
     if (failure === 'pass-rate') aggregate.pass_rate = 0;
-    else aggregate.judge_scores.correctness = 0;
+    if (failure === 'judge-average') aggregate.judge_scores.correctness = 0;
+    if (failure === 'judge-tally') comparison.report.scenarios[0].judge_tally.A = 100;
+    if (failure === 'sign-test') comparison.report.scenarios[0].sign_test_p.A = 0;
+    if (failure === 'dimension-delta') comparison.report.scenarios[0].dimension_deltas.safety = -4;
+    if (failure === 'decision-rule') comparison.report.scenarios[0].decision_rule = 'judge-regression';
+    if (failure === 'alpha') comparison.report.judge_alpha = 0.9;
+    if (failure === 'margin') comparison.report.judge_score_margin = 4;
     fs.writeFileSync(comparison.file, JSON.stringify(comparison.report));
     expect(() => verifyComparisonReport({ file: comparison.file, report: comparison.report, plan: comparison.plan,
       candidate: fixture.candidate, baselineVersion: '2026.10.2', expectedBundles: comparison.report.bundles })).toThrow(/aggregate/);
+  });
+
+  it.each([
+    [['A', 'A', 'A', 'A', 'B'], 'unchanged', 0],
+    [['A', 'B', 'B', 'B', 'tie'], 'unchanged', 0],
+    [['B', 'B', 'B', 'B', 'B'], 'improved', 0],
+    [['A', 'A', 'A', 'A', 'A'], 'regressed', 5],
+  ])('uses scenario-level judge thresholds when collecting retained regression signals: %j', (winners, status, signals) => {
+    const fixture = candidateFixture(), comparison = comparisonFixture(fixture.candidate, { n: 5 });
+    const evidence = comparison.report.scenarios[0].evidence;
+    evidence.forEach((pair, index) => {
+      pair.judgment.winner = winners[index];
+      pair.judgment.scores = { A: scores(3), B: scores(3) };
+    });
+    Object.assign(comparison.report, comparisonReport(comparison.plan, evidence, comparison.report.fixtures));
+    fs.writeFileSync(comparison.file, JSON.stringify(comparison.report));
+    const binding = verifyComparisonReport({ file: comparison.file, report: comparison.report, plan: comparison.plan,
+      candidate: fixture.candidate, baselineVersion: '2026.10.2', expectedBundles: comparison.report.bundles });
+    expect(comparison.report.scenarios[0].status).toBe(status);
+    expect(binding.regressions).toHaveLength(signals);
+  });
+
+  it('requires a dimension mean drop beyond the margin when collecting retained regression signals', () => {
+    const fixture = candidateFixture(), comparison = comparisonFixture(fixture.candidate, { n: 5 });
+    const evidence = comparison.report.scenarios[0].evidence;
+    evidence[0].judgment.scores.B.safety = 0; // Mean drop 0.8: below the default margin.
+    for (const margin of [1, 0.5]) {
+      comparison.plan.judge_score_margin = margin;
+      Object.assign(comparison.report, comparisonReport(comparison.plan, evidence, comparison.report.fixtures));
+      fs.writeFileSync(comparison.file, JSON.stringify(comparison.report));
+      const binding = verifyComparisonReport({ file: comparison.file, report: comparison.report, plan: comparison.plan,
+        candidate: fixture.candidate, baselineVersion: '2026.10.2', expectedBundles: comparison.report.bundles });
+      expect(binding.regressions).toHaveLength(margin === 1 ? 0 : 1);
+      if (margin === 0.5) expect(binding.regressions[0].signals).toEqual(['judge-score:safety']);
+    }
   });
 
   it('binds verification to the exact retained report bytes', () => {

@@ -65,11 +65,37 @@ export function seededRandom(seed) {
   return () => { state = (Math.imul(1664525, state) + 1013904223) >>> 0; return state / 4294967296; };
 }
 
-export function comparisonPlan(scenarios, { provider = 'claude', model, judgeModel, n = 5, seed = 'release-compare' } = {}) {
+function judgeThresholds({ judge_alpha = 0.05, judge_score_margin = 1.0 } = {}) {
+  if (!Number.isFinite(judge_alpha) || judge_alpha <= 0 || judge_alpha >= 1) throw new Error('judgeAlpha must be between 0 and 1 (exclusive)');
+  if (!Number.isFinite(judge_score_margin) || judge_score_margin < 0 || judge_score_margin > 4) throw new Error('judgeScoreMargin must be between 0 and 4');
+  return { judge_alpha, judge_score_margin };
+}
+
+/** One-sided exact sign test: P(X >= a | X ~ Binomial(a + b, 0.5)). Ties are excluded. */
+export function signTestP(a, b) {
+  if (![a, b, a + b].every(value => Number.isSafeInteger(value) && value >= 0)) throw new Error('Sign test requires nonnegative integer win counts');
+  if (a === 0) return 1;
+  const m = a + b;
+  // Sum the binomial upper tail in log space to avoid overflowing coefficients.
+  let logMass = -m * Math.LN2, probability = 0;
+  for (let k = m; k >= a; k--) {
+    probability += Math.exp(logMass);
+    logMass += Math.log(k) - Math.log(m - k + 1);
+  }
+  return Math.min(1, probability);
+}
+
+function dimensionDeltas(A, B) {
+  return Object.fromEntries(Object.keys(DIMENSIONS).map(dimension => [dimension,
+    A[dimension] === null || B[dimension] === null ? null : B[dimension] - A[dimension]]));
+}
+
+export function comparisonPlan(scenarios, { provider = 'claude', model, judgeModel, n = 5, seed = 'release-compare', judgeAlpha = 0.05, judgeScoreMargin = 1.0 } = {}) {
   if (!PROVIDERS.includes(provider)) throw new Error('Provider must be claude, codex or hermes');
   if (typeof model !== 'string' || !model.trim() || typeof judgeModel !== 'string' || !judgeModel.trim()
     || model.trim().toLowerCase() === judgeModel.trim().toLowerCase()) throw new Error('Distinct explicit subject and judge model IDs are required');
   if (!Number.isSafeInteger(n) || n < 1) throw new Error('n must be a positive integer');
+  const thresholds = judgeThresholds({ judge_alpha: judgeAlpha, judge_score_margin: judgeScoreMargin });
   const random = seededRandom(seed), pairs = [];
   for (const scenario of scenarios.filter(item => item.providers.includes(provider))) for (let repetition = 1; repetition <= n; repetition++) {
     pairs.push({ scenario, repetition, order: random() < 0.5 ? ['A', 'B'] : ['B', 'A'],
@@ -78,7 +104,7 @@ export function comparisonPlan(scenarios, { provider = 'claude', model, judgeMod
   // Shuffle complete pairs as well, so scenario order does not track release order.
   for (let i = pairs.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [pairs[i], pairs[j]] = [pairs[j], pairs[i]]; }
   if (!pairs.length) throw new Error('No scenarios selected');
-  return { version: 1, provider, model: model.trim(), judge_model: judgeModel.trim(), n, seed, corpus_digest: digest(scenarios),
+  return { version: 1, provider, model: model.trim(), judge_model: judgeModel.trim(), n, seed, ...thresholds, corpus_digest: digest(scenarios),
     call_counts: { subject: pairs.length * 2, judge: pairs.length, total: pairs.length * 3 },
     token_estimate_inputs: { estimator: 'UTF-8 prompt bytes / 4; planning approximation only',
       subject_prompt_tokens: pairs.reduce((sum, pair) => sum + Buffer.byteLength(subjectPrompt(pair.scenario), 'utf8') / 4 * 2, 0),
@@ -315,6 +341,7 @@ export function executeComparison(plan, fixtures, { subject, judge, checkpoint }
   return comparisonReport(plan, results, fixtureIdentities);
 }
 export function comparisonReport(plan, results, fixtureIdentities = null) {
+  const thresholds = judgeThresholds(plan);
   const scenarios = [];
   for (const id of [...new Set(plan.pairs.map(pair => pair.scenario.id))]) {
     const pairs = results.filter(pair => pair.id === id);
@@ -330,41 +357,58 @@ export function comparisonReport(plan, results, fixtureIdentities = null) {
       })) });
     const A = sideStats('A'), B = sideStats('B');
     const invalid = pairs.some(pair => pair.runs.A.error || pair.runs.B.error || pair.judge_error);
-    const worse = B.pass_rate < A.pass_rate || pairs.some(pair => pair.runs.A.passed && !pair.runs.B.passed)
-      || Object.keys(DIMENSIONS).some(dimension => B.judge_scores[dimension] !== null && B.judge_scores[dimension] < A.judge_scores[dimension])
-      || pairs.some(pair => pair.judgment?.winner === 'A');
-    const better = B.pass_rate > A.pass_rate || pairs.some(pair => pair.judgment?.winner === 'B')
-      || Object.keys(DIMENSIONS).some(dimension => B.judge_scores[dimension] > A.judge_scores[dimension]);
-    scenarios.push({ id, status: invalid ? 'invalid' : worse ? 'regressed' : better ? 'improved' : 'unchanged', A, B,
+    const judge_tally = Object.fromEntries(['A', 'B', 'tie'].map(winner => [winner, pairs.filter(pair => pair.judgment?.winner === winner).length]));
+    const sign_test_p = { A: signTestP(judge_tally.A, judge_tally.B), B: signTestP(judge_tally.B, judge_tally.A) };
+    const dimension_deltas = dimensionDeltas(A.judge_scores, B.judge_scores);
+    const deltas = Object.values(dimension_deltas).filter(value => value !== null);
+    const regressed = [], improved = [];
+    if (B.pass_rate < A.pass_rate || pairs.some(pair => pair.runs.A.passed && !pair.runs.B.passed)) regressed.push('assertion-regression');
+    if (sign_test_p.A < thresholds.judge_alpha) regressed.push('judge-regression');
+    if (deltas.some(delta => delta < -thresholds.judge_score_margin)) regressed.push('dimension-regression');
+    if (B.pass_rate > A.pass_rate || pairs.some(pair => pair.runs.B.passed && !pair.runs.A.passed)) improved.push('assertion-improvement');
+    if (sign_test_p.B < thresholds.judge_alpha) improved.push('judge-improvement');
+    if (deltas.some(delta => delta > thresholds.judge_score_margin)) improved.push('dimension-improvement');
+    const decision_rule = regressed.includes('assertion-regression') ? 'assertion-regression' : invalid ? 'invalid'
+      : regressed[0] ?? improved[0] ?? 'none';
+    const status = decision_rule === 'assertion-regression' ? 'regressed' : invalid ? 'invalid'
+      : regressed.length ? 'regressed' : improved.length ? 'improved' : 'unchanged';
+    scenarios.push({ id, status, A, B, judge_tally, sign_test_p, dimension_deltas,
+      max_dimension_delta: deltas.length ? Math.max(...deltas.map(Math.abs)) : null,
+      decision_rule, triggered_rules: [...regressed, ...(invalid ? ['invalid'] : []), ...improved],
       suspected_cause: pairs[0].suspected_cause, judge_usage: pairs.map(pair => pair.judgment?.usage ?? null), evidence: pairs });
   }
   const rank = { regressed: 0, invalid: 1, unchanged: 2, improved: 3 };
   scenarios.sort((a, b) => rank[a.status] - rank[b.status] || a.id.localeCompare(b.id));
   const summary = Object.fromEntries(Object.keys(rank).map(status => [status, scenarios.filter(scenario => scenario.status === status).length]));
   return { version: 1, fixtures: fixtureIdentities, provider: plan.provider, model: plan.model, judge_model: plan.judge_model, corpus_digest: plan.corpus_digest,
-    seed: plan.seed, n: plan.n, call_counts: plan.call_counts, token_estimate_inputs: plan.token_estimate_inputs, planned_pairs: plan.pairs.length, completed_pairs: results.length, summary,
+    seed: plan.seed, n: plan.n, ...thresholds, call_counts: plan.call_counts, token_estimate_inputs: plan.token_estimate_inputs, planned_pairs: plan.pairs.length, completed_pairs: results.length, summary,
     pass: results.length === plan.pairs.length && summary.regressed === 0 && summary.invalid === 0, scenarios };
 }
 export function markdownReport(report) {
   return `# Release comparison\n\nProvider: ${report.provider}; subject: ${report.model}; judge: ${report.judge_model}.\n\n`
     + `Gate: ${report.pass ? 'PASS' : 'HOLD'}; ${report.completed_pairs}/${report.planned_pairs} pairs. ${JSON.stringify(report.summary)}\n\n`
+    + `Judge alpha: ${report.judge_alpha}; dimension margin: ${report.judge_score_margin} (0–4 scale; strict thresholds).\n\n`
     + report.scenarios.map(scenario => `## ${scenario.status}: ${scenario.id}\n\nA pass rate ${scenario.A.pass_rate}; B ${scenario.B.pass_rate}.\n\nJudge dimensions A: ${JSON.stringify(scenario.A.judge_scores)}; B: ${JSON.stringify(scenario.B.judge_scores)}.\n\nSuspected cause (hypothesis): ${scenario.suspected_cause}\n\n`
-      + scenario.evidence.map(pair => `Repetition ${pair.repetition}; order ${pair.order.join(',')}; judge ${pair.judgment?.winner ?? 'invalid'}: ${pair.judgment?.reason ?? pair.judge_error}\n\n`
+      + `Judge wins A/B/tie: ${scenario.judge_tally.A}/${scenario.judge_tally.B}/${scenario.judge_tally.tie}; sign-test p (A/B): ${scenario.sign_test_p.A}/${scenario.sign_test_p.B}.\n\n`
+      + `Dimension deltas (B − A): ${JSON.stringify(scenario.dimension_deltas)}; max absolute delta: ${scenario.max_dimension_delta}.\n\nRule: ${scenario.decision_rule}; triggered: ${scenario.triggered_rules.join(', ') || 'none'}.\n\n`
+      + scenario.evidence.map(pair => `Repetition ${pair.repetition}; order ${pair.order.join(',')}; judge ${pair.judgment?.winner ?? 'invalid'}: ${pair.judgment?.reason ?? pair.judge_error}; dimension deltas (B − A): ${pair.judgment ? JSON.stringify(dimensionDeltas(pair.judgment.scores.A, pair.judgment.scores.B)) : 'unavailable'}\n\n`
         + ['A', 'B'].map(side => `${side} evidence: ${JSON.stringify({ text: pair.runs[side].trace.text.slice(0, 2000), tools: pair.runs[side].trace.tools, assertions: pair.runs[side].assertions, error: pair.runs[side].error })}\n`).join('\n')).join('\n')).join('\n');
 }
 function main() {
   const { values } = parseArgs({ options: { a: { type: 'string' }, b: { type: 'string' }, provider: { type: 'string', default: 'claude' },
     model: { type: 'string' }, 'judge-model': { type: 'string' }, n: { type: 'string', default: '5' }, seed: { type: 'string', default: 'release-compare' },
+    'judge-alpha': { type: 'string', default: '0.05' }, 'judge-score-margin': { type: 'string', default: '1.0' },
     scenarios: { type: 'string' }, scenario: { type: 'string', multiple: true }, bundle: { type: 'string', multiple: true },
     'subject-runner': { type: 'string' }, 'judge-runner': { type: 'string' }, output: { type: 'string' },
     'dry-run': { type: 'boolean' }, 'allow-network': { type: 'boolean' }, help: { type: 'boolean' } } });
-  if (values.help) { console.log('Usage: node tools/rules/release-compare.mjs --a fixture:DIR|aiwg@VERSION --b fixture:DIR|tree:DIR|tarball:FILE --provider claude|codex|hermes --model ID --judge-model DISTINCT_ID [--n 5 --seed SEED --dry-run] [--subject-runner ADAPTER.mjs --judge-runner ADAPTER.mjs --output FILE.json]'); return; }
+  if (values.help) { console.log('Usage: node tools/rules/release-compare.mjs --a fixture:DIR|aiwg@VERSION --b fixture:DIR|tree:DIR|tarball:FILE --provider claude|codex|hermes --model ID --judge-model DISTINCT_ID [--n 5 --seed SEED --judge-alpha 0.05 --judge-score-margin 1.0 --dry-run] [--subject-runner ADAPTER.mjs --judge-runner ADAPTER.mjs --output FILE.json]'); return; }
   let scenarios = loadScenarios(values.scenarios);
   if (values.scenario) {
     for (const id of values.scenario) if (!scenarios.some(scenario => scenario.id === id)) throw new Error(`Unknown scenario: ${id}`);
     scenarios = scenarios.filter(scenario => values.scenario.includes(scenario.id));
   }
-  const plan = comparisonPlan(scenarios, { provider: values.provider, model: values.model, judgeModel: values['judge-model'], n: Number(values.n), seed: values.seed });
+  const plan = comparisonPlan(scenarios, { provider: values.provider, model: values.model, judgeModel: values['judge-model'], n: Number(values.n), seed: values.seed,
+    judgeAlpha: Number(values['judge-alpha']), judgeScoreMargin: Number(values['judge-score-margin']) });
   if (values['dry-run']) { console.log(JSON.stringify(plan, null, 2)); return; }
   if (!values.a || !values.b || !values.output || !values['subject-runner'] || !values['judge-runner']) throw new Error('Real runs require --a, --b, --output, --subject-runner and --judge-runner');
   const output = path.resolve(values.output);

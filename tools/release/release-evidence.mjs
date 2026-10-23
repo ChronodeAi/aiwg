@@ -571,12 +571,13 @@ function validateLivePair(pair, expected, report, sourceHashes) {
     if (!Number.isInteger(score) || score < 0 || score > 4) throw new Error('Comparison judge score is invalid');
   }
 }
-function regressionSignals(pair) {
+function regressionSignals(pair, scenario, scoreMargin) {
   const signals = [];
   if (pair.runs.A.passed && !pair.runs.B.passed) signals.push('deterministic-pass-lost');
-  if (pair.judgment.winner === 'A') signals.push('judge-preferred-baseline');
+  if (scenario.triggered_rules.includes('judge-regression') && pair.judgment.winner === 'A') signals.push('judge-preferred-baseline');
   for (const dimension of Object.keys(DIMENSIONS)) {
-    if (pair.judgment.scores.B[dimension] < pair.judgment.scores.A[dimension]) signals.push(`judge-score:${dimension}`);
+    if (scenario.dimension_deltas[dimension] < -scoreMargin
+      && pair.judgment.scores.B[dimension] < pair.judgment.scores.A[dimension]) signals.push(`judge-score:${dimension}`);
   }
   return signals;
 }
@@ -599,7 +600,7 @@ export function verifyComparisonReport({ file, report, plan, candidate, baseline
   let retainedReport;
   try { retainedReport = JSON.parse(reportBytes); } catch { throw new Error('Comparison report file must contain JSON'); }
   if (!same(retainedReport, report)) throw new Error('Comparison input does not match the exact retained report file');
-  const reportKeys = ['version', 'fixtures', 'provider', 'model', 'judge_model', 'corpus_digest', 'seed', 'n', 'call_counts',
+  const reportKeys = ['version', 'fixtures', 'provider', 'model', 'judge_model', 'corpus_digest', 'seed', 'n', 'judge_alpha', 'judge_score_margin', 'call_counts',
     'token_estimate_inputs', 'planned_pairs', 'completed_pairs', 'summary', 'pass', 'scenarios', 'fixture_inputs', 'bundles', 'adapters'];
   if (!exactKeys(report, reportKeys) || report.version !== 1 || report.provider !== plan?.provider || report.model !== plan.model
     || report.judge_model !== plan.judge_model || report.model.trim().toLowerCase() === report.judge_model.trim().toLowerCase()) {
@@ -657,13 +658,15 @@ export function verifyComparisonReport({ file, report, plan, candidate, baseline
     }
   }
   const recomputed = comparisonReport(plan, results, report.fixtures);
-  if (!same(recomputed.summary, report.summary) || recomputed.pass !== report.pass
+  if (report.judge_alpha !== recomputed.judge_alpha || report.judge_score_margin !== recomputed.judge_score_margin
+    || !same(recomputed.summary, report.summary) || recomputed.pass !== report.pass
     || !same(recomputed.scenarios, report.scenarios)) {
     throw new Error('Comparison aggregate does not match retained case evidence');
   }
   const reportSha256 = hash(reportBytes);
-  const regressions = results.map(pair => ({ provider: report.provider, scenario: pair.id, repetition: pair.repetition,
-    report_sha256: reportSha256, signals: regressionSignals(pair) })).filter(item => item.signals.length);
+  const regressions = recomputed.scenarios.flatMap(scenario => scenario.evidence.map(pair => ({ provider: report.provider,
+    scenario: pair.id, repetition: pair.repetition, report_sha256: reportSha256,
+    signals: regressionSignals(pair, scenario, recomputed.judge_score_margin) }))).filter(item => item.signals.length);
   return { provider: report.provider, sha256: reportSha256, corpus_digest: report.corpus_digest,
     baseline_package_tree_sha256: report.fixtures.A.package_tree_sha256,
     candidate_package_tree_sha256: report.fixtures.B.package_tree_sha256,
