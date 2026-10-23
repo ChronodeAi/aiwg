@@ -509,7 +509,13 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
       const rulesDir = provider === 'claude'
         ? path.join(projectDir, '.claude', 'rules')
         : path.join(projectDir, '.codex', 'rules');
-      const body = await fs.readFile(path.join(rulesDir, 'RULES-ONDEMAND.md'), 'utf8');
+      const onDemandPath = path.join(rulesDir, 'RULES-ONDEMAND.md');
+      // With no untagged fallback rules left (#3463), no legacy index is written.
+      if (EXPECTED_ON_DEMAND_RULE_NAMES.length === 0) {
+        expect(existsSync(onDemandPath)).toBe(false);
+        return;
+      }
+      const body = await fs.readFile(onDemandPath, 'utf8');
       const actual = [...body.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]).sort();
 
       // ADR: only untagged medium/low fallback rules retain the legacy index.
