@@ -1,8 +1,10 @@
 /**
  * Worker process isolation for Tier 0 direct dispatch (FR-OG-108, #2954).
  *
- * Direct workers must never share the conductor's cgroup: on the titan host
- * an oomd kill of one shared cgroup took the conductor session with it.
+ * Direct workers default to a separate cgroup: on the titan host an oomd
+ * kill of one shared cgroup took the conductor session with it. Explicit
+ * native-sandbox policy instead uses an owned process group and the CLI's
+ * sandbox, without a cgroup memory limit or descendant kill scope.
  * This module builds `systemd-run --user` launch arguments (own unit or
  * scope with `MemoryMax` and `MemorySwapMax=0`, PATH/HOME passthrough,
  * stdin `/dev/null`) and, where no systemd user manager exists, returns an
@@ -40,6 +42,50 @@ import { buildSystemdClientEnv, resolveSystemdClient, resolveSystemdRun, CONNECT
 
 const UNIT_SAFE = /[^A-Za-z0-9:_.@-]/g;
 const transportBootstrapVariables = ['NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'LD_DEBUG', 'LD_DEBUG_OUTPUT'];
+const nativeSandboxProbes = new Map();
+let nativeSandboxProbeSequence = 0;
+export const NATIVE_SANDBOX_UNAVAILABLE = 'OG_NATIVE_SANDBOX_UNAVAILABLE';
+
+export function workerNeedsNativeNamespaces(adapter, permissions = {}, platform = process.platform) {
+  return platform === 'linux' && adapter?.provider === 'codex'
+    && (permissions.transport ?? 'shell') === 'shell'
+    && ['read-only', 'workspace-write'].includes(permissions.sandbox ?? 'workspace-write');
+}
+
+export function nativeSandboxFailure(text) {
+  return /loopback: Failed RTM_NEWADDR: Operation not permitted|uid_map[^\n]*Operation not permitted/i.test(text);
+}
+
+export function nativeSandboxProbeMessage(result) {
+  return `${NATIVE_SANDBOX_UNAVAILABLE}: Native sandbox unavailable: restricted unprivileged user namespaces inside systemd user units (host AppArmor policy may restrict userns). Probe: ${String(result.detail ?? 'failed').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 512)}. Select parallelism.groups.<group>.execution.launchMode="native-sandbox" with a verified enforcing CLI sandbox, or configure a host AppArmor allowance for the systemd worker launch path.`;
+}
+
+/** No inference: exercise user/network namespaces through the worker's unit and client environment path. */
+export function probeWorkerNativeSandbox({ spawn = spawnSync, env = process.env, envNames = ['PATH', 'HOME'], cwd,
+  cache = spawn === spawnSync ? nativeSandboxProbes : undefined } = {}) {
+  const key = JSON.stringify([cwd, [...envNames].sort()]);
+  if (cache?.has(key)) return cache.get(key);
+  let result;
+  try {
+    const managerEnvNames = resolveManagerEnvNames({ spawn });
+    const command = process.execPath;
+    const args = [fileURLToPath(import.meta.url), '--worker-environment', JSON.stringify(unitEnvironmentNames(envNames)),
+      '--', '/usr/bin/unshare', '--user', '--map-root-user', '--net', '/usr/bin/true'];
+    const argv = buildWorkerIsolationArgs({ unit: proposeWorkerUnitName(`sandbox-probe-${process.pid}-${++nativeSandboxProbeSequence}`),
+      command, args, cwd, env, envNames, managerEnvNames, memoryMaxGb: 0.25, attached: true,
+      extraProperties: ['RuntimeMaxSec=5s', 'TimeoutStopSec=1s'] });
+    const observed = spawn(resolveSystemdRun(), ['--collect', ...argv.slice(1)], {
+      encoding: 'utf8', timeout: 8000, maxBuffer: 4096, env: buildSystemdClientEnv({ env, envNames }) });
+    result = observed.status === 0 && !observed.error ? { ok: true, mode: 'systemd-unit' }
+      : { ok: false, mode: 'systemd-unit', code: NATIVE_SANDBOX_UNAVAILABLE,
+        detail: String(observed.error?.message ?? (String(observed.stderr ?? '').trim() || `exit ${observed.status}`)).replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 512) };
+  } catch (error) {
+    result = { ok: false, mode: 'systemd-unit', code: NATIVE_SANDBOX_UNAVAILABLE,
+      detail: String(error.message).replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 512) };
+  }
+  cache?.set(key, result);
+  return result;
+}
 
 /** Derive a unit-safe `aiwg-worker-<name>-<epoch>` unit name. */
 export function proposeWorkerUnitName(name, nowSeconds = Math.floor(Date.now() / 1000)) {
@@ -340,6 +386,7 @@ export function launchIsolatedWorker({
   config,
   allowDegraded = false,
   isolation,
+  workerGroup,
   kind = 'unit',
   attached = false,
   spawn = spawnSync,
@@ -368,6 +415,15 @@ export function launchIsolatedWorker({
     return { launched: false, blocked: true, failures: resolvedGate.failures ?? [], gate: resolvedGate };
   }
   const detected = isolation ?? detectWorkerIsolation({ spawn });
+  const nativeSandbox = detected.mode === 'native-sandbox';
+  if (nativeSandbox) {
+    const execution = config?.parallelism?.groups?.[workerGroup]?.execution;
+    if (execution?.launchMode !== 'native-sandbox' || !['read-only', 'workspace-write'].includes(execution.sandbox)
+      || (execution.transport ?? 'shell') !== 'shell' || !attached || !ownedGroup) {
+      throw Object.assign(new Error('native-sandbox requires policy opt-in and an owned attached process group with an enforcing native sandbox'),
+        { code: 'OG_POLICY_RELAXATION' });
+    }
+  }
   if (detected.mode === 'degraded' && !allowDegraded) {
     return {
       launched: false,
@@ -376,7 +432,7 @@ export function launchIsolatedWorker({
       gate: resolvedGate,
     };
   }
-  if (detected.mode === 'degraded') {
+  if (detected.mode === 'degraded' || nativeSandbox) {
     assertAbsolute('worker binary', command);
     if (cwd !== undefined) assertAbsolute('working directory', cwd);
     if (stdinPath !== undefined) assertAbsolute('stdin brief', stdinPath);
@@ -385,7 +441,7 @@ export function launchIsolatedWorker({
     if (!Array.isArray(args) || args.some(token => typeof token !== 'string' || token.includes('\0'))) {
       throw new Error('Worker isolation argv must be NUL-free strings');
     }
-    // Degraded mode has no systemd unit to confine the environment, so this
+    // Process-group modes have no systemd unit to confine the environment, so this
     // module builds the allowlisted environment itself and passes it as the
     // child's *entire* environment (the `env` option replaces, never merges
     // with, the current process environment) — the functional equivalent of
@@ -441,12 +497,12 @@ export function launchIsolatedWorker({
       }
       const result = _runDispatchCommit(onDispatchCommit, () => {
         const child = spawnAsync(launchCommand, launchArgs, launchOptions);
-        onSpawnAttempt?.({ mode: 'degraded', child, pid: child.pid });
+        onSpawnAttempt?.({ mode: detected.mode, child, pid: child.pid });
         const outcome = {
           launched: Number.isInteger(child.pid) && child.pid > 0,
-          mode: 'degraded', child, pid: child.pid,
+          mode: detected.mode, child, pid: child.pid,
           ...(attached ? { transportSupervisor: true } : {}),
-          diagnostic: `launched without resource confinement: ${detected.reason}`,
+          diagnostic: nativeSandbox ? 'Native CLI sandbox boundary; no cgroup resource confinement' : `launched without resource confinement: ${detected.reason}`,
           gate: resolvedGate,
         };
         // Preserve launch errors even when callers attach listeners later.
@@ -661,8 +717,8 @@ export function runWorkerTransport({ command, args, environment, record,
 }
 
 // Private attached transport entry, never a public CLI or legacy Ralph route.
-// The systemd unit owns this supervisor and its worker; cgroup exit evidence
-// includes descendants. Only the actual worker receives the allowed values.
+// The unit or launcher-owned process group owns this supervisor and worker.
+// Only unit cgroup exit evidence covers descendants. The worker receives only allowed values.
 if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--worker-environment') {
   process.umask(0o077);
   const names = JSON.parse(process.argv[3]);

@@ -223,6 +223,23 @@ describe('launchIsolatedWorker gate-then-launch', () => {
   // host having a systemd user manager (CI containers have none).
   const managerSpawn = (() => ({ status: 0, stdout: 'LANG=C.UTF-8\nNODE_OPTIONS=--synthetic\nLD_PRELOAD=/synthetic.so\n', stderr: '' })) as never;
 
+  it.each(['policy', 'sandbox', 'transport', 'attached', 'ownedGroup'])('codes native-sandbox precondition refusal for %s', missing => {
+    const execution = { launchMode: 'native-sandbox', sandbox: 'workspace-write', transport: 'shell' };
+    if (missing === 'policy') execution.launchMode = 'systemd-unit';
+    if (missing === 'sandbox') execution.sandbox = 'external';
+    if (missing === 'transport') execution.transport = 'mcp';
+    const spawn = vi.fn();
+    const spawnAsync = vi.fn();
+    expect(() => launchIsolatedWorker({ command: '/synthetic/codex', gate: passingGate,
+      config: { parallelism: { groups: { workers: { execution } } } }, workerGroup: 'workers',
+      isolation: { mode: 'native-sandbox' }, attached: missing !== 'attached', ownedGroup: missing !== 'ownedGroup',
+      spawn, spawnAsync,
+    })).toThrow(expect.objectContaining({ code: 'OG_POLICY_RELAXATION',
+      message: 'native-sandbox requires policy opt-in and an owned attached process group with an enforcing native sandbox' }));
+    expect(spawn).not.toHaveBeenCalled();
+    expect(spawnAsync).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('retains the unit stop authority before a failed trusted launch (attached=%s)', attached => {
     vi.stubEnv('AIWG_UNLISTED_SECRET', 'synthetic-conductor-secret');
     vi.stubEnv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/synthetic/conductor-bus');
@@ -877,4 +894,55 @@ it('fails status queries explicitly instead of manufacturing a successful outcom
   const fixture = systemdClientFixture(); roots.push(fixture.root); vi.stubEnv('PATH', fixture.root);
   expect(() => workerIsolation.getWorkerIsolationStatus('aiwg-worker-test', { spawn: (() => ({ status: 1, stderr: 'manager unavailable' })) as never })).toThrow(/unavailable/);
   expect(() => workerIsolation.getWorkerIsolationStatus('aiwg-worker-test', { spawn: (() => ({ status: 0, stdout: '' })) as never })).toThrow(/missing systemd properties/);
+});
+
+describe('native sandbox unit preflight', () => {
+  it('uses a bounded transient unit with the worker environment wrapper and caches only in memory', () => {
+    const clients = systemdClientFixture(); roots.push(clients.root);
+    vi.stubEnv('PATH', clients.root);
+    const spawn = vi.fn((_binary: string, argv: string[]) => ({ status: 0,
+      stdout: argv.includes('show-environment') ? 'LANG=C\n' : '', stderr: '' }));
+    const cache = new Map();
+    const options = { spawn, cache, cwd: '/synthetic/work', env: ENV, envNames: ['PATH', 'HOME'] };
+    expect(workerIsolation.probeWorkerNativeSandbox(options)).toMatchObject({ ok: true, mode: 'systemd-unit' });
+    expect(workerIsolation.probeWorkerNativeSandbox(options)).toMatchObject({ ok: true });
+    expect(spawn).toHaveBeenCalledTimes(2);
+    const [binary, argv, settings] = spawn.mock.calls[1] as any;
+    expect(binary).toBe(clients.binary);
+    for (const token of ['--user', '--collect', '--wait', '--pipe', '--quiet', '--worker-environment',
+      '/usr/bin/unshare', '--user', '--map-root-user', '--net', '/usr/bin/true', 'RuntimeMaxSec=5s', 'TimeoutStopSec=1s']) expect(argv).toContain(token);
+    expect(argv).toContain('UnsetEnvironment=LANG XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS SYSTEMD_BUS_ADDRESS');
+    expect(settings).toMatchObject({ timeout: 8000, maxBuffer: 4096 });
+    expect(argv.join(' ')).not.toContain(ENV.HOME);
+  });
+
+  it.each(['uid_map: Operation not permitted', 'loopback: Failed RTM_NEWADDR: Operation not permitted'])
+    ('reports bounded namespace probe failure: %s', detail => {
+      const clients = systemdClientFixture(); roots.push(clients.root); vi.stubEnv('PATH', clients.root);
+      const spawn = vi.fn((_binary: string, argv: string[]) => argv.includes('show-environment')
+        ? { status: 0, stdout: '' } : { status: 1, stderr: `${detail}\n${'x'.repeat(2000)}` });
+      const result = workerIsolation.probeWorkerNativeSandbox({ spawn, env: {}, envNames: [] });
+      expect(result).toMatchObject({ ok: false, code: 'OG_NATIVE_SANDBOX_UNAVAILABLE' });
+      expect(result.detail.length).toBeLessThanOrEqual(512);
+      expect(result.detail).not.toContain('\n');
+      expect(workerIsolation.nativeSandboxFailure(result.detail)).toBe(true);
+    });
+
+  it('fails closed on probe timeout', () => {
+    const clients = systemdClientFixture(); roots.push(clients.root); vi.stubEnv('PATH', clients.root);
+    const result = workerIsolation.probeWorkerNativeSandbox({ env: {}, envNames: [],
+      spawn: (_binary: string, argv: string[]) => argv.includes('show-environment') ? { status: 0, stdout: '' }
+        : { status: null, error: new Error('spawnSync ETIMEDOUT') } });
+    expect(result).toMatchObject({ ok: false, code: 'OG_NATIVE_SANDBOX_UNAVAILABLE', detail: 'spawnSync ETIMEDOUT' });
+  });
+
+  it('only requires the namespace probe for enforcing Codex sandboxes on Linux', () => {
+    expect(workerIsolation.workerNeedsNativeNamespaces({ provider: 'codex' }, { sandbox: 'workspace-write' }, 'linux')).toBe(true);
+    expect(workerIsolation.workerNeedsNativeNamespaces({ provider: 'codex' }, { sandbox: 'read-only' }, 'linux')).toBe(true);
+    for (const sandbox of ['external', 'none', 'danger-full-access']) {
+      expect(workerIsolation.workerNeedsNativeNamespaces({ provider: 'codex' }, { sandbox }, 'linux')).toBe(false);
+    }
+    expect(workerIsolation.workerNeedsNativeNamespaces({ provider: 'other' }, {}, 'linux')).toBe(false);
+    expect(workerIsolation.workerNeedsNativeNamespaces({ provider: 'codex' }, {}, 'darwin')).toBe(false);
+  });
 });

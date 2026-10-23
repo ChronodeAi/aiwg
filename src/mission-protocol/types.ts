@@ -353,6 +353,7 @@ export interface WorkerDirectBrief {
 export interface WorkerResolvedInvocation {
   version: typeof WORKER_CONTRACT_REVISION;
   mode: 'direct' | 'managed';
+  isolation?: 'systemd-unit' | 'native-sandbox';
   transport: 'shell' | 'mcp';
   selected: WorkerTuple;
   policyDigest: string;

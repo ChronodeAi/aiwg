@@ -642,6 +642,19 @@ export function hasOperatorWorkerNativeRenderer(adapter: WorkerAdapterMetadata):
     && adapter.invocation.kind === 'process';
 }
 
+/** The process-group launch boundary requires the independently verified native renderer. */
+export function assertWorkerLaunchMode(adapter: WorkerAdapterMetadata, permissions: WorkerExecution = {}): void {
+  const mode = permissions.launchMode ?? 'systemd-unit';
+  if (!['systemd-unit', 'native-sandbox'].includes(mode)) {
+    throw new WorkerPolicyError('OG_CONFIG_REFERENCE', 'Unknown worker launch mode');
+  }
+  if (mode === 'native-sandbox' && (!hasOperatorWorkerNativeRenderer(adapter)
+    || !['read-only', 'workspace-write'].includes(permissions.sandbox ?? '')
+    || (permissions.transport ?? 'shell') !== 'shell')) {
+    throw new WorkerPolicyError('OG_POLICY_RELAXATION', 'native-sandbox requires a verified native read-only or workspace-write shell renderer');
+  }
+}
+
 /** Check the actual argv before granting the direct renderer exception. */
 export function assertOperatorWorkerNativeArgv(adapter: WorkerAdapterMetadata, argv: string[],
   selected: { model: string; effort: { value: string | null } }, permissions?: { sandbox?: string; approval?: string }): void {

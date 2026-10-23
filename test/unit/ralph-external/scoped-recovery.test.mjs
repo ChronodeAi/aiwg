@@ -5134,7 +5134,10 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
       // that `Object.keys()` happens to match.
       expect(normalizeResult(notGatedResult)).toEqual(normalizeResult(baselineResult));
       expect(baselineLauncher.lastAttemptResult).toBeUndefined(); // origin/main never had this field at all
-      expect(Object.keys(notGatedCallOptionsSameInstance).sort()).toEqual(Object.keys(baselineCalls.at(-1)).sort());
+      // GH #366 adds exactly one launch option, `workerGroup`, so the
+      // launcher can re-check the native-sandbox opt-in.
+      expect(Object.keys(baselineCalls.at(-1))).not.toContain('workerGroup');
+      expect(Object.keys(notGatedCallOptionsSameInstance).sort()).toEqual([...Object.keys(baselineCalls.at(-1)), 'workerGroup'].sort());
       expect('onDispatchCommit' in baselineCalls.at(-1)).toBe(false);
       // A not-gated-only launcher's own key set is the base default...
       expect(keysBeforeBaselineLaunch).toEqual(keysBeforeAnyLaunch);
@@ -5835,10 +5838,24 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         expect(entry.args[0]).toEqual([...baselineKeys, 'paths'].sort());
         expect(entry.args.slice(1)).toEqual(baselineGateCalls[i].args.slice(1));
       });
-      const withoutGatePaths = (log) => log.map((entry) => (entry.name === 'checkDispatch'
-        ? { ...entry, args: [entry.args[0].filter((key) => key !== 'paths'), ...entry.args.slice(1)] }
-        : entry));
-      expect(withoutGatePaths(branchLog)).toEqual(baselineLog);
+      // GH #366 intentionally passes the selected group to the launcher so
+      // it can re-check the native-sandbox opt-in against current config:
+      // each `launchIsolated` options object adds exactly `workerGroup`.
+      const baselineLaunchCalls = baselineLog.filter((entry) => entry.name === 'launchIsolated');
+      const branchLaunchCalls = branchLog.filter((entry) => entry.name === 'launchIsolated');
+      expect(branchLaunchCalls.length).toBeGreaterThan(0);
+      branchLaunchCalls.forEach((entry, i) => {
+        const baselineKeys = baselineLaunchCalls[i].args[0];
+        expect(baselineKeys).not.toContain('workerGroup');
+        expect(entry.args[0]).toEqual([...baselineKeys, 'workerGroup'].sort());
+        expect(entry.args.slice(1)).toEqual(baselineLaunchCalls[i].args.slice(1));
+      });
+      const withoutIntendedKeys = (log) => log.map((entry) => {
+        if (entry.name === 'checkDispatch') return { ...entry, args: [entry.args[0].filter((key) => key !== 'paths'), ...entry.args.slice(1)] };
+        if (entry.name === 'launchIsolated') return { ...entry, args: [entry.args[0].filter((key) => key !== 'workerGroup'), ...entry.args.slice(1)] };
+        return entry;
+      });
+      expect(withoutIntendedKeys(branchLog)).toEqual(baselineLog);
       expect(baselineLog.length).toBeGreaterThan(0);
     } finally {
       await rm(fx.root, { recursive: true, force: true });

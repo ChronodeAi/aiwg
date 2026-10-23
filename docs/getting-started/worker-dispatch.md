@@ -438,3 +438,67 @@ aiwg config set --project parallelism.worker_dispatch false
 Turning it off only changes this one setting — any per-CLI enablement
 (`parallelism.clis`) and group configuration keep their existing values, so turning
 dispatch back on later restores the same setup.
+
+## Worker launch boundary on Linux
+
+Workers use a systemd user unit by default (`execution.launchMode: "systemd-unit"`),
+with cgroup memory limits and a cgroup kill scope. For Codex `read-only` and
+`workspace-write` sandboxes, the launcher first runs a bounded, non-inference
+user/network namespace probe inside a transient user unit using the worker's
+client environment handling. `aiwg doctor --probe-workers` reports this same
+check in `sandboxChecks`; qualification refuses a failed check.
+
+Ubuntu hosts can restrict unprivileged user namespaces inside systemd user units
+through AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`) even when
+sandboxing works in an interactive shell. A failed
+probe refuses launch before creating run metadata with
+`OG_NATIVE_SANDBOX_UNAVAILABLE`, the bounded probe failure, and remediation.
+The same code identifies known runtime `uid_map` and bwrap loopback permission
+failures. A host administrator can configure an AppArmor allowance for the worker
+launch path.
+
+Alternatively, explicitly select the CLI sandbox as the launch boundary in the
+project's `.aiwg/aiwg.config`, for each affected worker group:
+
+```json
+{
+  "parallelism": {
+    "worker_dispatch": true,
+    "groups": {
+      "workers": {
+        "execution": {
+          "launchMode": "native-sandbox",
+          "sandbox": "workspace-write",
+          "approval": "never",
+          "network": "deny",
+          "transport": "shell"
+        },
+        "members": [
+          { "id": "primary", "cli": "codex", "model": "<approved-model>", "roles": ["coding"] }
+        ]
+      }
+    }
+  }
+}
+```
+
+This mode is off by default and requires the verified Codex native shell renderer
+with an explicit `read-only` or `workspace-write` sandbox. External, disabled,
+unknown, and full-access sandboxes are refused. Environment variables, launch
+flags, and `--allow-degraded-worker` do not opt in.
+Config validation rejects `approval: "on-request"`, `network: "allowlisted"`,
+and any group member whose installation uses a non-Codex adapter in this mode.
+The MCP `worker-invoke` tool's `run` operation refuses pinned `native-sandbox`
+invocations with `OG_POLICY_RELAXATION` until it supports this launch boundary.
+
+The launcher uses its owned process group without a systemd unit and skips the
+unit namespace probe. **There is no cgroup memory limit or cgroup kill scope; the
+CLI's own sandbox is the only security boundary.** Process-group supervision and
+timeouts still apply, but escaped descendants cannot be proven stopped, so
+termination evidence remains uncertain. Run evidence and launch events identify
+`native-sandbox` explicitly.
+
+The host resource gate and saved-plan revalidation still apply. Launch mode is
+pinned in the config digest and resolved invocation; changing it requires a fresh
+`models resolve` plan. After changing the policy, run
+`aiwg doctor --probe-workers --qualify --yes` and resolve again.

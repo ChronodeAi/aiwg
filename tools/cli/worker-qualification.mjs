@@ -6,9 +6,49 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { importImpl } from '../_resolve-impl.mjs';
+import { detectWorkerIsolation, probeWorkerNativeSandbox, workerNeedsNativeNamespaces, nativeSandboxProbeMessage } from '../ralph-external/lib/worker-isolation.mjs';
 
 const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const accountScopeNotice = 'Account approval is bound only to the configured accountScope label (default: local-account), not the native CLI login. Account switches are not detected. After switching accounts, change parallelism.clis.<cli>.accountScope, refresh model discovery, and requalify before dispatch.';
+
+/** Report launch-path compatibility without inference or installation-store changes. */
+export async function checkWorkerSandboxLaunches({ projectDir, config, registry, cli,
+  detectIsolation = detectWorkerIsolation, probeNativeSandbox = probeWorkerNativeSandbox }) {
+  const checks = [];
+  let isolation;
+  for (const [groupId, group] of Object.entries(config?.parallelism?.groups ?? {})) {
+    for (const cliId of new Set(group.members.filter(member => member.enabled !== false
+      && (!cli || member.cli === cli)).map(member => member.cli))) {
+      if (config.parallelism.clis?.[cliId]?.enabled === false) continue;
+      const [namespace, id] = (config.parallelism.clis?.[cliId]?.adapter ?? `providers:${cliId}`).split(':');
+      const provider = registry.providers[id];
+      const adapter = namespace === 'providers' ? provider?.workerAdapter ?? provider?.workerHealthAdapter
+        : registry.workerAdapters?.[id];
+      const permissions = group.execution ?? {};
+      if (!workerNeedsNativeNamespaces(adapter, permissions)) continue;
+      const mode = permissions.launchMode ?? 'systemd-unit';
+      const check = { cli: cliId, group: groupId, isolation: mode, status: 'skipped', diagnostics: [] };
+      if (mode === 'native-sandbox') {
+        check.reason = 'Policy selects the native CLI sandbox; no systemd unit is used';
+      } else {
+        isolation ??= detectIsolation();
+        if (isolation.mode !== 'systemd-unit') check.reason = isolation.reason;
+        else {
+          const profileRef = config.parallelism.clis?.[cliId]?.invocationProfile ?? 'direct-shell';
+          const envNames = adapter.invocationProfiles?.[profileRef]?.envAllowlist ?? ['PATH', 'HOME'];
+          const probe = await probeNativeSandbox({ cwd: projectDir, envNames,
+            env: Object.fromEntries(envNames.filter(name => process.env[name] !== undefined).map(name => [name, process.env[name]])) });
+          check.probe = probe;
+          check.status = probe.ok ? 'passed' : 'blocked';
+          if (!probe.ok) check.diagnostics.push({ code: probe.code, pointer: `/parallelism/groups/${groupId}/execution/launchMode`,
+            message: nativeSandboxProbeMessage(probe) });
+        }
+      }
+      checks.push(check);
+    }
+  }
+  return checks;
+}
 
 async function executablePath(executable) {
   if (path.isAbsolute(executable)) return fs.realpath(executable);
@@ -122,7 +162,7 @@ export async function checkRecordedWorkerInvocationBuilds({ projectDir, config, 
 }
 
 export async function qualifyProbedWorkers({ projectDir, packageRoot, config, registry, section,
-  yes = false, dryRun = false }) {
+  yes = false, dryRun = false, cli, detectIsolation, probeNativeSandbox }) {
   const host = await importImpl(import.meta.url, 'models/worker-installation.mjs');
   const { WORKER_OPERATOR_APPROVAL } = await importImpl(import.meta.url, 'models/provider-policy.js');
   const { ConfigLoader } = await importImpl(import.meta.url, 'models/config-loader.js');
@@ -140,6 +180,12 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
       .filter(member => member.cli === row.cli && member.enabled !== false)
       .map(member => ({ model: member.model, roles: member.roles })) }));
   if (!ready.length) return { status: 'failed', accountScopeNotice, targets, results: [], message: 'No configured worker CLIs probed ready; no qualification was recorded.' };
+  const sandboxChecks = await checkWorkerSandboxLaunches({ projectDir, config, registry, cli, detectIsolation, probeNativeSandbox });
+  if (sandboxChecks.some(check => check.status === 'blocked')) {
+    return { status: 'failed', accountScopeNotice, targets, sandboxChecks,
+      results: sandboxChecks.filter(check => check.status === 'blocked').map(check => ({ cli: check.cli, status: 'failed',
+        diagnostics: check.diagnostics, sandboxChecks: [check] })) };
+  }
   const storeChanges = await host.prepareWorkerInstallationStore({ workerWritableRoots: [projectDir] });
   if (!dryRun && !yes) {
     const terminal = createInterface({ input: process.stdin, output: process.stderr });
