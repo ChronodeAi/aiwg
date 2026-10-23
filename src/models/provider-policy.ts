@@ -636,9 +636,9 @@ export function isOperatorQualifiedWorkerAdapter(adapter: WorkerAdapterMetadata)
     && adapter.qualification.evidenceRef === WORKER_OPERATOR_APPROVAL;
 }
 
-/** Only this bundled renderer has an independently checked native direct baseline. */
+/** Bundled renderers with an independently checked native direct baseline. */
 export function hasOperatorWorkerNativeRenderer(adapter: WorkerAdapterMetadata): boolean {
-  return isOperatorQualifiedWorkerAdapter(adapter) && adapter.provider === 'codex'
+  return isOperatorQualifiedWorkerAdapter(adapter) && ['codex', 'muse'].includes(adapter.provider)
     && adapter.invocation.kind === 'process';
 }
 
@@ -667,6 +667,32 @@ export function assertOperatorWorkerNativeArgv(adapter: WorkerAdapterMetadata, a
   };
   const sandbox = permissions?.sandbox ?? 'workspace-write';
   if (!['read-only', 'workspace-write'].includes(sandbox)) throw new Error('Requested sandbox has no verified native renderer');
+  if (adapter.provider === 'muse') {
+    requirePair('--provider', 'meta');
+    requirePair('--model', selected.model);
+    if (selected.effort.value === null) throw new Error('Muse requires explicit effort');
+    requirePair('--reasoning-effort', selected.effort.value);
+    if ((permissions?.approval ?? 'never') !== 'never') throw new Error('Muse direct worker approval requires never');
+    requirePair('--approval-mode', 'never');
+    requirePair('--approval-judge', 'off');
+    if (sandbox === 'read-only' && (!args.includes('--disable-write') || !args.includes('--disable-shell'))) {
+      throw new Error('Requested native worker read-only control is absent');
+    }
+    if (args[0] !== 'exec') throw new Error('Native worker controls could be overridden');
+    const seen = new Set<string>();
+    for (let index = 1; index < args.length; index++) {
+      const flag = args[index];
+      if (seen.has(flag)) throw new Error('Native worker controls could be overridden');
+      seen.add(flag);
+      if (['--json', '--trust-workspace', '--disable-write', '--disable-shell'].includes(flag)) continue;
+      if (!['--provider', '--model', '--reasoning-effort', '--workspace', '--approval-mode', '--approval-judge',
+        '--max-model-steps', '--output-schema', '--prompt-file'].includes(flag) || index + 1 >= args.length) {
+        throw new Error('Native worker controls could be overridden');
+      }
+      index++;
+    }
+    return;
+  }
   requirePair('-m', selected.model);
   requirePair('-s', sandbox);
   for (const [name, value] of [['model_reasoning_effort', selected.effort.value], ['approval_policy', permissions?.approval ?? 'never']]) {

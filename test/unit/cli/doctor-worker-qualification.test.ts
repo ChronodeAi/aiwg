@@ -23,7 +23,9 @@ const repo = process.cwd();
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
-async function fixture(providerless = false, unsetHome = false, namespaceProbe = true) {
+async function fixture(providerless = false, unsetHome = false, namespaceProbe = true, cli = 'codex') {
+  const role = cli === 'muse' ? 'efficiency' : 'coding';
+  const model = cli === 'muse' ? 'muse-spark-1.3' : 'synthetic-model';
   const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-qualify-workers-'));
   roots.push(root);
   // Installed modules must be outside worker-writable roots with trusted modes,
@@ -57,17 +59,31 @@ else { console.error('uid_map: Operation not permitted'); process.exit(1); }
 if (process.argv.includes('show-environment')) process.exit(0);
 else console.log('255');
 `);
-  const binary = path.join(root, 'fake-codex');
+  const binary = path.join(root, `fake-${cli}`);
   const writeCli = (version: string) => writeExecutable(binary, `#!${process.execPath}\nif (process.argv.includes('--version')) console.log('codex-cli ${version}');\nelse if (process.argv.slice(2).join(' ') === 'debug models') console.log(JSON.stringify({models:[{slug:'synthetic-model',${providerless ? '' : "provider:'synthetic-inference',"}visibility:'listed',context_window:32000,${providerless ? '' : 'output_limit:4096,'}supported_reasoning_levels:['medium']}]}));\nelse if (process.argv[2] === 'sandbox' && process.env.PATH && process.argv.slice(-3).join(' ') === '/bin/sh -c true') process.exit(0);\nelse process.exit(90);\n`);
-  await writeCli(unsetHome ? '0.163.0' : '0.161.0');
-  await writeFile(path.join(project, '.aiwg/aiwg.config'), JSON.stringify({ version: '1', providers: ['codex'],
-    parallelism: { worker_dispatch: true, clis: { codex: { adapter: 'providers:codex', executable: binary,
+  if (cli === 'muse') {
+    await writeExecutable(binary, `#!${process.execPath}
+if (process.argv.slice(2).join(' ') === '--version') console.log('Muse Code 1.4.12 (1.4.12-R6909.1)');
+else if (process.argv[2] === 'exec') console.log(JSON.stringify({argv:process.argv.slice(2)}));
+else process.exit(90);
+`);
+    const catalog = path.join(root, '.local/share/muse/model-catalog');
+    await mkdir(catalog, { recursive: true });
+    await writeFile(path.join(catalog, 'synthetic.json'), JSON.stringify({ fetchedAt: new Date().toISOString(), rows: [{
+      // Native Muse rows report inference identity via provider_id; unlike
+      // Codex, discovery cannot infer it when the field is absent.
+      model_id: model, provider_id: 'meta', visibility: 'listed', is_default: true, is_current: true,
+      reasoning_effort_variants: [{ tier: 'medium' }], context_limit: 128000, output_limit: 16000,
+    }] }));
+  } else await writeCli(unsetHome ? '0.163.0' : '0.161.0');
+  await writeFile(path.join(project, '.aiwg/aiwg.config'), JSON.stringify({ version: '1', providers: [cli],
+    parallelism: { worker_dispatch: true, clis: { [cli]: { adapter: `providers:${cli}`, executable: binary,
       accountScope: 'synthetic-account', quotaScope: 'synthetic-quota' } }, groups: { workers: { maxParallel: 1,
       execution: { sandbox: 'workspace-write', approval: 'never', transport: 'shell' },
-      members: [{ id: 'primary', cli: 'codex', model: 'synthetic-model', roles: ['coding'] }] } } } }));
+      members: [{ id: 'primary', cli, model, roles: [role] }] } } } }));
   // These are explicit test policy choices, never inferred account/data facts.
   await writeFile(path.join(project, 'models.json'), JSON.stringify({ defaults: { workerSelection: {
-    roleGuidance: { coding: { groups: ['workers'], tier: 'standard', initialEffort: 'medium', effortLadder: ['medium'] } },
+    roleGuidance: { [role]: { groups: ['workers'], tier: 'standard', initialEffort: 'medium', effortLadder: ['medium'] } },
     guards: { denySelfDelegation: false }, dataPolicy: { allowUnknown: true } } } }));
   const brief = path.join(project, 'brief.txt');
   await writeFile(brief, 'Synthetic implementation brief.');
@@ -91,7 +107,7 @@ process.exitCode = result.exitCode;
     } catch (error: any) { return { code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
   };
   const run = (args: string[], cwd = project) => runNode([entry, ...args], cwd);
-  const resolve = () => run(['models', 'resolve', '--role', 'coding', '--task', 'implementation', '--group', 'workers',
+  const resolve = () => run(['models', 'resolve', '--role', role, '--task', cli === 'muse' ? 'inventory' : 'implementation', '--group', 'workers',
     '--brief', brief, '--workdir', project, '--final-output', path.join(project, 'result.json'), '--format', 'json']);
   return { root, project, config, binary, installed, writeCli, run, runNode, resolve };
 }
@@ -126,6 +142,32 @@ if (process.env.UNRELATED_SECRET || process.env.PATH !== '/usr/bin:/bin'
         environment: { PATH: '/usr/bin:/bin' } })).resolves.toBeUndefined();
     } finally { vi.unstubAllEnvs(); }
   });
+
+  it('qualifies installed Muse and resolves and executes a Tier 0 efficiency command with a fake CLI', async () => {
+    const f = await fixture(false, false, true, 'muse');
+    const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--cli', 'muse', '--yes', '--json']);
+    expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
+    expect(JSON.parse(qualified.stdout).qualification.results).toMatchObject([{ cli: 'muse', status: 'qualified' }]);
+    const resolved = await f.resolve();
+    expect(resolved.code, resolved.stdout + resolved.stderr).toBe(0);
+    const plan = JSON.parse(resolved.stdout);
+    expect(plan.invocation).toMatchObject({ readiness: 'launchable', selected: { model: 'muse-spark-1.3', effort: { value: 'medium' } } });
+    const launched = await f.runNode([f.binary, ...plan.invocation.argv.slice(1)]);
+    expect(launched.code, launched.stderr).toBe(0);
+    expect(JSON.parse(launched.stdout).argv).toEqual(plan.invocation.argv.slice(1));
+    expect(plan.invocation.argv).toContain('--prompt-file');
+    expect(plan.invocation.argv).not.toContain('--output-schema');
+    expect(plan.invocation.shellCommand).toContain('< /dev/null');
+
+    const filename = path.join(f.project, '.aiwg/aiwg.config');
+    const config = JSON.parse(await readFile(filename, 'utf8'));
+    config.parallelism.groups.workers.execution.approval = 'on-request';
+    await writeFile(filename, JSON.stringify(config));
+    const denied = await f.resolve();
+    expect(denied.code).not.toBe(0);
+    expect(JSON.parse(denied.stdout).invocation).toBeUndefined();
+  });
+
   it('reports a blocked namespace probe as launcher-scoped and still qualifies Tier 0 direct dispatch', async () => {
     // Tier 0 direct handoff runs the rendered command from the conductor's own
     // shell under the conductor harness's sandbox; only the systemd-unit
@@ -427,6 +469,17 @@ try {
     const changed = await f.resolve();
     expect(changed.code).not.toBe(0);
     expect(JSON.parse(changed.stdout).invocation).toBeUndefined();
+  });
+
+  // Split from the case above so neither spends most of the per-test budget on CLI startup.
+  it('restores dispatch after requalifying under a changed accountScope label', async () => {
+    const f = await fixture();
+    const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
+    const filename = path.join(f.project, '.aiwg/aiwg.config');
+    const config = JSON.parse(await readFile(filename, 'utf8'));
+    config.parallelism.clis.codex.accountScope = 'synthetic-account-2';
+    await writeFile(filename, JSON.stringify(config));
     const requalified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
     expect(requalified.code, requalified.stdout + requalified.stderr).toBe(0);
     const restored = await f.resolve();

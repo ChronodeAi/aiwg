@@ -162,12 +162,15 @@ export class MuseAdapter extends ProviderAdapter {
     }
     let schema;
     try { schema = JSON.parse(profile.controls.structuredOutput.mapping); } catch { /* unavailable mapping blocks */ }
-    if (!Array.isArray(schema) || schema.length !== 2 || schema[0] !== '--output-schema'
-      || typeof schema[1] !== 'string' || !path.isAbsolute(schema[1]) || schema[1].includes('\0') || schema[1].split(path.sep).includes('..')) {
+    const directText = profile.controls.structuredOutput.mapping === '[]'
+      && profile.controls.structuredOutput.support === 'unqualified';
+    if (!directText && (!Array.isArray(schema) || schema.length !== 2 || schema[0] !== '--output-schema'
+      || typeof schema[1] !== 'string' || !path.isAbsolute(schema[1]) || schema[1].includes('\0') || schema[1].split(path.sep).includes('..'))) {
       throw new Error('Muse requires a host-bound output-schema control mapping');
     }
     if (!permissions || !['read-only', 'workspace-write', 'external'].includes(permissions.sandbox)
       || !Number.isSafeInteger(health?.maxSteps) || health.maxSteps < 1) throw new Error('Muse requires bounded steps and sandbox authority');
+    if ((permissions.approval ?? 'never') !== 'never') throw new Error('Muse direct worker approval requires never');
     // Trust is a host-owned, qualification-bound control, like the schema.
     // Brief contents and CLI defaults cannot opt into workspace instructions.
     let trust;
@@ -360,5 +363,11 @@ export class MuseAdapter extends ProviderAdapter {
 }
 
 registerProvider('muse', () => new MuseAdapter());
+
+/** Installed worker module contract; legacy registration above remains supported. */
+export const interfaceVersion = 1;
+export function register(factory) {
+  factory('muse', () => new MuseAdapter());
+}
 
 export default MuseAdapter;
