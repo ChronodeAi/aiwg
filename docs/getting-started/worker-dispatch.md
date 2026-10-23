@@ -429,6 +429,46 @@ aiwg models resolve --role coding --task implementation --group harness \
   --brief "$PWD/brief.txt" --workdir "$PWD" --final-output "$PWD/result.json" --format json
 ```
 
+## Worker health windows and supervision
+
+The generated `AIWG.md` carries only a one-line summary of the configured worker
+health windows. The full explanation lives here (moved out of the startup context,
+#3451).
+
+Configured health windows each carry an origin, `default` or `project config`.
+Defaults: check every 15s, confirm startup within 60s, quiet limit 90s, stall limit
+300s, hard stop 1800s. Per-attempt windows scale quiet and stall by the single
+largest applicable role/effort/model factor, never their product (for example,
+reasoning at `xhigh` effort resolves 180s/600s from the 90s/300s defaults; an
+effective 1.25 scale gives 112.5s/375s). Only the hard deadline and its
+diagnostic/termination grace periods are capped by the remaining wall-clock and
+transport ceilings; startup, quiet, and stall keep their configured or scaled
+values, and `truncatedWindows` instead records when one of them would exceed that
+capped deadline (`resolveWorkerEffectiveHealth()` in
+`src/serve/worker-invocation.ts`). Resolved values win over the configured values.
+`aiwg models resolve --format json` shows the resolved windows in
+`invocation.health` with per-field `origins`.
+
+Supervise by observer state, never by suspicion. `quiet` (no observed activity for
+the quiet window, reported with confidence `suspected`) is not a stop: read the
+status (`aiwg ralph-external --status --workers --runs-root <dir> --json` is
+read-only and never kills or retries), check owned-worktree progress, and keep
+waiting; the observer's `shouldStop()` stays false. `stalled` (no progress for the
+stall window) opens diagnosis through the diagnostic grace period; only `hung`
+(still no progress after grace, with the process live and connected) authorizes a
+no-progress stop, and only a worker this conductor owns. The launcher also stops
+independently of progress state on `failed-to-start`, the hard wall-clock deadline
+(`HARD_DEADLINE`), the step-count limit (`STEP_LIMIT`), and a fatal observer-record
+failure (`tools/ralph-external/session-launcher.mjs`). Confirm the stop (a sent
+signal, lease expiry, or final-file presence is not proof; only a confirmed exit
+is), preserve partial work for independent verification, then re-resolve within
+remaining attempts and budgets. Observer loss (`OBSERVER_GAP`, `DISCONNECTED`,
+degraded or unobserved coverage, opaque MCP output) is unknown, never worker
+failure: keep polling owned run files and processes from the shell at the same
+cadence. Heartbeats and log bytes are not progress. On correlated failure across
+workers sharing one account, quota, or host, pause further launches there and report
+cause and scope.
+
 ## How to turn it off
 
 ```bash
