@@ -75,7 +75,7 @@ describe('shared rule activation contract (#2938)', () => {
     expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'missing-activation' }));
   });
   it('handles missing frontmatter with an explicit migration warning', () => {
-    expect(parseRuleFrontmatter('# Rule').rule?.activation).toBe('kernel');
+    expect(parseRuleFrontmatter('# Rule').rule?.activation).toBe('on-demand');
   });
   it('strictly compiles the registered schema, and the schema requires explicit activation', () => {
     const validate = new Ajv({ strict: true }).compile(ruleFrontmatterSchema);

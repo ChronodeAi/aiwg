@@ -48,7 +48,12 @@ describe('compound action discovery (#3292)', () => {
     const rules = compoundGoverningRules(entries, target('work'), undefined, 'secure work and approval request in src/secure/key.ts');
     expect(rules.map(item => item.rule.name)).toEqual(['bound', 'paths', 'trigger']);
     const legacy = { ...entries.find(entry => entry.name === 'kernel')!, name: 'legacy-kernel', path: '.aiwg/rules/legacy.md', activation: undefined };
-    expect(compoundGoverningRules([...entries, legacy], target('unbound'), undefined, 'secure work')).toEqual([{ rule: entries.find(entry => entry.name === 'bound')!, applicability: ['trigger:secure work'] }]);
+    // #3463: missing activation falls back to on-demand; a matching trigger
+    // must still fetch that contract, while explicitly kernel rules stay excluded.
+    expect(compoundGoverningRules([...entries, legacy], target('unbound'), undefined, 'secure work')).toEqual([
+      { rule: entries.find(entry => entry.name === 'bound')!, applicability: ['trigger:secure work'] },
+      { rule: legacy, applicability: ['trigger:secure work'] },
+    ]);
     expect(rules[0].applicability).toEqual(expect.arrayContaining([expect.stringMatching(/^bound:/), 'trigger:secure work']));
     const fields = governingRuleFields(rules);
     expect(fields.required_rule_checks).toHaveLength(3);

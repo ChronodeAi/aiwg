@@ -37,6 +37,13 @@ const corpusRules = ['addons', 'frameworks', 'extensions'].flatMap(kind =>
   sourceRules(REPO_ROOT, kind as 'addons' | 'frameworks' | 'extensions'));
 const legacyOnDemandNames = [...new Set(corpusRules.filter(rule => rule.legacyOnDemand).map(rule => rule.name))].sort();
 const migratedTierNames = corpusRules.filter(rule => !rule.structural && rule.data.activation !== undefined).map(rule => rule.name);
+const expectFallbackSection = (body: string, heading = 'On-Demand Rules') => {
+  expect([...body.matchAll(/^- `([^`]+)` — `aiwg show rule /gm)].map(match => match[1])).toEqual(legacyOnDemandNames);
+  if (legacyOnDemandNames.length) {
+    expect(body).toContain(heading);
+    expect(body).toContain('aiwg show rule ');
+  } else expect(body).not.toContain(heading);
+};
 
 // `tmpFile()`'s directories were never removed (#3018), leaking one per call; module-level so
 // it covers every describe block in this file, not just the ones that already track their own.
@@ -66,16 +73,16 @@ describe('rule tier deployment (#1673)', () => {
   });
 
   describe('isAlwaysOnRule', () => {
-    it('keeps CRITICAL and HIGH rules always-on', async () => {
-      expect(isAlwaysOnRule(await tmpFile('a.md', '---\nenforcement: critical\n---\n'))).toBe(true);
-      expect(isAlwaysOnRule(await tmpFile('b.md', '---\nenforcement: high\n---\n'))).toBe(true);
+    it('keeps explicitly activated CRITICAL and HIGH kernel rules always-on', async () => {
+      expect(isAlwaysOnRule(await tmpFile('a.md', '---\nactivation: kernel\nenforcement: critical\n---\n'))).toBe(true);
+      expect(isAlwaysOnRule(await tmpFile('b.md', '---\nactivation: kernel\nenforcement: high\n---\n'))).toBe(true);
     });
     it('routes MEDIUM and LOW rules off the always-on set', async () => {
       expect(isAlwaysOnRule(await tmpFile('c.md', '---\nenforcement: medium\n---\n'))).toBe(false);
       expect(isAlwaysOnRule(await tmpFile('d.md', '---\nenforcement: low\n---\n'))).toBe(false);
     });
-    it('defaults unlabelled and index files to always-on (never silently dropped)', async () => {
-      expect(isAlwaysOnRule(await tmpFile('e.md', '# no level'))).toBe(true);
+    it('keeps unlabelled rules on demand and structural indexes always-on', async () => {
+      expect(isAlwaysOnRule(await tmpFile('e.md', '# no level'))).toBe(false);
       expect(isAlwaysOnRule(await tmpFile('RULES-INDEX.md', '---\nenforcement: medium\n---\n'))).toBe(true);
       expect(isAlwaysOnRule(await tmpFile('RULES-ONDEMAND.md', '---\nenforcement: medium\n---\n'))).toBe(true);
     });
@@ -312,8 +319,7 @@ describe('on-demand index propagation (#1675)', () => {
       const target = await mkdtemp(join(tmpdir(), 'aiwg-od-hermes-'));
       hermesAgentsMd(58, 20, target, { srcRoot: REPO_ROOT, dryRun: false });
       const body = await readFile(join(target, 'AGENTS.md'), 'utf8');
-      expect(body).toContain('On-Demand Rules');
-      expect(body).toContain('aiwg show rule ');
+      expectFallbackSection(body);
       expect(body.length).toBeLessThan(19_000); // Hermes hard cap
       await rm(target, { recursive: true, force: true });
     });
@@ -322,15 +328,14 @@ describe('on-demand index propagation (#1675)', () => {
       const target = await mkdtemp(join(tmpdir(), 'aiwg-od-openhuman-'));
       openhumanAgentsMd(target, REPO_ROOT, false);
       const body = await readFile(join(target, 'AGENTS.md'), 'utf8');
-      expect(body).toContain('On-Demand Rules');
-      expect(body).toContain('aiwg show rule ');
+      expectFallbackSection(body);
       expect([...body.matchAll(/^- `([^`]+)` — `aiwg show rule /gm)].map(match => match[1])).toEqual(legacyOnDemandNames);
       for (const name of migratedTierNames) expect(body).not.toContain(`- \`${name}\` — \`aiwg show rule `);
       expect(body).not.toContain('{{ON_DEMAND_RULES}}');
 
       openhumanAgentsMd(target, join(REPO_ROOT, 'agentic/code/addons/aiwg-utils'), false);
       const addonPassBody = await readFile(join(target, 'AGENTS.md'), 'utf8');
-      expect(addonPassBody).toContain('On-Demand Rules');
+      expectFallbackSection(addonPassBody);
       expect([...addonPassBody.matchAll(/^- `([^`]+)` — `aiwg show rule /gm)].map(match => match[1])).toEqual(legacyOnDemandNames);
       for (const name of migratedTierNames) expect(addonPassBody).not.toContain(`- \`${name}\` — \`aiwg show rule `);
       expect(addonPassBody).not.toContain('{{ON_DEMAND_RULES}}');
@@ -355,8 +360,7 @@ describe('on-demand index propagation (#1675)', () => {
       );
       const body = await readFile(join(target, 'AGENTS.md'), 'utf8');
       expect(body).toContain('OpenHuman');
-      expect(body).toContain('On-Demand Rules');
-      expect(body).toContain('aiwg show rule ');
+      expectFallbackSection(body);
       expect(body).not.toContain('{{ON_DEMAND_RULES}}');
       await rm(target, { recursive: true, force: true });
     }, 60_000);
@@ -369,8 +373,7 @@ describe('on-demand index propagation (#1675)', () => {
         { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
       );
       const body = await readFile(join(target, 'WARP.md'), 'utf8');
-      expect(body).toContain('## On-Demand Rules');
-      expect(body).toContain('aiwg show rule ');
+      expectFallbackSection(body, '## On-Demand Rules');
       await rm(target, { recursive: true, force: true });
     }, 60_000);
   });

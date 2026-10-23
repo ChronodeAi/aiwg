@@ -1,4 +1,6 @@
 ---
+activation: summary
+summary: Test disaster recovery and backup procedures periodically and record validation results before relying on them.
 enforcement: high
 ---
 

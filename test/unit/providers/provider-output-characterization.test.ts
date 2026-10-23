@@ -125,7 +125,8 @@ const USE_PATH_GOLDENS = {
       agents: null,
       commands: null,
       skills: resolveHermesHomePath('skills', '.aiwg'),
-      rules: null,
+      // #3471: expose the canonical rule projection for deployment accounting.
+      rules: '.hermes/rules',
       behaviors: null,
     },
     kernelSkills: resolveHermesHomePath('skills'),
@@ -177,6 +178,18 @@ const USE_PATH_GOLDENS = {
       behaviors: null,
     },
     kernelSkills: '~/.openhuman/skills',
+  },
+  // #3471: Pi records rule output separately from native context discovery.
+  pi: {
+    deployTarget: 'project',
+    artifacts: {
+      agents: '.agents/skills',
+      commands: '.pi/prompts',
+      skills: '.pi/.aiwg/skills',
+      rules: '.pi/rules',
+      behaviors: '.pi/extensions',
+    },
+    kernelSkills: '.agents/skills',
   },
   warp: {
     deployTarget: 'project',

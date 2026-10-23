@@ -306,7 +306,8 @@ describe('grok-build kernel-only dry-run', () => {
     expect(result.status).toBe(0);
     const out = `${result.stdout || ''}${result.stderr || ''}`;
     const skillLines = out.split('\n').filter((line) =>
-      line.includes('[dry-run] deploy') && line.includes('SKILL.md') && line.includes('.grok/skills/'));
+      // #3471 uses the shared transaction planner for kernel rule delivery.
+      line.includes('[dry-run] Would write') && line.endsWith('/SKILL.md') && line.includes('.grok/skills/'));
     // Full corpus was ~525; kernel-only should be the kernel set (tens, not hundreds).
     expect(skillLines.length).toBeGreaterThan(0);
     expect(skillLines.length).toBeLessThan(80);

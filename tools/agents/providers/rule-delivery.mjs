@@ -6,7 +6,8 @@ import { stringify } from 'yaml';
 import { createHash, randomUUID } from 'node:crypto';
 import { importImpl } from '../../_resolve-impl.mjs';
 import {
-  listMdFiles, discoverAddons, getFrameworksForMode, collectBehaviorDirs,
+  listMdFiles, listSkillDirs, getAddonSkillDirs, deploySkillsWithKernelRouting, isKernelSkill,
+  discoverAddons, getFrameworksForMode, collectBehaviorDirs,
   resolveAiwgRoot, ruleEnforcementLevel, stripTriggersFromContent,
   addManagedMarker, contentHash, replaceBoundRulesBlock, deployEmulatedBehaviors, filterAgentFiles,
 } from './base.mjs';
@@ -68,12 +69,52 @@ const structural = file => /^(RULES-INDEX|RULES-ONDEMAND)\.(md|mdc)$/.test(path.
 
 /** Collect selected source contracts, before any tier filter or projection. */
 export function collectDeploymentRuleSources(opts) {
-  if (opts.ruleSources) return [...new Set([...opts.ruleSources, ...(opts.previousRuleSources || []).filter(file => fs.existsSync(file))])];
-  const roots = [opts.srcRoot];
-  for (const framework of getFrameworksForMode(opts.srcRoot, opts.mode)) roots.push(framework.path);
-  for (const addon of discoverAddons(opts.srcRoot)) roots.push(addon.path);
-  const files = [...(opts.previousRuleSources || []).filter(file => fs.existsSync(file)), ...roots.flatMap(root => listMdFiles(path.join(root, 'rules')))].filter(file => !structural(file));
-  const behaviors = collectBehaviorDirs(opts.srcRoot).map(dir => path.join(dir, 'BEHAVIOR.md'));
+  if (opts.ruleSources) {
+    // Pin-only callers enumerate rule files separately from behavior contracts.
+    // Retain earlier behaviors only while their owning bundle is still selected.
+    const selected = new Set(collectDeploymentRuleSources({ ...opts, ruleSources: undefined }));
+    const behaviors = (opts.previousRuleSources || []).filter(file => path.basename(file) === 'BEHAVIOR.md' && selected.has(file));
+    return [...new Set([...opts.ruleSources, ...behaviors])];
+  }
+  const corpus = resolveAiwgRoot(opts.srcRoot) || opts.srcRoot;
+  const bundles = [];
+  const frameworks = getFrameworksForMode(corpus, 'all');
+  for (const kind of ['frameworks', 'addons', 'extensions', 'plugins']) {
+    const dir = path.join(corpus, 'agentic', 'code', kind);
+    if (!fs.existsSync(dir)) continue;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const root = path.join(dir, entry.name);
+      const manifest = JSON.parse(read(path.join(root, 'manifest.json')) || '{}');
+      bundles.push({ root, manifest, id: manifest.id || manifest.framework || entry.name,
+        aliases: [entry.name, ...(manifest.modeAliases || []), ...(manifest.aliases || []),
+          ...(kind === 'frameworks' ? frameworks.find(framework => framework.path === root)?.aliases || [] : [])] });
+    }
+  }
+  const configs = opts.pinConfigs || loadRulePinConfigs(opts.target, opts.config);
+  // Project installation is authoritative. User-wide discoverability is not a
+  // project install, and a previous projection must never reselect retired rules.
+  const installed = configs.project.installed || {};
+  const names = Array.isArray(installed) ? installed : Object.keys(installed);
+  const selected = new Set();
+  const select = name => {
+    const id = name.replace(/^(framework|addon|extension|plugin):/, '');
+    const bundle = bundles.find(b => b.id === id || b.aliases.includes(id));
+    if (!bundle || selected.has(bundle)) return;
+    selected.add(bundle);
+    const required = Array.isArray(bundle.manifest.dependencies) ? bundle.manifest.dependencies : bundle.manifest.dependencies?.required || [];
+    for (const dep of Array.isArray(required) ? required : Object.keys(required)) select(dep);
+  };
+  for (const bundle of bundles.filter(b => b.manifest.core && b.manifest.autoInstall)) select(bundle.id);
+  for (const name of names.filter(name => name !== 'all')) select(name);
+  const invoked = bundles.find(bundle => path.resolve(bundle.root) === path.resolve(opts.srcRoot));
+  if (invoked && !opts.kernelOnly) select(invoked.id);
+  // Include the invocation being installed before its config entry is saved.
+  if (!opts.kernelOnly) for (const framework of getFrameworksForMode(opts.srcRoot, opts.mode === 'all' && names.length ? 'general' : opts.mode)) select(framework.id);
+  const roots = [...(!invoked || !opts.kernelOnly ? [opts.srcRoot] : []), ...[...selected].map(bundle => bundle.root)];
+  for (const entry of Object.values(installed)) if (entry?.localPath) roots.push(path.resolve(opts.target, entry.localPath));
+  const files = roots.flatMap(root => listMdFiles(path.join(root, 'rules'))).filter(file => !structural(file));
+  const behaviors = roots.flatMap(root => walk(path.join(root, 'behaviors')).filter(file => path.basename(file) === 'BEHAVIOR.md'));
   return [...new Set([...files, ...behaviors])];
 }
 
@@ -85,11 +126,11 @@ export async function prepareRuleDelivery(opts) {
     const behavior = path.basename(file) === 'BEHAVIOR.md';
     const rule = { ...parsed.rule, file, content, body: parsed.body, behavior,
       name: behavior ? `behavior/${path.basename(path.dirname(file))}` : parsed.data.name || path.basename(file, '.md') };
-    if (!rule.tagged) rule.activation = behavior ? 'kernel' : inferRuleActivation(ruleEnforcementLevel(content));
+    if (!rule.tagged) rule.activation = inferRuleActivation();
     // Core rules (#3450) carry a compact body beside the full rule; the full text is never inlined.
     if (rule.activation === 'core') rule.coreBody = readCoreBody(file);
     for (const diagnostic of parsed.diagnostics) {
-      console.warn(`${opts.logicalInputPath ? opts.logicalInputPath(file) : file}: ${diagnostic.code}: ${diagnostic.code === 'missing-activation' ? `Missing activation; inferred ${rule.activation} delivery (migration fallback).` : diagnostic.message}`);
+      console.warn(`${opts.logicalInputPath ? opts.logicalInputPath(file) : file}: ${diagnostic.code}: ${diagnostic.code === 'missing-activation' ? `Missing activation; inferred ${rule.activation} delivery (migration fallback); add explicit activation frontmatter.` : diagnostic.message}`);
     }
     return rule;
   });
@@ -249,13 +290,15 @@ export async function prepareRuleDelivery(opts) {
 
 export function renderRuleKernelIndex(rules, nativePaths = false) {
   const summary = rules.filter(rule => rule.tagged && (rule.canonicalActivation || rule.activation) === 'summary');
-  const paths = nativePaths ? [] : rules.filter(rule => rule.tagged && (rule.canonicalActivation || rule.activation) === 'paths');
-  if (!summary.length && !paths.length) return '';
+  const paths = rules.filter(rule => rule.tagged && (rule.canonicalActivation || rule.activation) === 'paths');
+  const kernels = rules.filter(rule => rule.tagged && (rule.canonicalActivation || rule.activation) === 'kernel');
+  if (!summary.length && !paths.length && !kernels.length) return '';
   const lines = ['# Rule kernel index', ''];
+  for (const rule of kernels) lines.push(`- ${rule.name} — ${rule.summary || 'Fetch and follow the full rule before governed work.'} Fetch and follow: \`aiwg show rule ${rule.name} --body\`.`, '');
   for (const rule of summary) lines.push(`- ${rule.name} — ${rule.summary} Fetch and follow: \`aiwg show rule ${rule.name} --body\`.`, '');
   if (paths.length) {
-    lines.push('## Path rules (prompt emulation)', '',
-      'Before reading or changing files, compare intended project-relative paths with the globs below and fetch matching rules before their first read/write. If paths are initially unknown, check when they become known. An agent-only task has no path match. This is prompt emulation, not a filesystem hook.', '');
+    lines.push(nativePaths ? '## Path rules (native)' : '## Path rules (prompt emulation)', '',
+      nativePaths ? 'The provider loads these rules for matching paths; full contracts remain available through the commands below.' : 'Before reading or changing files, compare intended project-relative paths with the globs below and fetch matching rules before their first read/write. If paths are initially unknown, check when they become known. An agent-only task has no path match. This is prompt emulation, not a filesystem hook.', '');
     for (const rule of paths) lines.push(`- ${rule.name} | ${rule.paths.map(glob => `\`${glob}\``).join(', ')} | ${rule.summary} | \`aiwg show rule ${rule.name} --body\``, '');
   }
   return lines.join('\n');
@@ -282,6 +325,15 @@ function putStartup(file, body) {
 /** Tagged rules bypass legacy aggregate writers. Untagged projections retain their tier policy. */
 function projectRules(opts, provider) {
   const { rules } = opts.ruleDelivery;
+  if (provider.name === 'hermes') {
+    // The old context generator carries hardcoded corpus directives. Only the
+    // selected contracts below may activate policy; preserve operator prose.
+    const file = path.join(opts.target, 'AGENTS.md');
+    const content = read(file);
+    const clean = content.replace(/(<!-- AIWG:hermes-context:start -->)([\s\S]*?)(<!-- AIWG:hermes-context:end -->)/g,
+      (_, start, body, end) => start + body.replace(/^### Rule: [\s\S]*?(?=^#{1,3} |(?![\s\S]))/gm, '') + end);
+    if (clean !== content) put(file, clean);
+  }
   const nativePaths = ['claude', 'cursor'].includes(provider.name);
   const rulesDir = path.isAbsolute(provider.paths.rules || '') ? provider.paths.rules : path.join(opts.target, provider.paths.rules || `.${provider.name}/rules`);
   const tagged = rules.filter(rule => rule.tagged);
@@ -290,9 +342,14 @@ function projectRules(opts, provider) {
     const name = rule.behavior ? `behaviors/${path.basename(path.dirname(rule.file))}` : path.basename(rule.file, '.md');
     put(path.join(rulesDir, `${name}${extension}`), managed(content, opts));
   };
+  // Legacy projectors may have enumerated the whole corpus. Rebuild managed
+  // rule output from the canonical selection; preserve operator-owned files.
+  for (const file of walk(rulesDir)) {
+    if (/\.(md|mdc)$/.test(file) && /aiwg:managed/.test(read(file))) fs.rmSync(file);
+  }
   const priorManifestPath = path.join(rulesDir, '.aiwg-manifest.json');
   const priorSources = fs.existsSync(priorManifestPath) ? JSON.parse(read(priorManifestPath)).ruleSources || [] : [];
-  for (const source of priorSources.filter(file => !fs.existsSync(file))) {
+  for (const source of priorSources.filter(file => !rules.some(rule => rule.file === file))) {
     const name = path.basename(source) === 'BEHAVIOR.md' ? `behaviors/${path.basename(path.dirname(source))}` : path.basename(source, '.md');
     for (const ext of ['.md', '.mdc']) {
       const stale = path.join(rulesDir, name + ext);
@@ -319,7 +376,12 @@ function projectRules(opts, provider) {
   if (nativePaths) {
     for (const rule of cores) {
       const body = provider.name === 'cursor' ? `---\nalwaysApply: true\n---\n${rule.coreBody}\n` : `${rule.coreBody}\n`;
-      put(path.join(rulesDir, `core-${path.basename(rule.file, '.md')}${extension}`), managed(body, opts));
+      const dest = path.join(rulesDir, `core-${path.basename(rule.file, '.md')}${extension}`);
+      if (fs.existsSync(dest) && !/aiwg:managed/.test(read(dest)) && !opts.force) {
+        console.warn(`Unmanaged core rule left in place: ${dest}. Re-run with --force to replace it.`);
+        continue;
+      }
+      put(dest, managed(body, opts));
     }
   }
   for (const rule of tagged) {
@@ -336,6 +398,16 @@ function projectRules(opts, provider) {
       writeRule(rule, content);
     }
   }
+  // Explicit local/external bundle deployments predate activation metadata.
+  // Keep their native rule files reachable while they migrate; missing metadata
+  // in the shipped corpus still uses the on-demand fallback (#3463).
+  for (const rule of rules.filter(rule => !rule.tagged && !rule.behavior)) {
+    const source = opts.logicalInputPath ? opts.logicalInputPath(rule.file) : rule.file;
+    if (/(?:^|\/)agentic\/code\//.test(source.replaceAll('\\', '/'))) continue;
+    let content = stripTriggersFromContent(rule.content);
+    if (provider.name === 'cursor') content = provider.transformRule(rule.file, content, opts);
+    writeRule(rule, content);
+  }
   // A legacy consolidated index can mention now-bound rules. Replace it with an
   // activation-selected index when migration starts; pure legacy deployments keep it.
   // Hermes's 20K context limit requires a fixed provider projection: only
@@ -345,8 +417,7 @@ function projectRules(opts, provider) {
   const isCritical = rule => String(rule.enforcement || '').trim().toLowerCase() === 'critical';
   const deferredKernels = provider.name === 'hermes'
     ? rules.filter(rule => rule.tagged && rule.activation === 'kernel' && !rule.pinned && !isCritical(rule)) : [];
-  const indexRules = deferredKernels.length ? rules.map(rule => deferredKernels.includes(rule)
-    ? { ...rule, activation: 'summary', summary: rule.summary || 'Fetch and follow the full rule before governed work.' } : rule) : rules;
+  const indexRules = rules;
   const index = renderRuleKernelIndex(indexRules, nativePaths);
   if (tagged.length) {
     for (const ext of ['.md', '.mdc']) {
@@ -355,6 +426,11 @@ function projectRules(opts, provider) {
     }
     if (index) put(path.join(rulesDir, `RULES-INDEX${extension}`), managed(provider.name === 'cursor' ? `---\nalwaysApply: true\n---\n${index}` : index, opts));
   }
+  const legacyDemand = rules.filter(rule => !rule.tagged && !rule.behavior && rule.activation === 'on-demand');
+  if (legacyDemand.length) put(path.join(rulesDir, `RULES-ONDEMAND${extension}`), managed([
+    '# On-demand rules', '', 'These rules require explicit activation metadata. Fetch the applicable full rule before governed work.', '',
+    ...legacyDemand.map(rule => `- \`${rule.name}\` — \`aiwg show rule ${rule.name} --body\``), '',
+  ].join('\n'), opts));
   fs.rmSync(path.join(rulesDir, '.aiwg-rules-budget.json'), { force: true });
   const manifestPath = path.join(rulesDir, '.aiwg-manifest.json');
   const manifest = fs.existsSync(manifestPath) ? JSON.parse(read(manifestPath)) : { managed: {} };
@@ -428,14 +504,19 @@ function projectRules(opts, provider) {
 
 /** External helpers also project skills/flows. Inject into their body, never descriptions. */
 function finishBindings(opts, provider) {
-  const roots = [opts.target, opts.deploymentHome, ...Object.values(provider.paths).filter(p => path.isAbsolute(p))];
+  const roots = [opts.target, opts.deploymentHome,
+    ...[opts.kernelSkillsPath, opts.activeWorkspace, ...Object.values(provider.paths)].filter(p => p && path.isAbsolute(p))];
   const files = [...new Set(roots.flatMap(walk))];
+  const indexRel = `.${provider.name}/RULES-BOUND.md`;
+  const indexFile = path.join(opts.target, indexRel);
+  const anchor = target => `${target.type}-${target.name}`.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+  const sections = new Map();
   const targetsBySource = new Map();
   for (const target of opts.ruleDelivery.targets) {
     targetsBySource.set(target.source, [...(targetsBySource.get(target.source) || []), target]);
   }
   for (const file of files.filter(file => /\.(md|toml)$/.test(file))) {
-    if (!/(?:[/\\](?:skills|agents|commands)[/\\])/.test(file)) continue;
+    if (path.basename(file) !== 'SKILL.md' && !/(?:[/\\](?:skills?|agents?|droids|commands?|prompts|modes?)[/\\])/.test(file)) continue;
     if (/[/\\]rules[/\\]/.test(file) || /[/\\]\.aiwg[/\\](?!skills[/\\])/.test(file.replace(opts.target, ''))) continue;
     let content = read(file);
     if (!/aiwg:managed/.test(content) && !fs.existsSync(path.join(path.dirname(file), '.aiwg-managed')) && !fs.existsSync(path.join(path.dirname(file), '.aiwg-manifest.json'))) continue;
@@ -447,12 +528,30 @@ function finishBindings(opts, provider) {
     const flowSource = opts.flowSkillSources?.get(file);
     const targets = [...(flowSource ? targetsBySource.get(flowSource) || [] : []),
       ...(source ? targetsBySource.get(path.resolve(source)) || [] : opts.ruleDelivery.targets.filter(target =>
-        (skill ? target.type !== 'agent' : file.includes('/agents/') ? target.type === 'agent' : target.type === 'flow') &&
+        (skill ? target.type !== 'agent' : /[/\\](?:agents?|droids|modes?)[/\\]/.test(file) ? target.type === 'agent' : target.type === 'flow') &&
         [target.name, path.basename(target.source, '.md'), path.basename(path.dirname(target.source))].includes(name)))];
     const rules = targets.flatMap(target => opts.ruleDelivery.bindings.get(target.source) || []);
     if (!rules.length && !content.includes('<!-- AIWG:bound-rules:start -->')) continue;
-    if (file.endsWith('.toml')) content = content.replace(/^developer_instructions = (".*")$/m, (_, value) => `developer_instructions = ${JSON.stringify(replaceBoundRulesBlock(JSON.parse(value), rules))}`);
-    else content = replaceBoundRulesBlock(content, rules);
+    const pointer = body => {
+      const clean = replaceBoundRulesBlock(body, []);
+      if (!rules.length) return clean;
+      const identities = [...new Map(targets.map(target => [`${target.type} ${target.name}`, target])).values()];
+      for (const target of identities) {
+        const bound = opts.ruleDelivery.bindings.get(target.source) || [];
+        const unique = [...new Map(bound.map(rule => [rule.name, rule])).values()].sort((a, b) => a.name.localeCompare(b.name));
+        if (unique.length) sections.set(anchor(target), `## ${anchor(target)}\n\n` + unique.map(rule =>
+          `- ${rule.name} — ${rule.summary} Fetch and follow: \`aiwg show rule ${rule.name} --body\`.`).join('\n'));
+      }
+      // Skills must carry exact fetch commands themselves: a section pointer
+      // alone loses the invocation contract in clean installs (#3473).
+      const fetch = skill ? [...new Map(rules.map(rule => [rule.name, rule])).values()]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map(rule => `${rule.summary}\nFetch and follow before governed work: \`aiwg show rule ${rule.name} --body\`.`).join('\n') : '';
+      return `${clean}${clean.endsWith('\n') ? '' : '\n'}\n<!-- AIWG:bound-rules:start -->\nRead and follow before governed work: ${identities.map(target =>
+        `\`${indexRel}#${anchor(target)}\``).join('; ')}.\n${fetch ? fetch + '\n' : ''}<!-- AIWG:bound-rules:end -->\n`;
+    };
+    if (file.endsWith('.toml')) content = content.replace(/^developer_instructions = (".*")$/m, (_, value) => `developer_instructions = ${JSON.stringify(pointer(JSON.parse(value)))}`);
+    else content = pointer(content);
     put(file, content);
     // Keep deployment hashes honest after projection by external helpers.
     if (sidecar?.managed?.[path.basename(file)]) {
@@ -460,6 +559,10 @@ function finishBindings(opts, provider) {
       put(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`);
     }
   }
+  if (sections.size) put(indexFile, managed('# Bound rules\n\nFetch and follow every full rule in the invoked artifact’s section before governed work.\n\n' +
+    [...sections.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, section]) => section).join('\n\n') + '\n', opts));
+  else if (/aiwg:managed/.test(read(indexFile))) fs.rmSync(indexFile);
+
 }
 
 /** Bindings annotate the selected deployment; they do not select standard skills
@@ -533,7 +636,7 @@ export function warpRuleContent(content) {
 
 function startupFiles(opts, provider) {
   const bridgeNames = { claude: ['CLAUDE.md'], cursor: ['AGENTS.md'], codex: ['AGENTS.md'], hermes: ['AGENTS.md', '.hermes.md'], pi: ['AGENTS.md'], warp: ['WARP.md'], openclaw: [] };
-  const paths = ['AIWG.md', 'WORKSPACE.md', '.aiwg/AIWG.md', ...bridgeNames[provider.name]].map(name => path.join(opts.target, name));
+  const paths = ['AIWG.md', 'WORKSPACE.md', '.aiwg/AIWG.md', ...(bridgeNames[provider.name] || ['AGENTS.md'])].map(name => path.join(opts.target, name));
   if (opts.activeWorkspace) paths.push(path.join(opts.activeWorkspace, 'AGENTS.md'));
   if (['claude', 'cursor', 'openclaw'].includes(provider.name)) {
     const dir = path.isAbsolute(provider.paths.rules) ? provider.paths.rules : path.join(opts.target, provider.paths.rules);
@@ -1000,7 +1103,9 @@ export async function prepareRuleDeployment(original, provider, deploy) {
       mappings.push({ from, to, before });
     };
     // Mount directories independently so only provider-owned surfaces are promoted.
-    for (const dir of [`.${provider.name}`, '.agents', '.aiwg/skills']) mount(path.join(target, dir), path.join(stage, dir));
+    const relativeRoots = Object.values(provider.paths).filter(dir => dir && !path.isAbsolute(dir))
+      .map(dir => dir.split(/[\\/]/)[0]).filter(dir => dir && dir !== '.' && !path.extname(dir));
+    for (const dir of new Set([`.${provider.name}`, '.agents', '.aiwg/skills', ...relativeRoots])) mount(path.join(target, dir), path.join(stage, dir));
     fs.mkdirSync(path.join(stage, '.aiwg'), { recursive: true });
     if (fs.existsSync(projectSnapshot)) materializeInput(projectSnapshot, path.join(stage, '.aiwg', 'aiwg.config'));
     const rootNames = ['AGENTS.md', 'AIWG.md', 'WORKSPACE.md', 'CLAUDE.md', 'WARP.md', '.hermes.md', '.aiwg/AIWG.md', '.aiwg/frameworks/registry.json'];
@@ -1113,9 +1218,20 @@ export async function prepareRuleDeployment(original, provider, deploy) {
     preimages.push(...snapshotPreimages([...delivery.rules.map(rule => rule.file), ...delivery.targets.map(entry => entry.source), path.join(target, '.aiwg', 'aiwg.config')]));
     const opts = { ...original, target: stage, dryRun: false, ruleDelivery: delivery,
       kernelSkillsPath: kernel, deploymentHome: home, activeWorkspace, hermesLegacySkills, legacyCodexSkills, staging: true };
-    await deploy(opts);
+    if (opts.kernelOnly && provider.name === 'warp') {
+      // Warp's legacy aggregate writer always emits agent/command definitions,
+      // even in skills-only mode. The kernel path uses the shared skill router
+      // and lets projectRules own the complete startup rule presentation.
+      const skills = [...listSkillDirs(path.join(opts.srcRoot, 'skills')),
+        ...getFrameworksForMode(opts.srcRoot, opts.mode).flatMap(bundle => listSkillDirs(path.join(bundle.path, 'skills'))),
+        ...getAddonSkillDirs(opts.srcRoot)].filter(isKernelSkill);
+      const standard = path.join(stage, provider.paths.skills);
+      for (const dir of new Set([opts.kernelSkillsPath, provider.paths.crossAgentSkills])) {
+        if (dir) deploySkillsWithKernelRouting(skills, standard, path.isAbsolute(dir) ? dir : path.join(stage, dir), opts);
+      }
+    } else await deploy(opts);
     if (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly && opts.deployBehaviors !== false) {
-      deployEmulatedBehaviors(collectBehaviorDirs(opts.srcRoot), provider.name, stage, opts);
+      deployEmulatedBehaviors(delivery.rules.filter(rule => rule.behavior).map(rule => path.dirname(rule.file)), provider.name, stage, opts);
     }
     const selectedRoots = [original.srcRoot, ...getFrameworksForMode(original.srcRoot, original.mode).map(framework => framework.path), ...discoverAddons(original.srcRoot).map(addon => addon.path)];
     const selected = entry => selectedRoots.some(root => /^(agents|skills|commands|flows|workflows)[/\\]/.test(path.relative(root, entry.source)));
@@ -1125,7 +1241,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
       const selectedAgents = new Set(filterAgentFiles(agents.map(target => target.source), opts));
       for (const target of agents.filter(target => selectedAgents.has(target.source))) {
         const source = target.source;
-        put(path.join(stage, '.hermes', 'agents', path.basename(source)), replaceBoundRulesBlock(read(source), delivery.bindings.get(source)));
+        put(path.join(stage, '.hermes', 'agents', path.basename(source)), managed(replaceBoundRulesBlock(read(source), delivery.bindings.get(source)), opts));
         opts.definitionRoutes.push(`${target.name}: .hermes/agents/${path.basename(source)}`);
       }
     }
@@ -1136,7 +1252,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
         if (fs.existsSync(dest)) opts.definitionRoutes.push(`${entry.name}: .warp/agents/${path.basename(entry.source)}`);
       }
     }
-    if (opts.deployRules || opts.rulesOnly || (!opts.skillsOnly && !opts.commandsOnly && ['hermes', 'warp'].includes(provider.name))) projectRules(opts, provider);
+    if (opts.kernelOnly || opts.deployRules || opts.rulesOnly || (!opts.skillsOnly && !opts.commandsOnly && ['hermes', 'warp'].includes(provider.name))) projectRules(opts, provider);
     finishBindings(opts, provider);
     // Normalize all generated path wrappers before counting or promoting bytes.
     const normalize = content => {
@@ -1265,7 +1381,21 @@ export function commitRuleDeploymentPlan(plan) {
         if (before.get(rel) === fileDigest(file)) continue;
         const buffer = fs.readFileSync(file);
         // Provider output includes binary skill resources; normalize text only.
-        const output = buffer.includes(0) ? buffer : Buffer.from(normalize(buffer.toString('utf8')));
+        let output = buffer.includes(0) ? buffer : Buffer.from(normalize(buffer.toString('utf8')));
+        if (path.basename(file) === '.aiwg-manifest.json') {
+          const receipt = JSON.parse(output.toString('utf8'));
+          for (const [name, record] of Object.entries(receipt.managed || {})) {
+            const recordedFile = path.resolve(path.dirname(file), name);
+            if (!within(path.dirname(file), recordedFile) || !fs.existsSync(recordedFile)) continue;
+            const recorded = fs.readFileSync(recordedFile);
+            // Do not bless operator edits whose bytes already differ from the
+            // ownership receipt. Only normalize hashes of pristine staged files.
+            if (record.hash !== `sha256:${contentHash(recorded)}`) continue;
+            const promoted = recorded.includes(0) ? recorded : Buffer.from(normalize(recorded.toString('utf8')));
+            record.hash = `sha256:${contentHash(promoted)}`;
+          }
+          output = Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`);
+        }
         fs.mkdirSync(path.dirname(path.join(from, rel)), { recursive: true });
         fs.writeFileSync(path.join(from, rel), output);
       }

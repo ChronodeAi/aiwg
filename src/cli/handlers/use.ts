@@ -3822,7 +3822,7 @@ export class UseHandler implements CommandHandler {
         const resolved = resolveBuiltInProviderForUse(local.provider);
         if (!PREPARABLE_BUILTIN_PROVIDERS.has(resolved.provider)) { canPrepareConcurrently = false; break; }
         const args = withProviderOverride([...deployFilteredArgs], resolved.provider);
-        if (framework === 'all' && !['pi', 'omp'].includes(resolved.provider)
+        if (framework === 'all' && resolved.provider !== 'omp'
           && !remainingArgs.includes('--copy-all') && !remainingArgs.includes('--copy-standard-skills')) args.push('--kernel-only');
         preparedJobs.push({ order, provider: resolved.provider, target: path.resolve(target), args });
       }
@@ -3882,7 +3882,7 @@ export class UseHandler implements CommandHandler {
       ? withProviderOverride(deployFilteredArgs, provider)
       : deployFilteredArgs;
     const bulkKernelOnly = framework === 'all'
-      && !['pi', 'omp'].includes(provider)
+      && provider !== 'omp'
       && !remainingArgs.includes('--copy-all')
       && !remainingArgs.includes('--copy-standard-skills');
     if (bulkKernelOnly) providerDeployArgs.push('--kernel-only');

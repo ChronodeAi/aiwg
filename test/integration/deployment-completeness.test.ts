@@ -1,4 +1,4 @@
-import { sdlcDeploymentRules } from '../unit/providers/rule-source-expectations.js';
+import { sdlcDeploymentRules, legacySdlcDeploymentRules, sourceRules } from '../unit/providers/rule-source-expectations.js';
 import { mkdtempSync } from '../helpers/temp-dir.js';
 /**
  * Deployment Completeness & Content Validation Tests
@@ -26,6 +26,8 @@ import { execFileSync } from 'child_process';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const activationRules = sdlcDeploymentRules(REPO_ROOT);
+const uninstalledRules = sourceRules(REPO_ROOT, 'addons').filter(rule =>
+  !rule.structural && !activationRules.some(selected => selected.file === rule.file));
 const AGENTIC_ROOT = path.join(REPO_ROOT, 'agentic/code');
 let TEST_BASE: string;
 beforeAll(() => { TEST_BASE = mkdtempSync(path.join(os.tmpdir(), 'aiwg-deploy-completeness-')); });
@@ -640,13 +642,19 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
       if (providerName === 'claude') {
         expect(content).toContain('# Rule kernel index');
         const summaries = activationRules.filter(rule => rule.activation === 'summary');
+        // #3460: native path contracts remain in the canonical index too.
+        for (const rule of activationRules.filter(rule => rule.activation === 'paths')) {
+          expect(content).toContain(`- ${rule.data.name || rule.name} |`);
+          expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
+        }
         for (const rule of summaries) {
           expect(content).toContain(rule.data.summary);
           expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
           expect(content).not.toContain(rule.body);
         }
         expect([...content.matchAll(/^- (.*?) —/gm)].map(match => match[1]).sort())
-          .toEqual(summaries.map(rule => rule.data.name || rule.name).sort());
+          .toEqual(activationRules.filter(rule => ['kernel', 'summary'].includes(rule.activation))
+            .map(rule => rule.data.name || rule.name).sort());
       } else {
         expect(content).toContain('# AIWG');
         expect(content.length).toBeGreaterThan(500);
@@ -659,10 +667,16 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
       const rulesDir = path.join(projectDir, prov.ruleDir);
       const files = await fs.readdir(rulesDir);
       const mdFiles = files.filter(f => f.endsWith('.md'));
-      for (const rule of activationRules) {
+      // #3460 changes canonical projection membership. Preserve the existing
+      // full standard-addon contract for the legacy Factory/OpenCode writers.
+      const expectedRules = providerName === 'claude' ? activationRules : legacySdlcDeploymentRules(REPO_ROOT);
+      for (const rule of expectedRules) {
         const assertion = expect(mdFiles, `${providerName}: ${rule.name} (${rule.activation})`);
         if (rule.fileDelivered) assertion.toContain(`${rule.name}.md`);
         else assertion.not.toContain(`${rule.name}.md`);
+      }
+      if (providerName === 'claude') {
+        for (const rule of uninstalledRules) expect(mdFiles).not.toContain(`${rule.name}.md`);
       }
       expect(mdFiles, `${providerName}: RULES-INDEX.md still ships`).toContain('RULES-INDEX.md');
     });
