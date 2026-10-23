@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -49,6 +49,45 @@ describe('doctor command probe behavior', () => {
     mocks.spawn.mockReturnValue({ status: 0, stdout: '{}', stderr: '' });
   });
   afterEach(() => { vi.restoreAllMocks(); });
+
+  it.each([
+    { flags: [] },
+    { flags: ['--json'] },
+    { flags: ['--qualify', '--yes'] },
+    { flags: ['--qualify', '--yes', '--json'] },
+    { flags: ['--dry-run'] },
+    { flags: ['--qualify', '--dry-run', '--json'] },
+    { flags: ['--cli', 'codex'] },
+    { flags: ['--cli', 'codex', '--json'] },
+    { flags: ['--cli', 'codex', '--qualify', '--yes'] },
+    { flags: ['--cli', 'codex', '--qualify', '--yes', '--json'] },
+  ])('reports missing project config before worker probes with $flags (#3452)', async ({ flags }) => {
+    const project = mkdtempSync(join(tmpdir(), 'aiwg-doctor-missing-config-'));
+    const previousExitCode = process.exitCode;
+    vi.spyOn(process, 'cwd').mockReturnValue(project);
+    vi.spyOn(process, 'argv', 'get').mockReturnValue([process.execPath, 'doctor.mjs', '--probe-workers', ...flags]);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    mocks.execFile.mockClear();
+    mocks.spawn.mockClear();
+    try {
+      await runDoctor();
+      expect(process.exitCode).toBe(1);
+      const diagnostic = stderr.mock.calls.map(([text]) => String(text)).join('');
+      expect(diagnostic).toContain('OG_CONFIG_REFERENCE');
+      expect(diagnostic).toContain('Missing project config');
+      expect(diagnostic).toContain(join(project, '.aiwg', 'aiwg.config'));
+      expect(diagnostic).toContain('aiwg init');
+      expect(diagnostic).not.toMatch(/TypeError|Cannot read properties|Unknown configured worker CLI/);
+      expect(console.log).not.toHaveBeenCalled();
+      expect(mocks.execFile).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(process.exit).not.toHaveBeenCalled();
+      expect(existsSync(join(project, '.aiwg', 'aiwg.config'))).toBe(false);
+    } finally {
+      process.exitCode = previousExitCode;
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
 
   it.each(['linux', 'win32'])('runs both version and PATH probes with working %s launch arguments', async platform => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
