@@ -770,13 +770,12 @@ async function runWorkerProbeJson(projectDir, options = {}) {
   if (workerDispatch) {
     const { checkWorkerSandboxLaunches } = await import('./worker-qualification.mjs');
     payload.sandboxChecks = await checkWorkerSandboxLaunches({ projectDir, config: workerConfig, registry, cli: options.cli });
+    // A blocked probe limits only the systemd-unit launcher path, which fails
+    // closed at launch. Direct shell dispatch stays ready (Tier 0 runs under
+    // the conductor harness's sandbox), so report it without failing doctor.
     for (const worker of workers) {
       const blocked = payload.sandboxChecks.find(check => check.cli === worker.cli && check.status === 'blocked');
-      if (blocked) {
-        worker.ready = false;
-        worker.reason = blocked.diagnostics[0].code;
-        process.exitCode = 1;
-      }
+      if (blocked) worker.launcherSandbox = { status: 'blocked', code: blocked.diagnostics[0].code, scope: blocked.scope };
     }
   }
   if (!section.workersConfigured) payload.message = WORKER_PROBE_EMPTY_MESSAGE;
@@ -2378,7 +2377,10 @@ export async function runDoctor() {
         const { checkRecordedWorkerInvocationBuilds, checkWorkerSandboxLaunches } = await import('./worker-qualification.mjs');
         const sandboxChecks = await checkWorkerSandboxLaunches({ projectDir: process.cwd(), config: directConfig, registry });
         for (const result of sandboxChecks) {
-          check(`Direct Worker Sandbox (${result.cli}/${result.group})`, result.status === 'blocked' ? 'error' : result.status === 'passed' ? 'ok' : 'info', JSON.stringify(result));
+          check(`Launcher Worker Sandbox (${result.cli}/${result.group})`, result.status === 'blocked' ? 'warn' : result.status === 'passed' ? 'ok' : 'info',
+            result.status === 'blocked'
+              ? `systemd-unit launcher only (ralph-external --launch-worker, managed launches); Tier 0 direct shell dispatch is unaffected. ${JSON.stringify(result)}`
+              : JSON.stringify(result));
         }
         const invocationChecks = await checkRecordedWorkerInvocationBuilds({ projectDir: process.cwd(), config: directConfig,
           registry, workers: directSection.installFindings.map(toWorkerProbeRecord) });

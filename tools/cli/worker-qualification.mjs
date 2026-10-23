@@ -11,6 +11,10 @@ import { detectWorkerIsolation, probeWorkerNativeSandbox, workerNeedsNativeNames
 const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const accountScopeNotice = 'Account approval is bound only to the configured accountScope label (default: local-account), not the native CLI login. Account switches are not detected. After switching accounts, change parallelism.clis.<cli>.accountScope, refresh model discovery, and requalify before dispatch.';
 
+/** Which dispatch path a sandbox launch check governs: the systemd-unit
+ * launcher, never Tier 0 direct shell handoff from the conductor. */
+export const LAUNCHER_SANDBOX_SCOPE = 'systemd-launcher';
+
 /** Report launch-path compatibility without inference or installation-store changes. */
 export async function checkWorkerSandboxLaunches({ projectDir, config, registry, cli,
   detectIsolation = detectWorkerIsolation, probeNativeSandbox = probeWorkerNativeSandbox }) {
@@ -27,7 +31,7 @@ export async function checkWorkerSandboxLaunches({ projectDir, config, registry,
       const permissions = group.execution ?? {};
       if (!workerNeedsNativeNamespaces(adapter, permissions)) continue;
       const mode = permissions.launchMode ?? 'systemd-unit';
-      const check = { cli: cliId, group: groupId, isolation: mode, status: 'skipped', diagnostics: [] };
+      const check = { cli: cliId, group: groupId, isolation: mode, scope: LAUNCHER_SANDBOX_SCOPE, status: 'skipped', diagnostics: [] };
       if (mode === 'native-sandbox') {
         check.reason = 'Policy selects the native CLI sandbox; no systemd unit is used';
       } else {
@@ -180,12 +184,13 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
       .filter(member => member.cli === row.cli && member.enabled !== false)
       .map(member => ({ model: member.model, roles: member.roles })) }));
   if (!ready.length) return { status: 'failed', accountScopeNotice, targets, results: [], message: 'No configured worker CLIs probed ready; no qualification was recorded.' };
+  // The namespace probe describes the systemd-unit launcher path only
+  // (`aiwg ralph-external --launch-worker` and managed launches), which
+  // re-probes and fails closed at launch. Tier 0 direct handoff runs the
+  // rendered command from the conductor's own shell under the conductor
+  // harness's sandbox, so a blocked probe is reported, not a qualification
+  // failure.
   const sandboxChecks = await checkWorkerSandboxLaunches({ projectDir, config, registry, cli, detectIsolation, probeNativeSandbox });
-  if (sandboxChecks.some(check => check.status === 'blocked')) {
-    return { status: 'failed', accountScopeNotice, targets, sandboxChecks,
-      results: sandboxChecks.filter(check => check.status === 'blocked').map(check => ({ cli: check.cli, status: 'failed',
-        diagnostics: check.diagnostics, sandboxChecks: [check] })) };
-  }
   const storeChanges = await host.prepareWorkerInstallationStore({ workerWritableRoots: [projectDir] });
   if (!dryRun && !yes) {
     const terminal = createInterface({ input: process.stdin, output: process.stderr });
@@ -284,5 +289,6 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
     } catch (error) { results.push({ cli: row.cli, status: 'failed', message: error.message }); }
   }
   return { status: !ready.length || results.some(result => result.status === 'failed') ? 'failed'
-    : results.some(result => result.warning) ? 'partial' : 'recorded', accountScopeNotice, targets, storeChanges, results };
+    : results.some(result => result.warning) ? 'partial' : 'recorded', accountScopeNotice, targets, storeChanges, results,
+  ...(sandboxChecks.length ? { sandboxChecks } : {}) };
 }
