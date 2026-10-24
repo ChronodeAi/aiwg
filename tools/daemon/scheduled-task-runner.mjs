@@ -4,6 +4,9 @@ import { EventEmitter } from 'events';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { nextCronRun } from './cron-scheduler.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 /**
  * @typedef {'index.verify'|'index.reconcile'|'cache.retention'|'update.check'|'index.freshness'|'index.refresh'|'cache.prune'} MaintenanceKind
@@ -40,7 +43,7 @@ export function executeMaintenanceOwner(job, { cwd = process.cwd(), onSpawn = ()
     });
     let receipt;
     let timedOut = false;
-    const timeout = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, job.timeoutMs || 60000);
+    const timeout = setTimeout(() => { timedOut = true; signalChild(child, 'SIGKILL'); }, job.timeoutMs || 60000);
     child.once('message', result => { receipt = result; });
     child.once('error', error => { clearTimeout(timeout); reject(error); });
     child.once('exit', (code, signal) => {
@@ -55,7 +58,7 @@ export function executeMaintenanceOwner(job, { cwd = process.cwd(), onSpawn = ()
       onSpawn(child.pid);
       child.send(job);
     } catch (error) {
-      child.kill('SIGKILL');
+      signalChild(child, 'SIGKILL');
       clearTimeout(timeout);
       reject(error);
     }
