@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import YAML from 'yaml';
+import { normalizeResources } from './resource-bounds.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -184,6 +185,16 @@ export class Config {
 
     if (this.config.schedule?.enabled && !Array.isArray(this.config.schedule.jobs)) {
       errors.push('schedule.jobs must be an array');
+    }
+
+    // B6 resource bounds: validated envelope with safe defaults; the runner
+    // and watcher enforce the normalized values (see resource-bounds.mjs).
+    if (this.config.resources !== undefined) {
+      if (!this.config.resources || typeof this.config.resources !== 'object' || Array.isArray(this.config.resources)) {
+        errors.push('resources must be an object');
+      } else {
+        for (const message of normalizeResources(this.config.resources).errors) errors.push(message);
+      }
     }
 
     // The housekeeper profile runs deterministic owner operations only: no

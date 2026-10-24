@@ -9,6 +9,18 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Housekeeper slice B6 (part 1, #3353): opt-in `update.install` job kind
+  with a validated per-job policy (channel, patch/minor/any version policy,
+  named-zone maintenance windows, `install: false` by default) and ordered
+  gates — opt-in, window, version policy (never major unless explicitly
+  allowed), no active AIWG work, installer preflight — recording `deferred`
+  receipts on refusal and routing uncertain outcomes to
+  `schedule-recovery-required` without retry. Install receipts carry
+  old/new versions plus rollback guidance and surface in `aiwg housekeeper
+  status`. Validated resource bounds with safe defaults (max concurrent
+  jobs, queue cap with overflow receipts, timeout ceiling, child niceness,
+  watch-handle cap with polling fallback), a `tools/benchmarks/housekeeper.mjs`
+  script, and `docs/housekeeper-operator-guide.md`.
 - Core rule class: `activation: core` rules ship a compact `<name>.core.md` body
   (at most 1024 bytes each, 6144 bytes in total) that every provider loads at
   startup in every deploy mode, ahead of kernel rules, and that budget pressure

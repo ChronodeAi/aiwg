@@ -1,4 +1,6 @@
-/** Isolated deterministic owners: no supervisors, prompts, shell, or install route. */
+/** Isolated deterministic owners: no supervisors, prompts, or shell. The only
+ * install route is the opt-in `update.install` policy (never redeploys). */
+import { runUpdateInstall } from './update-policy.mjs';
 import { importImpl } from '../_resolve-impl.mjs';
 
 export async function invokeOwner(job) {
@@ -42,6 +44,11 @@ export async function invokeOwner(job) {
         state: detail.status === 'unsupported' ? 'deferred' : undefined,
         summary: detail.status === 'unsupported' ? 'Update channel unsupported' : `Update check: ${detail.available ? 'available' : 'current'}`,
         detail };
+    }
+    case 'update.install': {
+      // Every gate (opt-in, window, version policy, active work, preflight)
+      // lives in update-policy.mjs; a failed gate is a deferred receipt here.
+      return runUpdateInstall(job);
     }
     default: throw new Error(`Unsupported maintenance kind: ${job.kind}`);
   }

@@ -17,6 +17,7 @@ import { BehaviorRegistry } from '../ralph-external/lib/behavior-registry.mjs';
 import { WebServer } from './web-server.mjs';
 import { MessageRouter } from './message-router.mjs';
 import { ScheduledTaskRunner } from './scheduled-task-runner.mjs';
+import { normalizeResources } from './resource-bounds.mjs';
 import { AutonomousEngine } from './autonomous-engine.mjs';
 import { MemoryManager } from './memory-manager.mjs';
 import { ProviderWatcher } from './provider-watcher.mjs';
@@ -484,10 +485,18 @@ class DaemonMain {
     await this.ipcServer.start();
     this.log(`IPC server listening on ${this.socketPath}`);
 
+    // B6 resource bounds: validated once here; the runner and watcher enforce
+    // the normalized values (concurrency, queue, timeout ceiling, niceness,
+    // watch-handle cap). Invalid blocks fail startup loudly, never silently.
+    const { config: resources, errors: resourceErrors } = normalizeResources(this.config.get('resources'));
+    if (resourceErrors.length > 0) throw new Error(`Invalid resources: ${resourceErrors.join('; ')}`);
+    this.resources = resources;
+
     const watchConfig = this.config.get('watch');
     if (watchConfig?.enabled) {
       this.fileWatcher = new FileWatcher(watchConfig, watchConfig.debounce_ms, {
-        deliver: event => this.eventRouter.deliver(event)
+        deliver: event => this.eventRouter.deliver(event),
+        maxHandles: resources.maxWatchHandles,
       });
       this.fileWatcher.on('delivery-failed', ({ error }) => this.log(`Watcher recovery required: ${error.message}`));
       this.log('File watcher started');
@@ -498,6 +507,7 @@ class DaemonMain {
     this.scheduledTaskRunner = new this.deps.ScheduledTaskRunner({
       eventRouter: this.eventRouter,
       taskStore: this.taskStore,
+      resources,
     });
     this.scheduledTaskRunner.on('recovery-required', ({ error }) => this.log(`Scheduled task recovery required: ${error.message}`));
     this.scheduledTaskRunner.start();
@@ -578,13 +588,33 @@ class DaemonMain {
     const lastCheck = updateReceipts.length
       ? updateReceipts.map(receipt => receipt.finishedAt).sort().pop()
       : null;
+    const available = updateReceipts.length
+      ? updateReceipts.map(receipt => receipt.detail?.available ?? null).pop() ?? null
+      : null;
+    const channel = updateReceipts.length
+      ? updateReceipts.map(receipt => receipt.detail?.channel || 'stable').pop()
+      : 'stable';
+    // B6 recovery reporting: the latest install outcome (old/new version,
+    // success/failure, rollback) surfaces here; uncertain outcomes stay on
+    // the schedule-recovery-required path and are never auto-retried.
+    const installReceipts = schedules
+      .filter(record => record.job.kind === 'update.install')
+      .map(record => record.lastReceipt)
+      .filter(Boolean);
+    const last = installReceipts.length
+      ? installReceipts.sort((a, b) => (a.finishedAt < b.finishedAt ? -1 : 1)).pop()
+      : null;
     return {
       profile: 'housekeeper',
       pid: process.pid,
       uptimeSeconds: Math.floor((Date.now() - this.startTime) / 1000),
       jobs,
       freshness,
-      update: { channel: 'stable', checkOnly: true, lastCheck, available: null },
+      update: { channel, checkOnly: true, lastCheck, available,
+        lastInstall: last ? { state: last.state, reason: last.reason || null,
+          finishedAt: last.finishedAt, summary: last.summary,
+          oldVersion: last.detail?.oldVersion ?? null,
+          newVersion: last.detail?.newVersion ?? null } : null },
     };
   }
 

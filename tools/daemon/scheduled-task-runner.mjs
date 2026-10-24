@@ -4,6 +4,7 @@ import { EventEmitter } from 'events';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { nextCronRun } from './cron-scheduler.mjs';
+import { applyChildNiceness, normalizeResources } from './resource-bounds.mjs';
 import { importImpl } from '../_resolve-impl.mjs';
 
 const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
@@ -23,7 +24,7 @@ const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.
  */
 export const MAINTENANCE_KINDS = Object.freeze([
   'index.verify', 'index.reconcile', 'cache.retention', 'update.check',
-  'index.freshness', 'index.refresh', 'cache.prune',
+  'index.freshness', 'index.refresh', 'cache.prune', 'update.install',
 ]);
 
 /** Equal jitter: [ceiling/2, ceiling], capped before jitter; retries never loop in a tick. */
@@ -35,12 +36,13 @@ export function retryDelay(attempt, { baseMs = 1000, maxMs = 300000 } = {}, rng 
 }
 
 /** Await child exit, including on timeout: an uncertain exit is never safe to replay. */
-export function executeMaintenanceOwner(job, { cwd = process.cwd(), onSpawn = () => {} } = {}) {
+export function executeMaintenanceOwner(job, { cwd = process.cwd(), onSpawn = () => {}, niceness = null } = {}) {
   return new Promise((resolve, reject) => {
     const child = fork(fileURLToPath(new URL('./maintenance-owner.mjs', import.meta.url)), [], {
       cwd, env: { ...process.env, AIWG_MAINTENANCE_WORKER: '1', NO_UPDATE_NOTIFIER: '1' },
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     });
+    if (niceness !== null && niceness !== undefined) applyChildNiceness(child.pid, { niceness });
     let receipt;
     let timedOut = false;
     const timeout = setTimeout(() => { timedOut = true; signalChild(child, 'SIGKILL'); }, job.timeoutMs || 60000);
@@ -100,6 +102,7 @@ const BUILTIN_ACTIONS = {
  * @property {() => number} [rng] Random sample in [0,1]
  * @property {Function} [executeOwner] Injectable deterministic executor returning an owner receipt
  * @property {string} [cwd] Owner workspace
+ * @property {Object} [resources] Validated by resource-bounds.mjs (concurrency, queue, timeout ceiling, niceness)
  */
 
 export class ScheduledTaskRunner extends EventEmitter {
@@ -139,6 +142,28 @@ export class ScheduledTaskRunner extends EventEmitter {
     this.#rng = options.rng || Math.random;
     this.#executeOwner = options.executeOwner || executeMaintenanceOwner;
     this.#cwd = options.cwd || process.cwd();
+    const { config, errors } = normalizeResources(options.resources);
+    if (errors.length > 0) throw new Error(`Invalid runner resources: ${errors.join('; ')}`);
+    this.resources = config;
+    this.inflight = 0;
+    this.waiters = [];
+    this.pendingRuns = 0;
+    this.overflowCount = 0;
+  }
+
+  /** FIFO slot for the concurrency bound; resolves when a run may execute. */
+  acquireSlot() {
+    if (this.inflight < this.resources.maxConcurrentJobs) {
+      this.inflight++;
+      return Promise.resolve();
+    }
+    return new Promise(resolve => { this.waiters.push(resolve); });
+  }
+
+  releaseSlot() {
+    const next = this.waiters.shift();
+    if (next) next();
+    else this.inflight = Math.max(0, this.inflight - 1);
   }
 
   /**
@@ -248,15 +273,65 @@ export class ScheduledTaskRunner extends EventEmitter {
     });
     if (!claim) return response;
 
+    this.pendingRuns++;
+    try {
+      if (this.pendingRuns > this.resources.maxConcurrentJobs + this.resources.maxQueueDepth) {
+        return this.overflowRun(job, { fireTime, timestamp, expression });
+      }
+      return await this.executeClaimed(job, { fireTime, timestamp, expression, supported: MAINTENANCE_KINDS.includes(job.kind) });
+    } finally {
+      this.pendingRuns--;
+    }
+  }
+
+  /** Persisted queue-overflow report: the run is dropped, the next fire retries. */
+  overflowRun(job, { fireTime, timestamp, expression }) {
+    this.overflowCount++;
+    const finishedAt = new Date(this.#now()).toISOString();
+    let receipt;
+    this.#taskStore.changeSchedule(job.id, record => {
+      receipt = { jobId: job.id, fireTime, state: 'deferred', reason: 'queue-overflow',
+        exitStatus: null,
+        summary: `Run queue full (${this.resources.maxConcurrentJobs} concurrent, ${this.resources.maxQueueDepth} queued); run dropped, next fire retries`,
+        startedAt: timestamp, finishedAt, durationMs: 0, attemptCount: record.attemptCount, terminal: true };
+      record.receipts.push(receipt);
+      record.lastReceipt = receipt;
+      record.state = 'idle';
+      record.ownerPid = null;
+      record.workerPid = null;
+      record.pendingFireTime = null;
+      record.nextRun = expression ? nextCronRun(expression, this.#now(), record.timezone).toISOString() : null;
+      return record;
+    });
+    this.emit('job:overflow', receipt);
+    this.emit('job:receipt', receipt);
+    return receipt;
+  }
+
+  /** Execute a claimed run under the concurrency bound and timeout ceiling. */
+  async executeClaimed(job, { fireTime, timestamp, expression, supported }) {
+    const now = Date.parse(timestamp);
     let result;
-    const supported = MAINTENANCE_KINDS.includes(job.kind);
     try {
       if (!supported) result = { exitStatus: 2, summary: `Unsupported task kind: ${job.kind}` };
-      else if (job.prompt || job.args?.install || job.args?.force) {
+      else if (job.prompt || job.args?.force || (job.args?.install && job.kind !== 'update.install')) {
         result = { exitStatus: 2, summary: 'Maintenance cannot accept prompts, install, or force authority' };
-      } else result = await this.#executeOwner(job, { cwd: this.#cwd, onSpawn: pid => {
-        this.#taskStore.changeSchedule(job.id, record => ({ ...record, workerPid: pid }));
-      } });
+      } else {
+        // update.install carries its own install opt-in; every other kind
+        // stays check-only. Clamp the owner deadline to the global ceiling.
+        const boundedJob = { ...job,
+          timeoutMs: Math.min(job.timeoutMs || 60000, this.resources.maxTimeoutMs) };
+        await this.acquireSlot();
+        try {
+          result = await this.#executeOwner(boundedJob, { cwd: this.#cwd,
+            niceness: this.resources.jobNiceness,
+            onSpawn: pid => {
+              this.#taskStore.changeSchedule(job.id, record => ({ ...record, workerPid: pid }));
+            } });
+        } finally {
+          this.releaseSlot();
+        }
+      }
       if (!result || (result.exitStatus !== null && !Number.isInteger(result.exitStatus))) {
         result = { exitStatus: null, uncertain: true, summary: 'Invalid owner receipt; inspect effects' };
       }
@@ -271,8 +346,12 @@ export class ScheduledTaskRunner extends EventEmitter {
       const maxAttempts = Math.min(3, Math.max(1, Number(job.retries ?? 2) + 1));
       const retry = supported && failed && !result.uncertain && result.exitStatus !== 2
         && result.state !== 'deferred' && record.attemptCount < maxAttempts;
+      // Owner gate refusals (e.g. update-install policy) carry their own
+      // machine-readable reason through to the persisted receipt.
+      const gateReason = !result.uncertain && result.state === 'deferred' && typeof result.reason === 'string'
+        ? result.reason : undefined;
       receipt = { jobId: job.id, fireTime, state: result.uncertain ? 'deferred' : result.state || (failed ? 'failed' : 'ok'),
-        reason: result.uncertain ? 'recovery-required' : retry ? 'retry-pending' : undefined,
+        reason: result.uncertain ? 'recovery-required' : retry ? 'retry-pending' : gateReason,
         exitStatus: result.exitStatus, summary: result.summary || '', detail: result.detail,
         startedAt: timestamp, finishedAt, durationMs: Math.max(0, this.#now() - now),
         attemptCount: record.attemptCount, terminal: !retry && !result.uncertain };
@@ -409,6 +488,10 @@ export class ScheduledTaskRunner extends EventEmitter {
       maintenanceKinds: [...MAINTENANCE_KINDS],
       schedules: this.#taskStore?.getSchedules() || [],
       jobHistory: this.getHistory(),
+      resources: { ...this.resources },
+      inflight: this.inflight,
+      queued: this.waiters.length,
+      overflowed: this.overflowCount,
     };
   }
 }
