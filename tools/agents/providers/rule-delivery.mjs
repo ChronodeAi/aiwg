@@ -659,10 +659,11 @@ function startupFiles(opts, provider) {
       const parsed = parseRuleFrontmatter(content);
       if (parsed.data?.paths || parsed.data?.globs) content = content.slice(0, content.length - parsed.body.length);
     }
-    // WARP.md aggregates agents and commands as well; only its rule content
-    // (managed startup blocks, legacy inline rules, and on-demand lists) counts
-    // toward the rules startup budget.
-    if (provider.name === 'warp' && path.basename(file) === 'WARP.md') content = warpRuleContent(content);
+    // WARP.md and Windsurf's AGENTS.md aggregate agents (and Warp's commands)
+    // as well; only their rule content (managed startup blocks, legacy inline
+    // rules, and on-demand lists) counts toward the rules startup budget.
+    if ((provider.name === 'warp' && path.basename(file) === 'WARP.md')
+      || (provider.name === 'windsurf' && file === path.join(opts.target, 'AGENTS.md'))) content = warpRuleContent(content);
     return { path: file, content };
   });
 }
