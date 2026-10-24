@@ -26,7 +26,7 @@ const generatedAt = process.env.AIWG_PREBUILT_INDEX_GENERATED_AT ?? '1970-01-01T
 
 process.env.AIWG_ROOT ??= repoRoot;
 
-const releaseLock = await acquireDirectoryLock(lockRoot);
+const releaseLock = await acquireDirectoryLock(lockRoot, { reclaimDeadOwner: true });
 let nextRoot;
 let previousRoot;
 let size = 0;

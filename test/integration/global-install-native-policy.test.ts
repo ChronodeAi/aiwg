@@ -123,6 +123,7 @@ describe('global install native lifecycle-script policy', () => {
 
     const releasePackLock = await acquireDirectoryLock(
       path.join(PROJECT_ROOT, 'prebuilt', 'fortemi-core', '.framework-build.lock'),
+      { reclaimDeadOwner: true },
     );
     let pack: ReturnType<typeof spawnSync>;
     try {
