@@ -67,6 +67,9 @@ const { readAiwgConfig, getProviderParallelismDefaults, validateParallelismConfi
   import.meta.url,
   'config/aiwg-config.js'
 );
+const { nativeSandboxWarnings, readNativeSandboxWarnings } = await importImpl(
+  import.meta.url, 'config/native-sandbox-warnings.js'
+);
 
 export function checkNodeVersion(version) {
   const major = parseInt(version.replace(/^v/, '').split('.')[0]);
@@ -757,6 +760,7 @@ async function runWorkerProbeJson(projectDir, options, workerConfig) {
   const workers = section.installFindings.map(toWorkerProbeRecord);
   const payload = {
     probeWorkers: true,
+    nativeSandboxWarnings: nativeSandboxWarnings(workerConfig, projectDir),
     decisionOffload: await collectDecisionOffloadReport(projectDir),
     workerDispatch,
     workersConfigured: section.workersConfigured,
@@ -796,6 +800,7 @@ async function runWorkerProbeJson(projectDir, options, workerConfig) {
   }
   if (options.json !== false) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else {
+    for (const warning of payload.nativeSandboxWarnings) console.log(`Warning: ${warning.message}`);
     for (const worker of workers) console.log(`Direct Worker ${worker.cli}: ${worker.reason}`);
     if (payload.sandboxChecks?.length) console.log(`Worker sandbox checks: ${JSON.stringify(payload.sandboxChecks)}`);
     if (payload.qualification) console.log(`Worker qualification: ${JSON.stringify(payload.qualification)}`);
@@ -934,8 +939,12 @@ export async function runDoctor() {
 
   if (options.decisionOffload) {
     const decisionOffload = await collectDecisionOffloadReport(process.cwd());
-    if (jsonMode) console.log(JSON.stringify({ decisionOffload }, null, 2));
-    else for (const line of formatDecisionOffloadReport(decisionOffload)) console.log(line);
+    const warnings = await readNativeSandboxWarnings(process.cwd()).catch(() => []);
+    if (jsonMode) console.log(JSON.stringify({ decisionOffload, nativeSandboxWarnings: warnings }, null, 2));
+    else {
+      for (const warning of warnings) console.log(`Warning: ${warning.message}`);
+      for (const line of formatDecisionOffloadReport(decisionOffload)) console.log(line);
+    }
     return;
   }
 
@@ -1165,6 +1174,9 @@ export async function runDoctor() {
     workerSectionsConfig = probeWorkers ? workerProbeConfig : await readAiwgConfig(process.cwd());
   } catch {
     workerSectionsConfigFailed = true;
+  }
+  for (const warning of nativeSandboxWarnings(workerSectionsConfig, process.cwd())) {
+    check('Native sandbox isolation', 'warn', warning.message);
   }
 
   // 4-5. Provider-aware agents + commands check (#1057).

@@ -50,6 +50,45 @@ describe('doctor command probe behavior', () => {
   });
   afterEach(() => { vi.restoreAllMocks(); });
 
+  it.each([undefined, 'systemd-unit', 'native-sandbox'])(
+    'reports native-sandbox isolation only for opted-in groups (%s), in text and JSON', async launchMode => {
+      const configPath = join(root, '.aiwg', 'aiwg.config');
+      const original = { remotes: { primary: 'origin' } };
+      const group = mode => ({ maxParallel: 1,
+        execution: { sandbox: 'workspace-write', approval: 'never', ...(mode ? { launchMode: mode } : {}) },
+        members: [{ id: 'worker', cli: 'codex', model: 'synthetic-model', roles: ['coding'] }] });
+      writeFileSync(configPath, JSON.stringify({ ...original, parallelism: { worker_dispatch: false,
+        groups: { workers: group(launchMode), harnesses: group(launchMode), isolated: group('systemd-unit') } } }));
+      const priorExitCode = process.exitCode;
+      try {
+        for (const flags of [[], ['--probe-workers', '--dry-run'], ['--probe-workers', '--json'], ['--decision-offload', '--json']]) {
+          vi.spyOn(process, 'argv', 'get').mockReturnValue([process.execPath, 'doctor.mjs', '--no-budget-check', ...flags]);
+          console.log.mockClear();
+          const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+          await runDoctor();
+          const output = console.log.mock.calls.map(([line]) => String(line)).join('\n')
+            + stdout.mock.calls.map(([line]) => String(line)).join('');
+          if (flags.includes('--json')) {
+            const payload = JSON.parse(output);
+            expect(payload.nativeSandboxWarnings.map(warning => warning.group))
+              .toEqual(launchMode === 'native-sandbox' ? ['workers', 'harnesses'] : []);
+            for (const warning of payload.nativeSandboxWarnings) expect(warning.configPath).toBe(configPath);
+          }
+          if (launchMode === 'native-sandbox') {
+            expect(output).toContain('workers');
+            expect(output).toContain('harnesses');
+            expect(output).toContain(configPath);
+            expect(output).toContain('systemd-unit isolation and its memory limit do not apply');
+            expect(output).toContain("only the worker CLI's own sandbox applies");
+          } else expect(output).not.toContain('systemd-unit isolation and its memory limit do not apply');
+          stdout.mockRestore();
+        }
+      } finally {
+        process.exitCode = priorExitCode;
+        writeFileSync(configPath, JSON.stringify(original));
+      }
+    }, 120000);
+
   it.each([
     { flags: [] },
     { flags: ['--json'] },
