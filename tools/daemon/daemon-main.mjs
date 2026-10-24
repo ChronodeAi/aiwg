@@ -285,9 +285,10 @@ class DaemonMain {
 
     const watchConfig = this.config.get('watch');
     if (watchConfig?.enabled) {
-      this.fileWatcher = new FileWatcher(watchConfig, watchConfig.debounce_ms);
-      this.fileWatcher.on('event', (event) => this.eventRouter.route(event));
-      this.fileWatcher.start();
+      this.fileWatcher = new FileWatcher(watchConfig, watchConfig.debounce_ms, {
+        deliver: event => this.eventRouter.deliver(event)
+      });
+      this.fileWatcher.on('delivery-failed', ({ error }) => this.log(`Watcher recovery required: ${error.message}`));
       this.log('File watcher started');
     }
 
@@ -413,8 +414,9 @@ class DaemonMain {
     // Route events through automation engine and adapters
     this.eventRouter.on('event', (event) => {
       this.handleEvent(event);
-      this.automationEngine.processEvent(event);
+      return this.automationEngine.processEvent(event);
     });
+    this.fileWatcher?.start();
 
     // Forward DaemonSupervisor events to MessageRouter and WebServer
     if (this.daemonSupervisor) {

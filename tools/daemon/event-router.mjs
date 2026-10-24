@@ -9,6 +9,11 @@ export class EventRouter extends EventEmitter {
   }
 
   route(event) {
+    this.record(event);
+    this.emit('event', event);
+  }
+
+  record(event) {
     this.eventHistory.push({
       ...event,
       timestamp: new Date().toISOString()
@@ -17,14 +22,25 @@ export class EventRouter extends EventEmitter {
     if (this.eventHistory.length > 1000) {
       this.eventHistory = this.eventHistory.slice(-1000);
     }
+  }
 
-    this.emit('event', event);
+  // Watch delivery is awaited by FileWatcher so a busy owner cannot lose a
+  // subsequent change. Legacy route() remains synchronous EventEmitter fan-out.
+  async deliver(event) {
+    this.record(event);
+    try {
+      for (const listener of this.rawListeners('event')) await listener.call(this, event);
+    } catch (error) {
+      this.handleFailedEvent(event, error);
+      throw error;
+    }
   }
 
   handleFailedEvent(event, error, attemptCount = 0) {
-    // Scheduled owners have durable intent/receipts and one retry authority.
-    // Replaying through the transient DLQ would bypass that authority.
-    if (event.source === 'schedule' && event.payload?.kind && event.payload.kind !== 'agent.prompt') {
+    // Scheduled owners and watcher builds share the operator recovery path.
+    // Replaying through the transient DLQ would bypass the owning authority.
+    if (event.source === 'watch' ||
+        (event.source === 'schedule' && event.payload?.kind && event.payload.kind !== 'agent.prompt')) {
       if (!this.emit('schedule-recovery-required', { event, error })) throw error;
       return;
     }

@@ -164,6 +164,27 @@ describe('Config', () => {
   });
 
   describe('validate', () => {
+    it('accepts disabled reconciliation and per-root polling/output overrides', () => {
+      config.config = { daemon: {}, watch: { enabled: true, polling: true, reconcile_interval_ms: 0,
+        poll_interval_ms: 50, generated_output_paths: ['index'], paths: [
+          { path: 'src', polling: false, generated_output_paths: ['generated'] }
+        ] } };
+      expect(config.validate()).toEqual([]);
+    });
+
+    it.each([
+      ['reconcile_interval_ms', -1], ['reconcile_interval_ms', NaN], ['poll_interval_ms', 0],
+      ['debounce_ms', -1], ['polling', 'yes'], ['generated_output_paths', 'index']
+    ])('rejects invalid watch setting %s', (key, value) => {
+      config.config = { daemon: {}, watch: { paths: [], [key]: value } };
+      expect(config.validate().some(error => error.startsWith(`watch.${key}`))).toBe(true);
+    });
+
+    it('validates root overrides', () => {
+      config.config = { daemon: {}, watch: { paths: [{ path: '', polling: 1, generated_output_paths: [42] }] } };
+      expect(config.validate()).toHaveLength(3);
+    });
+
     it('should return no errors for valid config', () => {
       config.config = {
         daemon: { heartbeat_interval_seconds: 30 },

@@ -35,7 +35,11 @@ const DEFAULT_CONFIG = {
         extensions: ['.test.ts', '.test.js']
       }
     ],
-    debounce_ms: 2000
+    debounce_ms: 2000,
+    reconcile_interval_ms: 60000,
+    polling: false,
+    poll_interval_ms: 5000,
+    generated_output_paths: ['.aiwg/daemon/']
   },
   webhook: {
     enabled: false,
@@ -136,6 +140,32 @@ export class Config {
 
     if (this.config.watch?.enabled && !Array.isArray(this.config.watch.paths)) {
       errors.push('watch.paths must be an array');
+    }
+
+    if (this.config.watch) {
+      const watch = this.config.watch;
+      for (const [key, minimum] of [['debounce_ms', 0], ['reconcile_interval_ms', 0], ['poll_interval_ms', 1]]) {
+        if (watch[key] !== undefined && (!Number.isFinite(watch[key]) || watch[key] < minimum)) {
+          errors.push(`watch.${key} must be a number >= ${minimum}`);
+        }
+      }
+      for (const [label, settings] of [['watch', watch], ...(Array.isArray(watch.paths)
+        ? watch.paths.map((root, index) => [`watch.paths[${index}]`, root]) : [])]) {
+        if (!settings || typeof settings !== 'object') {
+          errors.push(`${label} must be an object`);
+          continue;
+        }
+        if (settings.polling !== undefined && typeof settings.polling !== 'boolean') {
+          errors.push(`${label}.polling must be a boolean`);
+        }
+        if (settings.generated_output_paths !== undefined && (!Array.isArray(settings.generated_output_paths) ||
+            settings.generated_output_paths.some(output => typeof output !== 'string' || !output))) {
+          errors.push(`${label}.generated_output_paths must be an array of non-empty paths`);
+        }
+        if (label !== 'watch' && (typeof settings.path !== 'string' || !settings.path)) {
+          errors.push(`${label}.path must be a non-empty path`);
+        }
+      }
     }
 
     if (this.config.webhook?.enabled) {

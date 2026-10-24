@@ -158,6 +158,10 @@ export class ScheduledTaskRunner extends EventEmitter {
     };
     this.#eventRouter.on('event', this.#listener);
     this.#recoveryListener = ({ event, error }) => {
+      if (event.source === 'watch') {
+        this.emit('recovery-required', { event, error });
+        return;
+      }
       const { job_id: jobId, fireTime, ...job } = event.payload;
       job.id = jobId || job.id;
       if (!this.#taskStore || !job.id) throw error;
