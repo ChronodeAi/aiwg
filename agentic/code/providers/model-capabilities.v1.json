@@ -3265,6 +3265,14 @@
               "PATH"
             ],
             "pitfalls": [
+              "Live qualification is an open S1 blocker; installed help and synthetic/echo mechanics are not paid inference qualification.",
+              "Configured-model events provide runtime-configured identity only, never backend attestation.",
+              "Contributor data policy is explicit; shared policy denies contributor models and never silently selects the CLI default.",
+              "Workspace trust defaults off; only a host-qualified trust mapping may load rules/skills. Approval-mode never and approval-judge off retain the sandbox. Muse requires a qualified external boundary.",
+              "Host qualification must bind an absolute output-schema mapping and include that schema in runtimeFiles.",
+              "Muse JSONL strict normalization needs the shared strict-parser hook; the MCP bridge must consume the selected provider parser. MSP is not MCP.",
+              "Semantic step/tool completion grammar and native session-log layout remain unavailable; unrelated logs, deltas and CPU cannot establish progress.",
+              "Shared version gate: installation requires the raw trimmed banner Muse Code 1.4.4 (1.4.4-R5419.1), but semver selection requires 1.4.4-R5419.1. No normalization exists; keep unqualified until the shared owner binds raw and normalized versions.",
               "Operator qualification approves the installed direct renderer, not authenticated inference or backend model identity.",
               "Workspace trust defaults off. Only never approval is supported. Explicit unsupported controls block dispatch.",
               "Self-delegation must be explicitly allowed by policy; no native child-denial flag is assumed."
