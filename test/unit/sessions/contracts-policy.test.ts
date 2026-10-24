@@ -342,11 +342,15 @@ session_0123456789abcdef`;
 
     // Doubling linear work should cost about 2x; quadratic suffix rescans
     // approach 4x. Check growth before the coarser ratio-to-baseline cap.
+    // Compare the fastest samples: contention on a shared runner (other test
+    // shards on the same cores) inflates even thread CPU time, and it only
+    // ever adds cost. A median still reached 3.003 in CI (run 90185) while the
+    // same code measures exactly 2.0x per doubling locally.
     const maxGrowth = 3;
     for (const small of cases.filter((entry) => entry.recordSize === sizes[0])) {
       const large = cases.find((entry) => entry.recordSize === sizes[1] && entry.name === small.name)!;
-      const smallMs = median(small.samples);
-      const largeMs = median(large.samples);
+      const smallMs = Math.min(...small.samples);
+      const largeMs = Math.min(...large.samples);
       expect(largeMs / smallMs, `${small.name} CPU growth (32 / 16 MiB; ${largeMs} / ${smallMs} ms)`)
         .toBeLessThan(maxGrowth);
     }
