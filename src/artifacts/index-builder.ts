@@ -935,26 +935,58 @@ function resolveInstallRootHint(): string {
   return '<aiwg install root>';
 }
 
+/** Current source identities for rule bindings; no search index or graph is written. */
+export async function collectRuleBindingEntries(cwd: string, scope: string): Promise<MetadataEntry[]> {
+  const fileStats = new Map<string, fs.Stats>();
+  const files = await collectGraphIndexFiles(cwd, undefined, { scope, fileStats });
+  return files.flatMap(fullPath => {
+    const stat = fileStats.get(fullPath) ?? fs.statSync(fullPath);
+    const entry = extractIndexArtifact({ fullPath, relativePath: indexPathFor(cwd, fullPath),
+      mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs, sizeBytes: stat.size }, true).entry;
+    return entry && ['skill', 'agent', 'flow'].includes(entry.type) ? [entry] : [];
+  });
+}
+
 /** Shared serial/worker read, checksum and extraction. No index output or global reduction. */
 export function prepareIndexArtifact(job: IndexPreparationJob): IndexPreparationResult {
+  return extractIndexArtifact(job, false);
+}
+
+function extractIndexArtifact(job: IndexPreparationJob, bindingOnly: boolean): IndexPreparationResult {
   const { fullPath, relativePath } = job;
   const content = fs.readFileSync(fullPath, 'utf8');
   const checksum = computeChecksum(content);
   if (job.existingChecksum === checksum) return { checksum };
   const { data, body } = parseFrontmatter(content);
+  const inferredType = inferType(data, relativePath);
+  const bindingType = ['skill', 'agent', 'flow'].includes(inferredType);
+  // Only YAML flows can promote an otherwise unrelated document to a binding target.
+  if (bindingOnly && !bindingType && !/\.ya?ml$/i.test(relativePath)) return { checksum };
   // YAML Flow documents (workflow.aiwg.io/v1) are pure YAML, not
   // markdown+frontmatter — detect them up front so they classify and
   // become discoverable (#1540).
   const flow = parseFlowDoc(content, relativePath);
+  if (bindingOnly && !flow && !bindingType) return { checksum };
   const decision = flow ? null : parseDecisionDoc(content, relativePath);
   const gatePack = flow || decision ? null : parseGatePackDoc(content, relativePath);
-  const inferredType = inferType(data, relativePath);
+  if (bindingOnly && (decision || gatePack)) return { checksum };
   const physicalType = inferType({ ...data, type: undefined }, relativePath);
   const runbook = flow || decision || gatePack ? null : parseRunbookDoc(data, body, relativePath);
   const schemaDoc = inferredType === 'schema' ? parseSchemaDoc(content, relativePath) : null;
   const title = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.title ?? extractTitle(data, body);
   const phase = typeof data.phase === 'string' ? data.phase : inferPhase(relativePath);
   const type = flow?.type ?? decision?.type ?? gatePack?.type ?? (runbook ? 'runbook' : inferredType);
+  // Binding resolution consumes only identity and title. Keep the same canonical
+  // classification (including declarative flows and runbooks), without extracting
+  // search terms, mentions, links, or constructing a persistent graph.
+  if (bindingOnly) return { checksum, entry: {
+    path: relativePath, type, title, phase,
+    name: flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.name
+      ?? (OPERATIONAL_DISCOVERY_TYPES.includes(type as typeof OPERATIONAL_DISCOVERY_TYPES[number])
+        ? extractCanonicalName(data, relativePath) : undefined),
+    tags: [], dependencies: [], dependents: [], checksum,
+    created: '', updated: '', summary: '',
+  } };
   const tags = flow?.tags ?? decision?.tags ?? gatePack?.tags ?? (Array.isArray(data.tags) ? data.tags.map(String) : []);
   const summary = flow?.description ?? decision?.description ?? gatePack?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
   const dependencies = extractMentions(content);
