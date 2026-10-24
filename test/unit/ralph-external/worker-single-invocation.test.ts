@@ -255,6 +255,42 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
       .toMatchObject({ source: 'adapter-extraction', terminalSuccess: true });
   });
 
+  // #3489: exit/close notification can be observed before the final pipe
+  // bytes are delivered as stream 'data' events (same class as #3488, which
+  // waited for IPC drain as well as exit). This holds every byte back in a
+  // paused userland buffer while the process-level events are observed, so
+  // the terminal stream is delivered strictly AFTER exit+close are seen.
+  // Health must still reach `completed`. On the old code finish() destroyed
+  // the source streams before the buffered bytes were ever delivered, so
+  // extraction saw a partial stream and an exit-0 run classified `failed`.
+  // Nothing here resumes the stream by hand: only the launcher's own drain
+  // may release it, which is why this fails deterministically on old code
+  // instead of racing like the in-isolation flake.
+  it('a Pi stream delivered after exit is observed still reaches completed health (#3489)', async () => {
+    const f = await fixture();
+    const claims = { version: 1, status: 'completed', summary: 'synthetic only', claims: [], artifacts: [], checks: [], limitations: [] };
+    const adapter = new PiDirectAdapter();
+    (f.drivers.codex as any).extractFinal = (text: string) => adapter.parseOutput(text);
+    (f.drivers.codex as any).parseWorkerFinal = (output: any, options: any) => adapter.parseWorkerFinal(output, options);
+    const child: any = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.unref = () => {};
+    child.pid = 2147483646;
+    const result = await f.launch({ launchIsolated: () => {
+      queueMicrotask(() => {
+        writeFileSync(f.final, '');
+        child.stdout.pause();
+        child.stdout.end(piStream(JSON.stringify(claims)));
+        child.stderr.end();
+        child.emit('exit', 0, null);
+        child.emit('close', 0, null);
+      });
+      return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-pi-late-drain' };
+    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+    expect(result.exitCode, JSON.stringify(result)).toBe(0);
+    expect(result.health).toMatchObject({ state: 'completed', termination: 'confirmed' });
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'final-evidence.json'), 'utf8')))
+      .toMatchObject({ source: 'adapter-extraction', terminalSuccess: true });
+  });
+
   it('the same realistic Pi stream with a plain-text (non-claims) final never reaches completed health', async () => {
     const f = await fixture();
     const result = await launchPiStream(f, piStream('synthetic plain reply, not a claims document'), 'aiwg-worker-synthetic-pi-plain');
