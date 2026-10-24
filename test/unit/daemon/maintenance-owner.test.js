@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const owners = vi.hoisted(() => ({
-  collectIndexStatus: vi.fn(), runIndexRefresh: vi.fn(), cleanWebResourceCache: vi.fn(), checkUpdateStatus: vi.fn(),
+  probeIndexStatus: vi.fn(), runIndexRefresh: vi.fn(), cleanWebResourceCache: vi.fn(), checkUpdateStatus: vi.fn(),
 }));
 vi.mock('../../../tools/_resolve-impl.mjs', () => ({
   importImpl: vi.fn(async (_caller, owner) => {
     const modules = {
-      'artifacts/index-status.js': { collectIndexStatus: owners.collectIndexStatus },
+      'artifacts/index-status.js': { probeIndexStatus: owners.probeIndexStatus },
       'artifacts/index-refresh.js': { runIndexRefresh: owners.runIndexRefresh },
       'resources/cache-cleanup.js': { cleanWebResourceCache: owners.cleanWebResourceCache },
       'update/checker.mjs': { checkUpdateStatus: owners.checkUpdateStatus },
@@ -18,7 +18,7 @@ vi.mock('../../../tools/_resolve-impl.mjs', () => ({
 import { invokeOwner } from '../../../tools/daemon/maintenance-owner.mjs';
 
 beforeEach(() => {
-  owners.collectIndexStatus.mockReturnValue({ summary: { built: 2, missing: 0, warnings: 0 } });
+  owners.probeIndexStatus.mockResolvedValue({ summary: { built: 2, missing: 0, warnings: 0 } });
   owners.runIndexRefresh.mockResolvedValue({ status: 'ok', totals: { errors: 0, deferred: 0 } });
   owners.cleanWebResourceCache.mockReturnValue({ removed: [], preserved: ['protected'] });
   owners.checkUpdateStatus.mockResolvedValue({ status: 'ok', available: false, checkOnly: true });
@@ -27,11 +27,26 @@ beforeEach(() => {
 describe('deterministic owner routing', () => {
   it.each(['index.verify', 'index.freshness'])('%s calls the existing status owner', async kind => {
     expect((await invokeOwner({ kind })).exitStatus).toBe(0);
-    expect(owners.collectIndexStatus).toHaveBeenCalledWith(process.cwd());
+    expect(owners.probeIndexStatus).toHaveBeenCalledWith(process.cwd(), undefined);
     expect(owners.runIndexRefresh).not.toHaveBeenCalled();
   });
+  it('forwards named selection and reports per-index freshness', async () => {
+    const detail = { summary: { built: 2, missing: 8, warnings: 0 }, indices: [{ name: 'project', status: 'fresh' }] };
+    owners.probeIndexStatus.mockResolvedValue(detail);
+    const result = await invokeOwner({ kind: 'index.verify', args: { index: 'project', workspace: '/workspace' } });
+    expect(owners.probeIndexStatus).toHaveBeenCalledWith('/workspace', 'project');
+    expect(result).toMatchObject({ exitStatus: 0, detail });
+  });
+  it.each(['stale', 'degraded', 'unavailable'])('reports %s indices without claiming fresh', async status => {
+    owners.probeIndexStatus.mockResolvedValue({ summary: { built: 1, missing: 0, warnings: 0 }, indices: [{ name: 'project', status }] });
+    expect((await invokeOwner({ kind: 'index.verify', args: { index: 'project' } })).exitStatus).toBe(1);
+  });
+  it('defers unsupported owners explicitly', async () => {
+    owners.probeIndexStatus.mockResolvedValue({ summary: { built: 1, missing: 0, warnings: 0 }, indices: [{ name: 'datasets', status: 'unsupported' }] });
+    expect(await invokeOwner({ kind: 'index.verify', args: { index: 'datasets' } })).toMatchObject({ exitStatus: null, state: 'deferred' });
+  });
   it('records a failed verify for missing indices', async () => {
-    owners.collectIndexStatus.mockReturnValue({ summary: { built: 0, missing: 2, warnings: 0 } });
+    owners.probeIndexStatus.mockResolvedValue({ summary: { built: 0, missing: 2, warnings: 0 } });
     expect((await invokeOwner({ kind: 'index.verify' })).exitStatus).toBe(1);
   });
   it.each(['index.reconcile', 'index.refresh'])('%s translates only supported owner flags', async kind => {

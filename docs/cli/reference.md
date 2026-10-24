@@ -4512,6 +4512,47 @@ aiwg index <subcommand> [options]
 
 - `--graph <name>` - Target a specific graph: built-in (`project`, `codebase`, `framework`) or user-defined
 
+Index status accepts `--only <name|all>` (for example `project`, `framework`,
+`relationships`, `sessions`, or `caches:project`). Refresh accepts the same
+names plus the existing owner groups (`graphs`, `caches`, `runtime`, `models`,
+`issues`). `all` uses the registered owners in the selected workspace; only an
+explicit `--root` requests workspace discovery. New graph registrations take
+effect on the next invocation.
+
+The status JSON preserves `graphs`, `summary`, and drift fields and adds
+`indices`. Each entry declares its roots, identity, backend, owner operation,
+exclusions, outputs, and freshness. Freshness reports the last verified digest
+and time, first observed dirty time/age, pending work, last error, and measured
+convergence (`wallMs`, `residualJobs`, `converged`). States are `fresh`, `stale`,
+`degraded`, `unavailable`, and `unsupported`. Remote dataset/model owners without
+a deterministic local probe are explicitly unsupported. Optional scopes without
+a published snapshot are unavailable. Framework relationships share the framework
+snapshot and lock. A failed graph rebuild preserves the published files and last
+successful verification; changes during a build leave reconciliation pending.
+
+Configure age targets independently in `.aiwg/aiwg.config`:
+
+```json
+{
+  "index": {
+    "freshness": {
+      "project": { "targetStaleAfterMs": 60000 },
+      "codebase": { "targetStaleAfterMs": 3600000 },
+      "sessions": { "targetStaleAfterMs": 900000 }
+    }
+  }
+}
+```
+
+A named policy overrides its owner-group policy. Defaults are one hour for
+graphs, fifteen minutes for sessions, five minutes for local issues, six hours
+for runtime discovery, and one day for caches. `measureConvergence` defaults to
+`true`; `maxRetriesPerDay` defaults to `3` as policy metadata for the scheduler.
+Targets measure individual verification age and observed reconciliation time;
+they do not establish a global freshness guarantee. The daemon's `index.verify`
+job forwards `args.index` to this same status owner and includes these results
+in its detail.
+
 ### artifacts
 
 Manage the configured project AIWG artifact root.

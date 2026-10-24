@@ -160,11 +160,11 @@ export function buildRelations(entries: MetadataEntry[]): RelationsIndex {
   return index;
 }
 
-export async function writeRelations(entries: Record<string, MetadataEntry>, cwd: string, indexDir: string, force = false): Promise<void> {
+export async function writeRelations(entries: Record<string, MetadataEntry>, cwd: string, indexDir: string, force = false, existingDir = indexDir): Promise<void> {
   const values = Object.values(entries);
   const fingerprint = relationsFingerprint(values);
   try {
-    const existing = JSON.parse(fs.readFileSync(path.join(indexDir, 'relations.json'), 'utf8')) as RelationsIndex;
+    const existing = JSON.parse(fs.readFileSync(path.join(existingDir, 'relations.json'), 'utf8')) as RelationsIndex;
     if (!force && existing.version === RELATIONS_VERSION && existing.$schema === RELATIONS_SCHEMA
       && existing.fingerprint.version === fingerprint.version && existing.fingerprint.sources === fingerprint.sources
       && existing.artifacts && existing.rules && existing.targets && existing.capabilities && existing.aliases?.targets && existing.aliases.rules) return;

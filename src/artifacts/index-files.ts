@@ -104,6 +104,8 @@ export interface ArtifactDiscoveryOptions {
   includeIgnored?: boolean;
   /** Reuse authorized file stats within this build, never across scans. */
   fileStats?: Map<string, fs.Stats>;
+  /** Reuse ignore decisions only within one locked build, for an unchanged candidate set. */
+  selection?: { candidates?: string[]; files?: string[] };
 }
 
 /** Return the exact current source-file set used by a standard graph build. */
@@ -210,6 +212,11 @@ export async function collectGraphIndexFiles(
   }
 
   let sources = [...files];
+  const candidates = [...sources].sort();
+  if (options.selection?.files && JSON.stringify(candidates) === JSON.stringify(options.selection.candidates)) {
+    return [...options.selection.files];
+  }
+
   if (!options.includeIgnored) {
     // Many projects ignore the whole artifact root (`.aiwg/`). Honoring that
     // would empty the index, so ignore rules apply only beneath a scan root
@@ -243,5 +250,6 @@ export async function collectGraphIndexFiles(
     const selected = new Set(sources);
     for (const file of options.fileStats.keys()) if (!selected.has(file)) options.fileStats.delete(file);
   }
+  if (options.selection) Object.assign(options.selection, { candidates, files: [...sources] });
   return sources;
 }

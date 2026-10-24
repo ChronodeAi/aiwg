@@ -7,9 +7,13 @@ export async function invokeOwner(job) {
   switch (job.kind) {
     case 'index.verify':
     case 'index.freshness': {
-      const { collectIndexStatus } = await importImpl(import.meta.url, 'artifacts/index-status.js');
-      const report = collectIndexStatus(cwd);
-      return { exitStatus: report.summary.missing || report.summary.warnings ? 1 : 0,
+      const { probeIndexStatus } = await importImpl(import.meta.url, 'artifacts/index-status.js');
+      const report = await probeIndexStatus(args.workspace || cwd, args.index);
+      const selected = report.indices || [];
+      const failed = selected.some(index => ['stale', 'degraded', 'unavailable'].includes(index.status));
+      const unsupported = selected.length > 0 && selected.every(index => index.status === 'unsupported');
+      return { exitStatus: failed || report.summary.warnings || (!args.index && report.summary.missing) ? 1 : unsupported ? null : 0,
+        state: unsupported ? 'deferred' : undefined,
         summary: `Index status: ${report.summary.built} built, ${report.summary.missing} missing`, detail: report };
     }
     case 'index.reconcile':

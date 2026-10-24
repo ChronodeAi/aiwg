@@ -11,7 +11,7 @@ import {
   type AiwgFortemiIndexExport,
 } from "./browser-export.js";
 import type { ArtifactIndex } from "./types.js";
-import { loadGraphIndexFile } from "./index-reader.js";
+import { loadGraphIndexFile, publishIndexFiles } from "./index-reader.js";
 import { getFrameworkIndexBaseDir } from './framework-index-paths.js';
 
 export interface FortemiCoreSyncOptions {
@@ -83,7 +83,7 @@ export interface FortemiCoreExecutableSkillStatus {
   missing: string[];
 }
 
-function syncDir(cwd: string, graph: string): string {
+export function getFortemiCoreIndexDir(cwd: string, graph: string): string {
   loadGlobalGraphConfigs();
   if (graph === 'framework') return path.join(getFrameworkIndexBaseDir(cwd), 'fortemi-core', graph);
   const config = GRAPH_CONFIGS[graph];
@@ -270,13 +270,14 @@ export function syncFortemiCoreIndex(
   options: FortemiCoreSyncOptions = {},
 ): FortemiCoreSyncManifest {
   const graph = options.graph ?? "project";
-  const dir = syncDir(cwd, graph);
+  const dir = getFortemiCoreIndexDir(cwd, graph);
   const exportPath = path.join(dir, "aiwg-fortemi-index-v2.json");
   const manifestPath = path.join(dir, "manifest.json");
   const maxChars = options.maxChunkChars ?? 64 * 1024;
   if (!Number.isSafeInteger(maxChars) || maxChars < 64) throw new Error("maxChunkChars must be an integer of at least 64");
   fs.mkdirSync(dir, { recursive: true });
-  const temporaryPath = path.join(dir, `.export-${randomUUID()}.tmp`);
+  const staging = fs.mkdtempSync(path.join(dir, ".sync-"));
+  const temporaryPath = path.join(staging, `.export-${randomUUID()}.tmp`);
   const previous = readManifest(manifestPath);
   const sourceBuiltAt = sourceIndexBuiltAt(cwd, graph);
 
@@ -343,7 +344,7 @@ export function syncFortemiCoreIndex(
       }
     }
 
-    fs.renameSync(temporaryPath, exportPath);
+    fs.renameSync(temporaryPath, path.join(staging, path.basename(exportPath)));
     const manifest: FortemiCoreSyncManifest = {
       schema_version: "aiwg.fortemi.core-sync.v1",
       backend: "fortemi-core",
@@ -359,13 +360,14 @@ export function syncFortemiCoreIndex(
       source_index_built_at: sourceBuiltAt,
     };
     fs.writeFileSync(
-      manifestPath,
+      path.join(staging, path.basename(manifestPath)),
       JSON.stringify(manifest, null, 2) + "\n",
       "utf-8",
     );
+    publishIndexFiles(staging, dir);
     return manifest;
   } finally {
-    fs.rmSync(temporaryPath, { force: true });
+    fs.rmSync(staging, { recursive: true, force: true });
   }
 }
 
@@ -373,7 +375,7 @@ export function getFortemiCoreSyncStatus(
   cwd: string,
   graph: string = "project",
 ): FortemiCoreSyncStatus {
-  const dir = syncDir(cwd, graph);
+  const dir = getFortemiCoreIndexDir(cwd, graph);
   const manifestPath = path.join(dir, "manifest.json");
   const exportPath = path.join(dir, "aiwg-fortemi-index-v2.json");
   const { manifest, reason: manifestReadReason } = readManifestResult(manifestPath);

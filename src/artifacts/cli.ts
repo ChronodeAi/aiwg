@@ -373,6 +373,7 @@ export function printIndexUsage(): void {
   console.log('  build [--force] [--verbose] [--all] [--scope <dir>] [--graph <name>]');
   console.log('  refresh [--full] [--workspace <path>]... [--root <dir>]...');
   console.log('          [--only graphs|sessions|caches|runtime|models|issues] [--dry-run] [--json] [--lock-wait-ms <n>]');
+  console.log('  --only also accepts a registered index name (for example project) or all.');
   console.log('          [--max-record-bytes <n>] [--max-source-bytes <n>]');
   console.log('  Session import defaults: 67108864 bytes per record, 1073741824 bytes (1 GiB) per source; source 0 is unlimited.');
   console.log('  --exclude <id-or-glob> (repeatable): skip session IDs or absolute path globs; adds to sessions.import.exclude and AIWG_SESSIONS_IMPORT_EXCLUDE (comma-separated).');
@@ -1483,7 +1484,7 @@ async function handleStats(args: string[]): Promise<void> {
  */
 async function handleStatus(args: string[]): Promise<void> {
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: aiwg index status [--json]');
+    console.log('Usage: aiwg index status [--only <name|all>] [--json]');
     console.log('       aiwg index list   [--json]   (alias)');
     console.log('');
     console.log('Enumerate every registered index graph (built-in + module + operator)');
@@ -1497,7 +1498,9 @@ async function handleStatus(args: string[]): Promise<void> {
     return;
   }
   const { showIndexStatus } = await import('./index-status.js');
-  await showIndexStatus(process.cwd(), { json: args.includes('--json') });
+  const onlyAt = args.indexOf('--only');
+  if (onlyAt >= 0 && (!args[onlyAt + 1] || args[onlyAt + 1].startsWith('--'))) throw new Error('--only requires an index name');
+  await showIndexStatus(process.cwd(), { json: args.includes('--json'), only: onlyAt >= 0 ? args[onlyAt + 1] : undefined });
 }
 
 /**
