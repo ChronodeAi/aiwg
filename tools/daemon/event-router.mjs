@@ -22,6 +22,12 @@ export class EventRouter extends EventEmitter {
   }
 
   handleFailedEvent(event, error, attemptCount = 0) {
+    // Scheduled owners have durable intent/receipts and one retry authority.
+    // Replaying through the transient DLQ would bypass that authority.
+    if (event.source === 'schedule' && event.payload?.kind && event.payload.kind !== 'agent.prompt') {
+      if (!this.emit('schedule-recovery-required', { event, error })) throw error;
+      return;
+    }
     if (attemptCount >= this.maxRetries) {
       this.deadLetterQueue.push({
         event,
