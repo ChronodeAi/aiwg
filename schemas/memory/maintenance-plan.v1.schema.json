@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/memory/maintenance-plan.v1.schema.json",
+  "title": "AIWG memory maintenance plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "operations"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "aiwg.maintenance-plan.v1"
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/operation"
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "placement",
+        "lifecycle"
+      ],
+      "properties": {
+        "placement": {
+          "$ref": "https://aiwg.io/schemas/memory/memory-taxonomy.v1.schema.json#/$defs/placement"
+        },
+        "lifecycle": {
+          "$ref": "https://aiwg.io/schemas/memory/memory-taxonomy.v1.schema.json#/$defs/lifecycle"
+        }
+      }
+    },
+    "targetState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "placement",
+        "lifecycle"
+      ],
+      "properties": {
+        "placement": {
+          "$ref": "https://aiwg.io/schemas/memory/memory-taxonomy.v1.schema.json#/$defs/placement"
+        },
+        "lifecycle": {
+          "enum": [
+            "active",
+            "superseded",
+            "retired",
+            "quarantined"
+          ]
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "target",
+        "from",
+        "to",
+        "scope",
+        "rationale",
+        "uncertainty",
+        "impactedLinks",
+        "sessionEffect",
+        "precondition"
+      ],
+      "properties": {
+        "op": {
+          "enum": [
+            "promote",
+            "demote",
+            "recategorize",
+            "merge",
+            "split",
+            "supersede",
+            "retire",
+            "restore"
+          ]
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "digest",
+            "version"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "from": {
+          "$ref": "#/$defs/state"
+        },
+        "to": {
+          "$ref": "#/$defs/targetState"
+        },
+        "scope": {
+          "$ref": "https://aiwg.io/schemas/memory/memory-taxonomy.v1.schema.json#/$defs/scope"
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uncertainty": {
+          "type": "string",
+          "minLength": 1
+        },
+        "impactedLinks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "sessionEffect": {
+          "enum": [
+            "current",
+            "next-session"
+          ]
+        },
+        "precondition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "digest",
+            "version"
+          ],
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        }
+      }
+    }
+  }
+}

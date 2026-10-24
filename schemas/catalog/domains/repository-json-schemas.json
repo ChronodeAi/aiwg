@@ -1604,6 +1604,86 @@
       "consumers": []
     },
     {
+      "logicalName": "schemas.memory.maintenance.plan.v1",
+      "id": "https://aiwg.io/schemas/memory/maintenance-plan.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-memory"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/memory/maintenance-plan.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.memory.maintenance.receipt.v1",
+      "id": "https://aiwg.io/schemas/memory/maintenance-receipt.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-memory"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/memory/maintenance-receipt.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.memory.memory.record.v1",
+      "id": "https://aiwg.io/schemas/memory/memory-record.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-memory"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/memory/memory-record.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.memory.memory.taxonomy.v1",
+      "id": "https://aiwg.io/schemas/memory/memory-taxonomy.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-memory"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/memory/memory-taxonomy.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "agentic.code.frameworks.sdlc.complete.schemas.metalanguage.agent",
       "id": "https://aiwg.io/schemas/metalanguage/agent.schema.json",
       "version": "1.0.0",

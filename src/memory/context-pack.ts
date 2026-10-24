@@ -70,7 +70,7 @@ const EXCLUDED_STATES = new Set<ContextState>([
   'contradicted', 'superseded', 'revoked', 'origin-unavailable',
 ]);
 
-function sha256(value: string): string {
+export function sha256(value: string): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
 

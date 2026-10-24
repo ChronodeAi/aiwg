@@ -1,0 +1,8 @@
+{
+  "graph": {
+    "CLAUDE.md": ["WORKSPACE.md"],
+    "WORKSPACE.md": ["docs/shared.md"],
+    "docs/shared.md": ["WORKSPACE.md"]
+  },
+  "expectedCycles": [["WORKSPACE.md", "docs/shared.md", "WORKSPACE.md"]]
+}
