@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { access, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -229,6 +229,33 @@ describe('compound-memory review and maintenance', () => {
     });
     expect(JSON.stringify(report)).not.toContain('private body');
     expect(report.mutation).toBe(false);
+  });
+
+  it('omits disposed pages and demoted facts from contradiction, orphan, and stale review scans', async () => {
+    await mkdir(path.join(projectDir, '.aiwg/wiki'), { recursive: true });
+    await mkdir(path.join(projectDir, '.aiwg/memory'), { recursive: true });
+    const old = new Date('2020-01-01');
+    for (const lifecycle of ['active', 'retired', 'superseded', 'quarantined']) {
+      const file = path.join(projectDir, `.aiwg/wiki/${lifecycle}.md`);
+      await writeFile(file, `---\n${lifecycle === 'retired' ? `memoryMaintenance:\n  history: ${'x'.repeat(70000)}\n` : ''}memoryRecord:\n  lifecycle: ${lifecycle}\n  placement: indexed\n---\n# ${lifecycle}\n> [!contradiction]\n${lifecycle === 'retired' ? '[[active]]' : ''}\n`);
+      await utimes(file, old, old);
+    }
+    await writeFile(path.join(projectDir, '.aiwg/memory/line-memory.meta.json'), JSON.stringify({
+      version: 1, entries: Object.fromEntries(['resident', 'indexed', 'retired'].map(state => [state, {
+        id: `lm_${state}`, status: 'active', digest: digest(state), updatedAt: old.toISOString(),
+        maintenance: { lifecycle: state === 'retired' ? 'retired' : 'active', placement: state === 'indexed' ? 'indexed' : 'resident' },
+      }])),
+    }));
+    const output: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation(value => output.push(String(value)));
+    await compoundMemoryCommand(['--json'], {
+      cwd: projectDir, frameworkRoot: path.resolve(__dirname, '../../..'), namespace: 'compound-memory', subcommand: 'review',
+    });
+    const signals = JSON.parse(output.pop()!).signals;
+    expect(signals.contradictions).toEqual([{ locator: '.aiwg/wiki/active.md' }]);
+    // The retired page's outbound link must not suppress the active orphan.
+    expect(signals.orphanPages).toEqual([{ locator: '.aiwg/wiki/active.md' }]);
+    expect(signals.staleFacts).toEqual([{ handle: 'lm_resident', digest: digest('resident') }]);
   });
 
   it('requires an exact preview and records a restart-safe maintenance receipt', async () => {

@@ -5564,6 +5564,10 @@ aiwg memory <subcommand>
 **Examples:**
 
 ```bash
+aiwg memory plan --help                                  # reviewed placement/lifecycle preview
+aiwg memory apply --plan reviewed.json --preview --json  # read-only exact-plan preview
+aiwg memory apply --plan reviewed.json --yes --json      # explicit headless confirmation
+aiwg memory restore --plan restore.json --yes --json     # reviewed restoration
 aiwg memory audit --provider codex --json                 # read-only static workspace inventory
 aiwg memory audit --scope global --provider claude        # explicit user scope
 aiwg memory audit --provider claude --cost                # resident-cost view of the same inventory

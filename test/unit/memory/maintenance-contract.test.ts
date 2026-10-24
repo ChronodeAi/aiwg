@@ -122,6 +122,9 @@ describe('memory identity, compatibility and history contracts', () => {
       expect(validateMaintenancePlan(plan(successor), records, { retirementBasis: 'review' })).toEqual(plan(successor));
     }
     expect(original.lifecycle).toBe('superseded');
+    const restored = { ...original, lifecycle: 'active' as const };
+    expect(indexMemoryAliases([restored, successor]).get(restored.id)).toEqual(restored);
+    expect(indexMemoryAliases([restored, successor]).get('compatibility-name')).toEqual(successor);
   });
   it('retains immutable merge and split lineage handles', () => {
     const first = record('first.md');
@@ -257,5 +260,51 @@ describe('strict versioned JSON and runtime schemas', () => {
   it('refuses unversioned and future records instead of guessing a migration', () => {
     expect(() => loadMemoryRecord({ ...item, schemaVersion: 'aiwg.memory-record.v2' })).toThrow();
     expect(() => loadMemoryRecord({ ...item, schemaVersion: undefined })).toThrow();
+  });
+});
+
+
+describe('reviewed execution bindings', () => {
+  it('accepts the same strict execution envelope in runtime and JSON contracts', () => {
+    const preview = plan();
+    Object.assign(preview.operations[0], {
+      owner: { name: 'semantic-memory', handle: pin.sourcePath, snapshot: sha256('store') },
+      review: { reviewer: 'operator', retirementBasis: 'review' },
+      category: 'decision',
+    });
+    expect(MaintenancePlanSchema.parse(preview)).toEqual(preview);
+    const require = createRequire(import.meta.url);
+    const { default: Ajv2020 } = require('ajv/dist/2020.js');
+    const ajv = new Ajv2020({ strict: true });
+    require('ajv-formats')(ajv);
+    for (const name of ['memory-taxonomy', 'maintenance-plan']) ajv.addSchema(JSON.parse(readFileSync(new URL(`../../../schemas/memory/${name}.v1.schema.json`, import.meta.url), 'utf8')));
+    const validate = ajv.getSchema('https://aiwg.io/schemas/memory/maintenance-plan.v1.schema.json')!;
+    expect(validate(preview), JSON.stringify(validate.errors)).toBe(true);
+    Object.assign(preview.operations[0].owner!, { authority: 'operator' });
+    expect(MaintenancePlanSchema.safeParse(preview).success).toBe(false);
+    expect(validate(preview)).toBe(false);
+  });
+  it('binds every merge input revision and refuses cross-authority merges', () => {
+    const first = { ...record('first.md'), authority: { ...record().authority, protection: 'unprotected' as const } };
+    const second = { ...record('second.md'), authority: first.authority };
+    const preview = plan(first);
+    Object.assign(preview.operations[0], {
+      op: 'merge', to: { placement: first.placement, lifecycle: 'superseded' },
+      related: [{ id: second.id, digest: second.digest, version: second.version }],
+      replacements: [{ key: 'merged', value: 'Reviewed combined fact', sourcePath: 'merged.md' }],
+    });
+    expect(validateMaintenancePlan(preview, [first, second])).toEqual(preview);
+    const reordered = { protection: second.authority.protection, source: second.authority.source, owner: second.authority.owner };
+    expect(validateMaintenancePlan(preview, [first, { ...second, authority: reordered }])).toEqual(preview);
+    expect(() => validateMaintenancePlan(preview, [first, { ...second, version: 2 }])).toThrow(/Stale related/);
+    expect(() => validateMaintenancePlan(preview, [first, { ...second, authority: { ...second.authority, source: 'operator' } }])).toThrow(/authority/);
+  });
+  it('rejects lifecycle changes hidden in recategorization and replacements hidden in retire', () => {
+    const preview = plan();
+    Object.assign(preview.operations[0], { op: 'recategorize', category: 'decision' });
+    expect(MaintenancePlanSchema.safeParse(preview).success).toBe(false);
+    preview.operations[0].op = 'retire';
+    preview.operations[0].replacements = [{ key: 'surprise', value: 'Surprise replacement' }];
+    expect(MaintenancePlanSchema.safeParse(preview).success).toBe(false);
   });
 });

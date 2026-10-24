@@ -74,7 +74,7 @@ export function indexMemoryAliases(records: readonly MemoryRecord[]): ReadonlyMa
         // Prior IDs may be compatibility aliases on successors, but an exact
         // canonical ID must still address its immutable retained history.
         const lineage = [...record.supersedes, ...record.mergedFrom, ...record.splitFrom];
-        if (canonicalIds.has(handle) && prior.lifecycle !== 'active' && lineage.includes(handle)) continue;
+        if (canonicalIds.has(handle) && lineage.includes(handle)) continue;
         throw new Error(`Memory alias collision: ${handle}`);
       }
       index.set(handle, record);

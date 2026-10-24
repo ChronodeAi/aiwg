@@ -9,8 +9,8 @@ for #3280 and later slices. It composes existing owners; it creates no new
 memory database (NFR-01).
 
 CLI decision (2026-10-24, #3280): audit extends the existing `aiwg memory`
-command as `aiwg memory audit`. Lifecycle command names remain proposals for
-#3284; the proposed `aiwg harness memory` family is not introduced.
+command as `aiwg memory audit`. The #3282 lifecycle surface extends this command with `plan`, `apply --plan` and
+`restore --plan`; the proposed `aiwg harness memory` family is not introduced.
 
 ## 1. Existing-surface map
 
@@ -181,3 +181,67 @@ secret-bearing data in reports (risks-security).
   separately-reported live native qualification; unchanged/no-memory/indexed/
   selected/resident baselines with recall, stale hits, activation, adherence,
   completion, cost, latency; migration retrieval; no smaller-file-alone gates.
+
+
+## 7. Executable review bindings (#3282)
+
+The existing v1 plan operation now optionally carries `owner: { name, handle,
+snapshot }`, `review: { reviewer, retirementBasis }`, `category`, reviewed
+`replacements: [{ key, value, sourcePath?, category? }]`, and `related` merge
+inputs with their own id/digest/version. These fields are required as
+appropriate by executable owners; earlier inventory-only previews remain
+readable. All content-bearing replacements are review inputs, never inferred
+from generated output. Executable plans currently support project-owned
+sources, next-session effects and one operation per owner snapshot. Different
+owners can share a coordinator plan; another revision of the same owner needs
+another exact preview.
+
+The coordinator stores only owner receipt references/progress under
+`.aiwg/memory/maintenance/`. Line-memory retains its WAL and sidecar,
+canonical-context commits its receipt with its store, and semantic-memory
+journals canonical Markdown updates before rebuilding the existing index.
+Exact pending transactions resume without pretending their original source
+versions are still current. Query, discovery and context-pack loading exclude
+canonical inactive/archived content even while index publication is pending.
+Owner history retains prior records/tombstones after restore.
+
+### Provider regeneration follow-up
+
+No existing provider regeneration or deployment consumer reads canonical
+context's `residentEntries()` projection. #3282 does not add that consumer:
+editing canonical placement/lifecycle does not remove text already copied
+into `WORKSPACE.md`, provider startup files, rules or adapters, and does not
+change a running session. Existing regeneration workflows continue to read
+their own sources; this change cannot promise that those workflows exclude
+previously copied canonical content.
+
+Exclusion implemented today is limited to the owning retrieval surfaces:
+artifact query/discovery and graph neighbours exclude inactive or archived
+index records; context packs filter wiki dispositions and line-memory's
+resident projection; compound-memory review signals ignore disposed content.
+Canonical `residentEntries()` returns only active, resident entries, and
+legacy canonical upsert/import cannot resurrect disposed entries. Explicit
+show/history and portable exports retain tombstones and prior revisions.
+Artifact builds omit private aggregate stores under
+`context/compound-memory/`, line-memory's metadata/config/lock files, and
+`memory/transactions/` and `memory/maintenance/` beneath the resolved artifact
+root. Those files contain mixed active records, history or transaction data;
+they are not per-item indexed retrieval projections. Line/canonical maintenance
+refreshes existing artifact indexes after owner commits, including receipt
+recovery, so old aggregate entries are removed.
+Line-memory and canonical owners refuse resident removal through the default
+maintenance CLI because neither has an owner-native indexed retrieval proof.
+
+A future provider regeneration integration must read
+`CanonicalContextRepository.residentEntries()` from the resolved canonical
+store, regenerate its owned output from that projection, and remove previously
+emitted entries absent from it. It must never use `read().entries` or portable
+`export()` as a resident projection, because they preserve history. That
+follow-up needs tests for demotion, retirement, restore and regeneration of
+previously emitted text, while retaining next-session effect reporting.
+
+Semantic-memory source frontmatter keeps the latest 16 prior memory records;
+`trimmedHistory` records the count and a chained SHA-256 digest of older
+revisions. Bodies and current tombstones remain in their canonical sources.
+See
+[operator instructions](../user-level-project-memory.md#reviewed-placement-and-retirement).

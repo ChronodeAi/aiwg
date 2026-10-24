@@ -90,27 +90,7 @@
           ]
         },
         "target": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "id",
-            "digest",
-            "version"
-          ],
-          "properties": {
-            "id": {
-              "type": "string",
-              "minLength": 1
-            },
-            "digest": {
-              "$ref": "#/$defs/digest"
-            },
-            "version": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 9007199254740991
-            }
-          }
+          "$ref": "#/$defs/target"
         },
         "from": {
           "$ref": "#/$defs/state"
@@ -159,6 +139,110 @@
               "maximum": 9007199254740991
             }
           }
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/target"
+          }
+        },
+        "owner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "handle",
+            "snapshot"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1
+            },
+            "snapshot": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reviewer",
+            "retirementBasis"
+          ],
+          "properties": {
+            "reviewer": {
+              "type": "string",
+              "minLength": 1
+            },
+            "retirementBasis": {
+              "enum": [
+                "age",
+                "review"
+              ]
+            }
+          }
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1
+        },
+        "replacements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "value"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sourcePath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "category": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "digest",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
         }
       }
     }

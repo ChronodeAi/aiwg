@@ -11,7 +11,8 @@ import {
 import { buildAiwgFortemiIndexExport } from "../../../src/artifacts/browser-export.js";
 import * as browserExport from "../../../src/artifacts/browser-export.js";
 import { collectIndexStatus } from "../../../src/artifacts/index-status.js";
-import { loadFortemiCoreExport } from "../../../src/artifacts/fortemi-core-query-adapter.js";
+import { loadFortemiCoreExport, loadFortemiCoreMetadataEntries } from "../../../src/artifacts/fortemi-core-query-adapter.js";
+import { discoverCapability, queryIndex } from '../../../src/artifacts/query-engine.js';
 import { main } from "../../../src/artifacts/cli.js";
 import {
   GRAPH_CONFIGS,
@@ -81,12 +82,27 @@ describe("Fortemi Core static index sync (#1687)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
     if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = prevXdg;
     resetRegistry();
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('preserves lifecycle metadata in Fortemi exports and excludes tombstones from ordinary retrieval', async () => {
+    const retired = entry({ name: 'retired-synthetic', title: 'Retired synthetic capability',
+      memoryRecord: { lifecycle: 'retired', placement: 'indexed' } as MetadataEntry['memoryRecord'] });
+    writeProjectIndex(tmp, retired);
+    const exported = buildAiwgFortemiIndexExport(tmp, { graph: 'project', schemaVersion: 'v2' });
+    expect(exported.items[0].search?.frontmatter.aiwg_memory_record).toEqual(retired.memoryRecord);
+    syncFortemiCoreIndex(tmp);
+    expect(loadFortemiCoreMetadataEntries(tmp).entries[0].memoryRecord).toEqual(retired.memoryRecord);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    for (const fulltext of [false, true]) {
+      await queryIndex(tmp, { text: 'synthetic', fulltext }, { backend: 'fortemi-core', json: true });
+      expect(JSON.parse(log.mock.calls.at(-1)![0] as string).results).toEqual([]);
+    }
+    await discoverCapability(tmp, { phrase: 'synthetic', graph: 'project', backend: 'fortemi-core', json: true });
+    expect(JSON.parse(log.mock.calls.at(-1)![0] as string).results).toEqual([]);
   });
 
   it.each([

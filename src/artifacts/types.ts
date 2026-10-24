@@ -17,6 +17,7 @@ import { getFrameworkIndexBaseDir } from './framework-index-paths.js';
 import { load as loadYaml } from 'js-yaml';
 import type { OperationalStateProvenance } from './operational-state.js';
 import type { StateTransferProjection } from './state-transfer.js';
+import type { MemoryRecord } from '../memory/maintenance-record.js';
 import {
   DEFAULT_PROJECT_AIWG_DIR,
   projectAiwgPath,
@@ -28,6 +29,9 @@ import {
  * A single indexed artifact entry
  */
 export interface MetadataEntry {
+  /** Canonical memory lifecycle; retained entries remain addressable as history. */
+  memoryRecord?: MemoryRecord;
+  memoryCategory?: string;
   /** Relative path from project root */
   path: string;
 
@@ -443,7 +447,7 @@ export const INDEX_VERSION = '1.0.0';
  * making the serialized index schema incompatible; a mismatch simply forces a
  * one-time content re-extraction during the next incremental build.
  */
-export const INDEX_EXTRACTOR_VERSION = '2026.10.19.1';
+export const INDEX_EXTRACTOR_VERSION = '2026.10.24.1';
 
 /**
  * Built-in graph type identifiers

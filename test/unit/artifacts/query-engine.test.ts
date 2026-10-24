@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { buildIndex } from '../../../src/artifacts/index-builder.js';
-import { discoverCapability, queryIndex, showArtifact } from '../../../src/artifacts/query-engine.js';
+import { discoverCapability, queryIndex, showArtifact, loadLocalCapabilityEntries } from '../../../src/artifacts/query-engine.js';
 import { INDEX_DIR, getGraphIndexDir } from '../../../src/artifacts/types.js';
 import type { ArtifactIndex, MetadataEntry } from '../../../src/artifacts/types.js';
 import { PROJECT_AIWG_LOCATION_FILE } from '../../../src/config/project-artifacts.js';
@@ -119,6 +119,53 @@ describe('Artifact Query Engine', () => {
     consoleSpy.mockRestore();
     consoleErrorSpy.mockRestore();
     vi.unstubAllEnvs();
+  });
+
+  it('queries and discovers 3000 synthetic entries without reading source files', async () => {
+    const entries = Object.fromEntries(Array.from({ length: 3000 }, (_, i) => {
+      const entry = createMockEntry({ path: `.aiwg/skills/synthetic-${i}.md`, type: 'skill',
+        name: `synthetic-${i}`, title: `Synthetic ${i}`, capability: 'synthetic capability' });
+      return [entry.path, entry];
+    }));
+    const indexDir = getGraphIndexDir(tmpDir, 'project');
+    fs.mkdirSync(indexDir, { recursive: true });
+    fs.writeFileSync(path.join(indexDir, 'metadata.json'), JSON.stringify({
+      version: '1.0.0', builtAt: new Date().toISOString(), buildTimeMs: 1, entries,
+    } satisfies ArtifactIndex));
+    const read = fs.readFileSync.bind(fs);
+    const sourceReads: string[] = [];
+    const spy = vi.spyOn(fs, 'readFileSync').mockImplementation((...args: Parameters<typeof fs.readFileSync>) => {
+      if (String(args[0]).includes('/skills/synthetic-')) {
+        sourceReads.push(String(args[0]));
+        throw new Error('Synthetic sources must never be read');
+      }
+      return read(...args);
+    });
+    try {
+      await queryIndex(tmpDir, { text: 'synthetic' }, { graph: 'project', backend: 'local', json: true });
+      expect(JSON.parse(consoleSpy.mock.calls.at(-1)![0]).results).toHaveLength(20);
+      await discoverCapability(tmpDir, { phrase: 'synthetic', graph: 'project', backend: 'local', json: true });
+      expect(JSON.parse(consoleSpy.mock.calls.at(-1)![0]).results.length).toBeGreaterThan(0);
+      expect(loadLocalCapabilityEntries(tmpDir, 'project')).toHaveLength(3000);
+      expect(sourceReads).toEqual([]);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('keeps active indexed memory available during transient source read errors', async () => {
+    const entry = createMockEntry({ memoryRecord: { lifecycle: 'active', placement: 'indexed' } as MetadataEntry['memoryRecord'] });
+    const indexDir = getGraphIndexDir(tmpDir, 'project');
+    fs.mkdirSync(indexDir, { recursive: true });
+    fs.writeFileSync(path.join(indexDir, 'metadata.json'), JSON.stringify({ version: '1.0.0', entries: { [entry.path]: entry } }));
+    const read = fs.readFileSync.bind(fs);
+    const spy = vi.spyOn(fs, 'readFileSync').mockImplementation((...args: Parameters<typeof fs.readFileSync>) => {
+      if (String(args[0]).endsWith('UC-001.md')) throw Object.assign(new Error('temporary I/O error'), { code: 'EIO' });
+      return read(...args);
+    });
+    try {
+      await queryIndex(tmpDir, { text: 'Login' }, { graph: 'project', backend: 'local', json: true });
+      expect(JSON.parse(consoleSpy.mock.calls.at(-1)![0]).results).toHaveLength(1);
+      expect(loadLocalCapabilityEntries(tmpDir, 'project')).toHaveLength(1);
+    } finally { spy.mockRestore(); }
   });
 
   it.each(['hermes', 'openhuman', 'antigravity', 'future-agent'])(
