@@ -269,6 +269,10 @@ export function createWebResourceReleaseFixture() {
   const start = async (): Promise<string> => {
     if (server) throw new Error("loopback fixture is already running");
     server = createServer((request, response) => {
+      // Resolver assertions do synchronous cache/crypto work between requests.
+      // Under load, an idle keep-alive timeout can become overdue while fetch
+      // still sees a reusable socket, racing the server's close with its reuse.
+      response.setHeader("connection", "close");
       const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
       requestPaths.push(pathname);
       requestHeaders.push(request.headers);
