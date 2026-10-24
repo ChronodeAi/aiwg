@@ -26,10 +26,18 @@ describe('TaskStore', () => {
     mockPath = pathModule.default;
 
     // Mock fs
-    mockFs.existsSync = vi.fn(() => false);
+    const files = new Map();
+    mockFs.existsSync = vi.fn(file => files.has(file));
     mockFs.mkdirSync = vi.fn();
-    mockFs.readFileSync = vi.fn(() => '{}');
-    mockFs.writeFileSync = vi.fn();
+    mockFs.readFileSync = vi.fn(file => files.get(file) || '{}');
+    mockFs.writeFileSync = vi.fn((file, content) => {
+      if (typeof file === 'string') files.set(file, content);
+    });
+    mockFs.renameSync = vi.fn((source, target) => {
+      files.set(target, files.get(source));
+      files.delete(source);
+    });
+    mockFs.unlinkSync = vi.fn(file => files.delete(file));
 
     // Mock path
     mockPath.dirname = vi.fn((p) => p.replace(/\/[^/]*$/, ''));
@@ -92,11 +100,11 @@ describe('TaskStore', () => {
       expect(store.taskIdCounter).toBe(6);
     });
 
-    it('handles corrupted JSON gracefully', async () => {
+    it('fails closed on corrupted JSON and preserves the source', async () => {
       mockFs.existsSync = vi.fn(() => true);
       mockFs.readFileSync = vi.fn(() => 'not valid json{');
 
-      await store.initialize();
+      await expect(store.initialize()).rejects.toThrow('recovery required');
 
       expect(store.tasks.size).toBe(0);
       expect(store.taskIdCounter).toBe(0);
@@ -165,8 +173,9 @@ describe('TaskStore', () => {
     it('persists to disk', () => {
       store.createTask({ prompt: 'test' });
       expect(mockFs.writeFileSync).toHaveBeenCalledWith(
-        '/tmp/tasks.json',
-        expect.stringContaining('task-0000')
+        expect.stringMatching(/^\/tmp\/tasks\.json\..*\.tmp$/),
+        expect.stringContaining('task-0000'),
+        expect.objectContaining({ flag: 'wx' })
       );
     });
   });
@@ -583,26 +592,25 @@ describe('TaskStore', () => {
 
       store._persist();
 
-      expect(mockFs.writeFileSync).toHaveBeenCalledOnce();
-      const [path, data] = mockFs.writeFileSync.mock.calls[0];
-      expect(path).toBe('/tmp/tasks.json');
+      const writes = mockFs.writeFileSync.mock.calls.filter(([file]) => typeof file === 'string' && file.endsWith('.tmp'));
+      expect(writes).toHaveLength(1);
+      const [path, data] = writes[0];
+      expect(path).toMatch(/^\/tmp\/tasks\.json\..*\.tmp$/);
+      expect(mockFs.renameSync).toHaveBeenCalledWith(path, '/tmp/tasks.json');
 
       const parsed = JSON.parse(data);
-      expect(parsed.version).toBe(1);
+      expect(parsed.version).toBe(2);
       expect(parsed.tasks).toHaveLength(1);
       expect(parsed.updatedAt).toBeDefined();
     });
 
-    it('handles write errors gracefully', () => {
+    it('propagates write errors to prevent unpersisted execution', () => {
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
       mockFs.writeFileSync = vi.fn(() => {
         throw new Error('Disk full');
       });
 
-      expect(() => store._persist()).not.toThrow();
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining('Failed to persist')
-      );
+      expect(() => store._persist()).toThrow('Disk full');
 
       consoleError.mockRestore();
     });

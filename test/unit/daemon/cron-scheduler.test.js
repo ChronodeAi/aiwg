@@ -191,7 +191,7 @@ describe('CronScheduler', () => {
       });
     });
 
-    it('should not emit events within 60 seconds of last fire', () => {
+    it('should fire once in each consecutive matching minute', () => {
       const eventSpy = vi.fn();
       // Use a cron that matches every minute so we can test de-duplication
       const everyMinuteConfig = {
@@ -213,9 +213,9 @@ describe('CronScheduler', () => {
       vi.advanceTimersByTime(30000);
       expect(eventSpy).toHaveBeenCalledTimes(1);
 
-      // 30s later at 12:02:00 — another interval tick, but only 60s since last fire (not > 60s)
+      // 30s later at 12:02:00 — another interval tick, a new matching minute must fire
       vi.advanceTimersByTime(30000);
-      expect(eventSpy).toHaveBeenCalledTimes(1);
+      expect(eventSpy).toHaveBeenCalledTimes(2);
 
       everyMinScheduler.stop();
     });
@@ -373,7 +373,7 @@ describe('CronScheduler', () => {
 
       // Advance 2 full intervals (120s) to ensure > 60s since last fire
       vi.advanceTimersByTime(120000);
-      expect(eventSpy).toHaveBeenCalledTimes(2);
+      expect(eventSpy).toHaveBeenCalledTimes(3);
 
       everyMinScheduler.stop();
     });

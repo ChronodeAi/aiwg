@@ -514,6 +514,11 @@ class DaemonCLI {
   }
 
   async schedule() {
+    if (this.flags['run-once']) {
+      const { runManualSchedule } = await import('./scheduled-task-runner.mjs');
+      process.exitCode = await runManualSchedule(this.flags);
+      return;
+    }
     if (!this.isDaemonRunning()) {
       console.error('Daemon is not running');
       process.exit(1);
@@ -1120,7 +1125,7 @@ Commands:
   task <sub>        Manage agent tasks (submit, list, get, cancel, stats)
   rooms             List connected messaging rooms
   autonomous <sub>  Manage autonomous mode (status, enable, disable)
-  schedule          Show scheduled task status and history
+  schedule          Show scheduled task status and history (--run-once --job ID runs without daemon)
   memory <sub>      Manage cross-session memory (show, clear)
 
 Options:
@@ -1130,6 +1135,16 @@ Options:
   --lines N         Show last N lines of logs (default: 50)
   --follow, -f      Follow log output in real-time
   --readonly        Attach to tmux in read-only mode
+  --run-once        Run one deterministic schedule job without starting the daemon
+  --job ID          Configured schedule job ID (with schedule --run-once)
+  --config PATH     Daemon config path for manual execution
+  --store-path PATH Task/receipt store for manual execution
+  --fire-time ISO   Stable scheduled minute for deduplication
+  --json            Print a single manual receipt object
+  --resolve TEXT    Acknowledge inspected interrupted owner effects; does not replay
+
+Scheduled updates check only; installation remains opt-in via aiwg update.
+Manual execution is supported on Linux/macOS; Windows: use WSL2.
 
 Examples:
   aiwg daemon init                     # Initialize with manager profile

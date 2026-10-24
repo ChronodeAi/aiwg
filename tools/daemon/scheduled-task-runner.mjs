@@ -1,14 +1,67 @@
-/**
- * ScheduledTaskRunner — Bridges CronScheduler events to task execution.
- *
- * Listens for cron.fired events from EventRouter and submits tasks to the
- * DaemonSupervisor. Built-in actions map to predefined prompts; custom
- * actions use the job's `prompt` field.
- *
- * @implements Plan: Daemon Starter — Scheduled Task Runner
- */
+/** Scheduled jobs: deterministic owner operations plus explicit legacy agent actions. */
 
 import { EventEmitter } from 'events';
+import { fork } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { nextCronRun } from './cron-scheduler.mjs';
+
+/**
+ * @typedef {'index.verify'|'index.reconcile'|'cache.retention'|'update.check'|'index.freshness'|'index.refresh'|'cache.prune'} MaintenanceKind
+ * @typedef {Object} MaintenanceJob
+ * @property {string} id Stable configured job identity
+ * @property {MaintenanceKind} kind Closed owner operation; never a prompt
+ * @property {string} [cron] Five civil-time cron fields (alias: schedule)
+ * @property {string} [timezone] Named IANA timezone, defaults to UTC
+ * @property {'skip'|'run-once'} [missedRunPolicy] Downtime coalescing, defaults to skip
+ * @property {Object} [args] Owner-specific arguments, never arbitrary CLI tokens
+ * @property {number} [timeoutMs] Bounded worker deadline, defaults to 60000
+ * @property {0|1|2} [retries] Retries after the first attempt, defaults to 2
+ * @property {{baseMs: number, maxMs: number}} [backoff] Equal-jitter bounds
+ */
+export const MAINTENANCE_KINDS = Object.freeze([
+  'index.verify', 'index.reconcile', 'cache.retention', 'update.check',
+  'index.freshness', 'index.refresh', 'cache.prune',
+]);
+
+/** Equal jitter: [ceiling/2, ceiling], capped before jitter; retries never loop in a tick. */
+export function retryDelay(attempt, { baseMs = 1000, maxMs = 300000 } = {}, rng = Math.random) {
+  const ceiling = Math.min(maxMs, baseMs * 2 ** Math.min(attempt - 1, 30));
+  const sample = rng();
+  if (!Number.isFinite(sample) || sample < 0 || sample > 1) throw new Error('Invalid retry RNG');
+  return Math.floor(ceiling * (0.5 + sample * 0.5));
+}
+
+/** Await child exit, including on timeout: an uncertain exit is never safe to replay. */
+export function executeMaintenanceOwner(job, { cwd = process.cwd(), onSpawn = () => {} } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = fork(fileURLToPath(new URL('./maintenance-owner.mjs', import.meta.url)), [], {
+      cwd, env: { ...process.env, AIWG_MAINTENANCE_WORKER: '1', NO_UPDATE_NOTIFIER: '1' },
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    });
+    let receipt;
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, job.timeoutMs || 60000);
+    child.once('message', result => { receipt = result; });
+    child.once('error', error => { clearTimeout(timeout); reject(error); });
+    child.once('exit', (code, signal) => {
+      clearTimeout(timeout);
+      if (timedOut || signal || !receipt) {
+        resolve({ exitStatus: code, state: 'deferred', uncertain: true,
+          summary: timedOut ? 'Owner timeout; inspect effects before recovery' : `Owner interrupted (${signal || code}); inspect effects before recovery` });
+      } else resolve(receipt);
+    });
+    try {
+      // Record the worker identity before sending it authority to execute.
+      onSpawn(child.pid);
+      child.send(job);
+    } catch (error) {
+      child.kill('SIGKILL');
+      clearTimeout(timeout);
+      reject(error);
+    }
+  });
+}
+
 
 /**
  * Built-in action registry — maps action names to task prompts.
@@ -36,9 +89,14 @@ const BUILTIN_ACTIONS = {
 
 /**
  * @typedef {Object} ScheduledTaskRunnerOptions
- * @property {import('../ralph-external/daemon-supervisor.mjs').DaemonSupervisor} supervisor
- * @property {import('./event-router.mjs').default} eventRouter
+ * @property {import('../ralph-external/daemon-supervisor.mjs').DaemonSupervisor} [supervisor]
+ * @property {import('./event-router.mjs').default} [eventRouter]
  * @property {import('../messaging/room-manager.mjs').RoomManager} [roomManager]
+ * @property {import('./task-store.mjs').TaskStore} [taskStore] Required for maintenance jobs
+ * @property {() => number} [now] Epoch milliseconds
+ * @property {() => number} [rng] Random sample in [0,1]
+ * @property {Function} [executeOwner] Injectable deterministic executor returning an owner receipt
+ * @property {string} [cwd] Owner workspace
  */
 
 export class ScheduledTaskRunner extends EventEmitter {
@@ -56,6 +114,14 @@ export class ScheduledTaskRunner extends EventEmitter {
 
   /** @type {boolean} */
   #started = false;
+  #taskStore;
+  #now;
+  #rng;
+  #executeOwner;
+  #cwd;
+  #listener;
+  #recoveryListener;
+
 
   /**
    * @param {ScheduledTaskRunnerOptions} options
@@ -65,6 +131,11 @@ export class ScheduledTaskRunner extends EventEmitter {
     this.#supervisor = options.supervisor;
     this.#eventRouter = options.eventRouter;
     this.#roomManager = options.roomManager || null;
+    this.#taskStore = options.taskStore || null;
+    this.#now = options.now || Date.now;
+    this.#rng = options.rng || Math.random;
+    this.#executeOwner = options.executeOwner || executeMaintenanceOwner;
+    this.#cwd = options.cwd || process.cwd();
   }
 
   /**
@@ -72,22 +143,145 @@ export class ScheduledTaskRunner extends EventEmitter {
    */
   start() {
     if (this.#started) return;
+    this.#taskStore?.recoverSchedules();
     this.#started = true;
 
-    this.#eventRouter.on('event', (event) => {
-      if (event.source === 'schedule' && event.type === 'cron.fired') {
-        this.#handleCronEvent(event).catch(err => {
-          console.error(`[scheduled-task-runner] Error handling cron event: ${err.message}`);
-        });
-      }
-    });
+    this.#listener = event => {
+      if (!this.#started || event.source !== 'schedule' || event.type !== 'cron.fired') return;
+      const handling = event.payload?.kind && event.payload.kind !== 'agent.prompt'
+        ? this.runOnce({ ...event.payload, id: event.payload.job_id || event.payload.id }, { fireTime: event.payload.fireTime })
+        : this.#handleCronEvent(event);
+      handling.catch(error => this.emit('recovery-required', { event, error }));
+    };
+    this.#eventRouter.on('event', this.#listener);
+    this.#recoveryListener = ({ event, error }) => {
+      const { job_id: jobId, fireTime, ...job } = event.payload;
+      job.id = jobId || job.id;
+      if (!this.#taskStore || !job.id) throw error;
+      this.#taskStore.ensureSchedule(job);
+      this.#taskStore.changeSchedule(job.id, record => {
+        record.state = 'blocked';
+        record.pendingFireTime ||= fireTime || new Date(this.#now()).toISOString();
+        record.lastReceipt = { jobId: job.id, fireTime: record.pendingFireTime, state: 'deferred',
+          reason: 'recovery-required', exitStatus: null, summary: error.message,
+          startedAt: new Date(this.#now()).toISOString(), finishedAt: new Date(this.#now()).toISOString(),
+          durationMs: 0, attemptCount: record.attemptCount, terminal: false };
+        record.receipts.push(record.lastReceipt);
+        return record;
+      });
+      this.emit('recovery-required', { event, error });
+    };
+    this.#eventRouter.on('schedule-recovery-required', this.#recoveryListener);
   }
 
-  /**
-   * Stop the runner.
-   */
   stop() {
     this.#started = false;
+    if (this.#listener) this.#eventRouter.off('event', this.#listener);
+    if (this.#recoveryListener) this.#eventRouter.off('schedule-recovery-required', this.#recoveryListener);
+  }
+
+  /** One owner attempt, shared by cron and manual mode. Retried only after persisted retryAt. */
+  async runOnce(job, { fireTime } = {}) {
+    if (!this.#taskStore) throw new Error('Maintenance requires a persistent TaskStore');
+    if (!job.id) throw new Error('Maintenance requires a job ID');
+    // Do not persist event envelope fields as configuration.
+    const { job_id: _jobId, fireTime: _fireTime, ...configuration } = job;
+    job = configuration;
+    const now = this.#now();
+    const timestamp = new Date(now).toISOString();
+    const expression = job.cron || job.schedule;
+    const nextRun = expression ? nextCronRun(expression, now, job.timezone).toISOString() : null;
+    this.#taskStore.recoverSchedules();
+    this.#taskStore.ensureSchedule(job, nextRun);
+    const existing = this.#taskStore.getSchedule(job.id);
+    fireTime ||= existing.pendingFireTime || new Date(Math.floor(now / 60000) * 60000).toISOString();
+    if (!Number.isFinite(Date.parse(fireTime))) throw new Error('Invalid fireTime');
+    fireTime = new Date(fireTime).toISOString();
+    let claim = false;
+    let response;
+    this.#taskStore.changeSchedule(job.id, record => {
+      const settled = record.receipts.find(receipt => receipt.fireTime === fireTime && receipt.terminal !== false);
+      if (settled) {
+        response = { ...settled, state: 'skipped', reason: 'already-settled' };
+        return record;
+      }
+      if (record.state === 'running' || record.state === 'blocked') {
+        let alive = false;
+        if (record.ownerPid) {
+          try { process.kill(record.ownerPid, 0); alive = true; }
+          catch (error) { if (error.code !== 'ESRCH') alive = true; }
+        }
+        if (!alive) record.state = 'blocked';
+        response = { jobId: job.id, fireTime, state: 'deferred', reason: alive ? 'lock-held' : 'recovery-required',
+          exitStatus: null, summary: 'Run outcome unresolved; inspect the retained intent', startedAt: timestamp,
+          finishedAt: timestamp, durationMs: 0, attemptCount: record.attemptCount, terminal: false };
+        record.lastReceipt = response;
+        return record;
+      }
+      if (record.pendingFireTime && record.pendingFireTime !== fireTime) {
+        response = { jobId: job.id, fireTime, state: 'deferred', reason: 'pending-run', summary: 'An earlier run is pending',
+          exitStatus: null, startedAt: timestamp, finishedAt: timestamp, durationMs: 0, attemptCount: record.attemptCount, terminal: false };
+        return record;
+      }
+      if (record.retryAt && Date.parse(record.retryAt) > now) {
+        response = { ...record.lastReceipt, state: 'deferred', reason: 'backoff' };
+        return record;
+      }
+      claim = true;
+      if (record.state === 'idle') record.attemptCount = 0;
+      record.state = 'running';
+      record.pendingFireTime = fireTime;
+      record.attemptCount++;
+      record.lastRun = timestamp;
+      record.ownerPid = process.pid;
+      record.workerPid = null;
+      record.nextRun = nextRun;
+      record.retryAt = null;
+      return record;
+    });
+    if (!claim) return response;
+
+    let result;
+    const supported = MAINTENANCE_KINDS.includes(job.kind);
+    try {
+      if (!supported) result = { exitStatus: 2, summary: `Unsupported task kind: ${job.kind}` };
+      else if (job.prompt || job.args?.install || job.args?.force) {
+        result = { exitStatus: 2, summary: 'Maintenance cannot accept prompts, install, or force authority' };
+      } else result = await this.#executeOwner(job, { cwd: this.#cwd, onSpawn: pid => {
+        this.#taskStore.changeSchedule(job.id, record => ({ ...record, workerPid: pid }));
+      } });
+      if (!result || (result.exitStatus !== null && !Number.isInteger(result.exitStatus))) {
+        result = { exitStatus: null, uncertain: true, summary: 'Invalid owner receipt; inspect effects' };
+      }
+    } catch (error) {
+      // A thrown executor error does not establish whether it launched work.
+      result = { exitStatus: null, uncertain: true, summary: error.message };
+    }
+    const finishedAt = new Date(this.#now()).toISOString();
+    let receipt;
+    this.#taskStore.changeSchedule(job.id, record => {
+      const failed = result.exitStatus !== 0;
+      const maxAttempts = Math.min(3, Math.max(1, Number(job.retries ?? 2) + 1));
+      const retry = supported && failed && !result.uncertain && result.exitStatus !== 2
+        && result.state !== 'deferred' && record.attemptCount < maxAttempts;
+      receipt = { jobId: job.id, fireTime, state: result.uncertain ? 'deferred' : result.state || (failed ? 'failed' : 'ok'),
+        reason: result.uncertain ? 'recovery-required' : retry ? 'retry-pending' : undefined,
+        exitStatus: result.exitStatus, summary: result.summary || '', detail: result.detail,
+        startedAt: timestamp, finishedAt, durationMs: Math.max(0, this.#now() - now),
+        attemptCount: record.attemptCount, terminal: !retry && !result.uncertain };
+      record.receipts.push(receipt);
+      record.lastReceipt = receipt;
+      record.state = result.uncertain ? 'blocked' : retry ? 'retry' : 'idle';
+      record.ownerPid = null;
+      if (!result.uncertain) record.workerPid = null;
+      record.retryAt = retry ? new Date(this.#now() + retryDelay(record.attemptCount, job.backoff, this.#rng)).toISOString() : null;
+      if (!retry && !result.uncertain) record.pendingFireTime = null;
+      // Completion advances past downtime too; never queue every slot missed during a slow run.
+      record.nextRun = expression ? nextCronRun(expression, this.#now(), record.timezone).toISOString() : null;
+      return record;
+    });
+    this.emit('job:receipt', receipt);
+    return receipt;
   }
 
   /**
@@ -101,13 +295,13 @@ export class ScheduledTaskRunner extends EventEmitter {
     const priority = event.payload?.priority ?? 1;
 
     if (!action) {
-      console.warn(`[scheduled-task-runner] Cron event missing action: ${jobId}`);
+      this.emit('recovery-required', { event, error: new Error('Cron event missing action') });
       return;
     }
 
     const prompt = this.#resolvePrompt(action, event.payload);
     if (!prompt) {
-      console.warn(`[scheduled-task-runner] Unknown action "${action}" for job ${jobId}`);
+      this.emit('recovery-required', { event, error: new Error(`Unknown action: ${action}`) });
       return;
     }
 
@@ -146,6 +340,7 @@ export class ScheduledTaskRunner extends EventEmitter {
     } catch (error) {
       console.error(`[scheduled-task-runner] Failed to submit job ${jobId}: ${error.message}`);
       this.emit('job:failed', { jobId, action, error: error.message });
+      this.emit('recovery-required', { event, error });
     }
   }
 
@@ -204,9 +399,33 @@ export class ScheduledTaskRunner extends EventEmitter {
     return {
       started: this.#started,
       registeredActions: Object.keys(BUILTIN_ACTIONS),
+      maintenanceKinds: [...MAINTENANCE_KINDS],
+      schedules: this.#taskStore?.getSchedules() || [],
       jobHistory: this.getHistory(),
     };
   }
 }
 
 export default ScheduledTaskRunner;
+
+/** Existing daemon schedule surface, no IPC, watcher, supervisor, or background process. */
+export async function runManualSchedule(flags, { now = Date.now, executeOwner } = {}) {
+  if (process.platform === 'win32') throw new Error('Scheduled maintenance unsupported on Windows; use WSL2');
+  const [{ Config }, { TaskStore }] = await Promise.all([import('./config.mjs'), import('./task-store.mjs')]);
+  if (typeof flags.job !== 'string') throw new Error('--run-once requires --job ID');
+  const config = new Config(flags.config || '.aiwg/daemon.json');
+  config.load();
+  const job = config.get('schedule.jobs')?.find(job => job.id === flags.job);
+  if (!job || !MAINTENANCE_KINDS.includes(job.kind)) throw new Error('Select a configured deterministic maintenance job');
+  const store = new TaskStore(flags['store-path'] || '.aiwg/daemon/tasks.json', { now });
+  await store.initialize();
+  let receipt;
+  if (flags.resolve) {
+    receipt = store.resolveSchedule(job.id, flags.resolve).lastReceipt;
+  } else {
+    const runner = new ScheduledTaskRunner({ taskStore: store, now, executeOwner });
+    receipt = await runner.runOnce(job, { fireTime: flags['fire-time'] });
+  }
+  console.log(flags.json ? JSON.stringify(receipt) : `${receipt.jobId}: ${receipt.state}: ${receipt.summary}`);
+  return receipt.state === 'deferred' ? 3 : receipt.state === 'failed' ? 1 : 0;
+}

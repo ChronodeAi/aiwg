@@ -291,14 +291,6 @@ class DaemonMain {
       this.log('File watcher started');
     }
 
-    const scheduleConfig = this.config.get('schedule');
-    if (scheduleConfig?.enabled) {
-      this.cronScheduler = new CronScheduler(scheduleConfig);
-      this.cronScheduler.on('event', (event) => this.eventRouter.route(event));
-      this.cronScheduler.start();
-      this.log('Cron scheduler started');
-    }
-
     // Initialize RoomManager for multi-room messaging
     try {
       const { RoomManager } = await import('../messaging/room-manager.mjs');
@@ -333,9 +325,20 @@ class DaemonMain {
         supervisor: this.daemonSupervisor,
         eventRouter: this.eventRouter,
         roomManager: this.roomManager,
+        taskStore: this.taskStore,
       });
+      this.scheduledTaskRunner.on('recovery-required', ({ error }) => this.log(`Scheduled task recovery required: ${error.message}`));
       this.scheduledTaskRunner.start();
       this.log('ScheduledTaskRunner started');
+    }
+
+    const scheduleConfig = this.config.get('schedule');
+    if (scheduleConfig?.enabled) {
+      this.cronScheduler = new CronScheduler(scheduleConfig, { taskStore: this.taskStore });
+      this.cronScheduler.on('event', (event) => this.eventRouter.route(event));
+      this.cronScheduler.on('recovery-required', ({ jobId, error }) => this.log(`Schedule ${jobId} recovery required: ${error.message}`));
+      this.cronScheduler.start();
+      this.log('Cron scheduler started');
     }
 
     // Initialize AutonomousEngine if enabled
