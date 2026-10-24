@@ -843,7 +843,10 @@ async function captureSizes(directory) {
 /** Readers never create a monitor, walk a worktree or execute a subprocess. */
 export async function sampleWorkerStatus(options, memory = new Map()) {
   const now = options.now?.() ?? Date.now(), sampledAt = new Date(now).toISOString();
-  const began = monotonicMs();
+  // Use one monotonic source for worker age and the sampling budget. Injected
+  // lifecycle traces must not expire because the host descheduled their I/O.
+  const monotonicNow = options.monotonicNow ?? monotonicMs;
+  const began = monotonicNow();
   const report = { version: 1, sampledAt, scope: 'direct-conductor', observerCoverage: 'unobserved',
     workers: [], breakers: [], nextCheckAt: null, complete: true, findings: [], exitCode: 0 };
   let root;
@@ -853,10 +856,10 @@ export async function sampleWorkerStatus(options, memory = new Map()) {
       : await boundedEntries(root, STATUS_LIMITS.directories);
     report.complete = listing.complete;
     if (!listing.complete) { report.findings.push('SELECTION_LIMIT: narrow --runs-root'); report.exitCode = 2; }
-    const sampleTime = options.monotonicNow?.() ?? monotonicMs();
+    const sampleTime = monotonicNow();
     const bootId = options.bootId ?? (() => { try { return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(); } catch { return null; } })();
     for (const entry of listing.entries) {
-      if (monotonicMs() - began >= STATUS_LIMITS.sampleMs) {
+      if (monotonicNow() - began >= STATUS_LIMITS.sampleMs) {
         report.complete = false; report.findings.push('SAMPLE_BUDGET: narrow selection'); if (report.exitCode !== 1) report.exitCode = 2; break;
       }
       let directory;
@@ -894,7 +897,7 @@ export async function sampleWorkerStatus(options, memory = new Map()) {
             row.findings.push(code); report.findings.push(`${row.invocationId}: ${code}`);
           }
         }
-        if (monotonicMs() - began >= STATUS_LIMITS.sampleMs) {
+        if (monotonicNow() - began >= STATUS_LIMITS.sampleMs) {
           report.complete = false; report.findings.push('SAMPLE_OVERRUN: observation unavailable; narrow selection');
           row.health.coverage = 'degraded'; row.health.unavailableSignals.push('observer-continuity'); row.nextAction = 'RESTORE_OBSERVATION';
         }

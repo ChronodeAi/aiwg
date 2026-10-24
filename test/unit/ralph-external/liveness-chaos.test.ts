@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtempSync } from 'node:fs';
+import { lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
@@ -9,6 +11,7 @@ import { sampleWorkerIdentity, sampleWorkerGroup, sampleWorkerStatus } from '../
 import { CodexAdapter } from '../../../tools/ralph-external/lib/codex-adapter.mjs';
 import { ScopedFailureBreaker, attributeFailureScope } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
 import { qualificationDigest } from '../../../src/models/qualification-digest.mjs';
+import { signalChild } from '../../../src/process/signal-child.mjs';
 
 function monotonicClock() {
   let time = 0;
@@ -19,6 +22,12 @@ function monotonicClock() {
 }
 
 const fixtures: any[] = [];
+const roots: string[] = [];
+function temporaryRoot(prefix: string) {
+  const root = mkdtempSync(path.join(tmpdir(), prefix));
+  roots.push(root);
+  return root;
+}
 afterEach(async () => {
   for (const f of fixtures.splice(0)) {
     // Only the birth identity of this fixture's detached child authorizes cleanup.
@@ -26,8 +35,8 @@ afterEach(async () => {
     if (f.child && f.child.exitCode === null && f.child.signalCode === null) await f.closed;
     await f.result;
     expect(f.signals.every(([pid]: [number]) => pid === -f.identity?.pgid)).toBe(true);
-    await rm(f.root, { recursive: true, force: true });
   }
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
   vi.unstubAllEnvs();
   resetInProcessAllowanceLedger();
 });
@@ -43,7 +52,7 @@ function bounded<T>(promise: Promise<T>): Promise<T> {
 async function fixture({ missing = false, effort = 'medium', retained = false, scopedBreaker = null as any,
   beforeSpawn = null as null | (() => Promise<void>) } = {}) {
   vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
-  const root = await mkdtemp(path.resolve('test/.tmp-liveness-'));
+  const root = temporaryRoot('liveness-');
   const cwd = path.join(root, 'work'); await mkdir(cwd);
   if (retained) await writeFile(path.join(cwd, 'partial.txt'), 'retained partial\n');
   const brief = path.join(root, 'brief'); await writeFile(brief, 'synthetic task');
@@ -150,8 +159,28 @@ async function fixture({ missing = false, effort = 'medium', retained = false, s
 }
 
 describe('T-OG-20–23 deterministic direct lifecycle traces', () => {
+  it.each([
+    { elapsed: 4999, phase: 'before-row', complete: true, finding: null, workers: 1 },
+    { elapsed: 5000, phase: 'before-row', complete: false, finding: 'SAMPLE_BUDGET', workers: 0 },
+    { elapsed: 5000, phase: 'after-row', complete: false, finding: 'SAMPLE_OVERRUN', workers: 1 },
+  ])('bounds status sampling at $elapsed ms ($phase) on the injected clock', async ({ elapsed, phase, complete, finding, workers }) => {
+    const runDir = temporaryRoot('status-budget-');
+    await writeFile(path.join(runDir, 'process.json'), JSON.stringify({ invocationId: 'manual', origin: 'manual' }), { mode: 0o600 });
+    const clock = monotonicClock();
+    let reads = 0;
+    const report = await sampleWorkerStatus({ runDir, bootId: 'fixture-boot', monotonicNow: () => {
+      // Reads: start, snapshot, before row, after row. Advance only at the
+      // selected boundary, without a timer or a real filesystem delay.
+      if (++reads === (phase === 'before-row' ? 3 : 4)) clock.advance(elapsed);
+      return clock.now();
+    } });
+    expect(report.complete).toBe(complete);
+    expect(report.workers).toHaveLength(workers);
+    expect(report.findings).toEqual(finding ? [expect.stringContaining(finding)] : []);
+  });
+
   it('T-OG-21 silent max hand-launch crosses the default 270/900/960 second boundaries', async () => {
-    const root = await mkdtemp(path.resolve('test/.tmp-silent-max-'));
+    const root = temporaryRoot('silent-max-');
     const clock = monotonicClock();
     const effectiveHealth = resolveWorkerEffectiveHealth(undefined, { role: 'reasoning', effort: 'max',
       modelKey: 'fixture/model', profileRef: 'fixture', wallSeconds: 1800, stepEnforcement: 'unavailable' });
@@ -197,13 +226,14 @@ describe('T-OG-20–23 deterministic direct lifecycle traces', () => {
       expect(observer.evidence().gaps).toEqual([]);
       expect(bytes).toBe(quietBytes); expect(child.exitCode).toBeNull();
     } finally {
-      if (identity) signalOwnedWorker(identity, 'SIGKILL'); else child.kill('SIGKILL');
-      await closed; await rm(root, { recursive: true, force: true });
+      if (identity) signalOwnedWorker(identity, 'SIGKILL'); else signalChild(child, 'SIGKILL');
+      await closed;
     }
   });
 
-  it.each([true, false])('T-OG-23 observes a shell hand-launch with run directory=%s without managed state', async withDirectory => {
-    const root = await mkdtemp(path.resolve('test/.tmp-hand-launch-'));
+  it.each([[true, false], [false, false], [true, true]])('T-OG-23 observes a shell hand-launch with run directory=%s without managed state (host pause=%s)', async (withDirectory, hostPause) => {
+    const root = temporaryRoot('hand-launch-');
+    const clock = monotonicClock();
     const runDir = path.join(root, 'run');
     const child = spawn('/bin/sh', ['-c',
       'umask 077; if [ "$1" = with-dir ]; then mkdir "$2"; exec >"$2/stdout.log" 2>"$2/stderr.log"; fi; exec "$3" "$4" --hand-launch --final-output "$5"',
@@ -238,8 +268,18 @@ describe('T-OG-20–23 deterministic direct lifecycle traces', () => {
               startupDeadlineAt: null, hardDeadlineAt: null } });
           return observed.observedWorker ? 'live-unobserved' : 'absent-uncertain';
         }
-        const report = await sampleWorkerStatus({ runDir });
-        expect(report).toMatchObject({ complete: true, observerCoverage: 'unobserved', breakers: [] });
+        // Simulate descheduling across the sampler's five-second budget. The
+        // lifecycle clock stays fixed until the fixture acknowledges a step.
+        const hostNow = process.hrtime.bigint.bind(process.hrtime);
+        let hostElapsed = 0n;
+        const hostClock = hostPause ? vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => {
+          hostElapsed += 5_000_000_000n;
+          return hostNow() + hostElapsed;
+        }) : null;
+        let report;
+        try { report = await sampleWorkerStatus({ runDir, monotonicNow: clock.now }); }
+        finally { hostClock?.mockRestore(); }
+        expect(report, JSON.stringify(report)).toMatchObject({ complete: true, observerCoverage: 'unobserved', breakers: [] });
         expect(report.workers).toHaveLength(1);
         const row = report.workers[0];
         expect(row).toMatchObject({ invocationId: 'hand-launch', transport: 'shell', terminal: false,
@@ -263,9 +303,8 @@ describe('T-OG-20–23 deterministic direct lifecycle traces', () => {
       if (withDirectory) expect((await readdir(runDir)).sort()).toEqual(['process.json', 'stderr.log', 'stdout.log']);
     } finally {
       if (identity) signalOwnedWorker(identity, 'SIGKILL');
-      else if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      else if (child.exitCode === null && child.signalCode === null) signalChild(child, 'SIGKILL');
       await closed;
-      await rm(root, { recursive: true, force: true });
     }
   });
 
