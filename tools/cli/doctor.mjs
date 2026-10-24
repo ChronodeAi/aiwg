@@ -959,6 +959,17 @@ export async function runDoctor() {
         throw new Error(`OG_CONFIG_REFERENCE: Missing project config at ${path.join(process.cwd(), '.aiwg', 'aiwg.config')}. Run \`aiwg init\` to create it, then rerun doctor.`);
       }
     } catch (error) {
+      // readAiwgConfig also validates models.json, before qualification gets
+      // a chance to report its coded policy diagnostics.
+      const { WorkerRoleEffortError } = await importImpl(import.meta.url, 'models/provider-policy.js');
+      if (jsonMode && error instanceof WorkerRoleEffortError) {
+        const { workerInvocationDiagnostic } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+        process.stdout.write(`${JSON.stringify({ probeWorkers: true,
+          qualification: { status: 'failed', results: [], diagnostics: [workerInvocationDiagnostic(error)] },
+        }, null, 2)}\n`);
+        process.exitCode = 1;
+        return;
+      }
       process.stderr.write(`aiwg doctor: cannot read .aiwg/aiwg.config: ${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
       return;

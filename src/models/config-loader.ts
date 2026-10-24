@@ -13,7 +13,7 @@ import { homedir } from 'os';
 import { existsSync } from 'fs';
 import { findPackageRoot } from '../cli/find-package-root.js';
 import { workerConfigDigest, validateWorkerGroupReferences, type ParallelismConfig, type WorkerActivation } from '../config/aiwg-config.js';
-import { DEFAULT_WORKER_SELECTION, mergeWorkerSelection, WorkerSelectionPolicySchema, validateUserProjectModelConfig } from './provider-policy.js';
+import { DEFAULT_WORKER_SELECTION, WorkerRoleEffortError, mergeWorkerSelection, WorkerSelectionPolicySchema, validateUserProjectModelConfig } from './provider-policy.js';
 import type {
   ModelConfig,
   ModelConfigV1,
@@ -160,10 +160,14 @@ export class ConfigLoader {
       const parsed: unknown = JSON.parse(content);
       const validation = validateUserProjectModelConfig(parsed);
       if (!validation.valid) {
+        const missingEffort = validation.diagnostics.find(item =>
+          /^\/defaults\/workerSelection\/roleGuidance\/[a-z][a-z0-9-]*\/initialEffort$/.test(item.pointer ?? ''));
+        if (missingEffort) throw new WorkerRoleEffortError(missingEffort.pointer!.split('/')[4]);
         throw new Error(validation.diagnostics.map(item => `${item.code}: ${item.message}`).join('; '));
       }
       return parsed as UserProjectConfig;
     } catch (error) {
+      if (error instanceof WorkerRoleEffortError) throw error;
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw new Error(`Invalid user model config ${this.locations.userConfig}: ${error}`);
     }
@@ -178,10 +182,14 @@ export class ConfigLoader {
       const parsed: unknown = JSON.parse(content);
       const validation = validateUserProjectModelConfig(parsed);
       if (!validation.valid) {
+        const missingEffort = validation.diagnostics.find(item =>
+          /^\/defaults\/workerSelection\/roleGuidance\/[a-z][a-z0-9-]*\/initialEffort$/.test(item.pointer ?? ''));
+        if (missingEffort) throw new WorkerRoleEffortError(missingEffort.pointer!.split('/')[4]);
         throw new Error(validation.diagnostics.map(item => `${item.code}: ${item.message}`).join('; '));
       }
       return parsed as UserProjectConfig;
     } catch (error) {
+      if (error instanceof WorkerRoleEffortError) throw error;
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw new Error(`Invalid project model config ${this.locations.projectConfig}: ${error}`);
     }

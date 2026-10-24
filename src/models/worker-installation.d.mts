@@ -9,6 +9,8 @@ export function loadRecordedWorkerInstallations(input: {
   parallelism?: import('../config/aiwg-config.js').ParallelismConfig;
   storePath?: string;
   storeDigest?: string;
+  /** Request validation after store presence, before recorded policy/adapter checks. */
+  precheckPolicy?: () => void;
 }): Promise<{ registry: ProviderModelCapabilityRegistry; installations: Record<string, WorkerResolutionBinding>; drivers: Record<string, WorkerInvocationDriver>; observations: Record<string, import('./model-discovery.js').ProviderModelDiscovery> }>;
 
 export function hasProvider(name: string): boolean;

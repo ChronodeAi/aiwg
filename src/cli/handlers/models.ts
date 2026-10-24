@@ -10,7 +10,7 @@ import { glob } from 'glob';
 import { load as loadYaml } from 'js-yaml';
 import {
   compileModelPolicy, validateCanonicalModelPolicy, validateUserProjectModelConfig,
-  loadProviderModelCapabilities, WorkerPolicyError,
+  loadProviderModelCapabilities, WorkerPolicyError, assertWorkerRoleEffort,
   type ProviderModelCatalog,
 } from '../../models/provider-policy.js';
 import type { CanonicalModelPolicy, ModelTier } from '../../models/types.js';
@@ -56,8 +56,34 @@ export async function loadWorkerInputs(ctx: HandlerContext) {
     return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
       registry, installations: {} }, drivers: {} };
   }
+  // Explain missing policy before a recorded approval's digest check can
+  // mask it. The host owner first preserves its missing-installation errors.
+  const parallelism = config.parallelism;
+  const precheckPolicy = () => {
+    if (!ctx.args.some(arg => arg === '--role' || arg.startsWith('--role='))) return;
+    const request = parseWorkerCommandArgs(ctx.args.slice(1));
+    const members = Object.entries(parallelism.groups ?? {})
+      .filter(([id]) => !request.group || request.group === id)
+      .flatMap(([, group]) => group.members).filter(member => member.enabled !== false
+        && parallelism.clis?.[member.cli]?.enabled !== false && member.roles.includes(request.role));
+    const requiresExplicit = members.length > 0 && members.every(member => {
+      // Health metadata can identify the provider before an operator has
+      // qualified its dispatch adapter. It grants no dispatch authority.
+      const [namespace, id] = (parallelism.clis?.[member.cli]?.adapter ?? `providers:${member.cli}`).split(':');
+      const provider = namespace === 'providers' ? registry.providers[id as keyof typeof registry.providers] : undefined;
+      const adapter = namespace === 'workerAdapters' ? registry.workerAdapters?.[id]
+        : provider?.workerAdapter ?? provider?.workerHealthAdapter;
+      const observation = (catalog.discovery?.instances?.[member.cli]
+        ?? catalog.discovery?.providers?.[adapter?.provider ?? id])?.models.find(row => row.id === member.model)?.worker;
+      if (observation?.effortSupport === 'explicit') return true;
+      if (observation?.effortSupport === 'not-applicable') return false;
+      return adapter?.capabilities.effort === 'explicit';
+    });
+    // With no matching worker, do not invent policy needs.
+    if (members.length) assertWorkerRoleEffort(models.defaults.workerSelection, request.role, requiresExplicit);
+  };
   const { registry: qualifiedRegistry, installations, drivers, observations } = await loadRecordedWorkerInstallations({
-    registry, cwd: ctx.cwd, policy: models.defaults.workerSelection, parallelism: config.parallelism,
+    registry, cwd: ctx.cwd, policy: models.defaults.workerSelection, parallelism: config.parallelism, precheckPolicy,
   });
   catalog.discovery ??= { source: 'static', fetchedAt: new Date().toISOString(), providers: {} };
   catalog.discovery.instances = { ...catalog.discovery.instances };

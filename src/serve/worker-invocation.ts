@@ -14,7 +14,7 @@ import type { WorkerPolicyDiagnostic } from '../models/types.js';
 import { qualificationDigest } from '../models/qualification-digest.mjs';
 import type { WorkerExecution, ParallelismConfig } from '../config/aiwg-config.js';
 import { qualifyWorkerInvocationProfile, isOperatorQualifiedWorkerAdapter, assertOperatorWorkerNativeArgv, assertWorkerSelectionAllowed,
-  assertWorkerLaunchMode, requiredWorkerControls, requiresWorkerExternalBoundary, isCanonicalWorkerModelKey, assertWorkerHealthQualification, WorkerPolicyError, DEFAULT_WORKER_SELECTION, type WorkerAdapterMetadata, type WorkerInvocationProfile, type WorkerBoundary } from '../models/provider-policy.js';
+  assertWorkerLaunchMode, WorkerRoleEffortError, requiredWorkerControls, requiresWorkerExternalBoundary, isCanonicalWorkerModelKey, assertWorkerHealthQualification, WorkerPolicyError, DEFAULT_WORKER_SELECTION, type WorkerAdapterMetadata, type WorkerInvocationProfile, type WorkerBoundary } from '../models/provider-policy.js';
 
 /** Frozen per-attempt windows; parent/transport ceilings include time already spent. */
 export function resolveWorkerEffectiveHealth(config: ParallelismConfig['health'], input: {
@@ -663,6 +663,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
 /** Public diagnostics contain fixed summaries or explicit typed request-path details. */
 export function workerInvocationDiagnostic(error: unknown, pointer: string,
   fallback: WorkerPolicyDiagnostic['code'] = 'OG_CONFIG_REFERENCE'): WorkerPolicyDiagnostic {
+  if (error instanceof WorkerRoleEffortError) return { code: error.code, pointer: error.pointer, message: error.message };
   if (error instanceof WorkerPathScopeError || error instanceof WorkerRequestArgumentError) {
     return { code: error.code, pointer: error.pointer, message: error.message };
   }

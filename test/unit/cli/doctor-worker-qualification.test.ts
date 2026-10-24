@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { validateWorkerCatalogDiscovery } from '../../../src/models/provider-policy.js';
+import { assertWorkerRoleEffort, validateWorkerCatalogDiscovery } from '../../../src/models/provider-policy.js';
 import { writeExecutable } from '../../helpers/write-executable.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { checkCodexWorkerSandbox, checkWorkerInvocationBuilds, checkRecordedWorkerInvocationBuilds } from '../../../tools/cli/worker-qualification.mjs';
@@ -113,6 +113,102 @@ process.exitCode = result.exitCode;
 }
 
 describe('doctor worker qualification through the public CLI (fake CLIs only)', () => {
+  it('preserves null effort for models with no applicable effort control', () => {
+    const policy = { roleGuidance: { efficiency: { groups: ['workers'], tier: 'standard' as const,
+      initialEffort: null, effortLadder: [], allowNotApplicableEffort: true } } };
+    expect(() => assertWorkerRoleEffort(policy, 'efficiency', false)).not.toThrow();
+    expect(() => assertWorkerRoleEffort(policy, 'efficiency', true)).toThrow('explicit initial effort');
+  });
+
+  it.each(['missing-file', 'missing-role', 'missing-field', 'null-effort'])('names missing role effort before adapter build and host loading (%s)', async kind => {
+    const f = await fixture();
+    const filename = path.join(f.project, 'models.json');
+    if (kind === 'missing-file') await rm(filename);
+    else {
+      const models = JSON.parse(await readFile(filename, 'utf8'));
+      if (kind === 'missing-role') delete models.defaults.workerSelection.roleGuidance.coding;
+      else if (kind === 'missing-field') delete models.defaults.workerSelection.roleGuidance.coding.initialEffort;
+      else Object.assign(models.defaults.workerSelection.roleGuidance.coding,
+        { initialEffort: null, effortLadder: [], allowNotApplicableEffort: true });
+      await writeFile(filename, JSON.stringify(models));
+    }
+    const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    expect(qualified.code, qualified.stdout + qualified.stderr).toBe(1);
+    expect(qualified.stderr).toBe('');
+    expect(qualified.stdout).not.toBe('');
+    const report = JSON.parse(qualified.stdout);
+    const diagnostic = kind === 'missing-field' ? report.qualification.diagnostics[0]
+      : report.qualification.results[0].invocationChecks[0].diagnostics[0];
+    expect(diagnostic).toMatchObject({ code: 'OG_CONFIG_REFERENCE',
+      pointer: '/defaults/workerSelection/roleGuidance/coding/initialEffort',
+      message: expect.stringContaining('models.json') });
+    expect(diagnostic.message).toContain('coding');
+    expect(qualified.stdout).not.toContain('invocation_build_failed');
+    await expect(access(path.join(f.config, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const resolved = await f.resolve();
+    expect(resolved.code).toBe(2);
+    const resolution = JSON.parse(resolved.stdout);
+    if (kind === 'missing-field') expect(resolution.diagnostics).toContainEqual(diagnostic);
+    else expect(resolution.diagnostics).toContainEqual(expect.objectContaining({ code: 'OG_ADAPTER_UNQUALIFIED' }));
+    expect(resolution.invocation).toBeUndefined();
+  });
+
+  it('retains exact approvals for parallel workspaces and replaces only the requalified workspace', async () => {
+    const f = await fixture();
+    const second = path.join(f.root, 'second-project');
+    await mkdir(path.join(second, '.aiwg'), { recursive: true });
+    for (const filename of ['.aiwg/aiwg.config', 'models.json', 'brief.txt']) {
+      await writeFile(path.join(second, filename), await readFile(path.join(f.project, filename)));
+    }
+    const qualificationArgs = ['doctor', '--probe-workers', '--qualify', '--yes', '--json'];
+    const results = await Promise.all([f.run(qualificationArgs), f.run(qualificationArgs, second)]);
+    for (const result of results) expect(result.code, result.stdout + result.stderr).toBe(0);
+    const store = path.join(f.config, 'worker-installations.json');
+    expect(JSON.parse(await readFile(store, 'utf8')).registrations).toHaveLength(2);
+    const again = await f.run(qualificationArgs);
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    expect(JSON.parse(await readFile(store, 'utf8')).registrations).toHaveLength(2);
+    const first = await f.resolve();
+    expect(first.code, first.stdout + first.stderr).toBe(0);
+    const resolved = await f.run(['models', 'resolve', '--role', 'coding', '--task', 'implementation', '--group', 'workers',
+      '--brief', path.join(second, 'brief.txt'), '--workdir', second, '--final-output', path.join(second, 'result.json'),
+      '--format', 'json'], second);
+    expect(resolved.code, resolved.stdout + resolved.stderr).toBe(0);
+    expect(JSON.parse(resolved.stdout).invocation.cwd).toBe(second);
+    const probed = await f.run(['doctor', '--probe-workers', '--json']);
+    expect(probed.code, probed.stdout + probed.stderr).toBe(0);
+    // Duplicate authority for one exact key still fails closed.
+    const stored = JSON.parse(await readFile(store, 'utf8'));
+    stored.registrations.push(stored.registrations.find((record: any) => record.installation.cwd === f.project));
+    await writeFile(store, JSON.stringify(stored));
+    const ambiguous = await f.resolve();
+    expect(ambiguous.code).toBe(2);
+    expect(JSON.parse(ambiguous.stdout).invocation).toBeUndefined();
+  });
+
+  it('bounds the approval set without eviction and permits replacement at capacity', async () => {
+    const f = await fixture();
+    const args = ['doctor', '--probe-workers', '--qualify', '--yes', '--json'];
+    const first = await f.run(args);
+    expect(first.code, first.stdout + first.stderr).toBe(0);
+    const store = path.join(f.config, 'worker-installations.json');
+    const stored = JSON.parse(await readFile(store, 'utf8'));
+    const record = stored.registrations[0];
+    stored.registrations = [record, ...Array.from({ length: 127 }, (_, index) => ({ ...record, cli: `retained-${index}` }))];
+    await writeFile(store, JSON.stringify(stored));
+    const replaced = await f.run(args);
+    expect(replaced.code, replaced.stdout + replaced.stderr).toBe(0);
+    expect(JSON.parse(await readFile(store, 'utf8')).registrations).toHaveLength(128);
+    stored.registrations[0].cli = 'retained-127';
+    const bytes = JSON.stringify(stored);
+    await writeFile(store, bytes);
+    const full = await f.run(args);
+    expect(full.code, full.stdout + full.stderr).toBe(1);
+    expect(full.stdout).toContain('store is full');
+    expect(await readFile(store, 'utf8')).toBe(bytes);
+    await expect(access(`${store}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('refuses qualification when the model-free Codex sandbox check fails', async () => {
     const f = await fixture();
     await writeExecutable(f.binary, `#!${process.execPath}
@@ -316,6 +412,26 @@ try {
       if (fail) expect(checks[0].diagnostics[0]).toMatchObject({ reason: 'invocation_build_failed', pointer: '/invocation/buildInvocation' });
       expect(JSON.stringify(checks)).not.toContain('sensitive-build-details');
       expect(await readdir(root)).toEqual([]);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it('rejects missing role guidance before calling the installed renderer', async () => {
+    const f = workerResolutionFixture();
+    const root = await mkdtemp(path.join(os.tmpdir(), 'worker-role-precheck-')); roots.push(root);
+    const buildInvocation = vi.fn(() => { throw new Error('renderer must not run'); });
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    try {
+      const checks = await checkWorkerInvocationBuilds({ projectDir: root, config: f.snapshot.config,
+        policy: { ...f.snapshot.models.defaults.workerSelection, roleGuidance: {} }, cli: 'codex',
+        observations: f.snapshot.catalog.discovery!.instances!.codex, driver: { buildInvocation,
+          qualification: { adapter: f.snapshot.registry.providers.codex.workerAdapter,
+            installation: { cwd: root, profile: 'fixture-shell' } } } });
+      expect(checks).toHaveLength(2);
+      expect(buildInvocation).not.toHaveBeenCalled();
+      for (const check of checks) expect(check).toMatchObject({ status: 'blocked', diagnostics: [{
+        code: 'OG_CONFIG_REFERENCE', pointer: `/defaults/workerSelection/roleGuidance/${check.role}/initialEffort`,
+        message: expect.stringContaining('models.json'),
+      }] });
     } finally { vi.unstubAllEnvs(); }
   });
 

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadRecordedWorkerInstallations, prepareWorkerInstallationStore } from '../../../src/models/worker-installation.mjs';
-import { loadProviderModelCapabilities } from '../../../src/models/provider-policy.js';
+import { loadProviderModelCapabilities, WorkerRoleEffortError } from '../../../src/models/provider-policy.js';
 
 vi.mock('node:fs/promises', { spy: true });
 // Node's native homedir ignores thread-local env changes in Vitest's pool.
@@ -19,6 +19,53 @@ afterEach(async () => {
 });
 
 describe('qualification store permission repair', () => {
+  it('requires recorded approvals before policy prechecks, then checks policy before record validation', async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-policy-order-')); roots.push(root);
+    const cwd = path.join(root, 'project'); const store = path.join(root, 'store');
+    await Promise.all([fs.mkdir(cwd), fs.mkdir(store, { mode: 0o700 })]);
+    vi.stubEnv('AIWG_CONFIG', store);
+    const policyError = new WorkerRoleEffortError('coding');
+    const precheckPolicy = vi.fn(() => { throw policyError; });
+    const input = { registry: loadProviderModelCapabilities(), cwd, precheckPolicy };
+    await expect(loadRecordedWorkerInstallations(input)).rejects.toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED',
+      details: { rejections: [{ registration: null, reason: 'no-records' }] } });
+    expect(precheckPolicy).not.toHaveBeenCalled();
+    // Invalid record content must not mask the actionable policy error.
+    await fs.writeFile(path.join(store, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [{}] }), { mode: 0o600 });
+    await expect(loadRecordedWorkerInstallations(input)).rejects.toBe(policyError);
+    expect(precheckPolicy).toHaveBeenCalledOnce();
+  });
+
+  it('selects the exact canonical workspace before validating its approval, without falling back to a peer', async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-workspace-approvals-')); roots.push(root);
+    const first = path.join(root, 'first'); const second = path.join(root, 'second');
+    const alias = path.join(root, 'alias'); const store = path.join(root, 'store');
+    await Promise.all([fs.mkdir(first), fs.mkdir(second), fs.mkdir(store, { mode: 0o700 })]);
+    await fs.symlink(first, alias);
+    vi.stubEnv('AIWG_CONFIG', store);
+    vi.stubEnv('AIWG_3475_ABSENT', undefined);
+    // Deliberately invalid proofs distinguish which workspace's record the
+    // owner checked, without importing a driver or running a version probe.
+    const registrations = [
+      { cli: 'codex', binding: {}, adapter: {}, installation: { cwd: first, environmentNames: ['AIWG_3475_ABSENT'] } },
+      { cli: 'codex', binding: { profile: 'changed' }, adapter: {}, installation: { cwd: second, profile: 'original' } },
+    ];
+    const filename = path.join(store, 'worker-installations.json');
+    await fs.writeFile(filename, JSON.stringify({ version: 1, registrations }), { mode: 0o600 });
+    for (const cwd of [first, alias]) {
+      await expect(loadRecordedWorkerInstallations({ registry: loadProviderModelCapabilities(), cwd }))
+        .rejects.toMatchObject({ details: { rejections: [{ registration: 0, reason: 'environment-name' }] } });
+    }
+    await expect(loadRecordedWorkerInstallations({ registry: loadProviderModelCapabilities(), cwd: second }))
+      .rejects.toMatchObject({ details: { rejections: [{ registration: 1, reason: 'binding-mismatch' }] } });
+    registrations.push({ ...registrations[0], installation: { ...registrations[0].installation, cwd: alias } });
+    await fs.writeFile(filename, JSON.stringify({ version: 1, registrations }));
+    await expect(loadRecordedWorkerInstallations({ registry: loadProviderModelCapabilities(), cwd: first }))
+      .rejects.toMatchObject({ details: { rejections: [
+        { registration: 0, reason: 'record-identity' }, { registration: 2, reason: 'record-identity' },
+      ] } });
+  });
+
   it.each([128, 129])('bounds secret-free registration diagnostics for %s records', async count => {
     const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-store-diagnostics-'));
     roots.push(root);

@@ -119,6 +119,26 @@ first: project-root `models.json`, `$AIWG_CONFIG/models.json` (normally
 only edits `.aiwg/aiwg.config`; edit `models.json` directly, including in headless
 setup scripts. There is currently no role-guidance setter.
 
+Qualification and `models resolve` report `OG_CONFIG_REFERENCE` at
+`/defaults/workerSelection/roleGuidance/<role>/initialEffort` when role guidance
+or a required explicit effort is missing. Set that role's `initialEffort` in
+`models.json` before qualifying; a fresh worktree may lack local-only settings.
+Null effort is reserved for models with qualified evidence that effort does not apply.
+When no installation approval is recorded, `models resolve` still reports
+`OG_ADAPTER_UNQUALIFIED`; run qualification to diagnose missing role effort.
+
+Qualify each worktree from its own project root. The host installation store retains
+up to 128 approvals keyed by CLI and canonical workspace path; requalifying one
+workspace replaces only its approval. Each record retains its own policy, installation
+digests, and input/output roots. Approval does not extend to siblings, descendants,
+or other worktrees sharing a Git common directory. An unapproved workdir still fails
+with `qualified_workspace_mismatch`; run qualification there explicitly.
+Concurrent qualification writes are serialized. A full store refuses a new approval
+without evicting existing ones. A crashed writer can leave a
+`worker-installations.json.lock` beside the host store; after verifying no qualification
+process is running, remove that lock and retry. Changes to the host store invalidate
+previously saved invocation bindings; resolve again before launching them.
+
 Run commands from the project root. For a new project, the following is a complete
 minimal `.aiwg/aiwg.config`. For an existing project, merge its `parallelism` keys
 into your existing configuration, preserving providers, scripts and other settings.
