@@ -63,6 +63,9 @@ import {
   MissingFlagValueError,
 } from '../flag-parsing.js';
 
+/** Default project scripts installed by init and merged by guided setup apply. */
+export const DEFAULT_SCRIPTS: Record<string, string> = { deploy: 'aiwg use all', doctor: 'aiwg doctor', sync: 'aiwg sync' };
+
 const PROVIDER_LABELS: Record<string, string> = {
   antigravity: 'Google Antigravity .agents/',
   claude:    'Claude Code       .claude/',
@@ -388,7 +391,6 @@ Progress resumes from the workspace's saved plan. Apply is a separate step.
     let providers: string[];
     let scripts: Record<string, string> = {};
     let workerDispatchDecision: WorkerDispatchDecision | undefined;
-    const DEFAULT_SCRIPTS = { deploy: 'aiwg use all', doctor: 'aiwg doctor', sync: 'aiwg sync' };
 
     if (nonInteractive) {
       // Non-interactive: an explicit `--providers`/`--default-scripts`
