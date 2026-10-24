@@ -497,8 +497,8 @@ export function createCopilotInstructions(target, srcRoot, dryRun) {
 export async function postDeploy(targetDir, opts) {
   initializeFrameworkWorkspace(targetDir, opts.mode, opts.dryRun, opts.srcRoot);
 
-  // Create copilot-instructions.md
-  createCopilotInstructions(targetDir, opts.srcRoot, opts.dryRun);
+  // copilot-instructions.md is Copilot's context file: --no-context-files leaves it alone.
+  if (opts.contextFiles !== false) createCopilotInstructions(targetDir, opts.srcRoot, opts.dryRun);
 }
 
 // ============================================================================
