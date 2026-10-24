@@ -170,6 +170,29 @@ describe('provider prepare subprocess coordinator', () => {
     expect(inventory(concurrent)).toEqual(inventory(serial));
   });
 
+  it('retains boundary version and context opt-out across worker preparation (#3459, #3476)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-b3-worker-policy-')); roots.push(root);
+    const source = path.join(root, 'source'), target = path.join(root, 'target');
+    fs.mkdirSync(path.join(source, 'rules'), { recursive: true });
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(source, 'package.json'), '{"version":"source-version"}');
+    fs.writeFileSync(path.join(source, 'rules', 'guard.md'), '---\nname: guard\nactivation: kernel\nsummary: Guard fixture.\n---\nGuard.\n');
+    const sentinel = 'SENTINEL\r\n<!-- AIWG:rule-startup:start -->\nOLD\n<!-- AIWG:rule-startup:end -->\n';
+    for (const name of ['AGENTS.md', 'AIWG.md', 'WORKSPACE.md']) fs.writeFileSync(path.join(target, name), sentinel);
+    const jobs = ['claude', 'pi'].map((provider, order) => ({ order, provider, target,
+      args: ['--source', source, '--target', target, '--provider', provider, '--kernel-only',
+        '--no-context-files', '--deploy-version', 'boundary-version', '--skip-commands-migration', '--quiet'] }));
+    const session = await prepareProviderDeployments({ srcRoot: source, jobs });
+    try { for (const job of jobs) await session.commit(job.order); }
+    finally { await session.dispose(); }
+    for (const name of ['AGENTS.md', 'AIWG.md', 'WORKSPACE.md']) expect(fs.readFileSync(path.join(target, name), 'utf8')).toBe(sentinel);
+    for (const provider of ['claude', 'pi']) {
+      for (const name of ['guard.md', 'RULES-INDEX.md']) {
+        expect(fs.readFileSync(path.join(target, `.${provider}/rules`, name), 'utf8')).toContain('aiwg:managed vboundary-version bundled');
+      }
+    }
+  }, 90_000);
+
   it('matches serial Codex, Hermes and Pi project deployment including shared roots and receipts', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-provider-real-parity-')); roots.push(root);
     const source = path.join(root, 'source');

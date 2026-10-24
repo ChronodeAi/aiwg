@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync, cpSync, statSync, truncateSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileWithCapture as execFileSync } from '../../helpers/exec-file-capture.js';
 import { parse } from 'yaml';
 import { sourceRules } from './rule-source-expectations.js';
 

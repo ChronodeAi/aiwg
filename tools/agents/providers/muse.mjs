@@ -226,7 +226,7 @@ export async function postDeploy(targetDir, opts = {}) {
   // bridge, managed hooks, and an opted-in MCP profile must not be skipped.
   const fullDeploy = !opts.commandsOnly && !opts.rulesOnly && (!opts.skillsOnly || opts.kernelOnly === true);
   if (opts.createAgentsMd || fullDeploy) {
-    createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
   }
 
   // #228 — managed project hooks (.muse/hooks.json). Default on, mirroring

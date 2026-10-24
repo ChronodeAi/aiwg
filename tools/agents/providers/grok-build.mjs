@@ -326,7 +326,7 @@ export function uninstall(target, opts = {}) {
 
 export async function postDeploy(target, opts = {}) {
   if (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)) {
-    createAgentsMd(target, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(target, opts.srcRoot, opts.dryRun);
   }
   if (!opts.quiet) {
     const home = resolveGrokHome(opts.env || process.env);

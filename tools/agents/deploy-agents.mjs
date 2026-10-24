@@ -32,6 +32,7 @@
  *   --model-tier <tier>      Override all artifacts with economy|standard|premium
  *   --as-agents-md               Aggregate to single AGENTS.md (OpenAI/Codex)
  *   --create-agents-md           Create/update AGENTS.md template
+  --no-context-files           Preserve WORKSPACE.md, AIWG.md and AGENTS.md (including managed blocks)
  *   --skip-commands-migration    Skip deleting the commands directory (warns about duplicate TUI entries) (Factory/Codex/OpenCode/Cursor)
  *   --deploy-source <name>       Managed-marker source for deployed artifacts (default: bundled)
  *   --deploy-version <version>   Managed-marker version for deployed artifacts (default: source package.json)
@@ -75,6 +76,8 @@ const staticModelCatalog = _require('../../agentic/code/providers/model-catalog.
 let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
+import { importImpl } from '../_resolve-impl.mjs';
+const { resolveDeployVersion } = await importImpl(import.meta.url, 'providers/deploy-version.mjs');
 import os from 'os';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
@@ -97,19 +100,6 @@ import {
   updateSidecarManifest,
 } from './providers/base.mjs';
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
-
-/**
- * Read version from package.json at the source root.
- * Falls back to 'unknown' if unavailable.
- */
-function getDeployVersion(srcRoot) {
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(srcRoot, 'package.json'), 'utf8'));
-    return pkg.version || 'unknown';
-  } catch {
-    return 'unknown';
-  }
-}
 
 // ============================================================================
 // Provider Registry
@@ -497,6 +487,8 @@ export function parseArgs(args = process.argv.slice(2)) {
     efficiencyModel: null,
     asAgentsMd: false,
     createAgentsMd: false,
+    contextFiles: true,
+    projectScope: false,
     deployCommands: false,
     deploySkills: false,
     deployRules: false,
@@ -539,6 +531,7 @@ export function parseArgs(args = process.argv.slice(2)) {
         throw new Error(`--scope expected 'user' or 'project', got '${scope ?? '(missing)'}'`);
       }
       cfg.userScope = scope === 'user';
+      cfg.projectScope = scope === 'project';
     }
     else if (a === '--user') cfg.userScope = true;
     else if (a === '--dry-run') cfg.dryRun = true;
@@ -580,6 +573,7 @@ export function parseArgs(args = process.argv.slice(2)) {
     // managed-hooks opt-out (default on, mirroring the Claude autoInstall policy).
     else if (a === '--mcp') cfg.mcp = true;
     else if (a === '--no-hooks') cfg.hooks = false;
+    else if (a === '--no-context-files') cfg.contextFiles = false;
     else if (a === '--deploy-source' && args[i + 1]) cfg.deploySource = String(args[++i]);
     else if (a === '--listing-budget') cfg.listingBudget = true;
     else if (a === '--deploy-version' && args[i + 1]) cfg.deployVersion = String(args[++i]);
@@ -631,6 +625,7 @@ Options:
                            (.muse/hooks.json; installed by default)
   --as-agents-md               Aggregate to single AGENTS.md (Codex)
   --create-agents-md           Create/update AGENTS.md template
+  --no-context-files           Preserve WORKSPACE.md, AIWG.md and AGENTS.md (including managed blocks)
   --skip-commands-migration    Skip deleting the commands directory before skills deployment
   --listing-budget             Honor the provider startup-listing cap even with --copy-all
   --deploy-source <name>       Managed-marker source stamped into deployed artifacts.
@@ -1040,7 +1035,8 @@ export async function main(args = process.argv.slice(2), internal = {}) {
     efficiencyModel: cfg.efficiencyModel,
     modelsConfig,
     asAgentsMd: cfg.asAgentsMd,
-    createAgentsMd: cfg.createAgentsMd,
+    createAgentsMd: cfg.contextFiles && cfg.createAgentsMd,
+    contextFiles: cfg.contextFiles,
     deployCommands: cfg.kernelOnly ? false : cfg.deployCommands,
     deploySkills: cfg.kernelOnly ? true : cfg.deploySkills,
     deployRules: !cfg.deferRuleProjection && (cfg.kernelOnly || cfg.deployRules),
@@ -1072,9 +1068,12 @@ export async function main(args = process.argv.slice(2), internal = {}) {
     mcp: cfg.mcp === true,
     hooks: cfg.hooks !== false,
     listingBudget: cfg.listingBudget === true,
-    deployVersion: cfg.deployVersion || getDeployVersion(srcRoot),
+    deployVersion: resolveDeployVersion(resolveAiwgRoot(srcRoot) || srcRoot, cfg.deployVersion),
     deploySource: cfg.deploySource || 'bundled',
   };
+  if (provider.name === 'hermes' && cfg.projectScope && !cfg.userScope) {
+    throw new Error('Hermes does not support --scope project: skills are discovered only under HERMES_HOME/skills (default ~/.hermes/skills). Use --scope user or an isolated HERMES_HOME profile shared with Hermes.');
+  }
   // Deferred kernel source passes must not load the projection dependency
   // graph. Preparation still owns their staged deployment when a hook is active.
   const preparationActive = cfg.kernelOnly && cfg.deferRuleProjection

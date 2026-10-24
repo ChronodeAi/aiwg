@@ -414,7 +414,7 @@ export async function postDeploy(targetDir, opts) {
   initializeFrameworkWorkspace(targetDir, opts.mode, opts.dryRun, opts.srcRoot);
 
   if (opts.createAgentsMd) {
-    createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
   }
 
   // PUW-019 (#1120): wire environment.json + worktrees.json templates.

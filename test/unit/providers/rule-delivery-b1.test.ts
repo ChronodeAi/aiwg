@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileWithCapture as execFileSync } from '../../helpers/exec-file-capture.js';
 import { collectDeploymentRuleSources, renderRuleKernelIndex } from '../../../tools/agents/providers/rule-delivery.mjs';
 import { lintRuleActivation } from '../../../src/lint/rule-activation.js';
 import { parseRuleFrontmatter } from '../../../src/rules/activation.mjs';
@@ -22,7 +22,7 @@ function setup() {
 function deploy(source: string, target: string, provider: string, args: string[] = []) {
   return execFileSync('node', [path.join(repo, 'tools/agents/deploy-agents.mjs'), '--source', source, '--target', target,
     '--provider', provider, '--mode', 'all', '--kernel-only', '--skip-commands-migration', ...args], {
-    cwd: repo, encoding: 'utf8', timeout: 60_000,
+    cwd: repo, encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, HOME: path.join(target, '../home'), HERMES_HOME: path.join(target, '../home/.hermes'),
       AIWG_ROOT: source, AIWG_RULES_INLINE_BUDGET_TOKENS: '0' },
   });

@@ -1,6 +1,6 @@
 /** #3035: real addon deploy pipeline with synthetic sources and isolated homes. */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileWithCapture as execFileSync } from '../../../helpers/exec-file-capture.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';

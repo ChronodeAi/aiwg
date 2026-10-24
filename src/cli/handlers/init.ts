@@ -461,13 +461,14 @@ export const initHandler: CommandHandler = {
     // Write
     await writeAiwgConfig(projectDir, config);
     if (workerDispatchDecision?.kind === 'enable') ui.info('Next: aiwg doctor --probe-workers --qualify.');
-    const normalizedAiwgMdPath = await writeNormalizedAiwgMd(projectDir);
-    const workspace = await ensureWorkspaceContext(projectDir);
+    const skipContext = ctx.args.includes('--no-context-files');
+    const normalizedAiwgMdPath = skipContext ? null : await writeNormalizedAiwgMd(projectDir);
+    const workspace = skipContext ? null : await ensureWorkspaceContext(projectDir);
 
     ui.blank();
     ui.success(`Created ${getConfigPath(projectDir)}`);
-    ui.success(`Created ${normalizedAiwgMdPath}`);
-    ui.success(`${workspace.action === 'created' ? 'Created' : 'Preserved'} WORKSPACE.md`);
+    if (normalizedAiwgMdPath) ui.success(`Created ${normalizedAiwgMdPath}`);
+    if (workspace) ui.success(`${workspace.action === 'created' ? 'Created' : 'Preserved'} WORKSPACE.md`);
     ui.success(`Providers: ${providers.join(', ')}`);
     if (Object.keys(scripts).length > 0) {
       ui.success(`Scripts: ${Object.keys(scripts).join(', ')}`);

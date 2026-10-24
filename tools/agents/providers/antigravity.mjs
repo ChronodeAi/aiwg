@@ -96,7 +96,7 @@ export async function postDeploy(target, opts) {
     throw new Error('Antigravity global skill deployment is disabled: official 1.1.26 path documentation conflicts');
   }
   if (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)) {
-    createAgentsMd(target, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(target, opts.srcRoot, opts.dryRun);
   }
   if (!opts.quiet) {
     console.log('Antigravity resources are project scoped. Restart agy after resource changes; authenticate with the provider separately.');

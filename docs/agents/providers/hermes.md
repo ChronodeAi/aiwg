@@ -19,6 +19,12 @@ means the equivalent path under the active `HERMES_HOME`. Run
 `hermes config path` to confirm which profile/config directory the current CLI
 uses, and invoke `aiwg use` with the same `HERMES_HOME` value.
 
+Hermes scans skills only beneath that home, so `aiwg use ... --provider hermes
+--scope project` refuses before deployment, including in dry-run mode. Use
+`--scope user` to explicitly select the shared home, or set `HERMES_HOME` to an
+isolated profile for both AIWG and the Hermes runtime. An unflagged Hermes deploy
+retains its home-based skill discovery; a project directory is not a skill root.
+
 > **Hermes integrates like any other provider; the MCP sidecar is optional.** As of v2026.5.13 (validated in #1527), `aiwg use sdlc --provider hermes` deploys artifacts and Hermes reaches AIWG through the discover-first CLI (`aiwg discover` / `aiwg show`) and the AGENTS.md / `.hermes.md` bridge — the same model as Claude Code and Codex, **no MCP required**. The `Hermes → MCP → AIWG` sidecar described below is an *optional* enrichment: any provider or system can connect to AIWG's MCP server, but none require it. Rules are delivered through generated `AGENTS.md` `### Rule:` sections and the CLI `aiwg show rule <name>` fallback; MCP remains a richer optional path. The broader MCP modernization audit is tracked in #1533. The rest of this guide covers the optional MCP setup.
 
 ---

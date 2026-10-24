@@ -128,7 +128,7 @@ export function createAgentsMd(target, srcRoot, dryRun) {
 
 export async function postDeploy(targetDir, opts) {
   if (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)) {
-    createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
   }
   if (!opts.quiet && (opts.deployCommands || opts.deploySkills || opts.commandsOnly || opts.skillsOnly)) {
     console.log('Pi project resources are trust-gated; approve the project with `/trust` (restart required) or use `pi --approve` for a reviewed one-shot run.');

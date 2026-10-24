@@ -119,6 +119,16 @@ describe('initHandler', () => {
   });
 
   describe('--non-interactive mode', () => {
+    it('honors the use bootstrap context opt-out', async () => {
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, ['--non-interactive', '--no-context-files']));
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(join(tmpDir, '.aiwg', 'aiwg.config'))).toBe(true);
+      for (const name of ['WORKSPACE.md', 'AIWG.md', 'AGENTS.md', '.aiwg/AIWG.md']) {
+        expect(existsSync(join(tmpDir, name))).toBe(false);
+      }
+    });
+
     it('creates config with default claude provider and default scripts', async () => {
       const { initHandler } = await import('../../../../src/cli/handlers/init.js');
       const ctx = makeCtx(tmpDir, ['--non-interactive']);

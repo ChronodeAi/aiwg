@@ -81,6 +81,7 @@ import {
   normalizeProviderDefinitionId,
   type ProviderArtifactPathStrings,
 } from '../../providers/provider-definitions.js';
+import { resolveDeployVersion } from '../../providers/deploy-version.mjs';
 import { deployedSkillRoots } from '../../providers/deployed-skill-roots.js';
 
 // Module-level guard so the iteration loops further down (which re-enter
@@ -221,10 +222,11 @@ const MODEL_OVERRIDE_VALUE_FLAGS = new Set([
 ]);
 const MODEL_DEPLOY_BOOLEAN_FLAGS = new Set(['--save', '--save-user']);
 
-/** Forward explicit user scope to every provider deploy subprocess. */
+/** Forward explicit scope to every provider deploy subprocess. */
 export function collectUseScopeDeployArgs(args: string[]): string[] {
   const scope = detectScope(args);
-  return scope === 'user' || args.includes('--user') ? ['--scope', 'user'] : [];
+  return scope === 'user' || args.includes('--user') ? ['--scope', 'user']
+    : args.includes('--scope') ? ['--scope', 'project'] : [];
 }
 
 export function collectUseModelDeployArgs(args: string[]): string[] {
@@ -772,7 +774,7 @@ async function mirrorStandardCommandSkills(opts: {
       projectPath: opts.target,
       dryRun: opts.dryRun,
       verbose: opts.verbose,
-      deployVersion: (await getVersionInfo()).version,
+      deployVersion: deploymentVersion(opts.frameworkRoot),
       nameFilter: shouldMirrorStandardCommandSkill,
     });
     count += result.translated.length;
@@ -1923,10 +1925,22 @@ export async function countPiAgentFiles(target: string, agentsPath: string | nul
 // Capture provider previews here: their staging summaries count source entries,
 // and additive passes can describe the same destination more than once.
 let usePreviewActions: Set<string> | undefined;
+// Recursive framework/addon/provider passes share the boundary's resolved policy.
+let useDeployment: { version: string; skipContextFiles: boolean } | undefined;
+function useDeploymentArgs(args: string[]): string[] {
+  const forwarded = [...args];
+  if (useDeployment && !forwarded.includes('--deploy-version')) forwarded.push('--deploy-version', useDeployment.version);
+  if (useDeployment?.skipContextFiles && !forwarded.includes('--no-context-files')) forwarded.push('--no-context-files');
+  return forwarded;
+}
+function deploymentVersion(root: string): string {
+  return useDeployment?.version ?? resolveDeployVersion(root);
+}
 function createUseScriptRunner(frameworkRoot: string) {
   const runner = createScriptRunner(frameworkRoot);
   return {
     async run(script: string, args: string[], options: Parameters<typeof runner.run>[2] = {}): Promise<HandlerResult> {
+      if (script === 'tools/agents/deploy-agents.mjs') args = useDeploymentArgs(args);
       if (!usePreviewActions) return runner.run(script, args, options);
       const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-use-preview-'));
       const removeScratch = trackTemporaryDirectory(scratch);
@@ -2400,6 +2414,7 @@ async function generateGlobalProjectContext(opts: {
   const userPaths = USER_SCOPE_PATHS[opts.provider];
   if (!userPaths) return;
   const skipContext = opts.args.includes('--no-context-files');
+  if (skipContext) return;
   const sections = await discoverDeployedArtifacts(opts.projectPath, {
     agents: userPaths.agents,
     rules: userPaths.rules,
@@ -2618,7 +2633,7 @@ async function deployOmpUserSource(opts: {
   const adapter = await import(pathToFileURL(path.join(opts.frameworkRoot, 'tools/agents/providers/omp.mjs')).href);
   await adapter.deploy({ srcRoot: opts.source, target: opts.target, provider: 'omp', scope: 'user',
     mode: opts.mode ?? 'general', deployCommands: true, deploySkills: true, deployRules: true,
-    copyStandardSkills: opts.copyAll, quiet: true, deployVersion: (await getVersionInfo()).version });
+    copyStandardSkills: opts.copyAll, quiet: true, contextFiles: !useDeployment?.skipContextFiles, deployVersion: deploymentVersion(opts.frameworkRoot) });
   const sourceBundles = new Set([opts.source]);
   const { resourceDirs } = resolveOmpPaths({ cwd: opts.target });
   const entries: Record<'agents' | 'commands' | 'skills' | 'rules' | 'behaviors', string[]> = {
@@ -2778,7 +2793,7 @@ Options:
   --verbose, -v             Show per-artifact deploy decisions
   --json                    Emit the machine-readable deployment result
   --no-project-local        Skip project-local bundles under .aiwg/
-  --no-context-files        Skip WORKSPACE.md / AIWG.md / AGENTS.md emission
+  --no-context-files        Preserve WORKSPACE.md / AIWG.md / AGENTS.md, including managed blocks
   -h, --help                Show this help without deploying
 
 Additional options:
@@ -2841,6 +2856,19 @@ export class UseHandler implements CommandHandler {
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const invalidOption = validateUseOptions(ctx.args, this.preparedProviderContinuations);
     if (invalidOption) return { exitCode: 2, message: invalidOption };
+    const previousDeployment = useDeployment;
+    useDeployment = {
+      version: previousDeployment?.version ?? resolveDeployVersion(ctx.frameworkRoot || await getFrameworkRoot()),
+      skipContextFiles: previousDeployment?.skipContextFiles || ctx.args.includes('--no-context-files'),
+    };
+    try {
+      return await this.executeDeployment(ctx);
+    } finally {
+      useDeployment = previousDeployment;
+    }
+  }
+
+  private async executeDeployment(ctx: HandlerContext): Promise<HandlerResult> {
     // Normalize the physical framework directory just as addon folder aliases
     // are normalized, before orchestration/registry bookkeeping sees the name.
     const aliasIndex = ctx.args.indexOf('sdlc-complete');
@@ -3209,6 +3237,14 @@ export class UseHandler implements CommandHandler {
       : null;
     const projectDir = getProjectDir(ctx, remainingArgs);
     let config = await readAiwgConfig(projectDir);
+    if (detectScope(remainingArgs) === 'project' && remainingArgs.includes('--scope')) {
+      for (const requested of configuredGlobalProviders(remainingArgs, config)) {
+        const resolved = await resolveProjectLocalProviderAdapter(projectDir, requested);
+        if (normalizeProviderDefinitionId(resolved.provider) === 'hermes') {
+          return { exitCode: 1, message: "Hermes does not support --scope project: it discovers skills only under HERMES_HOME/skills (default ~/.hermes/skills). Use --scope user or an isolated HERMES_HOME profile shared with Hermes." };
+        }
+      }
+    }
 
     // Auto-init when no config found (#720)
     // Check early for --provider/--platform and --providers flags
@@ -3246,7 +3282,9 @@ export class UseHandler implements CommandHandler {
         }
       } else if (process.stdin.isTTY) {
         // Interactive terminal with no config → run init wizard inline (#720)
-        const initResult = await initHandler.execute({ ...ctx, args: [] });
+        const initResult = await initHandler.execute({ ...ctx,
+          args: remainingArgs.includes('--no-context-files') ? ['--no-context-files'] : [],
+        });
         if (initResult.exitCode !== 0) return initResult;
         config = await readAiwgConfig(projectDir);
       }
@@ -3933,7 +3971,7 @@ export class UseHandler implements CommandHandler {
         if (unsupported) return { exitCode: 1, message: unsupported };
         const resolved = resolveBuiltInProviderForUse(local.provider);
         if (!PREPARABLE_BUILTIN_PROVIDERS.has(resolved.provider)) { canPrepareConcurrently = false; break; }
-        const args = withProviderOverride([...deployFilteredArgs], resolved.provider);
+        const args = useDeploymentArgs(withProviderOverride([...deployFilteredArgs], resolved.provider));
         if (framework === 'all') {
           const kernelOnly = !['pi', 'omp'].includes(resolved.provider)
             && !remainingArgs.includes('--copy-all') && !remainingArgs.includes('--copy-standard-skills');
@@ -4107,7 +4145,7 @@ export class UseHandler implements CommandHandler {
     let mainResult: HandlerResult;
     if (mainProviderPrepared) {
       try {
-        await finalizePreparedProvider(frameworkRoot, providerDeployArgs);
+        await finalizePreparedProvider(frameworkRoot, useDeploymentArgs(providerDeployArgs));
         mainResult = { exitCode: 0 };
       } catch (error) {
         mainResult = { exitCode: 1, message: `Prepared provider finalization failed: ${error instanceof Error ? error.message : String(error)}` };
@@ -4282,7 +4320,7 @@ export class UseHandler implements CommandHandler {
           projectPath: target,
           dryRun,
           verbose,
-          deployVersion: (await getVersionInfo()).version,
+          deployVersion: deploymentVersion(frameworkRoot),
         });
         if (verbose && translationResult.translated.length > 0) {
           ui.success(`Translated ${translationResult.translated.length} skills → commands (${provider})`);
@@ -4334,7 +4372,7 @@ export class UseHandler implements CommandHandler {
             projectPath: target,
             dryRun,
             verbose,
-            deployVersion: (await getVersionInfo()).version,
+            deployVersion: deploymentVersion(frameworkRoot),
             nameFilter: shouldMirrorKernelCommandSkill,
           });
           if (verbose && kernel.translated.length > 0) {
@@ -4643,11 +4681,10 @@ export class UseHandler implements CommandHandler {
     // failed deploys produce shorter indexes, never broken links.
     //
     // Operators opt out via --no-context-files / --no-aiwg-md / --no-agents-md.
-    if (!dryRun) {
-      const skipContext = remainingArgs.includes('--no-context-files');
-      const skipWorkspaceMd = skipContext || remainingArgs.includes('--no-workspace-md');
-      const skipAiwgMd = skipContext || remainingArgs.includes('--no-aiwg-md');
-      const skipAgentsMd = skipContext || remainingArgs.includes('--no-agents-md');
+    if (!dryRun && !remainingArgs.includes('--no-context-files')) {
+      const skipWorkspaceMd = remainingArgs.includes('--no-workspace-md');
+      const skipAiwgMd = remainingArgs.includes('--no-aiwg-md');
+      const skipAgentsMd = remainingArgs.includes('--no-agents-md');
       const forceContext = remainingArgs.includes('--force-context-files');
 
       try {
