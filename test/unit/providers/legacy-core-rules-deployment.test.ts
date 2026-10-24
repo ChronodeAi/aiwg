@@ -15,9 +15,9 @@ const surfaces: Record<string, string> = {
 const core = fs.readFileSync(path.join(repo, 'agentic/code/addons/aiwg-utils/rules/anti-laziness.core.md'), 'utf8').trim();
 afterAll(() => roots.splice(0).forEach(root => fs.rmSync(root, { recursive: true, force: true })));
 function setup() {
-  const scratch = path.join(os.tmpdir(), 'aiwg-3457');
-  fs.mkdirSync(scratch, { recursive: true });
-  const root = fs.mkdtempSync(path.join(scratch, 'legacy-')); roots.push(root);
+  // Each root is created directly under TMPDIR and removed after the suite;
+  // a shared parent directory would outlive it and trip the leak gate.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-3457-legacy-')); roots.push(root);
   const target = path.join(root, 'project'); fs.mkdirSync(target);
   const env = { ...process.env, HOME: path.join(root, 'home'), XDG_CONFIG_HOME: path.join(root, 'home/.config'),
     XDG_DATA_HOME: path.join(root, 'home/.local/share'), AIWG_ROOT: repo, AIWG_RULES_INLINE_BUDGET_TOKENS: '0' };
