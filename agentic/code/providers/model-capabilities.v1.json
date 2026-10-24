@@ -3134,7 +3134,7 @@
         "provider": "muse",
         "adapterVersion": "1",
         "supportedVersions": ">=1.4.4-R5419.1 <2.0.0",
-        "runtimeDriver": "tools/ralph-external/lib/muse-adapter.mjs",
+        "runtimeDriver": "installed:muse",
         "catalogAdapter": {
           "kind": "file",
           "locator": "agentic/code/providers/model-catalog.v1.json",
@@ -3167,7 +3167,10 @@
           ],
           "stdin": "closed",
           "cwd": "${workspace}",
-          "envAllowlist": ["PATH"],
+          "envAllowlist": [
+            "HOME",
+            "PATH"
+          ],
           "versionPattern": "^Muse Code ([0-9A-Za-z.+-]{1,128}) \\([0-9A-Za-z.+-]{1,128}\\)$",
           "versionArgv": [
             "--version"
@@ -3175,13 +3178,14 @@
           "maxOutputBytes": 10485760
         },
         "capabilities": {
-          "output": "native-schema",
+          "output": "text",
           "modelPin": "requested",
           "effort": "explicit",
           "cancel": "none",
           "resume": false,
           "sandboxModes": [
-            "external"
+            "read-only",
+            "workspace-write"
           ],
           "nestedAgentsControllable": false,
           "nativeFallbackControllable": false,
@@ -3198,52 +3202,52 @@
               "model": {
                 "support": "unqualified",
                 "mapping": "--model",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "effort": {
                 "support": "unqualified",
                 "mapping": "--reasoning-effort",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "sandbox": {
                 "support": "unqualified",
-                "mapping": "qualified external boundary; native sandbox remains enabled",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "mapping": "native sandbox enabled; read-only adds --disable-write and --disable-shell",
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "approval": {
                 "support": "unqualified",
                 "mapping": "[\"--approval-mode\",\"never\",\"--approval-judge\",\"off\"]",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "workdir": {
                 "support": "unqualified",
                 "mapping": "--workspace",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "finalOutput": {
                 "support": "unqualified",
                 "mapping": "bounded stdout capture; strict Muse terminal normalization pending shared owner",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "stdin": {
                 "support": "unqualified",
                 "mapping": "closed EOF",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "structuredOutput": {
                 "support": "unqualified",
-                "mapping": "--output-schema",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "mapping": "[]",
+                "evidence": "Direct Tier 0 output is text; structured output requires a host-bound schema and separate qualification."
               },
               "stepCap": {
                 "support": "unqualified",
                 "mapping": "--max-model-steps",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "trust": {
                 "support": "unqualified",
                 "mapping": "[]",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "children": {
                 "support": "unqualified",
@@ -3256,16 +3260,14 @@
                 "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
               }
             },
-            "envAllowlist": ["PATH"],
+            "envAllowlist": [
+              "HOME",
+              "PATH"
+            ],
             "pitfalls": [
-              "Live qualification is an open S1 blocker; installed help and synthetic/echo mechanics are not paid inference qualification.",
-              "Configured-model events provide runtime-configured identity only, never backend attestation.",
-              "Contributor data policy is explicit; shared policy denies contributor models and never silently selects the CLI default.",
-              "Workspace trust defaults off; only a host-qualified trust mapping may load rules/skills. Approval-mode never and approval-judge off retain the sandbox. Muse requires a qualified external boundary.",
-              "Host qualification must bind an absolute output-schema mapping and include that schema in runtimeFiles.",
-              "Muse JSONL strict normalization needs the shared strict-parser hook; the MCP bridge must consume the selected provider parser. MSP is not MCP.",
-              "Semantic step/tool completion grammar and native session-log layout remain unavailable; unrelated logs, deltas and CPU cannot establish progress.",
-              "Shared version gate: installation requires the raw trimmed banner Muse Code 1.4.4 (1.4.4-R5419.1), but semver selection requires 1.4.4-R5419.1. No normalization exists; keep unqualified until the shared owner binds raw and normalized versions."
+              "Operator qualification approves the installed direct renderer, not authenticated inference or backend model identity.",
+              "Workspace trust defaults off. Only never approval is supported. Explicit unsupported controls block dispatch.",
+              "Self-delegation must be explicitly allowed by policy; no native child-denial flag is assumed."
             ],
             "health": {
               "version": 1,
