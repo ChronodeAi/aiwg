@@ -509,6 +509,22 @@ export class WorkerPolicyError extends Error {
   }
 }
 
+export class WorkerRoleEffortError extends WorkerPolicyError {
+  readonly pointer: string;
+  constructor(role: string) {
+    const pointer = `/defaults/workerSelection/roleGuidance/${role.replace(/~/g, '~0').replace(/\//g, '~1')}/initialEffort`;
+    super('OG_CONFIG_REFERENCE', `Missing role guidance or explicit initial effort for role ${role}; configure models.json ${pointer}.`);
+    this.pointer = pointer;
+  }
+}
+
+/** Validate policy input before entering the sanitized adapter boundary. Null
+ * remains valid for models whose effort is explicitly not applicable. */
+export function assertWorkerRoleEffort(policy: WorkerSelectionPolicy | undefined, role: string, requiresExplicit = false): void {
+  const effort = policy?.roleGuidance?.[role]?.initialEffort;
+  if (effort === undefined || requiresExplicit && (effort === null || !effort.trim())) throw new WorkerRoleEffortError(role);
+}
+
 /**
  * Dispatch-time safety checks belong here, alongside transport qualification.
  * Like route validation, rendering requires observation evidence; a default

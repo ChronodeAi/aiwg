@@ -111,7 +111,7 @@ async function installedDriver(packageRoot, adapter) {
 export async function checkWorkerInvocationBuilds({ projectDir, config, policy, cli, driver, observations }) {
   const { buildWorkerInvocationTransport, resolveWorkerEffectiveHealth, workerInvocationDiagnostic,
     WorkerInvocationCheckError } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
-  const { workerModelKey } = await importImpl(import.meta.url, 'models/provider-policy.js');
+  const { workerModelKey, assertWorkerRoleEffort } = await importImpl(import.meta.url, 'models/provider-policy.js');
   const checks = [];
   const workdir = await fs.realpath(projectDir);
   const adapter = driver.qualification.adapter;
@@ -125,6 +125,7 @@ export async function checkWorkerInvocationBuilds({ projectDir, config, policy, 
         const effort = row.worker.effortSupport === 'not-applicable' ? null : policy?.roleGuidance?.[role]?.initialEffort ?? null;
         const check = { cli, group: groupId, member: member.id, role, model: member.model, effort, workdir, status: 'passed', diagnostics: [] };
         try {
+          assertWorkerRoleEffort(policy, role, row.worker.effortSupport === 'explicit');
           if (workdir !== await fs.realpath(driver.qualification.installation.cwd)) {
             throw new WorkerInvocationCheckError('OG_CONFIG_REFERENCE', 'qualified_workspace_mismatch');
           }
@@ -189,7 +190,14 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
   if (!dryRun && !yes && (!process.stdin.isTTY || !process.stdout.isTTY)) {
     throw new Error('Qualification requires confirmation. Rerun aiwg doctor --probe-workers --qualify --yes (or use --dry-run).');
   }
-  const models = await new ConfigLoader(projectDir).load(config.parallelism);
+  let models;
+  try { models = await new ConfigLoader(projectDir).load(config.parallelism); }
+  catch (error) {
+    const { WorkerRoleEffortError } = await importImpl(import.meta.url, 'models/provider-policy.js');
+    if (!(error instanceof WorkerRoleEffortError)) throw error;
+    const { workerInvocationDiagnostic } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+    return { status: 'failed', results: [], diagnostics: [workerInvocationDiagnostic(error)] };
+  }
   const policy = models.defaults.workerSelection;
   const ready = section.installFindings.filter(row => row.readiness === 'ready');
   const targets = ready.map(row => ({ cli: row.cli, version: row.installedVersion, executable: row.executable,

@@ -105,6 +105,29 @@ async function productionFixture(adapterFrame = false) {
 }
 
 describe('models resolve production installation loading', () => {
+  it.each(['missing-file', 'missing-role', 'missing-field', 'null-effort'])('reports missing role effort before recorded policy digest and adapter loading (%s)', async kind => {
+    const f = await productionFixture();
+    // An existing approval lets policy diagnostics precede its now-stale
+    // policy digest; absent approvals must retain #3070's qualification error.
+    await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [f.record] }), { mode: 0o600 });
+    const filename = path.join(f.cwd, 'models.json');
+    if (kind === 'missing-file') await rm(filename);
+    else {
+      const models = JSON.parse(await readFile(filename, 'utf8'));
+      if (kind === 'missing-role') delete models.defaults.workerSelection.roleGuidance.coding;
+      else if (kind === 'missing-field') delete models.defaults.workerSelection.roleGuidance.coding.initialEffort;
+      else Object.assign(models.defaults.workerSelection.roleGuidance.coding,
+        { initialEffort: null, effortLadder: [], allowNotApplicableEffort: true });
+      await writeFile(filename, JSON.stringify(models));
+    }
+    const result = await f.call();
+    expect(result.result.exitCode).toBe(2);
+    expect(result.plan.diagnostics).toContainEqual({ code: 'OG_CONFIG_REFERENCE',
+      pointer: '/defaults/workerSelection/roleGuidance/coding/initialEffort',
+      message: expect.stringContaining('models.json') });
+    expect(result.plan.invocation).toBeUndefined();
+  });
+
   it('qualifies its own single-link executable with trusted permissions', async () => {
     const f = await productionFixture();
     const executable = await stat(f.record.installation.executable);

@@ -1,7 +1,7 @@
 /** Shared installed-worker qualification owner, also used by the Ralph compatibility facade. */
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { open, realpath, lstat, mkdir, rename, writeFile } from 'node:fs/promises';
+import { open, realpath, lstat, mkdir, rename, writeFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -844,28 +844,56 @@ export async function recordWorkerInstallation(instance, options) {
     || binding.accountScope !== installation.accountScope) throw new Error('Installation binding differs from qualification');
   const filename = installationStorePath();
   await assertTrustedStore(filename, installation.workerWritableRoots);
-  const { stored } = await readInstallationStore(filename);
-  const environmentNames = Object.keys(installation.environment ?? {});
-  delete installation.environment;
-  delete installation.adapter;
-  delete installation.now;
-  const record = { cli, ...(options.modelObservations ? { modelObservations: structuredClone(options.modelObservations) } : {}), binding: { ...structuredClone(binding), boundary: installation.boundary }, adapter,
-    installation: { ...installation, environmentNames, versionProbe: { rawBanner: result.rawVersionBanner, version: result.cliVersion } },
-    ...(options.mcpSchemas ? { mcpSchemas: structuredClone(options.mcpSchemas) } : {}),
-    ...(options.mcpProfile ? { mcpProfile: structuredClone(options.mcpProfile) } : {}) };
-  stored.registrations = stored.registrations.filter(entry => entry.cli !== cli);
-  stored.registrations.push(record);
+  // Canonical workspace identity is an exact approval key, never a prefix.
+  installation.cwd = await realpath(installation.cwd);
   await mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
-  await assertTrustedStore(filename, installation.workerWritableRoots);
-  const temporary = `${filename}.${process.pid}.${createHash('sha256').update(String(Math.random())).digest('hex')}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-  await rename(temporary, filename);
-  return result;
+  // Serialize read/modify/rename across qualifying CLI processes. A stale lock
+  // fails closed; qualification never steals another process's lock.
+  const lockPath = `${filename}.lock`;
+  let lock;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try { lock = await open(lockPath, 'wx', 0o600); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST' || attempt === 99) throw error;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  }
+  try {
+    await assertTrustedStore(filename, installation.workerWritableRoots);
+    const { stored } = await readInstallationStore(filename);
+    const environmentNames = Object.keys(installation.environment ?? {});
+    delete installation.environment;
+    delete installation.adapter;
+    delete installation.now;
+    const record = { cli, ...(options.modelObservations ? { modelObservations: structuredClone(options.modelObservations) } : {}), binding: { ...structuredClone(binding), boundary: installation.boundary }, adapter,
+      installation: { ...installation, environmentNames, versionProbe: { rawBanner: result.rawVersionBanner, version: result.cliVersion } },
+      ...(options.mcpSchemas ? { mcpSchemas: structuredClone(options.mcpSchemas) } : {}),
+      ...(options.mcpProfile ? { mcpProfile: structuredClone(options.mcpProfile) } : {}) };
+    const retained = [];
+    for (const entry of stored.registrations) {
+      const workspace = typeof entry.installation?.cwd === 'string'
+        ? await realpath(entry.installation.cwd).catch(() => entry.installation.cwd) : null;
+      if (entry.cli !== cli || workspace !== installation.cwd) retained.push(entry);
+    }
+    // Bound host authority without silently evicting another workspace approval.
+    if (retained.length >= 128) throw new Error('Worker installation store is full (128 workspace approvals); remove an obsolete approval before qualifying another workspace');
+    stored.registrations = retained;
+    stored.registrations.push(record);
+    await mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
+    await assertTrustedStore(filename, installation.workerWritableRoots);
+    const temporary = `${filename}.${process.pid}.${createHash('sha256').update(String(Math.random())).digest('hex')}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    await rename(temporary, filename);
+    return result;
+  } finally {
+    await lock.close();
+    await unlink(lockPath);
+  }
 }
 
 /** Read recorded host authority, validate installation bytes and the current CLI
  * version, then load the same approved factory used by Ralph. */
-export async function loadRecordedWorkerInstallations({ registry, cwd, policy, parallelism, storePath, storeDigest }) {
+export async function loadRecordedWorkerInstallations({ registry, cwd, policy, parallelism, storePath, storeDigest, precheckPolicy }) {
   const { WorkerPolicyError, parseProviderModelCapabilities } = await import('./provider-policy.js');
   const { qualificationDigest } = await import('./qualification-digest.mjs');
   // Only fixed stage codes and bounded record indexes may leave this boundary.
@@ -886,17 +914,38 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, p
     ({ stored, digest } = await readInstallationStore(filename, storeDigest));
   }
   catch { rejections.push({ registration: null, reason }); throw fail(); }
+  if (!stored.registrations.length) {
+    rejections.push({ registration: null, reason: 'no-records' });
+    throw fail();
+  }
+  // Request policy errors remain actionable before digest/adapter checks,
+  // while an absent approval retains the qualification contract (#3070).
+  precheckPolicy?.();
   const installations = {};
   const drivers = {};
   const observations = {};
   const resolvedRegistry = structuredClone(registry);
+  const requestedWorkspace = await realpath(cwd);
+  const workspaces = await Promise.all(stored.registrations.map(async record => {
+    try { return await realpath(record?.installation?.cwd); } catch { return null; }
+  }));
   const counts = new Map();
-  for (const record of stored.registrations) counts.set(record?.cli, (counts.get(record?.cli) ?? 0) + 1);
+  const selected = new Map();
+  for (const [index, record] of stored.registrations.entries()) {
+    const key = JSON.stringify([record?.cli, workspaces[index]]);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    // Prefer an exact approval. Retain the latest other-workspace record only
+    // to preserve the typed workspace-mismatch diagnostic for unapproved dirs.
+    const prior = selected.get(record?.cli);
+    if (prior === undefined || workspaces[prior] !== requestedWorkspace) selected.set(record?.cli, index);
+  }
   for (const [registration, record] of stored.registrations.entries()) {
     reason = 'record-identity';
     try {
       const { cli, binding, adapter } = record;
-      if (!/^[a-z][a-z0-9-]{0,62}$/.test(cli) || counts.get(cli) !== 1) throw fail();
+      if (!/^[a-z][a-z0-9-]{0,62}$/.test(cli)) throw fail();
+      if (counts.get(JSON.stringify([cli, workspaces[registration]])) !== 1) throw fail();
+      if (selected.get(cli) !== registration) continue;
       const installation = { ...record.installation, adapter, now: Date.now(), environment: {} };
       reason = 'environment-name';
       if (record.installation.environment && Object.keys(record.installation.environment).length) throw fail();
