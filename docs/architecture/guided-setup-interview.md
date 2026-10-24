@@ -278,7 +278,7 @@ contract):
 
 | kind | does (A4) | fact dependencies (A3 records) |
 |---|---|---|
-| `configure-provider` | write provider config for workspace+provider | `tool(provider).installed`, `path(workspace, configPath)`, `project(workspace).layout` |
+| `configure-provider` | write nothing; preserve an existing provider file, or defer a missing one to `deploy-framework` (`aiwg use`) | `tool(provider).installed`, `path(workspace, configPath)` (informational only), `project(workspace).layout` |
 | `verify-provider` | read-back/qualify without secrets | `tool(provider).version`, `project(workspace).layout` |
 | `write-project-config` | write `.aiwg/aiwg.config` update | `path(workspace, package.json)`, `project(workspace).layout`, `path(workspace, .aiwg/aiwg.config)` |
 | `deploy-framework` | deploy suggested framework/capability | `project(workspace).layout`, `tool(provider).installed` |
@@ -292,6 +292,13 @@ changed facts as `unobserved`/`fact-changed`/`version-changed`/
 `tool-not-installed`/`path-missing` per the revalidation rules and must
 re-ask or refuse rather than apply stale actions. The first two kinds match
 the v1 fixture (`test/unit/discovery/fixtures/setup-plan-v1.json:47-81`).
+
+Two A4 judgment calls A5/A6 can rely on: `verify-provider` treats an
+`unobserved` tool version (unknown at plan and apply time) as advisory
+rather than stale, since the read-only check re-observes the tool from fresh
+inventory; and a run where every core action applies but an optional
+`deploy-framework` fails or skips exits 1 with a `Partial success` message
+(classification `partial`), leaving the optional action eligible for retry.
 
 ### Plan-model change A3 makes
 

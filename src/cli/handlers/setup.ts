@@ -23,12 +23,31 @@ import { AiwgError, EXIT_CODES } from '../errors.js';
 import { askChoice, askConsent, askString, askYesNo, createPromptInterface } from '../prompt-utils.js';
 import * as ui from '../ui.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
+import { readFile } from 'node:fs/promises';
+import { discoverInventory } from '../../discovery/index.js';
+import {
+  applyGuidedPlan,
+  configPathFor,
+  credentialReferenceFor,
+  defaultPlanReviewIO,
+  projectRootForWorkspace,
+  renderHumanReview,
+  reviewGuidedPlan,
+  type PlanApplyIO,
+} from '../../discovery/plan-apply.js';
+import { readSetupPlan, writeSetupPlan } from '../../discovery/plan-store.js';
+import type { CredentialReference, PlannedAction, SetupPlan } from '../../discovery/plan-types.js';
+import { workspaceSlug } from '../../discovery/interview.js';
+import type { DiscoveryInventory } from '../../discovery/types.js';
+import { registerProjectMemory } from '../../memory/project-registry.js';
+import { verifyProviderDeployment } from '../services/deployment-verification.js';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
+import { useHandler } from './use.js';
 import { normalizeProviderDefinitionId } from '../../providers/provider-definitions.js';
 import { isInteractive } from '../env.js';
 import { requireFlagValue as strictFlagValue, MissingFlagValueError } from '../flag-parsing.js';
 import { parseGuidedSetupFlags, runGuidedSetup } from './guided-setup.js';
-import { parseInitArgInputs } from './init.js';
+import { DEFAULT_SCRIPTS, parseInitArgInputs } from './init.js';
 import type { PlanValue } from '../../discovery/plan-types.js';
 import {
   detectInstalledWorkerClis,
@@ -592,6 +611,280 @@ function printPlan(plan: SetupProjectPlan): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Guided plan review and apply (#3449 A4).
+//
+// `--review` renders a saved guided plan per workspace and provider without
+// writing anything. `--apply` executes `remainingPlanActions` in dependency
+// order through the existing owners: project policy through
+// `buildSetupProjectPlan` + `writeAiwgConfig` (the setup/init config owners),
+// framework deployment through the `use` handler (consuming its
+// `aiwg.use.result.v1` verification), and project registration through the
+// project registry owner. Nothing here re-implements those paths.
+// ---------------------------------------------------------------------------
+
+/** Legacy policy flags: when any is present, `--dry-run` keeps its legacy preview meaning. */
+const LEGACY_SETUP_POLICY_FLAGS = [
+  '--primary', '--issue-tracker', '--customer-issue-tracker', '--ci',
+  '--issue-provider', '--customer-issue-provider', '--delivery-mode', '--default-branch',
+  '--require-ci-green', '--auto-close-issues', '--issue-comment-on-cycle', '--force-push-policy',
+  '--require-signed-commits', '--committer-name', '--committer-email', '--signing-format',
+  '--signing-key', '--signing-enforce', '--tracker-actor-login', '--tracker-actor-via',
+  '--customer-tracker-actor-login', '--customer-tracker-actor-via', '--worker-dispatch', '--providers',
+];
+
+function hasLegacySetupPolicyFlags(args: readonly string[]): boolean {
+  return LEGACY_SETUP_POLICY_FLAGS.some(flag => args.includes(flag) || args.some(arg => arg.startsWith(`${flag}=`)));
+}
+
+const GUIDED_INTENT_FRAMEWORK: Record<string, string> = {
+  code: 'sdlc', docs: 'writing', ops: 'ops', mixed: 'sdlc',
+};
+
+function guidedAnswer(plan: SetupPlan, workspace: string, block: string, topic: string, provider = 'shared'): PlanValue | undefined {
+  const projectRoot = projectRootForWorkspace(plan, workspace) ?? workspace;
+  return plan.answers[`${block}.${topic}.ws-${workspaceSlug(projectRoot)}.${provider}`]?.value;
+}
+
+function guidedProviders(plan: SetupPlan, workspace: string): string[] {
+  const projectRoot = projectRootForWorkspace(plan, workspace) ?? workspace;
+  const prefix = `tools.provider.ws-${workspaceSlug(projectRoot)}.`;
+  return Object.entries(plan.answers)
+    .filter(([id, answer]) => id.startsWith(prefix) && answer.value === true)
+    .map(([id]) => id.slice(prefix.length))
+    .sort();
+}
+
+async function writeGuidedProjectConfig(plan: SetupPlan, action: PlannedAction): Promise<string> {
+  const asRecord = (value: PlanValue | undefined): Record<string, PlanValue> =>
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, PlanValue> : {};
+  const delivery = asRecord(guidedAnswer(plan, action.workspace, 'capabilities', 'delivery'));
+  const signing = guidedAnswer(plan, action.workspace, 'capabilities', 'signing');
+  const tracker = asRecord(guidedAnswer(plan, action.workspace, 'capabilities', 'tracker'));
+  const team = guidedAnswer(plan, action.workspace, 'intent', 'team');
+  const dispatch = guidedAnswer(plan, action.workspace, 'tools', 'worker-dispatch');
+  const string = (value: PlanValue | undefined): string | undefined => typeof value === 'string' ? value : undefined;
+  const boolean = (value: PlanValue | undefined): boolean | undefined => typeof value === 'boolean' ? value : undefined;
+  const built = await buildSetupProjectPlan({
+    projectDir: action.workspace,
+    providers: guidedProviders(plan, action.workspace),
+    ...(string(delivery.mode) ? { deliveryMode: string(delivery.mode) as SetupProjectOptions['deliveryMode'] } : {}),
+    ...(string(delivery.default_branch) ? { defaultBranch: string(delivery.default_branch) } : {}),
+    ...(boolean(delivery.require_ci_green) ? { requireCiGreen: boolean(delivery.require_ci_green) } : {}),
+    ...(boolean(delivery.auto_close_issues) ? { autoCloseIssues: boolean(delivery.auto_close_issues) } : {}),
+    ...(boolean(delivery.issue_comment_on_cycle) ? { issueCommentOnCycle: boolean(delivery.issue_comment_on_cycle) } : {}),
+    ...(!delivery.force_push_policy && team === 'shared' ? { forcePushPolicy: 'never' as const } : {}),
+    ...(string(delivery.force_push_policy) ? { forcePushPolicy: string(delivery.force_push_policy) as SetupProjectOptions['forcePushPolicy'] } : {}),
+    ...(signing === false ? { requireSignedCommits: false } : {}),
+    ...(typeof (signing as Record<string, PlanValue> | undefined)?.required === 'boolean'
+      ? { requireSignedCommits: (signing as Record<string, boolean>).required } : {}),
+    ...(string((signing as Record<string, PlanValue>)?.format) ? { signingFormat: string((signing as Record<string, PlanValue>).format) as SetupProjectOptions['signingFormat'] } : {}),
+    ...(string((signing as Record<string, PlanValue>)?.key) ? { signingKey: string((signing as Record<string, PlanValue>).key) } : {}),
+    ...(string((signing as Record<string, PlanValue>)?.enforce) ? { signingEnforce: string((signing as Record<string, PlanValue>).enforce) as SetupProjectOptions['signingEnforce'] } : {}),
+    ...(string(tracker.primary) ? { primary: string(tracker.primary) } : {}),
+    ...(string(tracker.issue_tracker) ? { issueTracker: string(tracker.issue_tracker) } : {}),
+    ...(string(tracker.issue_provider) ? { issueProvider: string(tracker.issue_provider) as SetupProjectOptions['issueProvider'] } : {}),
+    ...(string(tracker.customer_issue_tracker) ? { customerIssueTracker: string(tracker.customer_issue_tracker) } : {}),
+    ...(string(tracker.customer_issue_provider) ? { customerIssueProvider: string(tracker.customer_issue_provider) as SetupProjectOptions['customerIssueProvider'] } : {}),
+    ...(string(tracker.ci) ? { ci: string(tracker.ci) } : {}),
+    ...(string(tracker.tracker_actor_login) ? { trackerActorLogin: string(tracker.tracker_actor_login) } : {}),
+    ...(string(tracker.tracker_actor_via) ? { trackerActorVia: string(tracker.tracker_actor_via) as SetupProjectOptions['trackerActorVia'] } : {}),
+    ...(string(tracker.customer_tracker_actor_login) ? { customerTrackerActorLogin: string(tracker.customer_tracker_actor_login) } : {}),
+    ...(string(tracker.customer_tracker_actor_via) ? { customerTrackerActorVia: string(tracker.customer_tracker_actor_via) as SetupProjectOptions['customerTrackerActorVia'] } : {}),
+    ...(dispatch === 'enable' || dispatch === 'decline' ? { workerDispatchChoice: dispatch } : {}),
+  });
+  // Interview script answers merge on top of the preserved config: init owns
+  // the default-script set, setup owns the policy merge above.
+  const scripts = asRecord(guidedAnswer(plan, action.workspace, 'tools', 'scripts'));
+  let next = built.next;
+  if (Object.keys(scripts).length > 0) {
+    const merged = { ...(next.scripts ?? {}) };
+    if (scripts.defaultScripts === true) {
+      for (const [name, command] of Object.entries(DEFAULT_SCRIPTS)) {
+        if (!merged[name]) merged[name] = command;
+      }
+    }
+    const custom = scripts.scripts;
+    if (custom && typeof custom === 'object' && !Array.isArray(custom)) Object.assign(merged, custom);
+    next = { ...next, scripts: merged };
+  }
+  await writeAiwgConfig(action.workspace, next);
+  return `merged guided policy into ${getConfigPath(action.workspace)}`;
+}
+
+// configure-provider writes no provider files: provider config files belong
+// to the existing deployment owner (`aiwg use`, the `deploy-framework`
+// action), which `PLAN_APPLY_KIND_ORDER` runs after every
+// configure-provider. An existing file is user-authored and left untouched
+// (applied, preserved); a missing one defers to deploy-framework. The
+// credential reference was already resolved at apply time by the apply engine
+// and is never written anywhere.
+async function writeGuidedProviderConfig(plan: SetupPlan, action: PlannedAction, configPath: string | undefined): Promise<string> {
+  if (!configPath) throw new Error(`Cannot apply '${action.id}': no provider config path was recorded for ${action.provider}.`);
+  try {
+    await readFile(configPath, 'utf8');
+    return `preserved existing provider file ${configPath} (left untouched)`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+  }
+  const deploy = plan.actions.find(other => other.workspace === action.workspace &&
+    other.provider === action.provider && other.kind === 'deploy-framework');
+  const owner = deploy ? `'${deploy.id}'` : 'deploy-framework';
+  return `provider files for ${action.provider} in ${action.workspace} are owned by ${owner}; nothing written`;
+}
+
+async function verifyGuidedProvider(plan: SetupPlan, fresh: DiscoveryInventory, action: PlannedAction, reference: CredentialReference | undefined): Promise<string> {
+  const executable = action.dependsOn.find(fact => fact.kind === 'tool')?.executable ?? action.provider;
+  const tool = fresh.tools.find(entry => entry.executable === executable);
+  if (!tool || tool.installed !== 'yes') {
+    throw new Error(`Provider tool '${executable}' is not installed; install it and re-run discovery before verifying '${action.id}'.`);
+  }
+  const configPath = action.dependsOn.find(fact => fact.kind === 'path')?.path
+    ?? configPathFor(plan, action.workspace, action.provider);
+  let configNote = 'no config path recorded';
+  if (configPath) {
+    try {
+      await readFile(configPath, 'utf8');
+      configNote = `config present at ${configPath}`;
+    } catch {
+      configNote = `config missing at ${configPath}`;
+    }
+  }
+  const version = tool.version ? `version ${tool.version}` : 'version unknown';
+  // Hyphenated wording: receipt messages persist through the plan store,
+  // whose redaction gate rejects `credential <value>` phrasing.
+  const credential = reference ? `credential-ref ${reference.source}:${reference.name} readable at apply time` : 'no credential-reference recorded';
+  return `verified ${action.provider} (${executable} installed, ${version}; ${configNote}; ${credential}; read-back only)`;
+}
+
+async function deployGuidedFramework(plan: SetupPlan, action: PlannedAction, frameworkRoot: string, signal: AbortSignal | undefined): Promise<string> {
+  const intent = guidedAnswer(plan, action.workspace, 'intent', 'use');
+  const framework = GUIDED_INTENT_FRAMEWORK[typeof intent === 'string' ? intent : 'code'] ?? 'sdlc';
+  const args = [framework, '--provider', action.provider, ...(action.scope === 'user' ? ['--scope', 'user'] : [])];
+  const deployed = await useHandler.execute({ cwd: action.workspace, args, rawArgs: args, frameworkRoot, dryRun: false, signal });
+  if (deployed.exitCode !== 0) {
+    throw new Error(`aiwg use ${framework} --provider ${action.provider} failed${deployed.message ? `: ${deployed.message}` : ` (exit ${deployed.exitCode})`}.`);
+  }
+  // Consume the aiwg.use.result.v1 verification for this provider and scope.
+  const verification = await verifyProviderDeployment({
+    projectRoot: action.workspace,
+    frameworkRoot,
+    provider: action.provider,
+    scope: action.scope,
+    requestedBundles: [framework],
+  });
+  const blocking = verification.findings.filter(finding => finding.severity === 'blocking');
+  if (verification.outcome === 'failed' || blocking.length > 0) {
+    throw new Error(`Deployment verification failed for ${action.provider}: ${blocking[0]?.message ?? verification.outcome}.`);
+  }
+  return `deployed ${framework} for ${action.provider} (verification: ${verification.outcome})`;
+}
+
+function defaultGuidedApplyIO(
+  plan: SetupPlan,
+  fresh: DiscoveryInventory,
+  ctx: HandlerContext,
+  projectDir: string,
+  frameworkRoot: string,
+  canPrompt: boolean,
+): PlanApplyIO {
+  return {
+    ...defaultPlanReviewIO(),
+    readEnv: name => process.env[name],
+    readCredentialFile: async path => readFile(path, 'utf8'),
+    // stdin-at-apply prompts for the value without echoing it anywhere: the
+    // label names the consumer only, and the value never reaches output.
+    ...(canPrompt ? { promptCredential: async (label: string) => {
+      const rl = createPromptInterface();
+      try {
+        return await askString(rl, label, '', ctx.signal);
+      } finally {
+        rl.close();
+      }
+    } } : {}),
+    now: () => new Date().toISOString(),
+    save: async next => {
+      await writeSetupPlan(projectDir, next);
+    },
+    owners: {
+      configureProvider: async ({ action, configPath }) =>
+        writeGuidedProviderConfig(plan, action, configPath),
+      verifyProvider: async ({ action }) =>
+        verifyGuidedProvider(plan, fresh, action, credentialReferenceFor(plan, action.workspace, action.provider)),
+      writeProjectConfig: async ({ action }) => writeGuidedProjectConfig(plan, action),
+      deployFramework: async ({ action }) => deployGuidedFramework(plan, action, frameworkRoot, ctx.signal),
+      registerProject: async ({ action }) => {
+        const entry = await registerProjectMemory({ workspaceRoot: action.workspace });
+        return `registered project '${entry.id}'`;
+      },
+      recordDecline: async ({ action }) => {
+        const existing = await readAiwgConfig(action.workspace);
+        const base = existing ?? emptyConfig([]);
+        await writeAiwgConfig(action.workspace, { ...base, setup: { ...base.setup, worker_dispatch_offer: 'declined' } });
+        return `recorded worker-dispatch decline in ${getConfigPath(action.workspace)}`;
+      },
+    },
+  };
+}
+
+async function loadGuidedPlan(projectDir: string, planId: string | undefined): Promise<{ plan: SetupPlan; fresh: DiscoveryInventory }> {
+  const fresh = await discoverInventory({ workspaceRoot: projectDir });
+  const workspaceRoot = fresh.projects.find(project => project.sources.includes('workspace'))?.root ?? projectDir;
+  const id = planId ?? `setup-${workspaceSlug(workspaceRoot)}`;
+  let plan: SetupPlan;
+  try {
+    plan = await readSetupPlan(projectDir, id);
+  } catch {
+    throw new AiwgError({
+      code: 'ERR_SETUP_PLAN_NOT_FOUND',
+      message: `No guided setup plan '${id}' for ${projectDir}.`,
+      hint: 'Record one first with `aiwg setup --scope project|user` (or `aiwg init --scope ...`).',
+      exitCode: EXIT_CODES.GENERAL,
+    });
+  }
+  return { plan, fresh };
+}
+
+async function runGuidedReview(_ctx: HandlerContext, projectDir: string, planId: string | undefined, json: boolean): Promise<HandlerResult> {
+  const { plan, fresh } = await loadGuidedPlan(projectDir, planId);
+  // Review is read-only: findings come from revalidation plus filesystem
+  // reads, and nothing here writes (not even receipts).
+  const review = await reviewGuidedPlan(plan, fresh, defaultPlanReviewIO());
+  if (json) return { exitCode: 0, rawOutput: true, message: JSON.stringify(review, null, 2) };
+  return { exitCode: 0, message: renderHumanReview(review) };
+}
+
+async function runGuidedApply(
+  ctx: HandlerContext,
+  projectDir: string,
+  planId: string | undefined,
+  options: { yes: boolean; json: boolean; canPrompt: boolean; frameworkRoot: string },
+): Promise<HandlerResult> {
+  const { plan, fresh } = await loadGuidedPlan(projectDir, planId);
+  // The existing --yes/confirmation gate and TTY rules: a write that can
+  // never be confirmed is refused before any owner runs.
+  if (!options.yes && !options.canPrompt) {
+    throw new AiwgError({
+      code: 'ERR_NON_INTERACTIVE_CONFIRMATION_REQUIRED',
+      message: 'Refusing to apply the guided setup plan in a non-interactive context without --yes.',
+      hint: 'Re-run with `aiwg setup --apply --yes` or use `--review`/`--dry-run` to preview only.',
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
+  if (!options.yes && options.canPrompt) {
+    const rl = createPromptInterface();
+    try {
+      const confirmed = await askYesNo(rl, `Apply the guided setup plan '${plan.id}'? [y/N]: `, false, ctx.signal);
+      if (!confirmed) return { exitCode: 0, message: 'Guided setup apply cancelled.' };
+    } finally {
+      rl.close();
+    }
+  }
+  const { result } = await applyGuidedPlan(plan, fresh, defaultGuidedApplyIO(plan, fresh, ctx, projectDir, options.frameworkRoot, options.canPrompt));
+  if (options.json) return { exitCode: result.exitCode, rawOutput: true, message: JSON.stringify(result, null, 2) };
+  return { exitCode: result.exitCode, message: result.message };
+}
+
 export const setupHandler: CommandHandler = {
   id: 'setup',
   name: 'Setup',
@@ -616,6 +909,9 @@ Options:
   --credential <provider>=env:NAME|file:PATH|stdin  Credential reference only
   --yes                           Confirm writes without prompting
   --dry-run                       Preview the setup plan
+  --review                        Render the saved guided plan per workspace/provider (writes nothing)
+  --apply                         Apply the saved guided plan through the existing owners
+  --plan <id>                     Guided plan ID (default: setup plan for the target directory)
   --non-interactive               Disable prompts
   --json                          Emit the plan as JSON
   --primary <remote>              Primary repository remote
@@ -669,6 +965,48 @@ Options:
     // process.stdout.isTTY`, so a CI job with a pseudo-terminal could still
     // reach these prompts.
     const canPrompt = isInteractive(options.nonInteractive);
+
+    // #3449 A4: operate on a saved guided plan. `--review` renders it
+    // read-only; `--apply` executes it through the existing owners behind the
+    // same --yes/confirmation gate as legacy writes. `--dry-run` on a guided
+    // plan (no planning or policy flags) previews the same review and writes
+    // nothing. `--review` and `--apply` together is a usage error.
+    const wantsReview = boolFlag(args, '--review');
+    const wantsApply = boolFlag(args, '--apply');
+    if (wantsReview && wantsApply) {
+      throw new AiwgError({
+        code: 'ERR_USAGE_CONFLICTING_FLAGS',
+        message: 'Cannot combine --review with --apply; use --review to preview or --apply to write.',
+        exitCode: EXIT_CODES.USAGE,
+      });
+    }
+    if (wantsReview || wantsApply || (options.dryRun && !guidedFlags.enabled && !hasLegacySetupPolicyFlags(args))) {
+      let planId: string | undefined;
+      try {
+        planId = flagValue(args, '--plan');
+      } catch (error) {
+        if (error instanceof MissingFlagValueError) {
+          throw new AiwgError({ code: 'ERR_USAGE_MISSING_FLAG_VALUE', message: `${error.message}.`, exitCode: EXIT_CODES.USAGE });
+        }
+        throw error;
+      }
+      // A bare `--dry-run` without a saved plan keeps its legacy preview
+      // meaning; only an existing plan switches it to the guided review.
+      if (!wantsReview && !wantsApply && options.dryRun) {
+        try {
+          return await runGuidedReview({ ...ctx, args }, options.projectDir, planId, options.json ?? false);
+        } catch (error) {
+          if (error instanceof AiwgError && error.code === 'ERR_SETUP_PLAN_NOT_FOUND') {
+            // Fall through to the legacy setup preview below.
+          } else throw error;
+        }
+      } else if (wantsReview || options.dryRun) {
+        return runGuidedReview({ ...ctx, args }, options.projectDir, planId, options.json ?? false);
+      } else {
+        return runGuidedApply({ ...ctx, args }, options.projectDir, planId,
+          { yes: options.yes ?? false, json: options.json ?? false, canPrompt, frameworkRoot: ctx.frameworkRoot });
+      }
+    }
 
     if (guidedFlags.enabled) {
       const target = flagValue(args, '--target');
