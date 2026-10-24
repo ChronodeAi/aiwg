@@ -24,11 +24,11 @@ Alternate expressions and non-obvious activations (primary phrases are matched a
 
 | Pattern | Example | Action |
 |---------|---------|--------|
-| Framework deploy | "use sdlc" | Run `aiwg use sdlc-complete` |
+| Framework deploy | "use sdlc" | Run `aiwg use sdlc` |
 | Addon deploy | "use the ralph addon" | Run `aiwg use ralph` |
-| Provider-scoped deploy | "deploy sdlc to copilot" | Run `aiwg use sdlc-complete --provider copilot` |
-| Dev mode deploy | "deploy from local source" | Run `aiwg use sdlc-complete --dev` |
-| All frameworks | "deploy everything" | Run `aiwg use all` |
+| Provider-scoped deploy | "deploy sdlc to copilot" | Run `aiwg use sdlc --provider copilot` |
+| Source deploy | "deploy from local source" | Run `aiwg use sdlc` (source installs are detected automatically) |
+| Kernel surface | "deploy the kernel" | Run `aiwg use all` |
 
 ## Behavior
 
@@ -37,7 +37,7 @@ When triggered:
 1. **Extract intent**:
    - Which framework or addon is requested? (resolve shorthand: "sdlc" → `sdlc-complete`, "marketing" → `media-marketing-kit`, "forensics" → `forensics-complete`, "research" → `research-complete`, "curator" → `media-curator`)
    - Is a specific provider mentioned? Default is the detected active provider.
-   - Is `--dev` (local source) requested?
+   - Source installs are detected automatically; no development flag is needed.
 
 2. **Resolve the target**:
 
@@ -65,22 +65,25 @@ When triggered:
 
    ```bash
    # Deploy a framework (default provider)
-   aiwg use sdlc-complete
+   aiwg use sdlc
 
    # Deploy an addon
    aiwg use ralph
 
    # Deploy to a specific provider
-   aiwg use sdlc-complete --provider copilot
+   aiwg use sdlc --provider copilot
 
-   # Deploy from local development source
-   aiwg use sdlc-complete --dev
-
-   # Deploy all frameworks and addons
+   # Deploy the kernel surface (kernel skills, kernel and core rules, behaviors)
    aiwg use all
    ```
 
 4. **Report the result** inline — confirm what was deployed, where, and any warnings about missing dependencies.
+
+The canonical SDLC target is `sdlc`; `sdlc-complete` is accepted as a compatibility alias. Source checkouts are detected automatically from their `.git` entry.
+
+Use `--dry-run` for one consolidated plan with each planned action listed once. `--copy-all` restores the full agent, command, skill and rule surface for `all`.
+
+Unknown options fail with exit code 2; run `aiwg use --help` for usage.
 
 ## Examples
 
@@ -92,7 +95,7 @@ When triggered:
 
 **Action**:
 ```bash
-aiwg use sdlc-complete
+aiwg use sdlc
 ```
 
 **Response**: "Deployed sdlc-complete to claude-code. Agents written to `.claude/agents/`, commands to `.claude/commands/`, rules to `.claude/rules/`. Registered in `.aiwg/frameworks/registry.json`."
@@ -105,7 +108,7 @@ aiwg use sdlc-complete
 
 **Action**:
 ```bash
-aiwg use sdlc-complete --provider copilot
+aiwg use sdlc --provider copilot
 ```
 
 **Response**: "Deployed sdlc-complete to copilot. Agents written as `.github/agents/*.agent.md`, commands to `.github/prompts/`, rules to `.github/instructions/`."
@@ -123,18 +126,18 @@ aiwg use ring-methodology
 
 **Response**: "Deployed ring-methodology addon to claude-code. 7 rules installed to `.claude/rules/`."
 
-### Example 4: Deploy all frameworks
+### Example 4: Deploy the kernel surface
 
-**User**: "deploy everything"
+**User**: "deploy the kernel"
 
-**Extraction**: All frameworks and addons
+**Extraction**: Kernel surface
 
 **Action**:
 ```bash
 aiwg use all
 ```
 
-**Response**: "Deployed all frameworks to claude-code: sdlc-complete, media-marketing-kit, forensics-complete, research-complete, media-curator, and 7 addons."
+**Response**: "Deployed the kernel surface to claude-code: kernel skills, kernel and core rules, and behaviors. Full framework artifacts remain available through discovery; deploy a named framework to install its full surface."
 
 ## Clarification Prompts
 

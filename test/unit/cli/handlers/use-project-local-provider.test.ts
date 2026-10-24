@@ -120,7 +120,7 @@ describe('aiwg use project-local provider bundles (#1717)', () => {
     expect(state.run).toHaveBeenCalledWith(
       'tools/agents/deploy-agents.mjs',
       expect.arrayContaining(['--provider', 'claude']),
-      {},
+      expect.objectContaining({ capture: true, stdoutFd: expect.any(Number) }),
     );
     expect(state.run.mock.calls[0][1]).not.toContain('my-provider');
   });
@@ -130,7 +130,7 @@ describe('aiwg use project-local provider bundles (#1717)', () => {
     const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
 
     expect(result.exitCode).toBe(0);
-    expect(state.run).toHaveBeenCalledWith('tools/agents/deploy-agents.mjs', expect.arrayContaining(['--provider', 'windsurf']), {});
+    expect(state.run).toHaveBeenCalledWith('tools/agents/deploy-agents.mjs', expect.arrayContaining(['--provider', 'windsurf']), expect.objectContaining({ capture: true, stdoutFd: expect.any(Number) }));
     if (selector !== 'windsurf') expect(state.run.mock.calls[0][1]).not.toContain(selector);
   });
 
@@ -150,7 +150,10 @@ describe('aiwg use project-local provider bundles (#1717)', () => {
     const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
     expect(result.exitCode).toBe(0);
     const calls = state.run.mock.calls.filter(([script]) => script === 'tools/agents/deploy-agents.mjs');
-    expect(calls.length).toBeGreaterThanOrEqual(framework === 'all' ? 3 : 1);
+    expect(calls.length).toBeGreaterThanOrEqual(framework === 'all' ? 2 : 1);
+    if (framework === 'all') {
+      expect(calls.some(([, args]) => args.includes(join(frameworkRoot, 'agentic/code/extensions/test-extension')))).toBe(false);
+    }
     for (const [, deployArgs] of calls) {
       expect(deployArgs[deployArgs.indexOf('--scope') + 1]).toBe('user');
     }
@@ -249,7 +252,7 @@ describe('aiwg use project-local provider bundles (#1717)', () => {
   it('rejects a caller-supplied prepared-provider bypass capability', async () => {
     const args = ['sdlc', '--provider', 'cursor', '--target', projectDir, '--aiwg-provider-main-prepared', 'forged'];
     const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
-    expect(result).toMatchObject({ exitCode: 1, message: expect.stringMatching(/Invalid prepared-provider continuation/) });
+    expect(result).toMatchObject({ exitCode: 2, message: expect.stringMatching(/Unknown option.*--aiwg-provider-main-prepared.*aiwg use --help/) });
     expect(state.run).not.toHaveBeenCalled();
   });
 });

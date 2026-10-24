@@ -1546,7 +1546,7 @@ async function deployOneProjectLocalBundle(opts: {
 
   let exitCode = 0;
   if (artifactTotal > 0) {
-    const runner = createScriptRunner(frameworkRoot);
+    const runner = createUseScriptRunner(frameworkRoot);
     const args: string[] = [
       '--source', bundle.artifactPath,
       '--deploy-commands', '--deploy-skills', '--deploy-rules',
@@ -1875,6 +1875,79 @@ const USE_FLAGS_WITH_VALUES = new Set([
   '--scope',
   '--target',
 ]);
+
+// Public use options, including supported deployer passthroughs. Value flags
+// also drive positional parsing, so option values cannot become bundle names.
+for (const flag of [...MODEL_DEPLOY_VALUE_FLAGS, '--reasoning', '--coding', '--efficiency']) {
+  USE_FLAGS_WITH_VALUES.add(flag);
+}
+const USE_BOOLEAN_FLAGS = new Set([
+  '--force', '--copy-all', '--copy-standard-skills', '--dry-run', '--verbose', '-v', '--quiet', '-q',
+  '--json', '--no-project-local', '--no-context-files', '--no-workspace-md',
+  '--no-aiwg-md', '--no-agents-md', '--force-context-files', '--global', '--user',
+  '--no-utils', '--ci-hooks-enabled', '--skip-conflicts', '--no-harness-agents',
+  '--workspace-signals', '--no-workspace-signals', '--yes', '-y', '--non-interactive',
+  '--allow-over-budget', '--no-hooks', '--enable-cross-provider-hooks',
+  '--skip-commands-migration', '--listing-budget', '--mcp', '--as-agents-md',
+  '--create-agents-md', '--commands-only', '--skills-only', '--rules-only',
+  '--save', '--save-user', '--help', '-h',
+]);
+
+export function validateUseOptions(args: string[], preparedCapabilities = new Set<string>()): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--aiwg-provider-main-prepared' && preparedCapabilities.has(args[i + 1])) {
+      i++;
+      continue;
+    }
+    if (USE_FLAGS_WITH_VALUES.has(arg)) {
+      if (!args[i + 1] || args[i + 1].startsWith('-')) return `Missing value for option '${arg}'. See aiwg use --help.`;
+      i++;
+    } else if (arg.startsWith('-') && !USE_BOOLEAN_FLAGS.has(arg)) {
+      return `Unknown option '${arg}'. See aiwg use --help.`;
+    }
+  }
+  return undefined;
+}
+
+/** Pi's agent discovery path doubles as its kernel skill directory. */
+export async function countPiAgentFiles(target: string, agentsPath: string | null): Promise<number> {
+  if (!agentsPath) return 0;
+  try {
+    const dir = path.isAbsolute(agentsPath) ? agentsPath : path.join(target, agentsPath);
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    return entries.filter(entry => entry.isFile() && entry.name.endsWith('.md')).length;
+  } catch { return 0; }
+}
+
+// Capture provider previews here: their staging summaries count source entries,
+// and additive passes can describe the same destination more than once.
+let usePreviewActions: Set<string> | undefined;
+function createUseScriptRunner(frameworkRoot: string) {
+  const runner = createScriptRunner(frameworkRoot);
+  return {
+    async run(script: string, args: string[], options: Parameters<typeof runner.run>[2] = {}): Promise<HandlerResult> {
+      if (!usePreviewActions) return runner.run(script, args, options);
+      const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-use-preview-'));
+      const stdoutFile = await fs.open(path.join(scratch, 'stdout'), 'w+');
+      try {
+        // Keep the shared runner's timeout/error handling and injectable
+        // execution boundary; capture only this invocation's stdout to disk.
+        const result = await runner.run(script, args, { ...options, capture: true, stdoutFd: stdoutFile.fd });
+        const stdout = await fs.readFile(path.join(scratch, 'stdout'), 'utf8');
+        for (const line of stdout.split(/\r?\n/)) {
+          if (/^\[dry-run\] Would (write|remove|deploy|copy|create) /i.test(line)) usePreviewActions.add(line);
+        }
+        return result;
+      } catch (error) {
+        return { exitCode: 1, message: error instanceof Error ? error.message : String(error) };
+      } finally {
+        await stdoutFile.close();
+        await fs.rm(scratch, { recursive: true, force: true });
+      }
+    },
+  };
+}
 
 type OpenHumanHarnessScope = 'project' | 'user';
 
@@ -2451,7 +2524,7 @@ async function deploySourceDirectory(opts: {
   if (opts.kernelOnly) args.push('--kernel-only');
   if (opts.quiet) args.unshift('--quiet');
 
-  const runner = createScriptRunner(opts.frameworkRoot);
+  const runner = createUseScriptRunner(opts.frameworkRoot);
   const result = await runner.run(
     'tools/agents/deploy-agents.mjs',
     args,
@@ -2683,7 +2756,7 @@ const USE_HELP = `Usage: aiwg use <bundle> [options]
 Deploy an AIWG framework, addon, or extension into the current project.
 
 Bundles:
-  all                       Kernel surface only (kernel skills, rules, behaviors)
+  all                       Kernel surface only (kernel skills, kernel and core rules, behaviors)
   sdlc | research | ops | forensics | marketing | media-curator | ...
                             Full framework surface (agents, commands, skills, rules)
   <addon> | <extension>     Any installed addon or extension name
@@ -2695,14 +2768,55 @@ Options:
   --force                   Re-write every artifact, replacing files AIWG does
                             not currently manage. Use this to reclaim a
                             directory left behind by an older AIWG install.
-  --copy-all                Mirror standard-tier skills into the project instead
-                            of relying on index-driven discovery
+  --copy-all                Mirror standard-tier skills into the project; for
+                            all, restore the full agent, command and rule surface
   --dry-run                 Preview the deployment without writing files
+  --quiet, -q               Suppress deployer progress output
   --verbose, -v             Show per-artifact deploy decisions
   --json                    Emit the machine-readable deployment result
   --no-project-local        Skip project-local bundles under .aiwg/
   --no-context-files        Skip WORKSPACE.md / AIWG.md / AGENTS.md emission
   -h, --help                Show this help without deploying
+
+Additional options:
+  --platform <name>         Alias for --provider
+  --providers <a,b>         Providers for global bootstrap
+  --prefix <dir>            Alias for --target
+  --global, --user          Install to user scope
+  --copy-standard-skills    Alias for --copy-all (also restores the full surface)
+  --profile <name>          Select workspace profile (implicit target: all)
+  --workspace-signals       Show the workspace signal plan
+  --no-workspace-signals    Skip workspace signal resolution
+  --model <name>, --model-tier <tier>
+  --reasoning-model <name>, --coding-model <name>, --efficiency-model <name>
+  --reasoning <name>, --coding <name>, --efficiency <name>
+                            Override deployer model selection
+  --filter <glob>, --filter-role <role>
+                            Filter deployed agents
+  --save, --save-user        Persist model selection
+  --no-utils                Skip additive addon and extension passes
+  --no-workspace-md, --no-aiwg-md, --no-agents-md
+                            Suppress individual context files
+  --force-context-files     Replace context files
+  --no-hooks                Skip managed hooks
+  --enable-cross-provider-hooks
+                            Enable cross-provider hooks
+  --ci-hooks-enabled        Deploy CI workflows
+  --skip-conflicts          Skip the collision check
+  --allow-over-budget       Allow oversized startup context
+  --harness-agents <list>, --no-harness-agents
+                            Select OpenHuman harness agents
+  --skip-commands-migration Skip commands migration
+  --listing-budget          Honor startup listing caps with --copy-all
+  --mcp                     Opt in to the Muse MCP profile
+  --as-agents-md, --create-agents-md
+                            Select Codex context aggregation
+  --commands-only, --skills-only, --rules-only
+                            Limit artifact kinds
+  --yes, -y, --non-interactive
+                            Allow unattended setup
+
+Source installs are detected automatically; no development flag is needed.
 
 Deployment counts report what the run wrote or already manages. Files AIWG does
 not own are listed separately as unmanaged and are never counted as deployed.
@@ -2722,6 +2836,16 @@ export class UseHandler implements CommandHandler {
   }
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    const invalidOption = validateUseOptions(ctx.args, this.preparedProviderContinuations);
+    if (invalidOption) return { exitCode: 2, message: invalidOption };
+    // Normalize the physical framework directory just as addon folder aliases
+    // are normalized, before orchestration/registry bookkeeping sees the name.
+    const aliasIndex = ctx.args.indexOf('sdlc-complete');
+    if (firstUsePositional(ctx.args) === 'sdlc-complete' && aliasIndex >= 0) {
+      const args = [...ctx.args];
+      args[aliasIndex] = 'sdlc';
+      ctx = { ...ctx, args };
+    }
     const requestedBundle = firstUsePositional(ctx.args)
       ?? (ctx.args[0] === '--profile' ? 'all' : undefined);
     const bypassOrchestration = this.orchestrationDepth > 0
@@ -2785,8 +2909,11 @@ export class UseHandler implements CommandHandler {
       warn: console.warn,
       error: console.error,
     };
-    if (json) {
-      machineReadableUseDepth += 1;
+    const previewActions = dryRun ? new Set<string>() : undefined;
+    const previousPreview = usePreviewActions;
+    if (previewActions) usePreviewActions = previewActions;
+    if (json || dryRun) {
+      if (!dryRun) machineReadableUseDepth += 1;
       console.log = () => {};
       console.info = () => {};
       console.warn = () => {};
@@ -2797,8 +2924,9 @@ export class UseHandler implements CommandHandler {
     try {
       coreResult = await this.executeCore({ ...ctx, args: coreArgs });
     } finally {
-      if (json) {
-        machineReadableUseDepth -= 1;
+      usePreviewActions = previousPreview;
+      if (json || dryRun) {
+        if (!dryRun) machineReadableUseDepth -= 1;
         console.log = originalConsole.log;
         console.info = originalConsole.info;
         console.warn = originalConsole.warn;
@@ -2855,7 +2983,7 @@ export class UseHandler implements CommandHandler {
             originalConsole.warn(`Provider receipt finalization failed for ${provider}: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
-        providerResults.push(await verifyProviderDeployment({
+        const verified = await verifyProviderDeployment({
           projectRoot: projectDir,
           frameworkRoot,
           provider,
@@ -2869,7 +2997,14 @@ export class UseHandler implements CommandHandler {
           // yet, so receipt absence belongs in doctor/status rather than
           // degrading an otherwise successful `aiwg use` result.
           reportMissingReceipt: false,
-        }));
+        });
+        // Pi exposes agents through skills. The shared verifier counts skill
+        // directories at that path as agents; report only actual agent files.
+        if (provider === 'pi') {
+          const paths = effectiveScope === 'user' ? USER_SCOPE_PATHS.pi : getProviderPaths(provider);
+          verified.counts.agents = await countPiAgentFiles(projectDir, paths.agents);
+        }
+        providerResults.push(verified);
       }
       result = aggregateUseDeploymentResult({
         projectRoot: projectDir,
@@ -2908,7 +3043,7 @@ export class UseHandler implements CommandHandler {
     });
     return {
       exitCode: result.exitCode,
-      message: [coreResult.message, rendered].filter(Boolean).join('\n'),
+      message: [coreResult.message, rendered, ...(previewActions ? [...previewActions].sort() : [])].filter(Boolean).join('\n'),
     };
   }
 
@@ -3122,7 +3257,7 @@ export class UseHandler implements CommandHandler {
           : '';
         return {
           exitCode: 1,
-          message: `Error: Framework, addon, or extension name required\nFrameworks: sdlc, marketing, media-curator, research, forensics, dfir, security-engineering, ops, validation, knowledge-base, all\nAddons: rlm, ring, daemon, aiwg-dev (full list: \`aiwg list\`)\nExtensions: sys, net, it, sec, stream, dev (full list: \`ls $AIWG_ROOT/agentic/code/extensions\`)\n'all' deploys every framework + every addon + every extension.${advisory}`,
+          message: `Error: Framework, addon, or extension name required\nFrameworks: sdlc, marketing, media-curator, research, forensics, dfir, security-engineering, ops, validation, knowledge-base, all\nAddons: rlm, ring, daemon, aiwg-dev (full list: \`aiwg list\`)\nExtensions: sys, net, it, sec, stream, dev (full list: \`ls $AIWG_ROOT/agentic/code/extensions\`)\n'all' deploys the kernel surface (kernel skills, kernel and core rules, behaviors).${advisory}`,
         };
       }
       const installedNames = Object.keys(config.installed);
@@ -3431,7 +3566,7 @@ export class UseHandler implements CommandHandler {
 
       return {
         exitCode: 1,
-        message: `Error: Unknown target '${framework}'\nFrameworks: ${VALID_FRAMEWORKS.join(', ')}\n\n'all' deploys every framework + every addon + every extension.\nFor a single addon, run 'aiwg list' to see available addons.\nFor extensions (sys, net, it, sec, stream, dev), see $AIWG_ROOT/agentic/code/extensions/.\nFor project-local artifacts, run 'aiwg list --project-local'.\nRun 'aiwg help' for usage information.`,
+        message: `Error: Unknown target '${framework}'\nFrameworks: ${VALID_FRAMEWORKS.join(', ')}\n\n'all' deploys the kernel surface (kernel skills, kernel and core rules, behaviors).\nFor a single addon, run 'aiwg list' to see available addons.\nFor extensions (sys, net, it, sec, stream, dev), see $AIWG_ROOT/agentic/code/extensions/.\nFor project-local artifacts, run 'aiwg list --project-local'.\nRun 'aiwg help' for usage information.`,
       };
     }
 
@@ -3458,7 +3593,7 @@ export class UseHandler implements CommandHandler {
         };
       }
 
-      const runner = createScriptRunner(frameworkRoot);
+      const runner = createUseScriptRunner(frameworkRoot);
       const addonBaseArgs = ['--deploy-commands', '--deploy-skills', '--deploy-rules'];
       if (remainingArgs.includes('--allow-over-budget')) addonBaseArgs.push('--allow-over-budget');
       if (addonScope === 'user') addonBaseArgs.push('--scope', 'user');
@@ -3782,8 +3917,8 @@ export class UseHandler implements CommandHandler {
     const deployFilteredArgs = removeFlagWithOptionalValue(filteredArgs, '--harness-agents');
 
     // Pass --quiet to suppress deploy-agents.mjs header/footer in default mode (#460)
-    // Human dry-run remains verbose; machine-readable dry-run captures the
-    // preview so stdout stays a single JSON document.
+    // Dry-run action output is captured and consolidated at the use boundary;
+    // keep it available to the collector rather than silencing child plans.
     if (machineReadableUseDepth > 0 || (!verbose && !dryRun)) deployFilteredArgs.push('--quiet');
 
     // Extract provider and target from remainingArgs to pass to addon deployments
@@ -3970,14 +4105,14 @@ export class UseHandler implements CommandHandler {
     const captureOpts = quiet ? { capture: true } : {};
     if (quiet) {
       const installLabel = framework === 'all'
-        ? 'Installing complete AIWG surface'
+        ? (bulkKernelOnly ? 'Installing AIWG kernel surface' : 'Installing full AIWG surface')
         : `Installing ${framework} framework`;
       const providerLabel = getProviderDefinition(provider)?.displayName ?? provider;
       ui.blank();
       console.log(`  ${ui.brandMark()} ${ui.bold(installLabel)}  ${ui.dimText(`for ${providerLabel}`)}`);
       ui.blank();
     }
-    const runner = createScriptRunner(ctx.frameworkRoot);
+    const runner = createUseScriptRunner(ctx.frameworkRoot);
     let mainResult: HandlerResult;
     if (mainProviderPrepared) {
       try {
@@ -4071,10 +4206,11 @@ export class UseHandler implements CommandHandler {
       // Deploy all extensions from agentic/code/extensions/* (#1222).
       // Extensions are addon-shaped bundles (manifest type: "addon") that live
       // in a separate top-level dir to keep ops/sysops/itops/devops grouped.
-      // `aiwg use all` was previously silent about them, leaving 6 extension
-      // bundles undeployed even when the user explicitly asked for everything.
+      // Kernel mode already projects kernel/core rules in the main pass.
+      // Per-extension passes merely re-project that surface from an unchanged
+      // dry-run destination (nine extensions produced ten copies of each line).
       const allExtensions = await getAllExtensions(frameworkRoot);
-      for (const ext of allExtensions) {
+      for (const ext of bulkKernelOnly ? [] : allExtensions) {
         if (verbose) {
           console.log('');
           console.log(`Deploying ${ext} extension...`);

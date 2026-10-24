@@ -14,7 +14,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync, spawn, ChildProcess } from 'child_process';
 import { resolve, join } from 'path';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 
 vi.mock('child_process', async (importOriginal) => {
@@ -38,13 +38,19 @@ function runCli(args: string[], options: { cwd?: string; timeout?: number } = {}
 } {
   const cwd = options.cwd || PROJECT_ROOT;
   const timeout = options.timeout || 30000;
+  // File-backed output also works in sandboxes that restrict child pipes.
+  const captureDir = mkdtempSync(join(tmpdir(), 'aiwg-router-output-'));
+  const stdoutPath = join(captureDir, 'stdout');
+  const stderrPath = join(captureDir, 'stderr');
+  const stdoutFd = openSync(stdoutPath, 'w');
+  const stderrFd = openSync(stderrPath, 'w');
 
   try {
     const stdout = execFileSync(process.execPath, [BIN_PATH, ...args], {
       encoding: 'utf-8',
       cwd,
       timeout,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['ignore', stdoutFd, stderrFd],
       env: {
         ...process.env,
         AIWG_CONFIG: TEST_CONFIG_DIR,
@@ -52,13 +58,17 @@ function runCli(args: string[], options: { cwd?: string; timeout?: number } = {}
         AIWG_NO_UPDATE_CHECK: '1',
       },
     });
-    return { stdout, stderr: '', exitCode: 0 };
+    return { stdout: stdout || readFileSync(stdoutPath, 'utf8'), stderr: readFileSync(stderrPath, 'utf8'), exitCode: 0 };
   } catch (error: any) {
     return {
-      stdout: error.stdout?.toString() || '',
-      stderr: error.stderr?.toString() || '',
+      stdout: readFileSync(stdoutPath, 'utf8'),
+      stderr: readFileSync(stderrPath, 'utf8'),
       exitCode: error.status || 1,
     };
+  } finally {
+    closeSync(stdoutFd);
+    closeSync(stderrFd);
+    rmSync(captureDir, { recursive: true, force: true });
   }
 }
 
@@ -431,9 +441,16 @@ describe('CLI Router Characterization Tests', () => {
 
     it('should pass remaining args after command to handler', () => {
       // use command with extra args
-      const result = runCli(['use', 'sdlc', '--dry-run']);
-      // Should pass --dry-run to deploy handler
-      expect(result.stdout + result.stderr).toMatch(/dry.?run|preview/i);
-    }, 60_000);
+      const project = mkdtempSync(join(tmpdir(), 'aiwg-router-preview-'));
+      try {
+        // #3464 emits the consolidated preview after deployment planning finishes.
+        const result = runCli(['use', 'sdlc', '--dry-run'], { cwd: project, timeout: 180_000 });
+        // Should pass --dry-run to deploy handler
+        expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout + result.stderr).toMatch(/dry.?run|preview/i);
+      } finally {
+        rmSync(project, { recursive: true, force: true });
+      }
+    }, 190_000);
   });
 });
