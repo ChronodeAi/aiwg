@@ -18,13 +18,13 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 
-async function fixture(mode: 'systemd-unit' | 'native-sandbox' = 'systemd-unit', sandbox: 'workspace-write' | 'read-only' = 'workspace-write') {
+async function fixture(mode: 'systemd-unit' | 'native-sandbox' = 'systemd-unit', sandbox: 'workspace-write' | 'read-only' = 'workspace-write', hardTimeoutSeconds = 30) {
   vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
   const clients = systemdClientFixture(); roots.push(clients.root);
   vi.stubEnv('PATH', clients.root);
   const root = await mkdtemp(join(tmpdir(), 'launcher-native-sandbox-')); roots.push(root);
   const f = workerResolutionFixture();
-  f.snapshot.config.parallelism!.health = { hardTimeoutSeconds: 1, terminateGraceSeconds: 1 };
+  f.snapshot.config.parallelism!.health = { hardTimeoutSeconds, terminateGraceSeconds: 1 };
   const cwd = join(root, 'work'); await mkdir(cwd);
   const brief = join(root, 'brief'); await writeFile(brief, 'Synthetic task.');
   const final = join(root, 'final.json');
@@ -61,7 +61,10 @@ async function fixture(mode: 'systemd-unit' | 'native-sandbox' = 'systemd-unit',
   const launchIsolated = vi.fn(options => launchIsolatedWorker({ ...options, spawn: syncSpawn, spawnAsync: asyncSpawn }));
   const probeNativeSandbox = vi.fn(() => ({ ok: true, mode: 'systemd-unit' }));
   const launcher = new SessionLauncher();
-  const options = { invocationPath, runDir, inputs, now: f.request.now, scopedBreaker: null,
+  // #3505: policy/isolation tests must not consume the fixture's one-second
+  // dispatch budget on real preparation I/O under load. Worker timers remain real.
+  const options = { dispatchGuard: { nowMs: () => 0, deadlineAtMs: 1000 },
+    invocationPath, runDir, inputs, now: f.request.now, scopedBreaker: null,
     checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
     isolation: { mode: 'systemd-unit', reason: 'Synthetic manager' }, probeNativeSandbox, launchIsolated,
     isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) };
@@ -172,7 +175,7 @@ describe('policy-selected native sandbox launch', () => {
   });
 
   it('bounds a timed-out native process group without claiming descendant termination', async () => {
-    const f = await fixture('native-sandbox');
+    const f = await fixture('native-sandbox', 'workspace-write', 1);
     f.asyncSpawn.mockImplementation(() => {
       const child: any = new EventEmitter(); child.pid = 2147483646;
       child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.unref = () => {};

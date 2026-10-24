@@ -1428,6 +1428,7 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
     let spawnCalls = 0;
     try {
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(root, 'hook-throw-run'),
         inputs: { snapshot: f.snapshot, drivers }, now: f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -2592,6 +2593,10 @@ describe('bounded retained state (#2915 P3: scopes, cohorts and dedup sets never
   });
 });
 
+// #3505: real-I/O integration cases below freeze the recovery clock by
+// default. Explicit moving clocks still exercise expiry and canary deadlines.
+// Pass each owned breaker to launchWorker as well as the singleton seam:
+// its dispatch guard reads options.scopedBreaker, not the singleton clock.
 describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
   // Proves the live launchWorker path constructs and consults the scoped
   // breaker: three launcher-observed missing-binary failures open the
@@ -2783,6 +2788,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     const launchOnce = async () => {
       attempt += 1;
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(),
         runDir: path.join(fx.root, `run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
@@ -2807,6 +2813,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       // runDir is even created — and charges no attempt.
       const refusedRunDir = path.join(fx.root, `run-${attempt + 1}`);
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(),
         runDir: refusedRunDir,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
@@ -2836,6 +2843,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       // a canary failure, not just before the first one.
       now += 120_000;
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(),
         runDir: path.join(fx.root, `run-${attempt + 1}`),
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
@@ -2887,6 +2895,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     const launchEnoent = async (drivers = fx.drivers) => {
       attempt += 1;
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(), runDir: path.join(fx.root, `leak-run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -2946,7 +2955,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
   // admitted over it. The bounded stop escalation must actually stop it.
   it('a post-spawn capture-setup exception actually stops the still-running child instead of abandoning it', async () => {
     const fx = await enoentFixtureRoot();
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     let capturedChild;
@@ -2957,6 +2966,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       // escalation) on its own within a few milliseconds.
       const throwingDriver = copyRecoveryDriver(fx.drivers.codex, { createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } });
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, 'stop-escalation-run'),
         inputs: { snapshot: fx.f.snapshot, drivers: { codex: throwingDriver } }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3038,6 +3048,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     const launchEnoent = async () => {
       attempt += 1;
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(), runDir: path.join(fx.root, `closes-run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3100,6 +3111,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         await writeFile(successPlanPath, JSON.stringify(successPlan));
         completePreliminaryProbe(breaker, [INSTALL]);
         const canaryResult = await launcher.launchWorker({
+          scopedBreaker: breaker,
           invocationPath: successPlanPath, runDir: path.join(fx.root, `closes-run-${attempt}`),
           inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
           checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3143,6 +3155,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     const launchEnoent = async () => {
       attempt += 1;
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(), runDir: path.join(fx.root, `twin-run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3193,6 +3206,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       child.pid = 2147483645;
       completePreliminaryProbe(breaker, [INSTALL]);
       const canaryResult = await launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: twinPlanPath, runDir: path.join(fx.root, `twin-run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3233,6 +3247,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     const launchEnoent = async () => {
       attempt += 1;
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(), runDir: path.join(fx.root, `lastwrite-run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3284,6 +3299,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         let exitJsonWrites = 0;
         completePreliminaryProbe(breaker, [INSTALL]);
         const canaryResult = await launcher.launchWorker({
+          scopedBreaker: breaker,
           invocationPath: successPlanPath, runDir: path.join(fx.root, `lastwrite-run-${attempt}`),
           inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
           checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3425,7 +3441,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('exhausted allowance refuses the next attempt', async () => {
     const fx = await ledgerFixtureRoot(1);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -3434,6 +3450,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       attempt += 1;
       const { invocationPath } = await fx.freshPlan();
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, `run-${attempt}`), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3459,7 +3476,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('five fresh requests with maxAttempts 1 dispatch exactly one', async () => {
     const fx = await ledgerFixtureRoot(1);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -3468,6 +3485,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       attempt += 1;
       const { invocationPath } = await fx.freshPlan();
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, `run-${attempt}`), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3519,7 +3537,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('two concurrent sibling retries through launchWorker with one remaining attempt dispatch exactly one', async () => {
     const fx = await ledgerFixtureRoot(2);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const spawns = { count: 0 };
     let attempt = 0;
@@ -3533,6 +3551,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       attempt += 1;
       const { invocationPath } = await fx.freshPlan();
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, `run-${attempt}`), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3565,7 +3584,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('spawn failure after commit stays charged', async () => {
     const fx = await ledgerFixtureRoot(1);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -3573,6 +3592,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       const { invocationPath, plan } = await fx.freshPlan();
       const taskChainDigest = await stableTaskChainDigest(plan.request, plan.invocation.briefDigest);
       const result = await launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, 'run-1'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3590,6 +3610,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       // Charged means permanently consumed: a second attempt for the same
       // task chain (maxAttempts: 1) is refused, never dispatched.
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: (await fx.freshPlan()).invocationPath, runDir: path.join(fx.root, 'run-2'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3607,7 +3628,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('pre-dispatch refusal refunds attempt and its correction', async () => {
     const fx = await ledgerFixtureRoot(1);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -3620,6 +3641,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       let prepError;
       try {
         await launcher.launchWorker({
+          scopedBreaker: breaker,
           invocationPath: badPath, runDir: path.join(fx.root, 'missing-parent', 'run-bad'), captureRoot: fx.captureRoot,
           inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
           checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3643,6 +3665,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       // refunded, not left charged.
       const { invocationPath: goodPath } = await fx.freshPlan();
       const second = await launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: goodPath, runDir: path.join(fx.root, 'run-good'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3670,6 +3693,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       attempt += 1;
       const { invocationPath } = await fx.freshPlan();
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, `run-${attempt}`), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3710,13 +3734,14 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('disabled dispatch performs zero ledger operations', async () => {
     const fx = await ledgerFixtureRoot(1);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
     try {
       const { invocationPath } = await fx.freshPlan();
       const result = await launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, 'run-1'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         // The global dispatch switch is off: `admitDirectWorker` returns
@@ -3740,7 +3765,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('a tampered policy or an insecurely-moded policy file refuses rather than resetting the chain', async () => {
     const fx = await ledgerFixtureRoot(5);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -3760,6 +3785,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       await chmod(tamperedPolicyPath, 0o600);
       const tamperedBefore = await readFile(tamperedPolicyPath, 'utf8');
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: tampered.invocationPath, runDir: path.join(fx.root, 'tamper-run'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3781,6 +3807,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       await writeFile(insecurePolicyPath, JSON.stringify({ version: 1, taskChainDigest: insecureDigest, maxAttempts: 5, maxCorrections: 1 }));
       await chmod(insecurePolicyPath, 0o666);
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: insecure.invocationPath, runDir: path.join(fx.root, 'insecure-run'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3937,7 +3964,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
   // still refuses a second correction for this exact task chain.
   it('a conductor-declared startup correction past the real ledger-recorded budget is refused through the gated path, ignoring the caller-claimed count', async () => {
     const fx = await ledgerFixtureRoot(5);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -3948,6 +3975,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       // ENOENT on its own merits, same as any other attempt).
       const first = await fx.freshPlan();
       const firstResult = await launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: first.invocationPath, runDir: path.join(fx.root, 'correct-run-1'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3963,6 +3991,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       // this one before dispatch.
       const second = await fx.freshPlan();
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: second.invocationPath, runDir: path.join(fx.root, 'correct-run-2'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3989,13 +4018,14 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
   // `STARTUP_CORRECTION_REFUSED`.
   it('disabled-dispatch-is-inert for correctStartup: an unqualified, budget-exceeded correction never refuses when recovery is off', async () => {
     const fx = await ledgerFixtureRoot(5);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
     try {
       const { invocationPath } = await fx.freshPlan();
       const result = await launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, 'disabled-correct-run'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: false, ok: true, failures: [] }),
@@ -4020,7 +4050,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
   // real `admitDirectWorker`/`debitDirectWorkerAllowance` pair the launcher
   // and MCP surfaces use.
   it('the standalone planDirectWorkerLaunch path debits allowance at its own dispatch boundary; a second launch for the same task chain refuses once maxAttempts is reached', async () => {
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     try {
       const invocation = { selected: { cli: 'codex' } };
       const launchOnce = () => planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
@@ -4047,7 +4077,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
   // two modeled conductor processes using the same explicit-but-unsafe
   // root each debited independently, with no shared record at all).
   it('an explicitly supplied captureRoot inside a worker-writable location refuses rather than silently falling back to an in-process ledger', async () => {
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-writable-'));
     try {
       const cwd = path.join(root, 'work'); await mkdir(cwd, { recursive: true });
@@ -4077,7 +4107,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
   // refuse, never be silently used.
   it('an existing ledger directory with an insecure mode refuses rather than being silently used', async () => {
     const fx = await ledgerFixtureRoot(5);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -4087,6 +4117,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       await chmod(ledgerDir, 0o777); // insecure: group/other-writable
       const { invocationPath } = await fx.freshPlan();
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, 'run-1'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
