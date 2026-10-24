@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { signalChild } from '../../../src/process/signal-child.mjs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, symlink, readdir, open, rename } from 'node:fs/promises';
@@ -22,7 +23,15 @@ import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecut
 
 const roots: string[] = [];
 const breakers: ScopedFailureBreaker[] = [];
-afterEach(async () => { vi.unstubAllEnvs(); vi.restoreAllMocks(); for (const breaker of breakers.splice(0)) breaker.destroy(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+afterEach(async () => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.restoreAllMocks(); for (const breaker of breakers.splice(0)) breaker.destroy(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+
+async function waitForCondition(predicate: () => boolean | Promise<boolean>, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!await predicate()) {
+    if (Date.now() >= deadline) throw new Error('Condition was not observed');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
 
 async function fixture({ stdin = 'closed', scenario = 'success', stdoutOnly = false, forgeRealExitCode, semanticHealth = false, artifacts = [], recoveryClock = () => 0, hardTimeoutSeconds = 30 }: any = {}) {
   vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
@@ -445,16 +454,31 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
     expect(exit.errorCode).toBe('FINAL_OUTPUT_INVALID');
   });
 
-  it('times out an EOF-blocked worker, records signal instead of a fake zero and clears timers', async () => {
+  it('times out a worker after stdin EOF, records signal instead of a fake zero and clears timers', async () => {
     const f = await fixture({ scenario: 'hang', hardTimeoutSeconds: 1 });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
     const kill = vi.spyOn(process, 'kill');
-    const result = await f.launch();
+    const observations: any[] = [];
+    const launched = new Promise(resolve => f.launcher.once('launched', resolve));
+    const done = f.launch({ publishRecord: async (runDir: string, name: string, value: any, inspect: any) => {
+      await publishWorkerRecord(runDir, name, value, inspect);
+      if (name === 'process.json') observations.push(value);
+    } });
+    await launched;
+    // Prove the fixture consumed stdin EOF before advancing the deadline.
+    // Freeze the execution clock while the real fixture starts under load.
+    await waitForCondition(async () => { try { await lstat(f.recordPath); return true; } catch { return false; } });
+    await vi.advanceTimersByTimeAsync(100);
+    await waitForCondition(() => observations.some(value => value.ownership === 'owned-group'));
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await done;
     expect(result).toMatchObject({ timedOut: true, exitCode: null, termination: 'uncertain' });
     expect(['SIGTERM', 'SIGKILL']).toContain(result.signal);
     const signals = kill.mock.calls.filter(call => call[1] !== 0);
     expect(signals.length).toBeGreaterThan(0);
     expect(signals.every(call => call[0] < 0 && call[0] !== -process.pid)).toBe(true);
-    await new Promise(resolve => setTimeout(resolve, 1100));
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(kill.mock.calls.filter(call => call[1] !== 0)).toEqual(signals);
     expect(f.launcher.getPid()).toBeNull();
   });
@@ -530,10 +554,7 @@ describe('launcher load races with controlled interleavings', () => {
   // guessed delay), and the deadline is only a generous safety net against
   // a genuinely hung write, not a correctness assumption.
   async function untilObserved(observations: any[], match: (value: any) => boolean, timeoutMs = 10000) {
-    const deadline = Date.now() + timeoutMs;
-    while (!observations.some(match) && Date.now() < deadline) {
-      await new Promise(resolve => setImmediate(resolve));
-    }
+    await waitForCondition(() => observations.some(match), timeoutMs);
   }
 
   function attachedStandIn(pid: number) {
@@ -541,6 +562,55 @@ describe('launcher load races with controlled interleavings', () => {
     child.pid = pid; child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.unref = () => {};
     return child;
   }
+
+  it.each([true, false])('kills an attached transport whose startup is still blocked at the hard deadline, recovery=%s (#3532)', async recoveryEnabled => {
+    const f = await fixture({ scenario: 'hang', hardTimeoutSeconds: 1 });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+    let transport: ReturnType<typeof spawn> | undefined;
+    let ready!: Promise<unknown>;
+    const launched = new Promise(resolve => f.launcher.once('launched', resolve));
+    const done = f.launch({ ...(recoveryEnabled ? {} : { scopedBreaker: null }),
+      launchIsolated: (opts: any) => launchIsolatedWorker({ ...opts,
+        // Hold the real transport before its module loads, as when CI starves
+        // startup. IPC is a gate, not a fixture-side timer or an early EOF.
+        spawnAsync: (command: string, args: string[], options: any) => {
+          const bootstrap = `process.send('ready'); await new Promise(resolve => process.once('message', resolve));
+            process.argv = ${JSON.stringify([process.execPath, ...args])};
+            await import(${JSON.stringify(new URL('../../../tools/ralph-external/lib/worker-isolation.mjs', import.meta.url).href)});`;
+          transport = spawn(command, ['--input-type=module', '--eval', bootstrap], {
+            ...options, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+          });
+          ready = new Promise(resolve => transport!.once('message', resolve));
+          return transport;
+        },
+      }) });
+    try {
+      await launched;
+      await ready;
+      expect(transport!.exitCode).toBeNull();
+      expect(transport!.signalCode).toBeNull();
+      await expect(lstat(f.recordPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await vi.advanceTimersByTimeAsync(1100);
+      const result = await done;
+      expect(result).toMatchObject({ timedOut: true, exitCode: null, termination: 'uncertain' });
+      expect(['SIGTERM', 'SIGKILL']).toContain(result.signal);
+      expect(transport!.signalCode).toBe(result.signal);
+      expect(result.workerReportedExit).toBeNull();
+      expect(JSON.parse(await readFile(path.join(f.runDir, 'exit.json'), 'utf8')).signal).toBe(result.signal);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(f.launcher.getPid()).toBeNull();
+    } finally {
+      if (transport) {
+        const exited = new Promise(resolve => transport!.once('exit', resolve));
+        if (transport.exitCode === null && transport.signalCode === null) {
+          signalChild(transport, 'SIGKILL');
+          await exited;
+        }
+      }
+    }
+  });
 
   it('records a fast-exiting direct worker from its single immediate owned leader sample', async () => {
     const f = await fixture();
@@ -1003,7 +1073,7 @@ describe('launcher load races with controlled interleavings', () => {
       expect(kill.mock.calls).toEqual(attempts);
       expect(vi.getTimerCount()).toBe(0);
       expect(JSON.parse(await readFile(path.join(f.runDir, 'exit.json'), 'utf8')).signal).toBe(result.signal);
-    } finally { worker.kill('SIGKILL'); }
+    } finally { signalChild(worker, 'SIGKILL'); }
   });
 });
 
@@ -1366,7 +1436,7 @@ describe('#2895 round 2, item 1: a forged identity record cannot authorize a sig
       expect(victim.signalCode).toBeNull();
       expect(result.termination).toBe('uncertain');
     } finally {
-      for (const proc of [transportStandIn, victim]) { try { proc.kill('SIGKILL'); } catch { /* best effort */ } }
+      for (const proc of [transportStandIn, victim]) { try { signalChild(proc, 'SIGKILL'); } catch { /* best effort */ } }
     }
   }, 15000);
 });
