@@ -34,9 +34,9 @@ Decision owners / Related / Context / Decision / consequences).
 | `Config` | `tools/daemon/daemon-main.mjs:6`, loaded at `tools/daemon/daemon-main.mjs:166` | Reads `daemon.profile` plus existing `watch` / `schedule` config. B2 adds the `housekeeper` profile key; validation stays in `tools/daemon/daemon-main.mjs:169`. |
 | `EventRouter` | `tools/daemon/daemon-main.mjs:9`, constructed at `tools/daemon/daemon-main.mjs:195` | In-memory fan-out with retry + DLQ (`tools/daemon/event-router.mjs:3`, `maxRetries` at `:8`, DLQ at `:24`). Housekeeper keeps it as the only event bus. |
 | `CronScheduler` | `tools/daemon/daemon-main.mjs:8`, started when `schedule.enabled` at `tools/daemon/daemon-main.mjs:294` | Primary trigger per D2. Minute-tick matcher at `tools/daemon/cron-scheduler.mjs:21`, emitting `cron.fired` with `{ job_id, action }` at `tools/daemon/cron-scheduler.mjs:28`. |
-| `FileWatcher` | `tools/daemon/daemon-main.mjs:7`, started when `watch.enabled` at `tools/daemon/daemon-main.mjs:286` | Optional trigger for source-driven jobs. Recursive `fs.watch` at `tools/daemon/file-watcher.mjs:38`, per-key debounce at `tools/daemon/file-watcher.mjs:61`. Known gaps (missing-filename drop at `:39`, missing-root warn-and-skip at `:33`) stay out of scope for scheduling correctness: watch events are hints, cron is the source of truth. |
+| `FileWatcher` | `tools/daemon/daemon-main.mjs:7`, started when `watch.enabled` at `tools/daemon/daemon-main.mjs:286` | Optional trigger for source-driven jobs. Recursive `fs.watch` at `tools/daemon/file-watcher.mjs:38`, per-key debounce at `tools/daemon/file-watcher.mjs:61`. B3 makes watch events hints to deterministic reconciliation, including startup, periodic scans and recovery; cron remains the scheduling source of truth. |
 | `IPCServer` (minimal method subset) | `tools/daemon/daemon-main.mjs:10`, started at `tools/daemon/daemon-main.mjs:281` | Keeps `ping` (`tools/daemon/daemon-main.mjs:558`), `daemon.status` (`:437`), `schedule.status` (`:656`), plus the new `housekeeper.*` methods from §6. All other methods (§1.2) are not registered in this profile. |
-| `TaskStore` (receipt shape TBD by B3) | `tools/daemon/daemon-main.mjs:12`, initialized at `tools/daemon/daemon-main.mjs:198` | Persistence substrate only. Its current corrupt-file behavior (silent fresh start, `tools/daemon/task-store.mjs:43`) is NOT adopted: B3 defines unified recovery semantics (§2.1, `JobReceipt`). |
+| `TaskStore` (receipts implemented by B2) | `tools/daemon/daemon-main.mjs:12`, initialized at `tools/daemon/daemon-main.mjs:198` | Persistence substrate only. Its current corrupt-file behavior (silent fresh start, `tools/daemon/task-store.mjs:43`) is NOT adopted: B2 implements persisted receipts and unified schedule recovery (§2.1, `JobReceipt`). |
 | Process plumbing | pid/lock/heartbeat/state/log/socket paths at `tools/daemon/daemon-main.mjs:52`, signal handlers at `:113`, log rotation at `:133`, heartbeat/state writers at `:717` / `:729` | Unchanged. The single-instance lock (`tools/daemon/daemon-main.mjs:94`, `EEXIST` exit at `:99`) is what serializes background + foreground writers until B6 wires per-root locks (`src/resources/lockfile.ts`, `src/effects/lock-recovery.ts`). |
 
 ### 1.2 What the housekeeper profile SKIPS, and how
@@ -82,7 +82,7 @@ All interfaces are TypeScript-style and documentary: B2–B6 implement them in
 whatever module layout they choose, but the shapes below are normative. Field
 names are exact; additive optional fields are allowed.
 
-### 2.1 Scheduled-job contract (B2 implements; B3 persists)
+### 2.1 Scheduled-job contract (B2 implements and persists)
 
 Replaces the prompt-based `BUILTIN_ACTIONS`
 (`tools/daemon/scheduled-task-runner.mjs:18`) with deterministic operations.
@@ -107,7 +107,7 @@ type JobKind =
   | 'update.check'     // B6: check-only version probe (D3)
   | 'cache.prune';     // B6: bounded cache cleanup (src/resources/cache-cleanup.ts)
 
-/** Typed receipt written for every settled job (B3 persists). */
+/** Typed receipt written for every settled job (B2 persists). */
 interface JobReceipt {
   jobId: string;
   fireTime: string;              // ISO; the scheduled minute, not start time
@@ -232,7 +232,7 @@ alternative. Honest support table:
 |---|---|---|---|
 | Linux + systemd | user unit `aiwg-housekeeper.service`, autostart via `loginctl enable-linger` or graphical session | `aiwg-housekeeper.timer` (or cron `(5)`) invoking `aiwg housekeeper run-once` | Documented (B5). Primary alternative per D2. |
 | Linux w/o systemd | foreground `aiwg housekeeper start` under tmux/nohup | cron or manual `aiwg housekeeper run-once` | Supported-manual; same binary, no unit file. |
-| macOS | foreground `aiwg housekeeper start` | `launchd` plist (`StartCalendarInterval`) invoking `run-once` | Best-effort: plist example documented by B5, not CI-tested (no macOS runner). `fs.watch` recursion works on macOS; polling fallback is a non-goal (§7). |
+| macOS | foreground `aiwg housekeeper start` | `launchd` plist (`StartCalendarInterval`) invoking `run-once` | Best-effort: plist example documented by B5, not CI-tested (no macOS runner). `fs.watch` recursion works on macOS; B3 provides configurable polling fallback. |
 | Windows | — | — | NOT supported. No service wrapper, no `fs.watch(recursive)` on Windows, and `runIndexRefresh` paths assume POSIX layouts. WSL2 → follow the Linux rows. Say so in help text; do not probe-detect and fake support. |
 | CI / containers | `run-once --job <id>` | same | Supported: single-shot, no daemon, exit code reflects receipt (§5). |
 
@@ -282,10 +282,9 @@ surface: zero `housekeeper` hits exist in
    (`tools/daemon/scheduled-task-runner.mjs:18`) are skipped, not adapted.
 3. No new mutation authority. Owner routing (§2.3) only invokes authority the
    owner already grants; B6 enforces stale-plan/protected-item rules.
-4. No FileWatcher reliability overhaul. Dropped/missing-filename events
-   (`tools/daemon/file-watcher.mjs:39`), reappearing roots (`:33`), overflow,
-   restart catch-up, and polling fallbacks stay as-is; watch is a hint, cron
-   is truth.
+4. Watcher reliability is B3 scope: reconciliation converges source changes;
+   cron remains the scheduling authority. Watcher recovery grants no owner
+   mutation or independent retry authority.
 5. No framework redeploy from schedule. `refreshHandler`
    (`src/cli/handlers/refresh.ts:530`) and the `index refresh` router
    short-circuit (`src/cli/router.ts:90`) keep their foreground semantics;
@@ -343,10 +342,36 @@ reports the index/owner as `unsupported` — never a prompt fallback.
   (resource gate), §4 (run-once, exit codes, temp hygiene + CI gate), §6
   (help/JSON). References: §1.1 load table, §1.2 skip table, §1.3 laziness
   rule.
-- **B3 — receipts + recovery semantics.** Persists §2.1 `JobReceipt`,
-  replaces the `task-store.mjs:43` silent-fresh-start with unified recovery
-  (EventRouter DLQ precedent at `tools/daemon/event-router.mjs:24`).
-  References: §2.1, §4 idempotence keys.
+- **B3 — watcher hardening + reconciliation** (scope updated by #3353 B3).
+  B2 owns persisted receipts and schedule recovery. B3 extends the existing
+  `FileWatcher` and `EventRouter`, using `schedule-recovery-required` for
+  uncertain watcher delivery outcomes without a transient DLQ retry.
+  Deterministic stat scans run at startup, after coalesced native hints (including
+  missing filenames), errors/overflow, root return, and periodically. Signatures
+  use size, mtime, ctime, and inode without reading file contents. Native
+  events are hints; scans honor each logical root's ignore/extension/event
+  filters. Startup catch-up also emits modifications for modify-only roots.
+  `watch.reconcile_interval_ms` defaults to 60000; zero disables routine scans.
+  `watch.polling` (default false) can be overridden on each `watch.paths` entry;
+  polling and unavailable-root probes use `watch.poll_interval_ms` (default
+  5000), independently of routine scans, scanning only polling, unavailable, or
+  uncovered unwatched roots. ENOSPC/EMFILE and unsupported recursive
+  watches switch that root to polling and report it. Root inode replacement
+  reattaches native watches; nested roots share a native watch while retaining
+  their separate scan policies. Symlinks are not followed.
+  `watch.generated_output_paths` excludes absolute or cwd-relative outputs;
+  root-level overrides are relative to that root. Built-in daemon/working
+  exclusions remain. An unavailable root retains its last good snapshot; a
+  failed descendant scan retains that subtree and emits `scan-incomplete` with
+  its path and error code while siblings keep converging. Neither case emits
+  deletions for unreadable entries. Debounce coalesces by path; a rename changes
+  the old and new paths, while an atomic replacement is one modification.
+  Awaited delivery queues changes during builds and leaves a further scan
+  pending. Failed delivery blocks until explicit inspection/acknowledgement
+  (`FileWatcher.resume()`), or startup reconciliation after restart. Stopping
+  cancels pending work; no scan snapshot is persisted or trusted across restart.
+  `EventRouter.route()` retains synchronous history/fan-out behavior; the
+  daemon watcher bridge uses the additive awaited `deliver()` method.
 - **B4 — index adapters + freshness/convergence.** Implements §2.2
   (`IndexAdapter`, `FreshnessPolicy`, `ConvergenceReport`) over
   `src/artifacts/index-refresh.ts:527`; owns `all`-mode discovery and

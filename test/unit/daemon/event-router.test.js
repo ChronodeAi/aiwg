@@ -15,6 +15,10 @@ describe('EventRouter', () => {
   });
 
   describe('route', () => {
+    it('retains synchronous exceptions for legacy delivery', () => {
+      router.on('event', () => { throw new Error('legacy failure'); });
+      expect(() => router.route({ source: 'watch', type: 'file.modify' })).toThrow('legacy failure');
+    });
     it('should add events to history with timestamp', () => {
       const mockDate = new Date('2026-02-08T12:00:00Z');
       vi.setSystemTime(mockDate);
@@ -70,6 +74,33 @@ describe('EventRouter', () => {
   });
 
   describe('handleFailedEvent', () => {
+    it('hands watch failures to schedule recovery without retry timers or DLQ entries', () => {
+      const recovery = vi.fn();
+      router.on('schedule-recovery-required', recovery);
+      const event = { source: 'watch', type: 'file.modify', payload: { path: '/source.md' } };
+      const error = new Error('Delivery failed');
+      router.handleFailedEvent(event, error);
+      expect(recovery).toHaveBeenCalledWith({ event, error });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(router.getDeadLetterQueue()).toEqual([]);
+    });
+
+    it('fails visibly when watch recovery has no operator listener', async () => {
+      router.on('event', async () => { throw new Error('Inspect owner'); });
+      await expect(router.deliver({ source: 'watch', type: 'file.modify' })).rejects.toThrow('Inspect owner');
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('awaits watcher consumers in order and preserves once listeners', async () => {
+      const calls = [];
+      router.once('event', async () => { await Promise.resolve(); calls.push('first'); });
+      router.on('event', () => { calls.push('second'); });
+      await router.deliver({ source: 'watch', type: 'file.create' });
+      await router.deliver({ source: 'watch', type: 'file.modify' });
+      expect(calls).toEqual(['first', 'second', 'second']);
+      expect(router.getEventHistory()).toHaveLength(2);
+    });
+
     it('should add to dead letter queue after max retries', () => {
       const mockDate = new Date('2026-02-08T12:00:00Z');
       vi.setSystemTime(mockDate);

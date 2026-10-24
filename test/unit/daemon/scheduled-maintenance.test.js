@@ -177,6 +177,24 @@ it('routes typed router failures into the persisted recovery record instead of t
   attached.stop();
 });
 
+it('forwards watcher recovery without inventing a scheduled job or retry authority', async () => {
+  const router = new EventRouter();
+  const attached = new ScheduledTaskRunner({ eventRouter: router, taskStore: store, now: () => now, executeOwner });
+  const recovery = vi.fn();
+  attached.on('recovery-required', recovery);
+  attached.start();
+  const event = { source: 'watch', type: 'file.modify', payload: { path: '/synthetic/source.md' } };
+  const error = new Error('Interrupted watcher delivery');
+  router.on('event', async () => { throw error; });
+  try {
+    await expect(router.deliver(event)).rejects.toThrow(error);
+    expect(recovery).toHaveBeenCalledWith({ event, error });
+    expect(store.getSchedules()).toEqual([]);
+    expect(executeOwner).not.toHaveBeenCalled();
+    expect(router.getDeadLetterQueue()).toEqual([]);
+  } finally { attached.stop(); }
+});
+
 it('runs manually with schedule disabled and prints a single receipt, with injected cheap owner execution', async () => {
   const config = path.join(root, 'daemon.json');
   fs.writeFileSync(config, JSON.stringify({ daemon: {}, schedule: { enabled: false, jobs: [job] } }));
