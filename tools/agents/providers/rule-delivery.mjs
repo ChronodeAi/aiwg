@@ -194,22 +194,19 @@ export async function prepareRuleDelivery(opts) {
           if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
         }
       }
-      const indexTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rule-index-'));
-      try {
-        const { buildIndex } = await importImpl(import.meta.url, 'artifacts/index-builder.js');
-        await buildIndex(root, { scope: root === opts.srcRoot && !fs.existsSync(path.join(root, 'agentic')) ? '.' : 'agentic/code', outputDir: indexTemp, force: true, quiet: true });
-        rebuilt = true;
-        const index = JSON.parse(read(path.join(indexTemp, '.aiwg', '.index', 'metadata.json')));
-        const entries = Object.values(index.entries).map(entry => ({ ...entry, path: path.resolve(root, entry.path) }));
-        if (cacheFile) {
-          fs.mkdirSync(cacheDir, { recursive: true });
-          // Workers may publish the same immutable source snapshot concurrently.
-          const temporary = `${cacheFile}.${process.pid}.tmp`;
-          fs.writeFileSync(temporary, JSON.stringify(entries.map(entry => ({ ...entry, path: opts.logicalInputPath ? opts.logicalInputPath(entry.path) : entry.path }))));
-          fs.renameSync(temporary, cacheFile);
-        }
-        return entries;
-      } finally { fs.rmSync(indexTemp, { recursive: true, force: true }); }
+      const { collectRuleBindingEntries } = await importImpl(import.meta.url, 'artifacts/index-builder.js');
+      const sourceEntries = await collectRuleBindingEntries(root,
+        root === opts.srcRoot && !fs.existsSync(path.join(root, 'agentic')) ? '.' : 'agentic/code');
+      rebuilt = true;
+      const entries = sourceEntries.map(entry => ({ ...entry, path: path.resolve(root, entry.path) }));
+      if (cacheFile) {
+        fs.mkdirSync(cacheDir, { recursive: true });
+        // Workers may publish the same immutable source snapshot concurrently.
+        const temporary = `${cacheFile}.${process.pid}.tmp`;
+        fs.writeFileSync(temporary, JSON.stringify(entries.map(entry => ({ ...entry, path: opts.logicalInputPath ? opts.logicalInputPath(entry.path) : entry.path }))));
+        fs.renameSync(temporary, cacheFile);
+      }
+      return entries;
     };
     const localEntries = opts.bindingEntries || loadEntries(opts.target, Boolean(packageRelations));
     let entries = [...localEntries];
