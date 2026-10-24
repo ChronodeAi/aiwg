@@ -148,13 +148,20 @@ setInterval(() => {}, 1000);
       expect(transport._failure).toBe(failure);
       expect(await transport._termination).toEqual({ termination: 'uncertain', delivered: true, diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
       await closed;
+      // The wrapper's close does not wait for the killed grandchild: it is
+      // reparented to init and can still be exiting (state R) when sampled.
+      // Wait for kernel teardown; a leaked member would never leave (#3507).
+      const settle = async (done: () => boolean) => {
+        const deadline = Date.now() + 5000;
+        while (!done() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+      };
+      await settle(() => sampleWorkerGroup(workerPid)?.length === 0);
       expect(sampleWorkerGroup(workerPid)).toEqual([]);
       if (escaped) {
         expect(sampleWorkerIdentity(descendantPid)).not.toBeNull();
         process.kill(descendantPid, 'SIGKILL');
-        const exitDeadline = Date.now() + 2000;
-        while (sampleWorkerIdentity(descendantPid) && Date.now() < exitDeadline) await new Promise(resolve => setTimeout(resolve, 10));
       }
+      await settle(() => sampleWorkerIdentity(descendantPid) === null);
       expect(sampleWorkerIdentity(descendantPid)).toBeNull();
       // Drain bytes already in the pipe; EOF proves every inherited writer closed.
       const eofDeadline = Date.now() + 2000;
