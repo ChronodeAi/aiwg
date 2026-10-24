@@ -1,18 +1,22 @@
+import { mkdtempSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, mkdir, writeFile, readFile, rm, access, cp, chmod, readdir, symlink, stat } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, rm, access, cp, chmod, readdir, symlink, stat } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { assertWorkerRoleEffort, validateWorkerCatalogDiscovery } from '../../../src/models/provider-policy.js';
+import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { readAiwgConfig } from '../../../src/config/aiwg-config.js';
+import { buildDirectWorkerDoctorSection } from '../../../src/models/worker-direct-readiness.js';
+import { assertWorkerRoleEffort, loadProviderModelCapabilities, validateWorkerCatalogDiscovery } from '../../../src/models/provider-policy.js';
 import { writeExecutable } from '../../helpers/write-executable.js';
+import { modelsHandler } from '../../../src/cli/handlers/models.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
-import { checkCodexWorkerSandbox, checkWorkerInvocationBuilds, checkRecordedWorkerInvocationBuilds } from '../../../tools/cli/worker-qualification.mjs';
+import { checkCodexWorkerSandbox, checkWorkerInvocationBuilds, checkRecordedWorkerInvocationBuilds, qualifyProbedWorkers } from '../../../tools/cli/worker-qualification.mjs';
 
 const terminal = vi.hoisted(() => ({ question: vi.fn(), close: vi.fn() }));
 vi.mock('node:readline/promises', () => ({ createInterface: () => terminal }));
-// The in-process TTY case needs the same temp HOME as the spawned CLI cases.
+// In-process resolver and TTY cases need the same temp HOME as the spawned CLI cases.
 vi.mock('node:os', async importOriginal => {
   const os = await importOriginal<typeof import('node:os')>();
   return { ...os, homedir: () => process.env.HOME || os.homedir() };
@@ -21,19 +25,27 @@ vi.mock('node:os', async importOriginal => {
 const exec = promisify(execFile);
 const repo = process.cwd();
 const roots: string[] = [];
+const profile: Array<{ test: string; kind: string; ms: number }> = [];
+let profileScope: string | undefined;
+function timed(kind: string, start: number) {
+  if (process.env.QUALIFICATION_PROFILE) profile.push({ test: profileScope ?? expect.getState().currentTestName ?? 'installation beforeAll', kind, ms: performance.now() - start });
+}
+afterEach(async () => {
+  if (process.env.QUALIFICATION_PROFILE) await writeFile(process.env.QUALIFICATION_PROFILE, JSON.stringify(profile, null, 2));
+});
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
-async function fixture(providerless = false, unsetHome = false, namespaceProbe = true, cli = 'codex') {
-  const role = cli === 'muse' ? 'efficiency' : 'coding';
-  const model = cli === 'muse' ? 'muse-spark-1.3' : 'synthetic-model';
-  const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-qualify-workers-'));
-  roots.push(root);
-  // Installed modules must be outside worker-writable roots with trusted modes,
-  // independent of the checkout's umask or dist/ state.
+let sharedInstalled: string;
+const installationRoots: string[] = [];
+
+async function installFixture(root: string) {
+  const start = performance.now();
   const installed = path.join(root, 'installed');
-  await mkdir(installed, { mode: 0o755 });
+  await mkdir(path.join(installed, 'dist'), { recursive: true, mode: 0o755 });
   await cp(path.join(repo, 'package.json'), path.join(installed, 'package.json'));
-  for (const directory of ['src', 'tools']) await cp(path.join(repo, directory), path.join(installed, directory), { recursive: true });
+  await cp(path.join(repo, 'dist/src'), path.join(installed, 'dist/src'), { recursive: true,
+    filter: filename => !filename.endsWith('.map') && !filename.endsWith('.d.ts') && !filename.endsWith('.d.mts') });
+  await cp(path.join(repo, 'tools'), path.join(installed, 'tools'), { recursive: true });
   async function trust(directory: string) {
     await chmod(directory, 0o755);
     for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -44,6 +56,29 @@ async function fixture(providerless = false, unsetHome = false, namespaceProbe =
   }
   await trust(installed);
   for (const directory of ['node_modules', 'agentic', 'schemas', 'vscode-extension']) await symlink(path.join(repo, directory), path.join(installed, directory));
+  timed('installation', start);
+  return installed;
+}
+
+beforeAll(async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'aiwg-qualification-install-'));
+  installationRoots.push(root);
+  sharedInstalled = await installFixture(root);
+});
+afterAll(async () => {
+  for (const root of installationRoots) await rm(root, { recursive: true, force: true });
+});
+
+async function fixture(providerless = false, unsetHome = false, namespaceProbe = true, cli = 'codex',
+  options: { privateInstallation?: boolean; roots?: string[] } = {}) {
+  const fixtureStart = performance.now();
+  const role = cli === 'muse' ? 'efficiency' : 'coding';
+  const model = cli === 'muse' ? 'muse-spark-1.3' : 'synthetic-model';
+  const root = mkdtempSync(path.join(os.tmpdir(), 'aiwg-qualify-workers-'));
+  (options.roots ?? roots).push(root);
+  // Only permission/renderer mutation cases need a private installation.
+  // Project, store, executable and HOME remain private to each fixture.
+  const installed = options.privateInstallation ? await installFixture(root) : sharedInstalled;
   const project = path.join(root, 'project');
   const config = path.join(root, 'config');
   await mkdir(path.join(project, '.aiwg'), { recursive: true });
@@ -88,36 +123,73 @@ else process.exit(90);
   const brief = path.join(project, 'brief.txt');
   await writeFile(brief, 'Synthetic implementation brief.');
   const env = { ...process.env, PATH: `${systemdBin}${path.delimiter}${process.env.PATH}`, HOME: root, AIWG_CONFIG: config, AIWG_HOME: repo, AIWG_ROOT: repo,
-    AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', AIWG_RESOLVE_IMPL_FROM: 'src', NODE_OPTIONS: `--import=${path.join(repo, 'node_modules/tsx/dist/loader.mjs')}` };
+    AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', AIWG_RESOLVE_IMPL_FROM: 'dist', NODE_OPTIONS: '' };
   if (unsetHome) delete (env as NodeJS.ProcessEnv).AIWG_HOME;
   delete (env as NodeJS.ProcessEnv).VITEST;
-  // Exercise the public handlers in a fresh process, without a dist prerequisite.
+  // Exercise the shipped handlers in a fresh process. Run npm run build:cli
+  // before this suite; fake CLIs do not need a TypeScript loader.
   const entry = path.join(root, 'cli.mjs');
-  await writeFile(entry, `import { modelsHandler } from ${JSON.stringify(pathToFileURL(path.join(installed, 'src/cli/handlers/models.ts')).href)};
-import { doctorHandler } from ${JSON.stringify(pathToFileURL(path.join(installed, 'src/cli/handlers/utilities.ts')).href)};
-const [command, ...args] = process.argv.slice(2);
-const result = await ({models: modelsHandler, doctor: doctorHandler})[command].execute({args, rawArgs: [command, ...args], cwd: process.cwd(), frameworkRoot: ${JSON.stringify(installed)}});
+  await writeFile(entry, `const [command, ...args] = process.argv.slice(2);
+const handler = command === 'models'
+  ? (await import(${JSON.stringify(pathToFileURL(path.join(installed, 'dist/src/cli/handlers/models.js')).href)})).modelsHandler
+  : (await import(${JSON.stringify(pathToFileURL(path.join(installed, 'dist/src/cli/handlers/utilities.js')).href)})).doctorHandler;
+const result = await handler.execute({args, rawArgs: [command, ...args], cwd: process.cwd(), frameworkRoot: ${JSON.stringify(installed)}});
 if (result.message) console.error(result.message);
 process.exitCode = result.exitCode;
 `);
+  timed('fixture', fixtureStart);
   const runNode = async (args: string[], cwd = project) => {
+    const start = performance.now();
     try {
       const result = await exec(process.execPath, args, { cwd, env, timeout: 30000, maxBuffer: 1024 * 1024 });
       return { code: 0, ...result };
     } catch (error: any) { return { code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
+    finally { timed(args[0] === entry ? args.slice(1).join(' ') : 'runNode ' + args.slice(1).join(' '), start); }
   };
   const run = (args: string[], cwd = project) => runNode([entry, ...args], cwd);
-  const resolve = () => run(['models', 'resolve', '--role', role, '--task', cli === 'muse' ? 'inventory' : 'implementation', '--group', 'workers',
-    '--brief', brief, '--workdir', project, '--final-output', path.join(project, 'result.json'), '--format', 'json']);
-  return { root, project, config, binary, installed, writeCli, run, runNode, resolve };
+  const resolveArgs = ['resolve', '--role', role, '--task', cli === 'muse' ? 'inventory' : 'implementation', '--group', 'workers',
+    '--brief', brief, '--workdir', project, '--final-output', path.join(project, 'result.json'), '--format', 'json'];
+  const resolve = () => run(['models', ...resolveArgs]);
+  // Resolver-only cases use the same exported handler and real loaders, store,
+  // version probe, and installed driver, without restarting the CLI process.
+  const inProcess = async <T>(kind: string, action: () => Promise<T>) => {
+    const start = performance.now();
+    const stdout: string[] = [], stderr: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation(value => { stdout.push(String(value)); });
+    const error = vi.spyOn(console, 'error').mockImplementation(value => { stderr.push(String(value)); });
+    for (const key of ['HOME', 'AIWG_CONFIG', 'AIWG_HOME', 'AIWG_ROOT', 'AIWG_RESOLVE_IMPL_FROM', 'PATH', 'NODE_OPTIONS'] as const) {
+      vi.stubEnv(key, env[key]);
+    }
+    // Use this fixture's actual cache, just as a fresh CLI process would.
+    vi.stubEnv('VITEST', undefined);
+    try {
+      const value = await action();
+      return { value, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
+    } finally {
+      log.mockRestore(); error.mockRestore(); vi.unstubAllEnvs();
+      timed(kind, start);
+    }
+  };
+  const modelsInProcess = async (args: string[], cwd = project) => {
+    const { value, ...output } = await inProcess('models API ' + args.join(' '), () =>
+      modelsHandler.execute({ args, rawArgs: ['models', ...args], cwd, frameworkRoot: installed }));
+    return { code: value.exitCode, ...output };
+  };
+  const resolveInProcess = () => modelsInProcess(resolveArgs);
+  const qualifyInProcess = async () => {
+    const { value } = await inProcess('qualification API', async () => {
+      const config = await readAiwgConfig(project);
+      const registry = loadProviderModelCapabilities();
+      const section = await buildDirectWorkerDoctorSection({ parallelism: config!.parallelism,
+        registry, probeWorkers: true, projectRoot: project });
+      return qualifyProbedWorkers({ projectDir: project, packageRoot: installed, config, registry, section, yes: true });
+    });
+    return value;
+  };
+  return { root, project, config, binary, installed, writeCli, run, runNode, resolve, resolveInProcess, modelsInProcess, qualifyInProcess };
 }
 
-// End-to-end: each test spawns the public CLI several times (qualify, resolve,
-// sometimes execute). Locally the slowest take ~12 s; on the shared CI runner
-// they reached 27 s and then exceeded the 30 s default under load (ci.yml run
-// 90135). The suite budget is explicit here; speeding the suite itself up is
-// tracked separately so this budget is not a cover for slowness.
-describe('doctor worker qualification through the public CLI (fake CLIs only)', { timeout: 120_000 }, () => {
+describe('doctor worker qualification through the public CLI (fake CLIs only)', () => {
   it('preserves null effort for models with no applicable effort control', () => {
     const policy = { roleGuidance: { efficiency: { groups: ['workers'], tier: 'standard' as const,
       initialEffort: null, effortLadder: [], allowNotApplicableEffort: true } } };
@@ -150,7 +222,7 @@ describe('doctor worker qualification through the public CLI (fake CLIs only)', 
     expect(diagnostic.message).toContain('coding');
     expect(qualified.stdout).not.toContain('invocation_build_failed');
     await expect(access(path.join(f.config, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
-    const resolved = await f.resolve();
+    const resolved = await f.resolveInProcess();
     expect(resolved.code).toBe(2);
     const resolution = JSON.parse(resolved.stdout);
     if (kind === 'missing-field') expect(resolution.diagnostics).toContainEqual(diagnostic);
@@ -170,12 +242,12 @@ describe('doctor worker qualification through the public CLI (fake CLIs only)', 
     for (const result of results) expect(result.code, result.stdout + result.stderr).toBe(0);
     const store = path.join(f.config, 'worker-installations.json');
     expect(JSON.parse(await readFile(store, 'utf8')).registrations).toHaveLength(2);
-    const again = await f.run(qualificationArgs);
-    expect(again.code, again.stdout + again.stderr).toBe(0);
+    const again = await f.qualifyInProcess();
+    expect(again.status, JSON.stringify(again)).toBe('recorded');
     expect(JSON.parse(await readFile(store, 'utf8')).registrations).toHaveLength(2);
-    const first = await f.resolve();
+    const first = await f.resolveInProcess();
     expect(first.code, first.stdout + first.stderr).toBe(0);
-    const resolved = await f.run(['models', 'resolve', '--role', 'coding', '--task', 'implementation', '--group', 'workers',
+    const resolved = await f.modelsInProcess(['resolve', '--role', 'coding', '--task', 'implementation', '--group', 'workers',
       '--brief', path.join(second, 'brief.txt'), '--workdir', second, '--final-output', path.join(second, 'result.json'),
       '--format', 'json'], second);
     expect(resolved.code, resolved.stdout + resolved.stderr).toBe(0);
@@ -186,7 +258,7 @@ describe('doctor worker qualification through the public CLI (fake CLIs only)', 
     const stored = JSON.parse(await readFile(store, 'utf8'));
     stored.registrations.push(stored.registrations.find((record: any) => record.installation.cwd === f.project));
     await writeFile(store, JSON.stringify(stored));
-    const ambiguous = await f.resolve();
+    const ambiguous = await f.resolveInProcess();
     expect(ambiguous.code).toBe(2);
     expect(JSON.parse(ambiguous.stdout).invocation).toBeUndefined();
   });
@@ -201,15 +273,15 @@ describe('doctor worker qualification through the public CLI (fake CLIs only)', 
     const record = stored.registrations[0];
     stored.registrations = [record, ...Array.from({ length: 127 }, (_, index) => ({ ...record, cli: `retained-${index}` }))];
     await writeFile(store, JSON.stringify(stored));
-    const replaced = await f.run(args);
-    expect(replaced.code, replaced.stdout + replaced.stderr).toBe(0);
+    const replaced = await f.qualifyInProcess();
+    expect(replaced.status, JSON.stringify(replaced)).toBe('recorded');
     expect(JSON.parse(await readFile(store, 'utf8')).registrations).toHaveLength(128);
     stored.registrations[0].cli = 'retained-127';
     const bytes = JSON.stringify(stored);
     await writeFile(store, bytes);
-    const full = await f.run(args);
-    expect(full.code, full.stdout + full.stderr).toBe(1);
-    expect(full.stdout).toContain('store is full');
+    const full = await f.qualifyInProcess();
+    expect(full.status, JSON.stringify(full)).toBe('failed');
+    expect(JSON.stringify(full)).toContain('store is full');
     expect(await readFile(store, 'utf8')).toBe(bytes);
     await expect(access(`${store}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -264,7 +336,7 @@ else console.log(JSON.stringify({models:[]}));
   });
 
   it('passes only named environment variables to the sandbox no-op', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-sandbox-env-'));
+    const root = mkdtempSync(path.join(os.tmpdir(), 'aiwg-sandbox-env-'));
     roots.push(root);
     const binary = path.join(root, 'codex');
     await writeExecutable(binary, `#!${process.execPath}
@@ -346,8 +418,8 @@ if (process.env.UNRELATED_SECRET || process.env.PATH !== '/usr/bin:/bin'
     const script = path.join(f.root, 'launcher-check.mjs');
     const planPath = path.join(f.root, 'plan.json');
     await writeFile(script, `import { mkdir, writeFile } from 'node:fs/promises';
-import { loadWorkerInputs } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'src/cli/handlers/models.ts')).href)};
-import { hasProvider } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'src/models/worker-installation.mjs')).href)};
+import { loadWorkerInputs } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'dist/src/cli/handlers/models.js')).href)};
+import { hasProvider } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'dist/src/models/worker-installation.mjs')).href)};
 const context = { cwd: process.cwd(), args: [], rawArgs: [], frameworkRoot: ${JSON.stringify(f.installed)} };
 if (process.argv[2] === 'seed') {
   if (hasProvider('codex')) throw new Error('Unexpected builtin registration before resolve');
@@ -397,10 +469,10 @@ if (process.argv[2] === 'seed') {
     const script = path.join(f.root, 'conflicting-adapter.mjs');
     await writeFile(script, `import { readFile } from 'node:fs/promises';
 import ${JSON.stringify(pathToFileURL(path.join(f.installed, 'tools/ralph-external/lib/codex-adapter.mjs')).href)};
-import { loadInstalledWorkerAdapters, loadRecordedWorkerInstallations, createProvider } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'src/models/worker-installation.mjs')).href)};
-import { loadProviderModelCapabilities } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'src/models/provider-policy.ts')).href)};
-import { ConfigLoader } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'src/models/config-loader.ts')).href)};
-import { readAiwgConfig } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'src/config/aiwg-config.ts')).href)};
+import { loadInstalledWorkerAdapters, loadRecordedWorkerInstallations, createProvider } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'dist/src/models/worker-installation.mjs')).href)};
+import { loadProviderModelCapabilities } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'dist/src/models/provider-policy.js')).href)};
+import { ConfigLoader } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'dist/src/models/config-loader.js')).href)};
+import { readAiwgConfig } from ${JSON.stringify(pathToFileURL(path.join(f.installed, 'dist/src/config/aiwg-config.js')).href)};
 const { registrations: [record] } = JSON.parse(await readFile(${JSON.stringify(path.join(f.config, 'worker-installations.json'))}, 'utf8'));
 const registry = structuredClone(loadProviderModelCapabilities());
 for (const provider of Object.values(registry.providers)) delete provider.workerAdapter;
@@ -431,7 +503,7 @@ try {
 
   it.each([false, true])('checks the configured tuple without launching a worker (build failure: %s)', async fail => {
     const f = workerResolutionFixture();
-    const root = await mkdtemp(path.join(os.tmpdir(), 'worker-build-check-')); roots.push(root);
+    const root = mkdtempSync(path.join(os.tmpdir(), 'worker-build-check-')); roots.push(root);
     const buildInvocation = vi.fn(async () => {
       if (fail) throw new Error('sensitive-build-details');
       return { argv: ['/synthetic/worker'], stdin: 'closed', envNames: [] };
@@ -456,7 +528,7 @@ try {
 
   it('rejects missing role guidance before calling the installed renderer', async () => {
     const f = workerResolutionFixture();
-    const root = await mkdtemp(path.join(os.tmpdir(), 'worker-role-precheck-')); roots.push(root);
+    const root = mkdtempSync(path.join(os.tmpdir(), 'worker-role-precheck-')); roots.push(root);
     const buildInvocation = vi.fn(() => { throw new Error('renderer must not run'); });
     vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
     try {
@@ -476,7 +548,7 @@ try {
 
   it.each(['native-controls', 'workspace'])('names the failing %s check without launching a worker', async kind => {
     const f = workerResolutionFixture();
-    const root = await mkdtemp(path.join(os.tmpdir(), 'worker-build-check-')); roots.push(root);
+    const root = mkdtempSync(path.join(os.tmpdir(), 'worker-build-check-')); roots.push(root);
     const other = path.join(root, 'other'); await mkdir(other);
     const adapter = f.snapshot.registry.providers.codex.workerAdapter!;
     adapter.provider = 'codex';
@@ -497,7 +569,7 @@ try {
 
   it.each([false, true])('checks the configured tuple from recorded installations (load failure: %s)', async fail => {
     const f = workerResolutionFixture();
-    const root = await mkdtemp(path.join(os.tmpdir(), 'worker-recorded-check-')); roots.push(root);
+    const root = mkdtempSync(path.join(os.tmpdir(), 'worker-recorded-check-')); roots.push(root);
     await writeFile(path.join(root, 'models.json'), JSON.stringify({ defaults: { workerSelection: f.projectPolicy } }));
     await writeFile(path.join(root, 'worker-installations.json'), '{"version":1,"registrations":[]}');
     vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src'); vi.stubEnv('AIWG_CONFIG', root);
@@ -528,7 +600,7 @@ try {
     const launcher = await readFile(f.binary, 'utf8');
     const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
     expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
-    const resolved = await f.resolve();
+    const resolved = await f.resolveInProcess();
     expect(resolved.code, resolved.stdout + resolved.stderr).toBe(0);
     for (const source of [
       `console.log('codex-cli 0.162.0');\n`,
@@ -537,14 +609,12 @@ try {
     ]) {
       await writeFile(payload, source);
       expect(await readFile(f.binary, 'utf8')).toBe(launcher);
-      const changed = await f.resolve();
+      const changed = await f.resolveInProcess();
       expect(changed.code).not.toBe(0);
       expect(changed.stdout).toContain('aiwg doctor --probe-workers --qualify');
     }
   });
 
-  // Each case runs several fresh CLI processes; they are split so no single case
-  // spends most of the default per-test budget on process startup (#3474 follow-up).
   it('qualifies installation and exact model roles and renders a launchable plan', async () => {
     const f = await fixture();
     const before = await f.resolve();
@@ -571,8 +641,8 @@ try {
 
   it('blocks a qualified installation when the group asks for unsupported approval or step controls', async () => {
     const f = await fixture();
-    const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
-    expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
+    const qualified = await f.qualifyInProcess();
+    expect(qualified.status, JSON.stringify(qualified)).toBe('recorded');
     const configPath = path.join(f.project, '.aiwg/aiwg.config');
     const configText = await readFile(configPath, 'utf8');
     const unsupportedApproval = JSON.parse(configText);
@@ -582,7 +652,7 @@ try {
     expect(blockedProbe.code, blockedProbe.stdout + blockedProbe.stderr).toBe(1);
     const blockedReport = JSON.parse(blockedProbe.stdout);
     expect(blockedReport.workers[0]).toMatchObject({ ready: false, reason: 'WORKER_DIRECT_INVOCATION_BLOCKED' });
-    const blockedResolve = await f.resolve();
+    const blockedResolve = await f.resolveInProcess();
     expect(blockedResolve.code).toBe(2);
     expect(blockedReport.invocationChecks[0].diagnostics).toEqual(JSON.parse(blockedResolve.stdout).diagnostics);
     const blockedText = await f.run(['doctor', '--probe-workers', '--cli', 'codex']);
@@ -592,7 +662,7 @@ try {
     const stricter = JSON.parse(configText);
     stricter.parallelism.health = { requireStepCap: true };
     await writeFile(configPath, JSON.stringify(stricter));
-    const unsupportedControl = await f.resolve();
+    const unsupportedControl = await f.resolveInProcess();
     expect(unsupportedControl.code).not.toBe(0);
     expect(unsupportedControl.stdout).toContain('OG_ADAPTER_UNQUALIFIED');
     await writeFile(configPath, configText);
@@ -606,7 +676,7 @@ try {
     expect(stored.registrations[0].modelObservations.models[0].worker.qualification.roles).toEqual(['coding']);
     expect(stored.registrations[0].installation.evidence.cases).toBeUndefined();
     await f.writeCli('0.162.0');
-    const changed = await f.resolve();
+    const changed = await f.resolveInProcess();
     expect(changed.code).not.toBe(0);
     expect(changed.stdout).toContain('aiwg doctor --probe-workers --qualify');
   });
@@ -615,18 +685,17 @@ try {
     const f = await fixture();
     const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
     expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
-    const resolved = await f.resolve();
+    const resolved = await f.resolveInProcess();
     expect(resolved.code, resolved.stdout + resolved.stderr).toBe(0);
     const filename = path.join(f.project, '.aiwg/aiwg.config');
     const config = JSON.parse(await readFile(filename, 'utf8'));
     config.parallelism.clis.codex.accountScope = 'synthetic-account-2';
     await writeFile(filename, JSON.stringify(config));
-    const changed = await f.resolve();
+    const changed = await f.resolveInProcess();
     expect(changed.code).not.toBe(0);
     expect(JSON.parse(changed.stdout).invocation).toBeUndefined();
   });
 
-  // Split from the case above so neither spends most of the per-test budget on CLI startup.
   it('restores dispatch after requalifying under a changed accountScope label', async () => {
     const f = await fixture();
     const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
@@ -637,7 +706,7 @@ try {
     await writeFile(filename, JSON.stringify(config));
     const requalified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
     expect(requalified.code, requalified.stdout + requalified.stderr).toBe(0);
-    const restored = await f.resolve();
+    const restored = await f.resolveInProcess();
     expect(restored.code, restored.stdout + restored.stderr).toBe(0);
   });
 
@@ -651,10 +720,13 @@ try {
     expect(result.stdout).toContain('refresh model discovery, and requalify before dispatch');
   });
 
-  it.each(['same-facts', 'banner', 'context', 'efforts', 'older', 'retired', 'hidden', 'conflict'])(
-    'reconciles approved observations with %s discovery cache', async kind => {
-      const f = await fixture();
-      if (kind === 'banner') {
+  describe('approved observation reconciliation', () => {
+    const retainedRoots: string[] = [];
+    let current: Awaited<ReturnType<typeof approvedFixture>>;
+    let legacy: Awaited<ReturnType<typeof approvedFixture>>;
+    async function approvedFixture(localAccount: boolean) {
+      const f = await fixture(false, false, true, 'codex', { roots: retainedRoots });
+      if (localAccount) {
         const filename = path.join(f.project, '.aiwg/aiwg.config');
         const config = JSON.parse(await readFile(filename, 'utf8'));
         config.parallelism.clis.codex.accountScope = 'local-account';
@@ -663,51 +735,65 @@ try {
       const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
       expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
       const stored = JSON.parse(await readFile(path.join(f.config, 'worker-installations.json'), 'utf8'));
-      const approved = stored.registrations[0].modelObservations;
-      // Resolve uses the same inventory signature as sources. The test process
-      // writes only this fixture's HOME cache, never the real user's cache.
-      const sources = await f.run(['models', 'sources', '--json']);
+      const sources = await f.modelsInProcess(['sources', '--json']);
       expect(sources.code, sources.stdout + sources.stderr).toBe(0);
-      const catalog = JSON.parse(await readFile(path.join(repo, 'agentic/code/providers/model-catalog.v1.json'), 'utf8'));
-      const discovery = structuredClone(approved);
-      const timestamp = new Date(Date.parse(approved.observedAt) + (kind === 'older' ? -1000 : 1)).toISOString();
-      discovery.observedAt = timestamp;
-      if (kind === 'banner') { discovery.runtimeVersion = 'codex-cli 0.161.0'; delete discovery.accountBinding; }
-      for (const row of discovery.models) {
-        row.worker.observedAt = timestamp;
-        if (kind === 'banner') row.worker.runtimeVersion = 'codex-cli 0.161.0';
-        row.worker.verifiedAt = timestamp;
-        row.worker.fetchedAt = timestamp;
-        row.worker.evidenceDigest = 'sha256:' + 'a'.repeat(64);
-        row.worker.qualification = { status: 'unqualified', roles: [] };
-        if (kind === 'context' || kind === 'older') row.worker.contextTokens = 1;
-        if (kind === 'efforts') { row.worker.efforts = [{ id: 'high', selfDelegates: false }]; row.reasoningEfforts = ['high']; }
-        if (kind === 'retired') row.worker.lifecycle = 'retired';
-        if (kind === 'hidden') { row.hidden = true; row.worker.visibility = 'hidden'; }
-        if (kind === 'conflict') row.worker.conflicts = [{ field: '/contextTokens',
-          evidence: [16000, 32000].map(value => ({ value, source: 'fixture:catalog', pointer: '/context_window',
-            observedAt: timestamp, digest: row.worker.evidenceDigest })) }];
-      }
-      catalog.refreshedAt = new Date().toISOString();
-      catalog.discovery = { ...JSON.parse(sources.stdout).discovery, source: 'native', fetchedAt: catalog.refreshedAt,
-        providers: { codex: discovery } };
-      expect(validateWorkerCatalogDiscovery(catalog.discovery)).toEqual([]);
-      const cacheFile = path.join(f.root, '.cache/aiwg/model-catalog.v1.json');
-      await mkdir(path.dirname(cacheFile), { recursive: true });
-      await writeFile(cacheFile, JSON.stringify(catalog));
-      const resolved = await f.resolve();
-      if (kind === 'same-facts' || kind === 'banner' || kind === 'older') {
-        expect(resolved.code, resolved.stdout + resolved.stderr).toBe(0);
-        expect(JSON.parse(resolved.stdout).invocation.readiness).toBe('launchable');
-      } else {
-        expect(resolved.code, resolved.stdout + resolved.stderr).not.toBe(0);
-        expect(resolved.stdout).toContain('aiwg doctor --probe-workers --qualify');
-      }
-      await expect(access(path.join(f.project, 'result.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+      return { f, approved: stored.registrations[0].modelObservations, sources: JSON.parse(sources.stdout) };
+    }
+    beforeAll(async () => {
+      profileScope = 'approved observation reconciliation beforeAll';
+      try { current = await approvedFixture(false); legacy = await approvedFixture(true); }
+      finally { profileScope = undefined; }
     });
+    afterEach(async () => {
+      for (const root of retainedRoots) await rm(path.join(root, '.cache'), { recursive: true, force: true });
+    });
+    afterAll(async () => {
+      for (const root of retainedRoots) await rm(root, { recursive: true, force: true });
+    });
+    it.each(['same-facts', 'banner', 'context', 'efforts', 'older', 'retired', 'hidden', 'conflict'])(
+      'reconciles approved observations with %s discovery cache', async kind => {
+        const { f, approved, sources } = kind === 'banner' ? legacy : current;
+        const catalog = JSON.parse(await readFile(path.join(repo, 'agentic/code/providers/model-catalog.v1.json'), 'utf8'));
+        const discovery = structuredClone(approved);
+        const timestamp = new Date(Date.parse(approved.observedAt) + (kind === 'older' ? -1000 : 1)).toISOString();
+        discovery.observedAt = timestamp;
+        if (kind === 'banner') { discovery.runtimeVersion = 'codex-cli 0.161.0'; delete discovery.accountBinding; }
+        for (const row of discovery.models) {
+          row.worker.observedAt = timestamp;
+          if (kind === 'banner') row.worker.runtimeVersion = 'codex-cli 0.161.0';
+          row.worker.verifiedAt = timestamp;
+          row.worker.fetchedAt = timestamp;
+          row.worker.evidenceDigest = 'sha256:' + 'a'.repeat(64);
+          row.worker.qualification = { status: 'unqualified', roles: [] };
+          if (kind === 'context' || kind === 'older') row.worker.contextTokens = 1;
+          if (kind === 'efforts') { row.worker.efforts = [{ id: 'high', selfDelegates: false }]; row.reasoningEfforts = ['high']; }
+          if (kind === 'retired') row.worker.lifecycle = 'retired';
+          if (kind === 'hidden') { row.hidden = true; row.worker.visibility = 'hidden'; }
+          if (kind === 'conflict') row.worker.conflicts = [{ field: '/contextTokens',
+            evidence: [16000, 32000].map(value => ({ value, source: 'fixture:catalog', pointer: '/context_window',
+              observedAt: timestamp, digest: row.worker.evidenceDigest })) }];
+        }
+        catalog.refreshedAt = new Date().toISOString();
+        catalog.discovery = { ...sources.discovery, source: 'native', fetchedAt: catalog.refreshedAt,
+          providers: { codex: discovery } };
+        expect(validateWorkerCatalogDiscovery(catalog.discovery)).toEqual([]);
+        const cacheFile = path.join(f.root, '.cache/aiwg/model-catalog.v1.json');
+        await mkdir(path.dirname(cacheFile), { recursive: true });
+        await writeFile(cacheFile, JSON.stringify(catalog));
+        const resolved = await f.resolveInProcess();
+        if (kind === 'same-facts' || kind === 'banner' || kind === 'older') {
+          expect(resolved.code, resolved.stdout + resolved.stderr).toBe(0);
+          expect(JSON.parse(resolved.stdout).invocation.readiness).toBe('launchable');
+        } else {
+          expect(resolved.code, resolved.stdout + resolved.stderr).not.toBe(0);
+          expect(resolved.stdout).toContain('aiwg doctor --probe-workers --qualify');
+        }
+        await expect(access(path.join(f.project, 'result.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+      });
+  });
 
   it('surfaces the offending installed path and exact permission remedy', async () => {
-    const f = await fixture();
+    const f = await fixture(false, false, true, 'codex', { privateInstallation: true });
     await chmod(f.installed, 0o775);
     const result = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
     expect(result.code).not.toBe(0);
@@ -746,15 +832,15 @@ try {
     const stored = JSON.parse(await readFile(path.join(f.config, 'worker-installations.json'), 'utf8'));
     expect(stored.registrations[0].modelObservations.models[0].llmProvider).toBe('openai');
     expect(stored.registrations[0].modelObservations.models[0].worker.qualification.roles).toEqual(['coding', 'reasoning']);
-    expect((await f.resolve()).code).toBe(0);
+    expect((await f.resolveInProcess()).code).toBe(0);
     const reviewArgs = ['models', 'resolve', '--role', 'reasoning', '--task', 'review', '--group', 'workers',
       '--brief', path.join(f.project, 'brief.txt'), '--workdir', f.project, '--final-output', path.join(f.project, 'review.json'), '--format', 'json'];
-    const review = JSON.parse((await f.run(reviewArgs)).stdout);
+    const review = JSON.parse((await f.modelsInProcess(reviewArgs.slice(1))).stdout);
     const exclusions = review.exclusions;
     expect(exclusions.flatMap((entry: any) => entry.diagnostics).some((d: any) => d.message.includes('Role lacks qualified evidence'))).toBe(false);
     expect(exclusions.find((entry: any) => entry.member === 'reviewer').diagnostics.filter((d: any) => d.blocking !== false).map((d: any) => d.pointer)).toEqual(['/request/authority']);
     expect(JSON.stringify(exclusions)).toContain('--authorize-premium');
-    const authorized = await f.run([...reviewArgs, '--authorize-premium']);
+    const authorized = await f.modelsInProcess([...reviewArgs.slice(1), '--authorize-premium']);
     expect(authorized.code, authorized.stdout + authorized.stderr).toBe(0);
     const plan = JSON.parse(authorized.stdout);
     expect(plan.invocation.readiness).toBe('launchable');
@@ -762,14 +848,14 @@ try {
     expect(plan.selected.diagnostics).toContainEqual(expect.objectContaining({ blocking: false,
       message: 'Output limit is unreported; only the context window was checked.' }));
     expect((await f.run([...reviewArgs.slice(0, -1), 'shell', '--authorize-premium'])).code).toBe(0);
-    expect((await f.run(reviewArgs)).code).not.toBe(0);
+    expect((await f.modelsInProcess(reviewArgs.slice(1))).code).not.toBe(0);
     await expect(access(path.join(f.project, 'review.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('explains that an existing relative brief must be absolute', async () => {
     const f = await fixture();
     await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
-    const result = await f.run(['models', 'resolve', '--role', 'coding', '--task', 'implementation', '--group', 'workers',
+    const result = await f.modelsInProcess(['resolve', '--role', 'coding', '--task', 'implementation', '--group', 'workers',
       '--brief', 'brief.txt', '--workdir', f.project, '--final-output', path.join(f.project, 'result.json'), '--format', 'json']);
     expect(result.code).not.toBe(0);
     expect(JSON.parse(result.stdout).diagnostics).toContainEqual({ code: 'OG_CONFIG_REFERENCE', pointer: '/request/brief',
@@ -777,7 +863,7 @@ try {
   });
 
   it('blocks an operator-approved installed renderer that silently drops the requested sandbox', async () => {
-    const f = await fixture();
+    const f = await fixture(false, false, true, 'codex', { privateInstallation: true });
     const driver = path.join(f.installed, 'tools/ralph-external/lib/codex-adapter.mjs');
     const source = await readFile(driver, 'utf8');
     expect(source).toContain("'-s', sandbox === 'external' ? 'danger-full-access' : sandbox,");
@@ -797,7 +883,7 @@ try {
   });
 
   it('reports a sanitized adapter build failure before recording qualification', async () => {
-    const f = await fixture();
+    const f = await fixture(false, false, true, 'codex', { privateInstallation: true });
     const driver = path.join(f.installed, 'tools/ralph-external/lib/codex-adapter.mjs');
     const source = await readFile(driver, 'utf8');
     await writeFile(driver, source.replace('const model = invocation?.selected?.model;', "throw new Error('sensitive-build-details');"));
@@ -918,22 +1004,30 @@ describe('doctor namespace compatibility through the launcher unit probe', () =>
     const f = workerResolutionFixture();
     f.snapshot.registry.providers.codex.workerAdapter!.provider = 'codex';
     f.snapshot.config.parallelism!.groups!.workers.execution = { sandbox: 'workspace-write', transport: 'shell' };
-    const projectDir = await mkdtemp(path.join(os.tmpdir(), 'doctor-sandbox-probe-')); roots.push(projectDir);
-    const probeNativeSandbox = vi.fn(() => ({ ok: false, code: 'OG_NATIVE_SANDBOX_UNAVAILABLE',
-      detail: 'uid_map: Operation not permitted', mode: 'systemd-unit' }));
-    const input = { projectDir, config: f.snapshot.config, registry: f.snapshot.registry,
-      detectIsolation: () => ({ mode: 'systemd-unit' }), probeNativeSandbox };
-    const checks = await checkWorkerSandboxLaunches(input);
-    expect(checks).toHaveLength(1);
-    expect(checks[0]).toMatchObject({ status: 'blocked', isolation: 'systemd-unit', scope: 'systemd-launcher',
-      diagnostics: [{ code: 'OG_NATIVE_SANDBOX_UNAVAILABLE', message: expect.stringContaining('AppArmor allowance') }] });
-    const result = await qualifyProbedWorkers({ ...input, packageRoot: repo, yes: true,
-      section: { installFindings: [{ cli: 'codex', readiness: 'ready', executable: '/synthetic/codex', installedVersion: '1.0.0' }] } });
-    // The probe is reported with the result, but it no longer short-circuits
-    // qualification: the store is prepared and each CLI is evaluated.
-    expect(result.sandboxChecks).toEqual(checks);
-    expect(result.results.some((entry: { diagnostics?: Array<{ code: string }> }) =>
-      entry.diagnostics?.some(diagnostic => diagnostic.code === 'OG_NATIVE_SANDBOX_UNAVAILABLE'))).toBe(false);
+    const root = mkdtempSync(path.join(os.tmpdir(), 'doctor-sandbox-probe-')); roots.push(root);
+    const projectDir = path.join(root, 'project');
+    await mkdir(projectDir);
+    vi.stubEnv('HOME', root);
+    vi.stubEnv('AIWG_CONFIG', path.join(root, 'config'));
+    vi.stubEnv('AIWG_HOME', repo);
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    try {
+      const probeNativeSandbox = vi.fn(() => ({ ok: false, code: 'OG_NATIVE_SANDBOX_UNAVAILABLE',
+        detail: 'uid_map: Operation not permitted', mode: 'systemd-unit' }));
+      const input = { projectDir, config: f.snapshot.config, registry: f.snapshot.registry,
+        detectIsolation: () => ({ mode: 'systemd-unit' }), probeNativeSandbox };
+      const checks = await checkWorkerSandboxLaunches(input);
+      expect(checks).toHaveLength(1);
+      expect(checks[0]).toMatchObject({ status: 'blocked', isolation: 'systemd-unit', scope: 'systemd-launcher',
+        diagnostics: [{ code: 'OG_NATIVE_SANDBOX_UNAVAILABLE', message: expect.stringContaining('AppArmor allowance') }] });
+      const result = await qualifyProbedWorkers({ ...input, packageRoot: repo, yes: true,
+        section: { installFindings: [{ cli: 'codex', readiness: 'ready', executable: '/synthetic/codex', installedVersion: '1.0.0' }] } });
+      // The probe is reported with the result, but it no longer short-circuits
+      // qualification: the store is prepared and each CLI is evaluated.
+      expect(result.sandboxChecks).toEqual(checks);
+      expect(result.results.some((entry: { diagnostics?: Array<{ code: string }> }) =>
+        entry.diagnostics?.some(diagnostic => diagnostic.code === 'OG_NATIVE_SANDBOX_UNAVAILABLE'))).toBe(false);
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it('reports passing probes and skips them for the policy-selected native sandbox', async () => {
