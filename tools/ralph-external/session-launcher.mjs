@@ -983,6 +983,38 @@ async function launchOneWorker(owner, options) {
   }
 }
 
+// #3489: process exit/close notification can be observed before the final
+// pipe bytes are delivered as stream 'data' events (the same class as #3488,
+// which waited for IPC disconnect as well as exit). The child 'data'
+// handlers are the ONLY path that feeds the health observer and accumulates
+// the `output` buffer adapter extraction consumes, so settling health on
+// the process-level event alone classifies a completed exit-0 run as
+// `failed` (missing terminal event, FINAL_INVALID) whenever it wins the
+// race under load. Drain any already-buffered stdout/stderr bytes — bounded
+// by the termination grace — before destroying the source streams and
+// snapshotting output/observer state. Streams with no buffered bytes
+// resolve immediately, so never-ending stdio (timer-faked stand-ins, held
+// pipes) never delays settle; the bound only covers genuinely in-flight
+// data. The timer stays referenced so a bounded drain always completes,
+// mirroring the already-referenced exit-grace `later()` timer.
+function drainChildStdio(child, timeoutMs) {
+  const pending = [];
+  for (const stream of [child?.stdout, child?.stderr]) {
+    if (!stream || typeof stream.once !== 'function' || stream.readableEnded || stream.destroyed) continue;
+    if (!(stream.readableLength > 0)) continue;
+    try { stream.resume?.(); } catch { continue; }
+    pending.push(new Promise(resolve => {
+      const done = () => { clearTimeout(timer); resolve(); };
+      const timer = setTimeout(done, Math.max(0, timeoutMs ?? 0));
+      stream.once('end', done);
+      stream.once('close', done);
+      stream.once('error', done);
+    }));
+  }
+  if (!pending.length) return Promise.resolve();
+  return Promise.all(pending);
+}
+
 async function captureOneWorker(owner, ctx) {
   const { child, outcome, invocation, invocationId, supervisor, launchTime, monotonicStart, publish, paths, handles, options,
     canaryDeadlineMs = null, canaryNowMs = () => Date.now(), recoveryGated = false } = ctx;
@@ -1144,6 +1176,10 @@ async function captureOneWorker(owner, ctx) {
     timers.clear();
     process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal);
     owner.currentProcess = null; owner.workerStop = null;
+    // #3489: drain in-flight stdio before destroying the source streams —
+    // destroying first discards bytes never delivered as 'data', settling
+    // health on a partial stream (exit observed before drain).
+    await drainChildStdio(child, graceMs);
     child.stdout.destroy(); child.stderr.destroy(); child.stdin?.destroy(); child.unref();
     for (const stream of streams) await new Promise(resolve => { if (stream.destroyed) resolve(); else stream.end(resolve); });
     const native = outcome.mode === 'systemd-unit' ? readNative() : null;
@@ -1794,6 +1830,11 @@ async function captureOneWorkerBaseline(owner, ctx) {
     timers.clear();
     process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal);
     owner.currentProcess = null; owner.workerStop = null;
+    // #3489: drain in-flight stdio before destroying the source streams —
+    // destroying first discards bytes never delivered as 'data', settling
+    // health on a partial stream (exit observed before drain). Ordering-only;
+    // recovery semantics in this frozen baseline are unchanged.
+    await drainChildStdio(child, graceMs);
     child.stdout.destroy(); child.stderr.destroy(); child.stdin?.destroy(); child.unref();
     for (const stream of streams) await new Promise(resolve => { if (stream.destroyed) resolve(); else stream.end(resolve); });
     const native = outcome.mode === 'systemd-unit' ? readNative() : null;
