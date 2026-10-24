@@ -18,11 +18,13 @@ import { CodexAdapter } from '../../../tools/ralph-external/lib/codex-adapter.mj
 import { FactoryDirectAdapter } from '../../../tools/ralph-external/lib/factory-adapter.mjs';
 import { PiDirectAdapter } from '../../../tools/ralph-external/lib/pi-adapter.mjs';
 import { GrokBuildAdapter } from '../../../tools/ralph-external/lib/grok-build-adapter.mjs';
+import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
 
 const roots: string[] = [];
-afterEach(async () => { vi.unstubAllEnvs(); vi.restoreAllMocks(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+const breakers: ScopedFailureBreaker[] = [];
+afterEach(async () => { vi.unstubAllEnvs(); vi.restoreAllMocks(); for (const breaker of breakers.splice(0)) breaker.destroy(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
-async function fixture({ stdin = 'closed', scenario = 'success', stdoutOnly = false, forgeRealExitCode, semanticHealth = false, artifacts = [] }: any = {}) {
+async function fixture({ stdin = 'closed', scenario = 'success', stdoutOnly = false, forgeRealExitCode, semanticHealth = false, artifacts = [], recoveryClock = () => 0, hardTimeoutSeconds = 30 }: any = {}) {
   vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
   const f = workerResolutionFixture();
   const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-one-shot-')); roots.push(root);
@@ -45,7 +47,7 @@ async function fixture({ stdin = 'closed', scenario = 'success', stdoutOnly = fa
   profile.health = { version: 1, handshake: semanticHealth ? 'semantic' : 'process-only', outputFraming: 'jsonl', signalParser: 'fixture:jsonl',
     sessionLogLocator: null, progressEvidence: semanticHealth ? ['item.completed'] : [], stopEvidence: 'fixture:wait-only', fixtureRef: 'fixture:one-shot', qualifiedAt: f.request.now,
     statusOperation: null, cancelOperation: null };
-  f.snapshot.config.parallelism!.health = { hardTimeoutSeconds: 1, terminateGraceSeconds: 1 };
+  f.snapshot.config.parallelism!.health = { hardTimeoutSeconds, terminateGraceSeconds: 1 };
   const driver: any = { qualification: { adapter, adapterId: adapter.id, cliVersion: '1.0.0',
     boundary: { kind: 'os', identity: 'fixture:boundary', digest: qualificationDigest('boundary'), controls: ['sandbox'] } },
     buildInvocation: async (input: any) => ({ argv: [process.execPath, path.resolve('test/fixtures/ralph-worker-cli.mjs'),
@@ -63,7 +65,14 @@ async function fixture({ stdin = 'closed', scenario = 'success', stdoutOnly = fa
   expect(plan.invocation, JSON.stringify({ diagnostics: plan.diagnostics, exclusions: plan.exclusions })).toBeDefined();
   const invocationPath = path.join(root, 'plan.json'); await writeFile(invocationPath, JSON.stringify(plan));
   const launchSpy = vi.fn();
+  // Recovery scope state belongs to this test, never the process singleton.
+  // The recovery clock is frozen by default: a loaded runner must not spend
+  // the one-second dispatch budget on fixture preparation (#3505). Tests of
+  // deadline enforcement pass their own moving clock. The execution hard
+  // timeout is likewise generous unless a test exercises it (hang/deadline).
+  const scopedBreaker = new ScopedFailureBreaker({ nowMs: recoveryClock }); breakers.push(scopedBreaker);
   const options: any = { invocationPath, runDir, inputs: { snapshot: f.snapshot, drivers }, now: f.request.now,
+    scopedBreaker,
     checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
     isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true };
   const launcher = new SessionLauncher();
@@ -437,7 +446,7 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
   });
 
   it('times out an EOF-blocked worker, records signal instead of a fake zero and clears timers', async () => {
-    const f = await fixture({ scenario: 'hang' });
+    const f = await fixture({ scenario: 'hang', hardTimeoutSeconds: 1 });
     const kill = vi.spyOn(process, 'kill');
     const result = await f.launch();
     expect(result).toMatchObject({ timedOut: true, exitCode: null, termination: 'uncertain' });
@@ -952,7 +961,7 @@ describe('launcher load races with controlled interleavings', () => {
   });
 
   it.each(['withheld wait', 'zero wait', 'non-zero wait'])('reports delivered signal or observed status with %s', async wait => {
-    const f = await fixture({ scenario: 'hang' });
+    const f = await fixture({ scenario: 'hang', hardTimeoutSeconds: 1 });
     // A real owned group exercises all production signal gates. Its wait
     // events are withheld from the launcher to model the transport blocked
     // in its synchronous exit-record fsync before mirroring the signal.
@@ -1166,7 +1175,7 @@ describe('MAJOR regression (#2895): systemd-unit mode has real stop authority', 
   it('stops the unit via systemctl on hard timeout; confirmation comes from unit state, not the stop request', async ctx => {
     if (detectWorkerIsolation().mode !== 'systemd-unit') { ctx.skip(); return; }
     const { spawnSync } = await import('node:child_process');
-    const f = await fixture({ scenario: 'hang' });
+    const f = await fixture({ scenario: 'hang', hardTimeoutSeconds: 1 });
     const stopSpy = vi.fn((unit: string) => stopWorkerUnit(unit));
     try {
       const result = await f.launch({ isolation: { mode: 'systemd-unit', reason: 'live probe' }, stopUnit: stopSpy });
@@ -1205,7 +1214,10 @@ describe('#2895 round 2, item 2: workerExitCode precedence — uncertainty domin
 
 describe('#2895 round 2, item 3: the final exit.json publish is always attempted', () => {
   it('a failing FINAL recordProcess() still results in a published exit.json', async () => {
-    const f = await fixture();
+    // Preparation must not consume the one-second dispatch budget merely
+    // because a loaded runner delays filesystem work. Capture's real worker
+    // timeout remains active; dispatch deadline enforcement is tested below.
+    const f = await fixture({ recoveryClock: () => 0 });
     let processJsonAttempts = 0;
     const result = await f.launch({
       // Bypass the attached transport wrapper so there is no transport to
@@ -1253,6 +1265,41 @@ describe('#2895 round 2, item 3: the final exit.json publish is always attempted
   });
 });
 
+describe('#3505: launch refusals preserve the underlying diagnostic', () => {
+  it('reports a deadline exhausted during preparation without spawning a child', async () => {
+    let now = 0;
+    const f = await fixture({ recoveryClock: () => now, hardTimeoutSeconds: 1 });
+    const spawnAsync = vi.fn();
+    const launchIsolated = vi.fn((opts: any) => {
+      expect(opts.onDispatchCommit).toBeTypeOf('function');
+      // No sleep: admission succeeded at time zero, but preparation used
+      // the entire one-second budget before the actual dispatch commit.
+      now = 1000;
+      return launchIsolatedWorker({ ...opts, attached: false, spawnAsync });
+    });
+    await expect(f.launch({ launchIsolated })).rejects.toThrow(
+      'Worker launch refused: dispatch-commit: Worker dispatch refused: deadline exceeded before process start');
+    expect(launchIsolated).toHaveBeenCalledOnce();
+    expect(spawnAsync).not.toHaveBeenCalled();
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'exit.json'), 'utf8'))).toMatchObject({
+      termination: 'confirmed', descendants: 'not-started', errorCode: 'LAUNCH_REFUSED',
+    });
+  });
+
+  it.each([
+    { outcome: { blocked: true, failures: [{ signal: 'gate', reason: 'synthetic gate refusal' }] }, reason: 'gate: synthetic gate refusal' },
+    { outcome: { launched: false, diagnostic: 'synthetic manager preparation failure' }, reason: 'synthetic manager preparation failure' },
+    { outcome: { launched: false, error: 'synthetic spawn failure' }, reason: 'synthetic spawn failure' },
+    { outcome: undefined, reason: 'Worker launch did not return an attached child' },
+  ])('preserves $reason with recovery enabled and disabled', async ({ outcome, reason }) => {
+    for (const recoveryEnabled of [true, false]) {
+      const f = await fixture({ recoveryClock: () => 0 });
+      await expect(f.launch({ ...(recoveryEnabled ? {} : { scopedBreaker: null }),
+        launchIsolated: () => outcome })).rejects.toThrow(reason);
+    }
+  });
+});
+
 describe('#2895 round 2, item 4: a planted worker-exit.json cannot crash the transport into reporting the wrong exit code', () => {
   it('the reported exit code is the real worker exit, and the collision is a recorded anomaly, not a crash', async () => {
     const f = await fixture({ scenario: 'forge-exit', forgeRealExitCode: 42 });
@@ -1276,7 +1323,7 @@ describe('#2895 round 2, item 4: a planted worker-exit.json cannot crash the tra
 
 describe('#2895 round 2, item 1: a forged identity record cannot authorize a signal against an unrelated process', () => {
   it('no signal reaches the unrelated process, and identity resolution stays uncertain', async () => {
-    const f = await fixture({ scenario: 'hang' });
+    const f = await fixture({ scenario: 'hang', hardTimeoutSeconds: 1 });
     // Two independent, unrelated real processes, both owned by this test's
     // UID. `transportStandIn` stands in for the launcher's own trusted
     // transport child (`nativeSupervisor`); `victim` is the unrelated

@@ -81,7 +81,7 @@ describe('saved-plan launcher resource gate', () => {
     { branch: 'baseline', createRunDir: false },
   ])('detects real free disk at both $branch gates with createRunDir=$createRunDir', async ({ branch, createRunDir }) => {
     const f = await fixture(createRunDir);
-    const breaker = new ScopedFailureBreaker();
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0 });
     let calls = 0;
     const checkDispatch = vi.fn(options => {
       const diskPath = ++calls === 1 && !createRunDir ? root : f.runDir;
@@ -166,7 +166,7 @@ describe('saved-plan launcher resource gate', () => {
     { branch: 'baseline', at: 2, signal: 'avail-mem', live: { ...okLive, availMemGb: 1 }, reason: 'available 1.0GB < 8GB' },
   ])('refuses $signal before spawn at $branch gate $at with its reason', async ({ branch, at, signal, live, reason }) => {
     const f = await fixture();
-    const breaker = new ScopedFailureBreaker();
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0 });
     let calls = 0;
     const checkDispatch = vi.fn(options => {
       expect(options).toEqual({ config: f.inputs.snapshot.config, paths: [f.cwd, f.runDir] });

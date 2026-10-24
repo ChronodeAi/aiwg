@@ -475,6 +475,18 @@ function workerDispatchRefusal(gate) {
   return new Error(`Worker dispatch resource gate refused launch${reasons ? `: ${reasons}` : ''}`);
 }
 
+function workerLaunchRefusal(outcome) {
+  const bounded = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 256);
+  const reasons = (outcome?.failures ?? []).slice(0, 8)
+    .map(failure => `${bounded(failure.signal)}: ${bounded(failure.reason)}`);
+  for (const detail of [outcome?.diagnostic, outcome?.error]) {
+    if (detail) reasons.push(bounded(detail));
+  }
+  return new Error(reasons.length
+    ? `Worker launch refused: ${reasons.join('; ').slice(0, 1024)}`
+    : 'Worker launch did not return an attached child');
+}
+
 async function launchOneWorker(owner, options) {
   const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validate } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
   const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
@@ -854,7 +866,7 @@ async function launchOneWorker(owner, options) {
       env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir,
       ...(onDispatchCommit ? { onDispatchCommit } : {}) });
     outcome = typeof launchResult?.then === 'function' ? await launchResult : launchResult;
-    if (!outcome.child) throw new Error('Worker launch did not return an attached child');
+    if (!outcome?.child) throw workerLaunchRefusal(outcome);
     // #2915 review 4 (finding 3): when THIS attempt is the admitted canary
     // for one or more covering scopes, execution itself must be clipped to
     // the canary's own deadline (min(task deadline, admission+300s)) — not
@@ -1675,7 +1687,7 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
       ...(options.managedAdmission ? { onSpawnAttempt: () => { managedSpawnAttempted = true; } } : {}),
       env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
     outcome = typeof launchResult?.then === 'function' ? await launchResult : launchResult;
-    if (!outcome.child) throw new Error('Worker launch did not return an attached child');
+    if (!outcome?.child) throw workerLaunchRefusal(outcome);
     return await captureOneWorkerBaseline(owner, { child: outcome.child, outcome, invocation, invocationId, supervisor,
       launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options,
       brief: ctx.brief, stdinBytes: ctx.stdinBytes, runDir });
