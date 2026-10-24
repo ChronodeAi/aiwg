@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { homedir } from 'os';
-import { join } from 'path';
+import { isAbsolute, join } from 'path';
 import type { Platform } from '../agents/types.js';
 import { resolveHermesHomePath } from './hermes-home.js';
 import { resolveGrokbotSkillsDir } from './grokbot-paths.js';
@@ -1597,11 +1597,14 @@ export function getProviderKernelSkillPath(provider: string | null | undefined):
   return expandProviderHomePath(definition?.paths.kernelSkills ?? null);
 }
 
-export function resolveProviderPathValue(providerPath: string | null, projectPath: string): string {
-  const expandedPath = expandProviderHomePath(providerPath);
+export function resolveProviderPathValue(providerPath: string | null, projectPath: string,
+  paths: Pick<typeof import('node:path'), 'join' | 'isAbsolute'> = { join, isAbsolute },
+  homeDirectory = homedir()): string {
+  const expandedPath = !providerPath ? '' : providerPath === '~' ? homeDirectory
+    : providerPath.startsWith('~/') ? paths.join(homeDirectory, providerPath.slice(2)) : providerPath;
   if (!expandedPath) return '';
-  if (expandedPath.startsWith('/')) return expandedPath;
-  return join(projectPath, expandedPath);
+  if (paths.isAbsolute(expandedPath)) return expandedPath;
+  return paths.join(projectPath, expandedPath);
 }
 
 export function normalizeProviderDefinitionId(provider: string | null | undefined): Platform | null {

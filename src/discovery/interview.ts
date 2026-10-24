@@ -1,6 +1,6 @@
 import { evaluateWorkerDispatchOffer, knownWorkerCliExecutables } from '../models/worker-dispatch-offer.js';
 import { createHash } from 'node:crypto';
-import { basename, isAbsolute, join } from 'node:path';
+import { isAbsolute, join, posix } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { getProviderDefinition, normalizeProviderDefinitionId, resolveProviderPathValue } from '../providers/provider-definitions.js';
 import { assertPlanRedacted, validateSetupPlan } from './plan-validation.js';
@@ -27,7 +27,8 @@ export const INSTALL_METHOD_EXPLANATION = 'Installing the aiwg CLI globally with
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
 /** Roots come from discovery, which owns realpath canonicalization. No filesystem access here. */
 export function workspaceSlug(canonicalRoot: string): string {
-  const slug = basename(canonicalRoot).toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/^-+|-+$/g, '');
+  // Leave room for the setup- prefix and hash inside the plan ID's 120 chars.
+  const slug = posix.basename(canonicalRoot.replace(/\\/g, '/')).toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/^-+|-+$/g, '').slice(0, 105) || 'workspace';
   return `${slug}-${hash(canonicalRoot).slice(0, 8)}`;
 }
 export function inventoryId(inventory: DiscoveryInventory): string {
@@ -60,12 +61,12 @@ export function isAnswered(plan: Pick<SetupPlan, 'answers'>, id: string): boolea
   return Object.hasOwn(plan.answers, id);
 }
 
-export function credentialReference(input: string): CredentialReference {
+export function credentialReference(input: string, paths: Pick<typeof import('node:path'), 'isAbsolute'> = { isAbsolute }): CredentialReference {
   let reference: CredentialReference;
   if (input === 'stdin') reference = { kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' };
   else if (input.startsWith('env:') && /^[A-Za-z_][A-Za-z0-9_]*$/.test(input.slice(4))) {
     reference = { kind: 'credential-ref', source: 'env', name: input.slice(4) };
-  } else if (input.startsWith('file:') && isAbsolute(input.slice(5))) {
+  } else if (input.startsWith('file:') && paths.isAbsolute(input.slice(5))) {
     reference = { kind: 'credential-ref', source: 'file', name: input.slice(5) };
   } else throw new Error('--credential requires <provider>=env:NAME|file:PATH|stdin (file paths must be absolute).');
   assertPlanRedacted(reference);
@@ -78,6 +79,8 @@ export function credentialEnvName(provider: string): string {
 export interface InterviewContext {
   inventory: DiscoveryInventory;
   workspaceRoot: string;
+  /** Host path operations are injectable for cross-platform planning fixtures. */
+  paths?: Pick<typeof import('node:path'), 'join' | 'isAbsolute'>;
   /** Additional canonical providers from flags or existing settings. */
   providers?: readonly string[];
   unknownRemote?: boolean;
@@ -93,6 +96,7 @@ export function interviewProviders(context: InterviewContext): string[] {
 }
 export function interviewQuestions(context: InterviewContext, answers: SetupPlan['answers'] = {}): InterviewQuestion[] {
   const { inventory, workspaceRoot } = context;
+  const paths = context.paths ?? { join, isAbsolute };
   const workerExecutables = new Set(knownWorkerCliExecutables());
   const questions: InterviewQuestion[] = [];
   const add = (block: InterviewBlock, topic: string, whyItMatters: string, defaultValue: PlanValue,
@@ -129,11 +133,11 @@ export function interviewQuestions(context: InterviewContext, answers: SetupPlan
     const target = answers[questionId('targets', 'root', project.root)]?.value;
     const targetRoot = typeof target === 'string' && target !== 'root' ? target : project.root;
     const configPath = (targetRoot === project.root ? project.providerFiles.find(f => f.provider === provider && f.kind === 'config')?.path : undefined)
-      ?? (resolveProviderPathValue(getProviderDefinition(provider)?.paths.configFile ?? null, targetRoot) || targetRoot);
+      ?? (resolveProviderPathValue(getProviderDefinition(provider)?.paths.configFile ?? null, targetRoot, paths) || targetRoot);
     add('locations', 'config-dir', "Where this provider's config file lives (informational; A3 writes nothing).", configPath, [configPath], '--target <dir>', 'path', project.root, provider);
     add('locations', 'credential-source', "Where should A4 read this provider's credential from?", null,
       [{ kind: 'credential-ref', source: 'env', name: credentialEnvName(provider) },
-        { kind: 'credential-ref', source: 'file', name: join(project.root, '.credentials', provider) },
+        { kind: 'credential-ref', source: 'file', name: paths.join(project.root, '.credentials', provider) },
         { kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' }], '--credential <provider>=env:NAME|file:PATH|stdin', 'credential', project.root, provider, true);
   }
   for (const project of projects) {
@@ -159,7 +163,7 @@ export function interviewQuestions(context: InterviewContext, answers: SetupPlan
       false, ['enable', 'decline'], '--jev enable|decline|defer', 'choice', project.root, undefined, true);
     if (jev === 'enable') {
       add('capabilities', 'credential-source', 'Where should A4 read the Jev API input from? Enter a reference only; setup/defer works without an API input.', null,
-        [{ kind: 'credential-ref', source: 'env', name: 'JEV_API_KEY' }, { kind: 'credential-ref', source: 'file', name: join(project.root, '.credentials', 'jev') },
+        [{ kind: 'credential-ref', source: 'env', name: 'JEV_API_KEY' }, { kind: 'credential-ref', source: 'file', name: paths.join(project.root, '.credentials', 'jev') },
           { kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' }], '--credential jev=env:NAME|file:PATH|stdin', 'credential', project.root, 'jev', true);
       questions[questions.length - 1].questionId = questionId('locations', 'credential-source', project.root, 'jev');
       add('capabilities', 'jev-options', 'Optional Jev settings as JSON: region, endpoint, verify. Verification sends a billable request at apply.',
@@ -196,6 +200,7 @@ export function interviewRecommendations(context: InterviewContext): SetupRecomm
 
 /** Recompute only from current answers. Declines and unresolved optionals create no capability actions. */
 export function buildInterviewPlan(context: InterviewContext, answers: SetupPlan['answers'], now: string, previous?: SetupPlan): SetupPlan {
+  const paths = context.paths ?? { join, isAbsolute };
   const questions = interviewQuestions(context, answers);
   const workerExecutables = new Set(knownWorkerCliExecutables());
   const actions: PlannedAction[] = [];
@@ -228,8 +233,8 @@ export function buildInterviewPlan(context: InterviewContext, answers: SetupPlan
       if ((intent && intent.source !== 'default') || dispatch?.value === 'enable') add(workspace, id, 'deploy-framework', [layout, tool('installed')]);
     }
     if (selectedProviders.length > 0) {
-      add(workspace, 'shared', 'write-project-config', [path(join(workspace, 'package.json')), layout, path(join(workspace, '.aiwg', 'aiwg.config'))]);
-      add(workspace, 'shared', 'register-project', [{ kind: 'project', root: workspace, field: 'root' }, path(join(workspace, '.aiwg'))]);
+      add(workspace, 'shared', 'write-project-config', [path(paths.join(workspace, 'package.json')), layout, path(paths.join(workspace, '.aiwg', 'aiwg.config'))]);
+      add(workspace, 'shared', 'register-project', [{ kind: 'project', root: workspace, field: 'root' }, path(paths.join(workspace, '.aiwg'))]);
     }
     const jevChoice = answers[questionId('capabilities', 'jev', project.root)]?.value;
     if (jevChoice === 'enable' || jevChoice === 'remove') {

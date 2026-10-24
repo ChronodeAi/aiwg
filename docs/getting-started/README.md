@@ -12,6 +12,7 @@ README](just-try-it.md). The result is a saved report with three prioritized fix
 |---|---|
 | Follow the first task from setup through a saved result | [Start Here](start-here.md) |
 | Install or repair AIWG | [Install, Connect, and Verify](install-connect-verify.md) |
+| Review or resume a guided setup plan, including headless setup | [Guided Setup](guided-setup.md) |
 | Set up Node.js/npm | [Install Node.js](install-node.md) |
 | Resolve macOS installation problems | [macOS Install Guide](macos-install.md) |
 | Choose the right AI tool handoff | [Provider Handoff](provider-handoff.md) |

@@ -300,6 +300,21 @@ export async function conductInterview(options: InterviewSessionOptions): Promis
     visited.add(question.questionId);
     plan = buildInterviewPlan(options.context, plan.answers, now(), plan);
   }
+  // Flags are provisionally available to every observed root while the user can
+  // still edit the workspace selection. Persist only the selected roots' answers
+  // once the interview completes, just as prompting only visits those roots.
+  const selectionId = questionId('targets', 'workspaces', options.context.workspaceRoot);
+  const selected = plan.answers[selectionId]?.value;
+  if (Array.isArray(selected)) {
+    const unselected = options.context.inventory.projects.filter(project => !selected.includes(project.root))
+      .map(project => `.ws-${workspaceSlug(project.root)}.`);
+    const answers = Object.fromEntries(Object.entries(plan.answers).filter(([id]) =>
+      id === selectionId || !unselected.some(slug => id.includes(slug))));
+    if (Object.keys(answers).length !== Object.keys(plan.answers).length) {
+      plan = buildInterviewPlan(options.context, answers, now(), plan);
+      dirty = true;
+    }
+  }
   await save();
   const required = interviewQuestions(options.context, plan.answers).find(q => q.required && !Object.hasOwn(plan.answers, q.questionId));
   if (required) throw missingChoice(required);

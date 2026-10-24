@@ -831,6 +831,9 @@ function defaultGuidedApplyIO(
           maxBuffer: 1024 * 1024,
         });
         if (child.error || child.status !== 0) throw new Error('Jev setup failed.');
+        if (settings.verify === true && settings.remove !== true && JSON.parse(child.stdout).verified !== true) {
+          throw new Error('Jev verification incomplete.');
+        }
       },
       configureWorkerDispatch: async ({ action }) => {
         const built = await buildSetupProjectPlan({ projectDir: action.workspace, workerDispatchChoice: 'enable' });
@@ -943,6 +946,7 @@ export const setupHandler: CommandHandler = {
 Options:
   --target <dir>                  Project directory
   --scope project|user            Record guided plan only (no config writes)
+  --force                         Recreate guided interview answers
   --workspace <root>              Observed workspace to configure (repeatable)
   --monorepo root|package         Monorepo target selection
   --package <root>                Observed package root (with --monorepo package)

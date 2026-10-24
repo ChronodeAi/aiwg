@@ -20,6 +20,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Changed
 
+- Guided setup now documents interview → review → apply across the public
+  provider-orchestrated installer, agent guidance, and getting-started paths
+  (#3449 A6). Resume and idempotence checks cover successful, partial, and
+  interrupted applies; headless parity, portable path fixtures, CLI documentation
+  contracts, and a local walkthrough exercise the complete flow.
+
 - Generated startup context is smaller (#3451). `AIWG.md` no longer `@`-imports
   `WORKSPACE.md`, and `.aiwg/aiwg.config` is a plain-path pointer (with
   `aiwg config show --project`) instead of an `@` import, so each file is reached

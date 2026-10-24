@@ -9,6 +9,11 @@ description: "Validate a `setup.aiwg.io/v1` SetupManifest file against the schem
 
 Validate a `setup.aiwg.io/v1` SetupManifest file against the schema and run consistency checks.
 
+For the public AIWG installer, retain `metadata.execution_mode:
+provider-orchestrated`. Validate the manifest's interview → review → apply
+sequence; do not convert it to deterministic execution. Guided plan review
+(`aiwg setup --review`) is distinct from SetupManifest schema validation.
+
 ## Trigger Phrases
 
 - "validate setup manifest"

@@ -25,6 +25,25 @@ unexpected environment states. A manifest with
 capable AI provider and may use reasoning steps as the workflow. The CLI
 validates that mode but does not execute it through `setup-run`.
 
+## AIWG installation entry point
+
+The public `https://aiwg.io/setup.aiwg.yaml` remains provider-orchestrated.
+After inspecting and repairing the CLI, follow the guided sequence:
+
+```bash
+aiwg setup --scope project --providers claude
+aiwg setup --review
+aiwg setup --apply
+```
+
+The interview writes a redacted saved plan; review writes nothing; apply uses
+existing owners and persists per-action receipts. Explicit opt-in controls Jev
+and worker dispatch. Reapply after a partial run to resume unfinished actions.
+Use [the runbook](https://github.com/jmagly/aiwg/blob/main/docs/agentic-install-runbook.md) and
+[guided setup reference](https://github.com/jmagly/aiwg/blob/main/docs/getting-started/guided-setup.md) for
+scope, headless flags, credentials, and readiness interpretation. `setup-run`
+is the deterministic manifest runner, not the guided installer.
+
 ## Quick Start
 
 ```yaml

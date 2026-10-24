@@ -13,10 +13,10 @@
  * the plan, in receipts, or in rendered output. Only the reference
  * (`env:NAME`, `file:PATH`, `stdin`) is ever rendered or persisted.
  */
-import { relative, resolve, sep, isAbsolute } from 'node:path';
+import { relative, resolve, sep, isAbsolute, join } from 'node:path';
 import { revalidateSetupPlan, remainingPlanActions } from './plan-store.js';
 import type { DiscoveryInventory, Observation } from './types.js';
-import { questionId, workspaceSlug } from './interview.js';
+import { questionId } from './interview.js';
 import type {
   ActionReceipt,
   ActionRevalidation,
@@ -153,12 +153,8 @@ export function credentialReferenceFor(
   workspace: string,
   provider: string,
 ): CredentialReference | undefined {
-  const projectRoot = projectRootForWorkspace(plan, workspace);
-  const slug = projectRoot ? workspaceSlug(projectRoot) : undefined;
-  const candidates = Object.entries(plan.answers).filter(([id]) =>
-    id.startsWith('locations.credential-source.') && id.endsWith(`.${provider}`));
-  const scoped = slug ? candidates.find(([id]) => id.includes(`.ws-${slug}.`)) : undefined;
-  const value = (scoped ?? candidates[0])?.[1]?.value;
+  const projectRoot = projectRootForWorkspace(plan, workspace) ?? workspace;
+  const value = plan.answers[questionId('locations', 'credential-source', projectRoot, provider)]?.value;
   return isCredentialReference(value) ? value : undefined;
 }
 
@@ -169,6 +165,11 @@ function isCredentialReference(value: PlanValue | undefined): value is Credentia
 
 /** The inventory project owning a workspace (workspaces may be selected package roots). */
 export function projectRootForWorkspace(plan: SetupPlan, workspace: string): string | undefined {
+  // Selected packages also have their own discovery entry for fact checks,
+  // while their interview answers belong to the selecting monorepo root.
+  const selectedFrom = plan.inventory.projects.find(project => project.packageRoots.includes(workspace) &&
+    plan.answers[questionId('targets', 'root', project.root)]?.value === workspace);
+  if (selectedFrom) return selectedFrom.root;
   if (plan.inventory.projects.some(project => project.root === workspace)) return workspace;
   return plan.inventory.projects.find(project => project.packageRoots.includes(workspace))?.root;
 }
@@ -280,8 +281,10 @@ function splitStale(action: PlannedAction, stale: ActionRevalidation | undefined
     const blocking = stale.changes.filter(change => change.fact.kind !== 'path');
     return { blocking: blocking.length > 0 ? { ...stale, changes: blocking } : undefined, advisory: [] };
   }
-  const blocking = stale.changes.filter(change => change.reason !== 'unobserved');
-  const advisory = stale.changes.filter(change => change.reason === 'unobserved');
+  const isAdvisory = (change: StaleInventoryFact): boolean => change.reason === 'unobserved' &&
+    change.fact.kind === 'tool' && change.fact.field === 'version' && change.before === null && change.after === null;
+  const blocking = stale.changes.filter(change => !isAdvisory(change));
+  const advisory = stale.changes.filter(isAdvisory);
   return { blocking: blocking.length > 0 ? { ...stale, changes: blocking } : undefined, advisory };
 }
 
@@ -311,9 +314,26 @@ async function detectConflicts(
   return conflicts;
 }
 
+/** Saving a plan in the default store itself creates the project's .aiwg directory. */
+async function revalidateForApply(plan: SetupPlan, fresh: DiscoveryInventory, io: PlanReviewIO): Promise<ActionRevalidation[]> {
+  const stale = revalidateSetupPlan(plan, fresh);
+  for (const entry of stale) {
+    const action = plan.actions.find(action => action.id === entry.actionId)!;
+    if (action.kind !== 'register-project') continue;
+    const ownDirectory = join(action.workspace, '.aiwg');
+    if (!entry.changes.some(change => change.fact.kind === 'path' && change.fact.path === ownDirectory &&
+      change.before === false && change.after === true)) continue;
+    if (await io.exists(join(ownDirectory, 'setup', 'plans', `${plan.id}.json`))) {
+      entry.changes = entry.changes.filter(change => !(change.fact.kind === 'path' && change.fact.path === ownDirectory &&
+        change.before === false && change.after === true));
+    }
+  }
+  return stale.filter(entry => entry.changes.length > 0);
+}
+
 /** Read-only review: revalidate facts, compute diffs, destinations, conflicts, and readiness. Writes nothing. */
 export async function reviewGuidedPlan(plan: SetupPlan, fresh: DiscoveryInventory, io: PlanReviewIO, now?: string): Promise<PlanReview> {
-  const stale = revalidateSetupPlan(plan, fresh);
+  const stale = await revalidateForApply(plan, fresh, io);
   const staleByAction = new Map(stale.map(entry => [entry.actionId, entry]));
   const appliedIds = new Set<string>();
   for (const receipt of plan.receipts) {
@@ -424,7 +444,7 @@ export function renderHumanReview(review: PlanReview): string {
         lines.push(`      diff: ${preview.diff}`);
         for (const conflict of preview.conflicts) lines.push(`      conflict: ${conflict.message}`);
         for (const change of preview.stale?.changes ?? []) {
-          lines.push(`      stale: ${describeFact(change.fact)} is ${change.reason}; re-run discovery or re-answer before applying.`);
+          lines.push(`      stale: ${describeFact(change.fact)} is ${change.reason}; re-run discovery and the setup interview before applying.`);
         }
         for (const note of preview.notes) lines.push(`      note: ${note}`);
       }
@@ -570,6 +590,77 @@ function receiptFor(plan: SetupPlan, action: PlannedAction, status: ActionReceip
   return next;
 }
 
+/** Execute an owner without persistence: save failures must abort, never become failed-action receipts. */
+async function executePlanAction(
+  plan: SetupPlan,
+  action: PlannedAction,
+  io: PlanApplyIO,
+  advisoryNote: string,
+): Promise<Pick<AppliedActionResult, 'status' | 'message'>> {
+  if (action.kind === 'configure-jev') {
+    // Never persist owner output or exceptions: either can contain API bytes.
+    try {
+      const recordedOptions = answerFor(plan, action.workspace, 'capabilities', 'jev-options', 'jev');
+      const remove = answerFor(plan, action.workspace, 'capabilities', 'jev') === 'remove';
+      const options = recordedOptions && typeof recordedOptions === 'object' && !Array.isArray(recordedOptions)
+        ? { ...recordedOptions, remove } : { remove };
+      let token: string | undefined;
+      let reference: CredentialReference | undefined;
+      if (!remove) {
+        reference = credentialReferenceFor(plan, action.workspace, 'jev');
+        if (!reference) { return { status: 'skipped', message: 'Jev setup deferred: choose --credential jev=env:NAME|file:PATH|stdin.' }; }
+        const resolved = await resolveCredential(reference, 'jev', io);
+        if (!resolved.ok) { return { status: 'skipped', message: 'Jev setup deferred: API input unavailable; core setup can proceed.' }; }
+        token = resolved.value;
+      }
+      if (!io.owners.configureJev) throw new Error('Missing Jev owner');
+      await io.owners.configureJev({ action, token, options, credential: reference });
+      return { status: 'applied', message: remove ? 'Removed Jev setup through its existing owner.' : 'Configured Jev through its existing owner.' };
+    } catch { return { status: 'failed', message: 'Jev setup failed; retry the existing decision setup command.' }; }
+  }
+  if (action.kind === 'configure-worker-dispatch') {
+    try {
+      if (!io.owners.configureWorkerDispatch) throw new Error('Missing worker owner');
+      await io.owners.configureWorkerDispatch({ action });
+      return { status: 'applied', message: 'Enabled direct workers; doctor qualification succeeded. Launch rechecks availability.' };
+    } catch { return { status: 'failed', message: 'Worker qualification incomplete; installed CLIs remain unqualified. Retry aiwg doctor --probe-workers --qualify.' }; }
+  }
+  if (action.kind === 'configure-provider') {
+    const reference = credentialReferenceFor(plan, action.workspace, action.provider);
+    if (!reference) {
+      return { status: 'skipped', message: `Refused '${action.id}': no credential-reference recorded for ${action.provider}; re-answer locations.credential-source first.` };
+    }
+    const resolved = await resolveCredential(reference, action.provider, io);
+    if (!resolved.ok) {
+      return { status: 'skipped', message: `Refused '${action.id}': ${resolved.message}` };
+    }
+    // The secret value stays in this scope only: owners receive the
+    // reference shape plus a presence bit, never the value.
+    try {
+      const message = await io.owners.configureProvider({ action, configPath: configPathOf(action),
+        credential: reference, credentialPresent: true });
+      return { status: 'applied', message };
+    } catch (error) {
+      return { status: 'failed', message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  try {
+    const message = action.kind === 'verify-provider'
+      ? await io.owners.verifyProvider({ action })
+      : action.kind === 'write-project-config'
+        ? await io.owners.writeProjectConfig({ action })
+        : action.kind === 'deploy-framework'
+          ? await io.owners.deployFramework({ action, intent: answerFor(plan, action.workspace, 'intent', 'use') })
+          : action.kind === 'register-project'
+            ? await io.owners.registerProject({ action })
+            : action.kind === 'record-decline' ? await io.owners.recordDecline({ action })
+              : await Promise.reject(new Error('Unsupported setup action kind.'));
+    return { status: 'applied', message: `${message}${advisoryNote}` };
+  } catch (error) {
+    return { status: 'failed', message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /**
  * Apply remaining actions in dependency order through the injected owners.
  * Stale/unobserved facts are refused (re-ask or re-run discovery), never
@@ -577,7 +668,7 @@ function receiptFor(plan: SetupPlan, action: PlannedAction, status: ActionReceip
  * only `applied` receipts leave `remainingPlanActions`.
  */
 export async function applyGuidedPlan(plan: SetupPlan, fresh: DiscoveryInventory, io: PlanApplyIO): Promise<{ plan: SetupPlan; result: PlanApplyResult }> {
-  const staleByAction = new Map(revalidateSetupPlan(plan, fresh).map(entry => [entry.actionId, entry]));
+  const staleByAction = new Map((await revalidateForApply(plan, fresh, io)).map(entry => [entry.actionId, entry]));
   const install = await io.installMode();
   let current = plan;
   const results: AppliedActionResult[] = [];
@@ -596,79 +687,14 @@ export async function applyGuidedPlan(plan: SetupPlan, fresh: DiscoveryInventory
     }
     if (stale) {
       const first = stale.changes[0];
-      await record('skipped', `Refused '${action.id}': ${describeFact(first.fact)} is ${first.reason} (was ${formatFactValue(first.before)}, now ${formatFactValue(first.after)}); re-run discovery or re-answer before applying.`);
+      await record('skipped', `Refused '${action.id}': ${describeFact(first.fact)} is ${first.reason} (was ${formatFactValue(first.before)}, now ${formatFactValue(first.after)}); re-run discovery and the setup interview before applying.`);
       continue;
     }
     const advisoryNote = advisory.length > 0
       ? ` (note: ${advisory.map(change => `${describeFact(change.fact)} unobserved; qualified from fresh inventory`).join(', ')})`
       : '';
-    if (action.kind === 'configure-jev') {
-      // Never persist owner output or exceptions: either can contain API bytes.
-      try {
-        const recordedOptions = answerFor(current, action.workspace, 'capabilities', 'jev-options', 'jev');
-        const remove = answerFor(current, action.workspace, 'capabilities', 'jev') === 'remove';
-        const options = recordedOptions && typeof recordedOptions === 'object' && !Array.isArray(recordedOptions)
-          ? { ...recordedOptions, remove } : { remove };
-        let token: string | undefined;
-        let reference: CredentialReference | undefined;
-        if (!remove) {
-          reference = credentialReferenceFor(current, action.workspace, 'jev');
-          if (!reference) { await record('skipped', 'Jev setup deferred: choose --credential jev=env:NAME|file:PATH|stdin.'); continue; }
-          const resolved = await resolveCredential(reference, 'jev', io);
-          if (!resolved.ok) { await record('skipped', 'Jev setup deferred: API input unavailable; core setup can proceed.'); continue; }
-          token = resolved.value;
-        }
-        if (!io.owners.configureJev) throw new Error('Missing Jev owner');
-        await io.owners.configureJev({ action, token, options, credential: reference });
-        await record('applied', remove ? 'Removed Jev setup through its existing owner.' : 'Configured Jev through its existing owner.');
-      } catch { await record('failed', 'Jev setup failed; retry the existing decision setup command.'); }
-      continue;
-    }
-    if (action.kind === 'configure-worker-dispatch') {
-      try {
-        if (!io.owners.configureWorkerDispatch) throw new Error('Missing worker owner');
-        await io.owners.configureWorkerDispatch({ action });
-        await record('applied', 'Enabled direct workers; doctor qualification succeeded. Launch rechecks availability.');
-      } catch { await record('failed', 'Worker qualification incomplete; installed CLIs remain unqualified. Retry aiwg doctor --probe-workers --qualify.'); }
-      continue;
-    }
-    if (action.kind === 'configure-provider') {
-      const reference = credentialReferenceFor(current, action.workspace, action.provider);
-      if (!reference) {
-        await record('skipped', `Refused '${action.id}': no credential-reference recorded for ${action.provider}; re-answer locations.credential-source first.`);
-        continue;
-      }
-      const resolved = await resolveCredential(reference, action.provider, io);
-      if (!resolved.ok) {
-        await record('skipped', `Refused '${action.id}': ${resolved.message}`);
-        continue;
-      }
-      // The secret value stays in this scope only: owners receive the
-      // reference shape plus a presence bit, never the value.
-      try {
-        const message = await io.owners.configureProvider({ action, configPath: configPathOf(action),
-          credential: reference, credentialPresent: true });
-        await record('applied', message);
-      } catch (error) {
-        await record('failed', error instanceof Error ? error.message : String(error));
-      }
-      continue;
-    }
-    try {
-      const message = action.kind === 'verify-provider'
-        ? await io.owners.verifyProvider({ action })
-        : action.kind === 'write-project-config'
-          ? await io.owners.writeProjectConfig({ action })
-          : action.kind === 'deploy-framework'
-            ? await io.owners.deployFramework({ action, intent: answerFor(current, action.workspace, 'intent', 'use') })
-            : action.kind === 'register-project'
-              ? await io.owners.registerProject({ action })
-              : action.kind === 'record-decline' ? await io.owners.recordDecline({ action })
-                : await Promise.reject(new Error('Unsupported setup action kind.'));
-      await record('applied', `${message}${advisoryNote}`);
-    } catch (error) {
-      await record('failed', error instanceof Error ? error.message : String(error));
-    }
+    const outcome = await executePlanAction(current, action, io, advisoryNote);
+    await record(outcome.status, outcome.message);
   }
   const core = results.filter(result => !result.optional);
   const coreBad = core.filter(result => result.status !== 'applied');

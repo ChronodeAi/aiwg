@@ -113,11 +113,19 @@ function factValue(inventory: DiscoveryInventory, fact: InventoryFact): unknown 
   return false;
 }
 
+/** Successful config owners establish these paths as present for subsequent actions. */
+function createdByAppliedConfig(plan: SetupPlan, fact: InventoryFact): boolean {
+  if (fact.kind !== 'path' || ![join(fact.workspace, '.aiwg'), join(fact.workspace, '.aiwg', 'aiwg.config')].includes(fact.path)) return false;
+  return plan.actions.some(action => action.workspace === fact.workspace &&
+    ['write-project-config', 'configure-worker-dispatch', 'record-decline'].includes(action.kind) &&
+    plan.receipts.some(receipt => receipt.workspace === action.workspace && receipt.actions[action.id]?.status === 'applied'));
+}
+
 /** Pure comparison of local observations. Does not inspect paths, execute tools, or authorize apply. */
 export function revalidateSetupPlan(plan: SetupPlan, fresh: DiscoveryInventory): ActionRevalidation[] {
   return plan.actions.flatMap(action => {
     const changes: StaleInventoryFact[] = action.dependsOn.flatMap(fact => {
-      const before = factValue(plan.inventory, fact);
+      const before = createdByAppliedConfig(plan, fact) ? true : factValue(plan.inventory, fact);
       const after = factValue(fresh, fact);
       let reason: StaleInventoryFact['reason'] | undefined;
       if (before === undefined || after === undefined || before === 'unknown' || after === 'unknown') reason = 'unobserved';

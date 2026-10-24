@@ -86,6 +86,7 @@ describe('guided setup review and apply', () => {
 
   it('passes Jev bytes only on owner stdin at apply; output and receipts stay canary-free', async () => {
     await integrationPlan('jev', { kind: 'credential-ref', source: 'env', name: SENTINEL_ENV }, { region: 'eu', verify: true });
+    vi.mocked(boundedSpawnSync).mockReturnValue({ status: 0, stdout: JSON.stringify({ verified: true }), stderr: '' } as never);
     expect(readFileSync(planPath(), 'utf8')).not.toContain(SENTINEL_VALUE);
     const review = await setupHandler.execute(harness.ctx(['--review', '--json']));
     expect(review.message).not.toContain(SENTINEL_VALUE);
@@ -98,6 +99,17 @@ describe('guided setup review and apply', () => {
     expect(call[3]).toMatchObject({ cwd: harness.project, input: `${SENTINEL_VALUE}\n`, stdio: ['pipe', 'pipe', 'pipe'] });
     expect(`${result.message}${readFileSync(planPath(), 'utf8')}${JSON.stringify(vi.mocked(console.log).mock.calls)}`).not.toContain(SENTINEL_VALUE);
   });
+
+  it.each([JSON.stringify({ verified: false }), JSON.stringify({}), 'invalid-json'])(
+    'keeps Jev retryable when requested verification is incomplete (%s)', async stdout => {
+      await integrationPlan('jev', { kind: 'credential-ref', source: 'env', name: SENTINEL_ENV }, { verify: true });
+      vi.mocked(boundedSpawnSync).mockReturnValue({ status: 0, stdout, stderr: '' } as never);
+      const result = await setupHandler.execute(harness.ctx(['--apply', '--yes', '--json']));
+      expect(JSON.parse(result.message!)).toMatchObject({ classification: 'partial', results: [{ status: 'failed', optional: true }] });
+      const saved: SetupPlan = JSON.parse(readFileSync(planPath(), 'utf8'));
+      expect(saved.receipts.flatMap(receipt => Object.values(receipt.actions))).toEqual([expect.objectContaining({ status: 'failed' })]);
+      expect(readFileSync(planPath(), 'utf8')).not.toContain(SENTINEL_VALUE);
+    });
 
   it('removes Jev through the existing owner without resolving any API input', async () => {
     await initHandler.execute(harness.ctx(['--remove', '--yes']));

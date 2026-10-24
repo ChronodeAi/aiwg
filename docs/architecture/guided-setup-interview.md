@@ -369,3 +369,68 @@ New files:
   optional capability declined or skipped yields no corresponding action
   and no config fragment, and `remainingPlanActions`
   (`src/discovery/plan-store.ts:88-91`) never resurrects it.
+
+### A6 regression evidence
+
+- `test/unit/discovery/plan-apply.test.ts` persists and reloads receipts for
+  success, failed/skipped retries, and interruptions after core, Jev, and
+  worker actions. Receipt persistence errors abort the run before another
+  owner executes; they never overwrite an applied receipt with a failure.
+  A second successful apply invokes no owners and saves no plan.
+- Successful config receipts explain only the appearance of `.aiwg` and
+  `.aiwg/aiwg.config` in the same workspace. Unrelated path changes, missing
+  paths, tool changes, and unknown layout facts still block dependent
+  actions. A version unknown in both snapshots remains advisory for the
+  read-only provider check; losing a previously observed version blocks it.
+  Review/apply also recognize `.aiwg` creation by the default plan store
+  when that directory contains the exact saved plan file; an unrelated
+  directory appearing without that file remains stale.
+- `test/unit/cli/guided-setup-parity.test.ts` compares mocked interactive
+  answers against flags across fresh/existing installs, zero/one/multiple
+  workers, project/user scope and conflicting settings, and monorepo
+  root/package choices. It compares normalized plans, review and apply
+  results, receipts, and cancellation persistence.
+- `test/unit/discovery/interview-paths.test.ts` injects POSIX and Windows
+  path operations for Linux, macOS, Windows (including UNC), and WSL.
+  Workspace slugs use a bounded portable basename and a digest of the
+  discovery-canonical root. Config destinations and opaque credential-file
+  locators use the selected path flavour without touching those files.
+- `test/integration/guided-setup-walkthrough.test.ts` runs the built CLI
+  interview → review → apply → review in a temporary HOME/project. A fake
+  provider executable supplies presence; a strict fetch stub verifies Jev
+  without network access. Actual deployment verification, project config,
+  registry, applied receipts, and final readiness are asserted. Repeated
+  apply preserves project/plan bytes and modification times.
+- `test/contract/setup-manifest-site-dispatch.test.mjs` checks the published
+  provider-orchestrated sequencing and documented setup options against
+  CLI help and executable dispatch. The manifest remains provider mode.
+
+### Known limitations
+
+- Resume checkpoints occur after each completed action. A process lost
+  after an external effect but before its receipt is saved may repeat that
+  effect; this is not an exactly-once transaction or rollback mechanism.
+  Apply one writer per plan; concurrent apply runs are not serialized.
+- Revalidation compares the inventory's selected facts (including path
+  presence), not file-content hashes or remote authentication state. It
+  cannot detect arbitrary edits to a file that remains present. After a
+  stale refusal, repeat the interview to refresh discovery, review the new
+  plan, then apply it.
+- Provider verification reports executable presence and config read-back;
+  it does not make paid authentication/model calls. Deployment verification
+  checks the existing deployment owner's output. The offline walkthrough
+  demonstrates these local guarantees and a synthetic Jev response, not
+  live service availability on every operating system.
+- `--scope user` changes provider deployment scope; project policy and the
+  registry still belong to the selected workspace. `configure-provider`
+  preserves existing files and writes no provider configuration itself;
+  framework deployment owns those files. Credential references remain
+  workspace/provider scoped, including selected packages.
+- Worker qualification is historical evidence. Review keeps current worker
+  launch readiness pending until launch rechecks it; installed or previously
+  qualified CLIs do not imply current availability. A failed optional
+  integration leaves core receipts intact and exits with partial success.
+- Plans retain v1 compatibility. Legacy plans with platform-dependent IDs
+  can be addressed with `--plan`; repeating the interview uses the current
+  portable slug. Cross-platform fixtures exercise planning semantics, not
+  native shell/deployment execution on each OS.

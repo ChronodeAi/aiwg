@@ -35,15 +35,32 @@ The agent should:
 
 1. confirm the project root and provider;
 2. inspect the installed AIWG version and ownership;
-3. preview installation, deployment, and context changes;
-4. request approval where project policy requires it or a choice needs your input;
-5. connect the complete supported AIWG surface to the selected provider;
-6. preserve project-authored instructions and unrelated work; and
-7. run the engagement check and explain the result.
+3. repair or install the CLI only after the proposed changes are approved;
+4. run the guided interview to save scope, provider, usage, and optional integration choices;
+5. review the saved plan, including conflicts and actions that are not ready;
+6. apply the approved plan while preserving project-authored instructions; and
+7. explain the core readiness and optional integration results.
 
 If the agent cannot determine the project folder, tell it which folder contains
 your project and ask it to reopen or continue from there. Do not approve a path
 that points at your home directory or an unrelated repository.
+
+## Interview, review, apply
+
+After installing the CLI, the same guided flow is available in a terminal:
+
+```bash
+aiwg setup --scope project --providers claude
+aiwg setup --review
+aiwg setup --apply
+```
+
+Replace `claude` with your provider. The interview saves answers and credential
+references, then stops before configuration changes. Review writes nothing.
+Apply asks for confirmation, runs the selected actions, and saves progress after
+each action. Jev and direct workers are optional and require explicit opt-in.
+Use the [guided setup reference](guided-setup.md) for headless commands, multiple
+providers, monorepos, scopes, cancellation, and resuming a partial run.
 
 ## Provider handoff
 
@@ -73,7 +90,8 @@ asking you to restart by default.
 
 ## Verify the result
 
-Paste this after setup:
+The apply report is the first readiness evidence. For an independent later
+check, paste:
 
 ```text
 Is AIWG active in this project? Read the canonical engagement evidence and
