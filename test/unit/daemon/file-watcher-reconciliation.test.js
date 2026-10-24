@@ -64,7 +64,7 @@ describe('FileWatcher reconciliation', () => {
       // Control ctime independently of filesystem timestamp resolution.
       return target === a ? Object.assign(stat, { ctimeMs: ctime }) : stat;
     };
-    filesystem.readFileSync = vi.fn(() => { throw new Error('scan must not read contents'); });
+    filesystem.readFileSync = vi.fn(() => { throw new Error('stable files must not be read'); });
     start({}, { filesystem }); await advance();
     expect(view.get(a)).toBe('old');
     const before = filesystem.statSync(a);
@@ -79,7 +79,9 @@ describe('FileWatcher reconciliation', () => {
     fs.unlinkSync(a);
     await advance(100);
     expect(view).toEqual(new Map([[b, 'added']]));
-    expect(filesystem.readFileSync).not.toHaveBeenCalled();
+    // The stable file converged by ctime alone; only the freshly written b.md
+    // is inside the racy window and may be hashed.
+    expect(filesystem.readFileSync.mock.calls.filter(([target]) => target === a)).toEqual([]);
   });
 
   it('detects a same-size atomic replacement through inode even with identical timestamps', async () => {
@@ -138,6 +140,42 @@ describe('FileWatcher reconciliation', () => {
     await advance(50);
     expect(view.get(a)).toBe('returned');
     expect(watcher.getStats().unavailable_roots).toEqual([]);
+  });
+
+  it('detects a same-size rewrite inside one timestamp tick (racy stat signature)', async () => {
+    const a = write('a.md', 'old');
+    const pinned = { mtimeMs: Date.now(), ctimeMs: Date.now() };
+    const filesystem = Object.create(fs);
+    // Coarse timestamps: the rewrite keeps size, inode, mtime and ctime.
+    filesystem.statSync = target => {
+      const stat = fs.statSync(target);
+      return target === a ? Object.assign(stat, pinned) : stat;
+    };
+    start({}, { filesystem }); await advance();
+    expect(view.get(a)).toBe('old');
+    write('a.md', 'new');
+    watcher.reconcile(); await advance();
+    expect(view.get(a)).toBe('new');
+    // Once the content hash matches again, no further events are emitted.
+    const count = events.length;
+    watcher.reconcile(); await advance();
+    expect(events).toHaveLength(count);
+  });
+
+  it('never reads files whose timestamps are outside the racy window', async () => {
+    const a = write('a.md', 'old');
+    const time = new Date('2020-01-01T00:00:00Z');
+    fs.utimesSync(a, time, time);
+    const filesystem = Object.create(fs);
+    filesystem.statSync = target => {
+      const stat = fs.statSync(target);
+      return target === a ? Object.assign(stat, { ctimeMs: time.getTime() }) : stat;
+    };
+    filesystem.readFileSync = vi.fn(fs.readFileSync);
+    start({}, { filesystem }); await advance();
+    watcher.reconcile(); await advance(200);
+    expect(view.get(a)).toBe('old');
+    expect(filesystem.readFileSync.mock.calls.filter(([target]) => target === a)).toEqual([]);
   });
 
   it.each(['ENOENT', 'EACCES', 'ENOTCONN', 'EIO'])('retains the good snapshot while the root returns %s', async code => {

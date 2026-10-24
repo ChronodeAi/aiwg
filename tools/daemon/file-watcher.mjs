@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'events';
 
 const inside = (root, candidate) => {
@@ -7,6 +8,12 @@ const inside = (root, candidate) => {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 };
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+// Filesystem timestamps are coarse (often a few ms, up to seconds on network or
+// overlay filesystems). A same-size rewrite inside one timestamp tick keeps the
+// whole stat signature, so files modified this recently are "racy" (as in git's
+// racy-clean check): their contents are hashed once, and compared on the next
+// scan even when the stat signature is unchanged. Stable files are never read.
+const RACY_WINDOW_MS = 2000;
 
 export class FileWatcher extends EventEmitter {
   // Timers use the ambient clock (injectable by fake timers); filesystem and
@@ -41,7 +48,7 @@ export class FileWatcher extends EventEmitter {
     this.pendingRoots.clear();
     this.generation++;
     this.roots = this.config.paths.map(config => ({ config, path: path.resolve(config.path),
-      state: new Map(), available: false, polling: config.polling ?? this.config.polling ?? false,
+      state: new Map(), hashes: new Map(), available: false, polling: config.polling ?? this.config.polling ?? false,
       watcher: null, identity: null, incompletePaths: [] }));
     this.reconcile();
     // Recovery probing remains enabled even if routine reconciliation is off.
@@ -120,11 +127,18 @@ export class FileWatcher extends EventEmitter {
 
   scan(root) {
     const state = new Map();
+    const hashes = new Map();
+    const changed = new Set();
     const incompletePaths = [];
+    const scanStart = Date.now();
+    const previousHashes = root.hashes ?? new Map();
     const stat = this.fs.statSync(root.path);
     const preserve = (filepath, error) => {
       for (const [previous, signature] of root.state) {
         if (inside(filepath, previous)) state.set(previous, signature);
+      }
+      for (const [previous, digest] of previousHashes) {
+        if (inside(filepath, previous)) hashes.set(previous, digest);
       }
       incompletePaths.push(filepath);
       this.emit('scan-incomplete', { path: filepath, code: error.code, error });
@@ -147,14 +161,30 @@ export class FileWatcher extends EventEmitter {
           try {
             const { size, mtimeMs, ctimeMs, ino } = this.fs.statSync(filepath);
             // ctime detects writes with restored mtime; ino detects atomic saves.
-            state.set(filepath, `${size}:${mtimeMs}:${ctimeMs}:${ino}`);
+            const signature = `${size}:${mtimeMs}:${ctimeMs}:${ino}`;
+            state.set(filepath, signature);
+            const racy = Math.max(mtimeMs, ctimeMs) >= scanStart - RACY_WINDOW_MS;
+            const recheck = previousHashes.has(filepath) && root.state.get(filepath) === signature;
+            if (racy || recheck) {
+              const digest = this.contentDigest(filepath);
+              if (digest !== null) {
+                if (racy) hashes.set(filepath, digest);
+                if (recheck && digest !== previousHashes.get(filepath)) changed.add(filepath);
+              }
+            }
           } catch (error) { preserve(filepath, error); }
         }
         // Symlinks are not followed: no loops or traversal outside a root.
       }
     };
     visit(root.path);
-    return { state, identity: `${stat.dev}:${stat.ino}`, incompletePaths };
+    return { state, hashes, changed, identity: `${stat.dev}:${stat.ino}`, incompletePaths };
+  }
+
+  // Unreadable racy files fall back to the stat signature alone.
+  contentDigest(filepath) {
+    try { return createHash('sha256').update(this.fs.readFileSync(filepath)).digest('hex'); }
+    catch { return null; }
   }
 
   reconcile(roots = this.roots) {
@@ -191,13 +221,14 @@ export class FileWatcher extends EventEmitter {
       for (const filepath of paths) {
         const before = root.state.get(filepath);
         const after = next.state.get(filepath);
-        if (before === after) continue;
+        if (before === after && !next.changed?.has(filepath)) continue;
         let type = before === undefined ? 'create' : after === undefined ? 'delete' : 'modify';
         // A modify-only subscription still needs startup/restart catch-up.
         if (type === 'create' && root.config.events?.includes('modify') && !root.config.events.includes('create')) type = 'modify';
         if (!root.config.events || root.config.events.includes(type)) changes.set(filepath, type);
       }
       root.state = next.state;
+      root.hashes = next.hashes ?? new Map();
     }
     // Attach shallowest first; logical nested roots still get independent scans.
     for (const root of [...this.roots].sort((a, b) => a.path.length - b.path.length || compare(a.path, b.path))) {
