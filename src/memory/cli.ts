@@ -27,7 +27,23 @@ export async function main(args: string[]): Promise<void> {
     const opts = parseMemoryAuditOptions(args.slice(1));
     if (opts.help) { console.log(MEMORY_AUDIT_USAGE); return; }
     const report = await auditMemory(opts);
+    if (opts.cost) {
+      const { costMemory, formatMemoryCost } = await import('./cost.js');
+      const cost = costMemory(report);
+      console.log(opts.json ? JSON.stringify(cost, null, 2) : formatMemoryCost(cost));
+      return;
+    }
     console.log(opts.json ? JSON.stringify(report, null, 2) : formatMemoryAudit(report));
+    return;
+  }
+  if (args[0] === 'cost') {
+    const { auditMemory } = await import('./audit.js');
+    const { costMemory, formatMemoryCost } = await import('./cost.js');
+    const opts = parseMemoryCostOptions(args.slice(1));
+    if (opts.help) { console.log(MEMORY_COST_USAGE); return; }
+    const report = await auditMemory(opts);
+    const cost = costMemory(report, await resolveMemoryCostInputs(opts));
+    console.log(opts.json ? JSON.stringify(cost, null, 2) : formatMemoryCost(cost));
     return;
   }
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
@@ -169,27 +185,42 @@ project memory root uses a private .aiwg layout under ~/.aiwg/projects/<id>/.aiw
 }
 
 
-export const MEMORY_AUDIT_USAGE = `Usage: aiwg memory audit [--scope global|project|provider] [--provider <id>] [--json]
+export const MEMORY_AUDIT_USAGE = `Usage: aiwg memory audit [--scope global|project|provider] [--provider <id>] [--json] [--cost]
+       aiwg memory cost [--scope global|project|provider] [--provider <id>] [--json] [--demote <id|path> ...] [--startup-measurement <file>] [--usage <file>]
 
 Read-only static memory and instruction inventory. Defaults to this workspace;
 global roots require --scope global. --scope provider requires --provider <id>.
 Reports include exposure chains, unavailable/opaque surfaces and scan bounds.
 Static eligibility does not establish live context loading. JSON: aiwg.memory-audit.v1.
+--cost renders the same inventory through the resident-cost view (JSON: aiwg.memory-cost.v1).
+The cost subcommand adds --demote previews, a #2936 startup-measurement report
+and caller-supplied usage evidence; all views are read-only and write nothing.
 Other memory subcommands: path, list, get, put, delete, append-log, project.`;
 
+export const MEMORY_COST_USAGE = `Usage: aiwg memory cost [--scope global|project|provider] [--provider <id>] [--json] [--demote <id|path> ...] [--startup-measurement <file>] [--usage <file>]
+
+Read-only resident context cost and memory utility over the static audit inventory.
+Token estimates reuse the existing UTF-8 bytes estimators (#2936 startup measure,
+#2938 inline-budget guard); no new tokenizer. Anything not measurable locally
+stays unknown, never guessed. --demote previews before/after cost with the
+retrieval anchors required to keep demoted content reachable. --usage reads a
+JSON object of { "<item-id>": { retrieved, used, rejected, evidence } } held in
+memory only. JSON: aiwg.memory-cost.v1. Writes nothing.`;
+
 export function parseMemoryAuditOptions(args: string[]): {
-  scope?: 'global' | 'project' | 'provider'; provider?: string; json?: boolean; help?: boolean;
+  scope?: 'global' | 'project' | 'provider'; provider?: string; json?: boolean; help?: boolean; cost?: boolean;
 } {
   const opts: ReturnType<typeof parseMemoryAuditOptions> = {};
   const seen = new Set<string>();
   for (let index = 0; index < args.length; index++) {
     const [flag, inline, ...extra] = args[index].split('=');
-    if (!['--scope', '--provider', '--json', '--help', '-h'].includes(flag) || extra.length) throw new Error(`Unknown memory audit argument: ${args[index]}`);
+    if (!['--scope', '--provider', '--json', '--cost', '--help', '-h'].includes(flag) || extra.length) throw new Error(`Unknown memory audit argument: ${args[index]}`);
     if (seen.has(flag)) throw new Error(`Duplicate memory audit option: ${flag}`);
     seen.add(flag);
-    if (flag === '--json' || flag === '--help' || flag === '-h') {
+    if (flag === '--json' || flag === '--cost' || flag === '--help' || flag === '-h') {
       if (inline !== undefined) throw new Error(`${flag} takes no value`);
       if (flag === '--json') opts.json = true;
+      else if (flag === '--cost') opts.cost = true;
       else opts.help = true;
       continue;
     }
@@ -202,4 +233,73 @@ export function parseMemoryAuditOptions(args: string[]): {
   }
   if (opts.scope === 'provider' && !opts.provider && !opts.help) throw new Error('--scope provider requires --provider <id>');
   return opts;
+}
+
+export interface MemoryCostCliOptions {
+  scope?: 'global' | 'project' | 'provider';
+  provider?: string;
+  json?: boolean;
+  help?: boolean;
+  demote: string[];
+  startupMeasurement?: string;
+  usage?: string;
+}
+
+export function parseMemoryCostOptions(args: string[]): MemoryCostCliOptions {
+  const opts: MemoryCostCliOptions = { demote: [] };
+  const once = new Set<string>();
+  for (let index = 0; index < args.length; index++) {
+    const [flag, inline, ...extra] = args[index].split('=');
+    if (!['--scope', '--provider', '--json', '--demote', '--startup-measurement', '--usage', '--help', '-h'].includes(flag) || extra.length) {
+      throw new Error(`Unknown memory cost argument: ${args[index]}`);
+    }
+    if (flag !== '--demote') {
+      if (once.has(flag)) throw new Error(`Duplicate memory cost option: ${flag}`);
+      once.add(flag);
+    }
+    if (flag === '--json' || flag === '--help' || flag === '-h') {
+      if (inline !== undefined) throw new Error(`${flag} takes no value`);
+      if (flag === '--json') opts.json = true;
+      else opts.help = true;
+      continue;
+    }
+    const value = inline ?? args[++index];
+    if (!value || value.startsWith('-')) throw new Error(`${flag} requires a value`);
+    if (flag === '--scope') {
+      if (!['global', 'project', 'provider'].includes(value)) throw new Error('--scope must be global, project or provider');
+      opts.scope = value as NonNullable<MemoryCostCliOptions['scope']>;
+    } else if (flag === '--provider') opts.provider = value;
+    else if (flag === '--demote') opts.demote.push(value);
+    else if (flag === '--startup-measurement') opts.startupMeasurement = value;
+    else opts.usage = value;
+  }
+  if (opts.scope === 'provider' && !opts.provider && !opts.help) throw new Error('--scope provider requires --provider <id>');
+  return opts;
+}
+
+/** Read-only input resolution for the cost view. Reads input files; writes nothing. */
+export async function resolveMemoryCostInputs(opts: MemoryCostCliOptions): Promise<{
+  usage?: Record<string, { retrieved?: boolean; used?: boolean; rejected?: boolean; evidence?: string }>;
+  startupMeasurement?: unknown;
+  demote?: string[];
+}> {
+  const fs = await import('node:fs/promises');
+  const readJson = async (file: string, label: string): Promise<unknown> => {
+    let text: string;
+    try {
+      text = await fs.readFile(file, 'utf8');
+    } catch (error) {
+      throw new Error(`${label} could not be read: ${(error as NodeJS.ErrnoException).message}`);
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`${label} is not valid JSON: ${file}`);
+    }
+  };
+  return {
+    usage: opts.usage ? (await readJson(opts.usage, 'Usage evidence')) as Record<string, { retrieved?: boolean; used?: boolean; rejected?: boolean; evidence?: string }> : undefined,
+    startupMeasurement: opts.startupMeasurement ? await readJson(opts.startupMeasurement, 'Startup measurement') : undefined,
+    demote: opts.demote.length ? [...opts.demote] : undefined,
+  };
 }

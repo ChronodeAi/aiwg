@@ -92,6 +92,8 @@ describe('version launcher entrypoint', () => {
   it.each([
     { args: ['memory', 'audit'], expected: true },
     { args: ['memory', 'audit', '--json', '--write'], expected: true },
+    { args: ['memory', 'cost'], expected: true },
+    { args: ['memory', 'cost', '--demote', 'synthetic'], expected: true },
     { args: ['memory', '--help'], expected: true },
     { args: ['help', 'memory'], expected: true },
     { args: ['memory', 'put', 'page.md'], expected: false },

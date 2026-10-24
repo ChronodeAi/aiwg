@@ -5559,13 +5559,16 @@ Storage operations on the AIWG memory subsystem. Routes through `resolveStorage(
 aiwg memory <subcommand>
 ```
 
-**Subcommands:** `audit` / `path` / `list` / `get` / `put` / `delete` / `append-log` / `project`.
+**Subcommands:** `audit` / `cost` / `path` / `list` / `get` / `put` / `delete` / `append-log` / `project`.
 
 **Examples:**
 
 ```bash
 aiwg memory audit --provider codex --json                 # read-only static workspace inventory
 aiwg memory audit --scope global --provider claude        # explicit user scope
+aiwg memory audit --provider claude --cost                # resident-cost view of the same inventory
+aiwg memory cost --provider claude --json                 # versioned cost report (aiwg.memory-cost.v1)
+aiwg memory cost --demote <id> --startup-measurement report.json  # demotion preview vs measured startup
 aiwg memory path                                         # resolved root (fs only)
 aiwg memory list --prefix research-complete/
 aiwg memory get research-complete/index.md
@@ -5575,6 +5578,8 @@ echo '{"op":"ingest","summary":"foo"}' \
 ```
 
 **`append-log` semantics:** reads a single JSON object from stdin, appends as one JSONL line. Atomic via `adapter.append` (#976) on backends that support it.
+
+**`audit --cost` / `cost` semantics (#3281):** read-only resident context cost and memory utility over the static audit inventory. Tokens and bytes are attributed per item to resident instructions, roles, rules, skills, tool schemas, native memory, and imported or duplicated content, each with an estimator name and confidence. Estimates reuse the existing UTF-8 bytes estimators — per-file `ceil(bytes / 4)` from `tools/rules/measure-startup-context.mjs` (#2936) and the `bytes / 4` guard report from `src/rules/inline-budget.mjs` (#2938) — and add no new tokenizer. The report separates startup residency, per-task injection, repeated tool/context overhead, actual usage/billing, and provider cache discounts; anything not measurable from local evidence stays `unknown`, never a guessed number. Retrieval, exposure, successful use, rejection, and unknown outcome are recorded independently; by default no new persistent telemetry is written (caller-supplied `--usage` evidence is held in memory only — to persist utility observations, reuse the existing memory log via `aiwg memory append-log`). `--demote <id|path>` previews before/after cost with the retrieval anchors required to keep demoted content reachable; an imported or linked loaded body never counts as zero cost. JSON schema: `schemas/memory/memory-cost.v1.schema.json`. Both views write nothing.
 
 ---
 
