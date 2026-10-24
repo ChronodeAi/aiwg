@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyGuidedPlan,
+  credentialReferenceFor,
   renderHumanReview,
   reviewGuidedPlan,
   sortPlanActionsForApply,
@@ -12,7 +13,7 @@ import {
   type PlanReviewIO,
 } from '../../../src/discovery/plan-apply.js';
 import { buildInterviewPlan, questionId } from '../../../src/discovery/interview.js';
-import { remainingPlanActions } from '../../../src/discovery/plan-store.js';
+import { readSetupPlan, remainingPlanActions, revalidateSetupPlan, writeSetupPlan } from '../../../src/discovery/plan-store.js';
 import type { DiscoveryInventory } from '../../../src/discovery/types.js';
 import type { SetupAnswer, SetupPlan } from '../../../src/discovery/plan-types.js';
 
@@ -95,6 +96,12 @@ beforeEach(() => {
   scratch = mkdtempSync(join(tmpdir(), 'aiwg-plan-apply-'));
   project = join(scratch, 'project');
   mkdirSync(project, { recursive: true });
+  vi.stubEnv('HOME', join(scratch, 'home'));
+  vi.stubEnv('XDG_CONFIG_HOME', join(scratch, 'config'));
+  vi.stubEnv('AIWG_PROJECT_MEMORY_HOME', join(scratch, 'memory'));
+  vi.stubEnv('AIWG_ARTIFACTS_PATH', '');
+  vi.stubEnv('AIWG_PROJECT_ARTIFACTS_PATH', '');
+  vi.stubEnv('AIWG_PROJECT_AIWG_DIR', '');
 });
 
 afterEach(() => {
@@ -103,6 +110,23 @@ afterEach(() => {
 });
 
 describe('guided plan review (dry run)', () => {
+  it('never uses another workspace credential and resolves selected packages through their owning project', () => {
+    const inventory = inventoryFor(project);
+    const other = `${project}-other`;
+    inventory.projects.push(inventoryFor(other).projects[0]);
+    inventory.projects[0].packageRoots = [join(project, 'packages', 'app')];
+    const plan = buildPlan(inventory);
+    const reference = { kind: 'credential-ref', source: 'env', name: SENTINEL_ENV };
+    expect(credentialReferenceFor(plan, project, 'codex')).toEqual(reference);
+    expect(credentialReferenceFor(plan, inventory.projects[0].packageRoots[0], 'codex')).toEqual(reference);
+    expect(credentialReferenceFor(plan, other, 'codex')).toBeUndefined();
+    expect(credentialReferenceFor(plan, project, 'jev')).toBeUndefined();
+    const selectedPackage = inventory.projects[0].packageRoots[0];
+    plan.inventory.projects.push(inventoryFor(selectedPackage).projects[0]);
+    plan.answers[questionId('targets', 'root', project)] = answer(selectedPackage);
+    expect(credentialReferenceFor(plan, selectedPackage, 'codex')).toEqual(reference);
+  });
+
   it('renders per workspace and provider without writing anything', async () => {
     const inventory = inventoryFor(project);
     const plan = buildPlan(inventory);
@@ -172,6 +196,150 @@ describe('guided plan review (dry run)', () => {
 });
 
 describe('guided plan apply', () => {
+  it('recognizes its own saved plan directory without accepting unrelated directory creation', async () => {
+    vi.stubEnv(SENTINEL_ENV, SENTINEL_VALUE);
+    const inventory = inventoryFor(project);
+    const plan = buildPlan(inventory);
+    const fresh = structuredClone(inventory);
+    fresh.projects[0].aiwg.directory = true;
+    const beforeSave = await reviewGuidedPlan(plan, fresh, reviewIO());
+    expect(beforeSave.actions.find(action => action.kind === 'register-project')?.status).toBe('stale');
+    await writeSetupPlan(project, plan, {});
+    const saved = await readSetupPlan(project, plan.id, {});
+    const review = await reviewGuidedPlan(saved, fresh, reviewIO());
+    expect(review.actions.every(action => action.status === 'ready')).toBe(true);
+    const io = applyIO();
+    io.save = async next => { await writeSetupPlan(project, next, {}); };
+    const applied = await applyGuidedPlan(saved, fresh, io);
+    expect(applied.result.classification).toBe('success');
+    expect(remainingPlanActions(await readSetupPlan(project, plan.id, {}))).toEqual([]);
+  });
+
+  it('re-applying a successful persisted plan writes nothing and retains applied receipts', async () => {
+    vi.stubEnv(SENTINEL_ENV, SENTINEL_VALUE);
+    const inventory = inventoryFor(project);
+    const plan = buildPlan(inventory);
+    const io = applyIO();
+    io.save = async next => { await writeSetupPlan(project, next); };
+    const applied = await applyGuidedPlan(plan, inventory, io);
+    const saved = await readSetupPlan(project, plan.id);
+    const before = snapshotTree(scratch);
+    io.save = vi.fn(io.save);
+    for (const key of Object.keys(io.owners) as Array<keyof typeof io.owners>) io.owners[key] = vi.fn(io.owners[key]) as never;
+    const rerun = await applyGuidedPlan(saved, inventory, io);
+    expect(rerun.result).toMatchObject({ classification: 'success', exitCode: 0, results: [] });
+    expect(rerun.plan).toEqual(applied.plan);
+    expect(remainingPlanActions(rerun.plan)).toEqual([]);
+    expect(rerun.plan.receipts.flatMap(receipt => Object.values(receipt.actions)).every(receipt => receipt.status === 'applied')).toBe(true);
+    expect(io.save).not.toHaveBeenCalled();
+    for (const owner of Object.values(io.owners)) expect(owner).not.toHaveBeenCalled();
+    expect(snapshotTree(scratch)).toEqual(before);
+  });
+
+  it('retries only failed and skipped actions after partial progress', async () => {
+    const inventory = inventoryFor(project);
+    const io = applyIO({ deployFramework: async () => { throw new Error('synthetic deploy failure'); } });
+    io.readEnv = () => undefined;
+    io.save = async next => { await writeSetupPlan(project, next); };
+    const first = await applyGuidedPlan(buildPlan(inventory), inventory, io);
+    expect(first.result.results.filter(result => result.status !== 'applied').map(result => result.status)).toEqual(['skipped', 'failed']);
+    const pending = remainingPlanActions(first.plan);
+    const fresh = structuredClone(inventory);
+    fresh.projects[0].aiwg = { directory: true, configFile: join(project, '.aiwg', 'aiwg.config'), contextFile: null };
+    const retry = applyIO();
+    retry.readEnv = () => SENTINEL_VALUE;
+    retry.save = async next => { await writeSetupPlan(project, next); };
+    for (const key of Object.keys(retry.owners) as Array<keyof typeof retry.owners>) retry.owners[key] = vi.fn(retry.owners[key]) as never;
+    const second = await applyGuidedPlan(await readSetupPlan(project, first.plan.id), fresh, retry);
+    expect(second.result.classification).toBe('success');
+    expect(second.result.results.map(result => result.actionId)).toEqual(sortPlanActionsForApply(pending).map(action => action.id));
+    expect(retry.owners.configureProvider).toHaveBeenCalledOnce();
+    expect(retry.owners.deployFramework).toHaveBeenCalledOnce();
+    expect(retry.owners.writeProjectConfig).not.toHaveBeenCalled();
+    expect(retry.owners.registerProject).not.toHaveBeenCalled();
+    expect(remainingPlanActions(second.plan)).toEqual([]);
+  });
+
+  it.each(['configure-provider', 'write-project-config', 'deploy-framework', 'configure-jev', 'configure-worker-dispatch'])(
+    'resumes persisted receipts after interruption following %s without replaying that action', async kind => {
+      vi.stubEnv(SENTINEL_ENV, SENTINEL_VALUE);
+      const inventory = inventoryFor(project);
+      const original = buildPlan(inventory);
+      original.answers[questionId('capabilities', 'jev', project)] = answer('enable');
+      original.answers[questionId('locations', 'credential-source', project, 'jev')] = answer({ kind: 'credential-ref', source: 'env', name: SENTINEL_ENV });
+      original.answers[questionId('tools', 'worker-dispatch', project)] = answer('enable');
+      const plan = buildInterviewPlan({ inventory, workspaceRoot: project }, original.answers, original.createdAt);
+      const io = applyIO({ configureJev: async () => {}, configureWorkerDispatch: async () => {} });
+      let interrupted = false;
+      io.save = async next => {
+        await writeSetupPlan(project, next);
+        const action = next.actions.find(action => action.kind === kind)!;
+        if (!interrupted && next.receipts.some(receipt => receipt.actions[action.id]?.status === 'applied')) {
+          interrupted = true;
+          throw new Error('synthetic interruption between actions');
+        }
+      };
+      await expect(applyGuidedPlan(plan, inventory, io)).rejects.toThrow('synthetic interruption');
+      const saved = await readSetupPlan(project, plan.id);
+      const completed = saved.receipts.flatMap(receipt => Object.keys(receipt.actions));
+      expect(completed).toContain(plan.actions.find(action => action.kind === kind)!.id);
+      expect(saved.receipts.flatMap(receipt => Object.values(receipt.actions)).every(receipt => receipt.status === 'applied')).toBe(true);
+      const pending = remainingPlanActions(saved);
+      const fresh = structuredClone(inventory);
+      if (completed.some(id => plan.actions.find(action => action.id === id)?.kind === 'write-project-config')) {
+        fresh.projects[0].aiwg = { directory: true, configFile: join(project, '.aiwg', 'aiwg.config'), contextFile: null };
+      }
+      const retry = applyIO({ configureJev: async () => {}, configureWorkerDispatch: async () => {} });
+      retry.save = async next => { await writeSetupPlan(project, next); };
+      const resumed = await applyGuidedPlan(saved, fresh, retry);
+      expect(resumed.result.classification).toBe('success');
+      expect(resumed.result.results.map(result => result.actionId)).toEqual(sortPlanActionsForApply(pending).map(action => action.id));
+      expect(remainingPlanActions(await readSetupPlan(project, plan.id))).toEqual([]);
+    });
+
+  it('aborts on receipt persistence failure without continuing owners or overwriting the prior snapshot', async () => {
+    vi.stubEnv(SENTINEL_ENV, SENTINEL_VALUE);
+    const inventory = inventoryFor(project);
+    const plan = buildPlan(inventory);
+    await writeSetupPlan(project, plan);
+    const verify = vi.fn(async () => 'verified');
+    const io = applyIO({ verifyProvider: verify });
+    io.save = vi.fn(async () => { throw new Error('synthetic disk failure'); });
+    await expect(applyGuidedPlan(plan, inventory, io)).rejects.toThrow('synthetic disk failure');
+    expect(io.save).toHaveBeenCalledOnce();
+    expect(verify).not.toHaveBeenCalled();
+    expect(await readSetupPlan(project, plan.id)).toEqual(plan);
+  });
+
+  it('permits only receipt-backed config creation and refuses unrelated environment changes', async () => {
+    vi.stubEnv(SENTINEL_ENV, SENTINEL_VALUE);
+    const inventory = inventoryFor(project);
+    const plan = buildPlan(inventory);
+    const fresh = structuredClone(inventory);
+    fresh.projects[0].aiwg = { directory: true, configFile: join(project, '.aiwg', 'aiwg.config'), contextFile: null };
+    expect(revalidateSetupPlan(plan, fresh).filter(change => change.changes.some(entry => entry.fact.kind === 'path'))
+      .map(change => plan.actions.find(action => action.id === change.actionId)?.kind)).toEqual(['write-project-config', 'register-project']);
+    const { plan: progressed } = await applyGuidedPlan(plan, inventory, applyIO());
+    expect(revalidateSetupPlan(progressed, fresh).filter(change => change.changes.some(entry => entry.fact.kind === 'path'))).toEqual([]);
+    // A successful config receipt establishes presence, even if the path was
+    // absent in the original snapshot. Its later disappearance must block retries.
+    expect(revalidateSetupPlan(progressed, inventory).filter(change => change.changes.some(entry => entry.fact.kind === 'path')))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ changes: [expect.objectContaining({ reason: 'path-missing', before: true, after: false })] })]));
+    const changed = structuredClone(fresh);
+    changed.projects[0].packageManifest = null;
+    changed.projects[0].layout = 'monorepo';
+    changed.tools[1].installed = 'no';
+    expect(revalidateSetupPlan(progressed, changed).flatMap(action => action.changes.map(change => change.reason)))
+      .toEqual(expect.arrayContaining(['path-missing', 'fact-changed', 'tool-not-installed']));
+    // Retrying an unapplied action still refuses changed facts even with other applied receipts.
+    const target = progressed.actions.find(action => action.kind === 'deploy-framework')!;
+    for (const receipt of progressed.receipts) delete receipt.actions[target.id];
+    const deploy = vi.fn(async () => 'deployed');
+    const refused = await applyGuidedPlan(progressed, changed, applyIO({ deployFramework: deploy }));
+    expect(refused.result.results).toEqual([expect.objectContaining({ status: 'skipped', message: expect.stringContaining('re-run discovery and the setup interview') })]);
+    expect(deploy).not.toHaveBeenCalled();
+  });
+
   it('reports partial success when an optional integration fails, keeping it eligible', async () => {
     vi.stubEnv(SENTINEL_ENV, SENTINEL_VALUE);
     const inventory = inventoryFor(project);
@@ -208,6 +376,25 @@ describe('guided plan apply', () => {
     expect(refused.message).toContain('re-run discovery');
     expect(configure).not.toHaveBeenCalled();
     expect(result.classification).toBe('failure');
+  });
+
+  it.each(['lost-version', 'unobserved-layout'] as const)('refuses %s instead of treating every unknown fact as advisory', async condition => {
+    vi.stubEnv(SENTINEL_ENV, SENTINEL_VALUE);
+    const inventory = inventoryFor(project);
+    inventory.tools[1].version = '1.0.0';
+    const plan = buildPlan(inventory);
+    const fresh = structuredClone(inventory);
+    if (condition === 'lost-version') fresh.tools[1].version = null;
+    else {
+      fresh.projects = [];
+      fresh.stats.truncated = true;
+    }
+    const verify = vi.fn(async () => 'verified');
+    const review = await reviewGuidedPlan(plan, fresh, reviewIO());
+    expect(review.actions.find(action => action.kind === 'verify-provider')?.status).toBe('stale');
+    const { result } = await applyGuidedPlan(plan, fresh, applyIO({ verifyProvider: verify }));
+    expect(result.results.find(action => action.kind === 'verify-provider')?.status).toBe('skipped');
+    expect(verify).not.toHaveBeenCalled();
   });
 
   it('resolves env credentials at apply time without persisting or printing the value', async () => {

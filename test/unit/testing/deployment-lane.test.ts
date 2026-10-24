@@ -11,10 +11,13 @@ import { deploymentFiles, packagingFiles } from '../../../config/test-lanes.mjs'
 const root = path.resolve(import.meta.dirname, '../../..');
 
 describe('required provider deployment lane', () => {
-  it('owns exactly the two full-corpus files and runs them serially', () => {
+  it('owns exactly the full-corpus deployment files and runs them serially', () => {
+    // The guided-setup walkthrough (#3449 A6) applies a real `aiwg use`
+    // deployment against the shared reviewed cache, so it runs in this lane.
     expect(deploymentFiles).toEqual([
       'test/integration/use-all-deployment.test.ts',
       'test/integration/hermes-deployment.test.ts',
+      'test/integration/guided-setup-walkthrough.test.ts',
     ]);
     expect(deployment.test.include).toEqual(deploymentFiles);
     expect(deployment.test).toMatchObject({

@@ -27,6 +27,7 @@ export const discoveryFiles = ['test/integration/artifacts/discover-fortemi-corp
 export const deploymentFiles = [
   'test/integration/use-all-deployment.test.ts',
   'test/integration/hermes-deployment.test.ts',
+  'test/integration/guided-setup-walkthrough.test.ts',
 ];
 // Shared S0 infrastructure and frozen contracts run in the existing offline
 // conformance lane. Mechanism suites retain their source owner's unit lane.
