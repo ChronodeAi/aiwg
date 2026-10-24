@@ -238,6 +238,13 @@ describe('GitHub mirror tag gate', () => {
     expect(auth.stderr).toContain('GitHub rejected the mirror token')
     expect(auth.stdout + auth.stderr).not.toContain('fixture-mirror-token')
 
+    // #3400: GitHub's actual message for a dead token. It must hard-fail at
+    // the push, not fall through to "main push declined".
+    const deadToken = runPush("remote: Invalid username or token. Password authentication is not supported for Git operations.", 128)
+    expect(deadToken.status).toBe(1)
+    expect(deadToken.stderr).toContain('GitHub rejected the mirror token')
+    expect(deadToken.stdout + deadToken.stderr).not.toContain('fixture-mirror-token')
+
     const rejected = runPush('! [rejected] HEAD -> main (non-fast-forward)', 1)
     expect(rejected.status).toBe(0)
     expect(rejected.stdout).toContain('main push declined')
