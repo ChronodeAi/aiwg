@@ -25,7 +25,24 @@ import { DaemonBehaviorLoader } from './behavior-loader.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 class DaemonMain {
-  constructor() {
+  constructor(deps = {}) {
+    // Injectable construction sites for the conversational stack. The
+    // housekeeper profile test (#3353 B5) passes throwing stubs here to
+    // prove the minimal profile never constructs the skipped modules.
+    this.deps = {
+      MemoryManager,
+      AgentSupervisor,
+      AutomationEngine,
+      DaemonSupervisor,
+      BehaviorRegistry,
+      DaemonBehaviorLoader,
+      MessageRouter,
+      ScheduledTaskRunner,
+      AutonomousEngine,
+      ProviderWatcher,
+      WebServer,
+      ...deps,
+    };
     this.config = null;
     this.fileWatcher = null;
     this.cronScheduler = null;
@@ -186,8 +203,16 @@ class DaemonMain {
   }
 
   async initializeSubsystems() {
+    // Epic #3353 B5: the single profile gate. The housekeeper profile loads
+    // only the deterministic maintenance stack (scheduler/runner/store,
+    // watcher/router, minimal IPC) and never constructs the conversational
+    // stack below, so no model calls are possible in this profile.
+    if (this.config.get('daemon.profile') === 'housekeeper') {
+      await this.initializeHousekeeperSubsystems();
+      return;
+    }
     // Initialize memory manager (cross-session context for concierge)
-    this.memoryManager = new MemoryManager({ projectRoot: process.cwd() });
+    this.memoryManager = new this.deps.MemoryManager({ projectRoot: process.cwd() });
     const memorySnapshot = this.memoryManager.load();
     const totalEntries = memorySnapshot.project.length + memorySnapshot.user.length;
     this.log(`Memory manager initialized (${totalEntries} persistent entries loaded)`);
@@ -202,7 +227,7 @@ class DaemonMain {
     // Initialize agent supervisor (spawns claude -p subprocesses)
     const maxConcurrency = this.config.get('daemon.max_parallel_actions') || 3;
     const taskTimeoutMs = (this.config.get('daemon.action_timeout_minutes') || 120) * 60 * 1000;
-    this.supervisor = new AgentSupervisor({
+    this.supervisor = new this.deps.AgentSupervisor({
       maxConcurrency,
       taskStore: this.taskStore,
       taskTimeout: taskTimeoutMs,
@@ -215,7 +240,7 @@ class DaemonMain {
 
     // Wrap AgentSupervisor with DaemonSupervisor for production governance
     const supConfig = this.config.get('supervisor') || {};
-    this.daemonSupervisor = new DaemonSupervisor({
+    this.daemonSupervisor = new this.deps.DaemonSupervisor({
       agentSupervisor: this.supervisor,
       maxConcurrent: supConfig.max_concurrent ?? maxConcurrency,
       maxQueueDepth: supConfig.max_queue_depth ?? 20,
@@ -236,7 +261,7 @@ class DaemonMain {
     // Load behavior registry
     try {
       const projectRoot = process.cwd();
-      this.behaviorRegistry = new BehaviorRegistry({
+      this.behaviorRegistry = new this.deps.BehaviorRegistry({
         projectRoot,
         frameworkRoot: projectRoot,
       });
@@ -248,7 +273,7 @@ class DaemonMain {
 
     // Load and activate daemon behaviors (injectable orchestrators)
     try {
-      this.behaviorLoader = new DaemonBehaviorLoader({
+      this.behaviorLoader = new this.deps.DaemonBehaviorLoader({
         projectRoot: process.cwd(),
         supervisor: this.supervisor,
         memoryManager: this.memoryManager,
@@ -264,11 +289,11 @@ class DaemonMain {
     }
 
     // Initialize MessageRouter
-    this.messageRouter = new MessageRouter({ supervisor: this.supervisor });
+    this.messageRouter = new this.deps.MessageRouter({ supervisor: this.supervisor });
     this.log('MessageRouter initialized');
 
     // Initialize automation engine (trigger-action rules)
-    this.automationEngine = new AutomationEngine({
+    this.automationEngine = new this.deps.AutomationEngine({
       supervisor: this.supervisor,
     });
     const rules = this.config.get('rules') || [];
@@ -322,7 +347,7 @@ class DaemonMain {
 
     // Initialize ScheduledTaskRunner to bridge cron events to tasks
     if (this.daemonSupervisor && this.eventRouter) {
-      this.scheduledTaskRunner = new ScheduledTaskRunner({
+      this.scheduledTaskRunner = new this.deps.ScheduledTaskRunner({
         supervisor: this.daemonSupervisor,
         eventRouter: this.eventRouter,
         roomManager: this.roomManager,
@@ -345,7 +370,7 @@ class DaemonMain {
     // Initialize AutonomousEngine if enabled
     const modesConfig = this.config.get('modes');
     if (modesConfig?.autonomous && this.daemonSupervisor) {
-      this.autonomousEngine = new AutonomousEngine({
+      this.autonomousEngine = new this.deps.AutonomousEngine({
         supervisor: this.daemonSupervisor,
         config: modesConfig.autonomous,
         roomManager: this.roomManager,
@@ -361,7 +386,7 @@ class DaemonMain {
     // Initialize ProviderWatcher if configured
     const providerWatchConfig = this.config.get('provider_watch');
     if (providerWatchConfig?.enabled) {
-      this.providerWatcher = new ProviderWatcher({
+      this.providerWatcher = new this.deps.ProviderWatcher({
         stateDir: '.aiwg/daemon/provider-watch',
         providers: providerWatchConfig.providers || undefined,
         intervalHours: providerWatchConfig.interval_hours || 6,
@@ -400,7 +425,7 @@ class DaemonMain {
     if (webConfig?.enabled) {
       // In Docker mode, bind to 0.0.0.0 so port mapping works
       const webHost = process.env.AIWG_DOCKER === '1' ? '0.0.0.0' : (webConfig.host ?? '127.0.0.1');
-      this.webServer = new WebServer({
+      this.webServer = new this.deps.WebServer({
         port: webConfig.port ?? 7474,
         host: webHost,
         token: webConfig.token || process.env.AIWG_WEB_TOKEN || null,
@@ -434,27 +459,202 @@ class DaemonMain {
   }
 
   /**
+   * Minimal housekeeper profile (epic #3353 B5, design note §1.1).
+   *
+   * Loads only Config (already loaded), EventRouter, TaskStore, FileWatcher,
+   * CronScheduler, the deterministic ScheduledTaskRunner (maintenance jobs,
+   * no prompts, no supervisor) and the minimal IPC subset. Never constructs
+   * the conversational stack (MemoryManager, AgentSupervisor,
+   * DaemonSupervisor, behaviors, MessageRouter, AutomationEngine, rooms /
+   * messaging, AutonomousEngine, ProviderWatcher, WebServer) and registers
+   * none of their IPC methods, so no model calls are possible here.
+   */
+  async initializeHousekeeperSubsystems() {
+    this.eventRouter = new EventRouter();
+
+    // Task store doubles as the persisted receipt substrate for schedules.
+    this.taskStore = new TaskStore(this.taskStorePath);
+    await this.taskStore.initialize();
+    this.log(`Task store initialized (${this.taskStore.size} existing tasks)`);
+
+    // Minimal IPC subset: ping, daemon.status, schedule.status, the
+    // housekeeper.* methods, and read-only task.list/get/stats.
+    this.ipcServer = new IPCServer(this.socketPath);
+    this._registerHousekeeperIPCMethods();
+    await this.ipcServer.start();
+    this.log(`IPC server listening on ${this.socketPath}`);
+
+    const watchConfig = this.config.get('watch');
+    if (watchConfig?.enabled) {
+      this.fileWatcher = new FileWatcher(watchConfig, watchConfig.debounce_ms, {
+        deliver: event => this.eventRouter.deliver(event)
+      });
+      this.fileWatcher.on('delivery-failed', ({ error }) => this.log(`Watcher recovery required: ${error.message}`));
+      this.log('File watcher started');
+    }
+
+    // Deterministic dispatcher: maintenance owner operations only. No
+    // supervisor is passed, so legacy prompt-based actions cannot run.
+    this.scheduledTaskRunner = new this.deps.ScheduledTaskRunner({
+      eventRouter: this.eventRouter,
+      taskStore: this.taskStore,
+    });
+    this.scheduledTaskRunner.on('recovery-required', ({ error }) => this.log(`Scheduled task recovery required: ${error.message}`));
+    this.scheduledTaskRunner.start();
+    this.log('ScheduledTaskRunner started (housekeeper maintenance jobs)');
+
+    const scheduleConfig = this.config.get('schedule');
+    if (scheduleConfig?.enabled) {
+      this.cronScheduler = new CronScheduler(scheduleConfig, { taskStore: this.taskStore });
+      this.cronScheduler.on('event', (event) => this.eventRouter.route(event));
+      this.cronScheduler.on('recovery-required', ({ jobId, error }) => this.log(`Schedule ${jobId} recovery required: ${error.message}`));
+      this.cronScheduler.start();
+      this.log('Cron scheduler started');
+    }
+
+    // Housekeeper events fan out read-only: no automation engine, no
+    // messaging bus, no supervisor broadcast.
+    this.eventRouter.on('event', (event) => this.handleEvent(event));
+    this.fileWatcher?.start();
+  }
+
+  /**
+   * Null-safe daemon status payload shared by both profiles. Absent
+   * subsystems report as disabled instead of throwing, so the housekeeper
+   * profile (which never constructs them) still answers daemon.status.
+   */
+  _daemonStatusPayload() {
+    return {
+      pid: process.pid,
+      uptime_seconds: Math.floor((Date.now() - this.startTime) / 1000),
+      started_at: new Date(this.startTime).toISOString(),
+      health: 'healthy',
+      profile: this.config.get('daemon.profile') || 'default',
+      subsystems: {
+        ipc: { clients: this.ipcServer.clientCount },
+        supervisor: this.supervisor ? this.supervisor.getStatus() : { enabled: false },
+        automation: this.automationEngine ? this.automationEngine.getStatus() : { enabled: false },
+        file_watcher: this.fileWatcher?.getStats() || { enabled: false },
+        scheduler: this.cronScheduler?.getStats() || { enabled: false },
+        messaging: this.messagingBus ? { enabled: true, adapters: this.messagingBus.adapterCount } : { enabled: false },
+        provider_watcher: this.providerWatcher ? { enabled: true, ...this.providerWatcher.getStatus() } : { enabled: false },
+        behaviors: this.behaviorLoader ? this.behaviorLoader.getStatus() : { active: {}, count: 0 },
+      },
+    };
+  }
+
+  /**
+   * Housekeeper status section (design note §6 HousekeeperStatus).
+   * Freshness probes are best-effort: when the compiled index surface is
+   * unavailable the section reports an empty list rather than failing.
+   */
+  async getHousekeeperStatus() {
+    const schedules = this.taskStore ? this.taskStore.getSchedules() : [];
+    const jobs = schedules.map(record => ({
+      id: record.job.id,
+      kind: record.job.kind || null,
+      lastState: record.lastReceipt?.state || 'never',
+      lastRun: record.lastRun || null,
+      nextFire: record.nextRun || null,
+    }));
+    let freshness = [];
+    try {
+      const { importImpl } = await import('../_resolve-impl.mjs');
+      const { collectIndexStatus } = await importImpl(import.meta.url, 'artifacts/index-status.js');
+      const report = collectIndexStatus(process.cwd(), Date.now());
+      freshness = (report.indices || []).map(index => ({
+        index: index.name,
+        state: index.status,
+        targetMs: index.policy?.targetStaleAfterMs ?? null,
+        converged: index.convergence?.converged ?? null,
+      }));
+    } catch {
+      freshness = [];
+    }
+    const updateReceipts = schedules
+      .filter(record => record.job.kind === 'update.check')
+      .map(record => record.lastReceipt)
+      .filter(Boolean);
+    const lastCheck = updateReceipts.length
+      ? updateReceipts.map(receipt => receipt.finishedAt).sort().pop()
+      : null;
+    return {
+      profile: 'housekeeper',
+      pid: process.pid,
+      uptimeSeconds: Math.floor((Date.now() - this.startTime) / 1000),
+      jobs,
+      freshness,
+      update: { channel: 'stable', checkOnly: true, lastCheck, available: null },
+    };
+  }
+
+  /**
+   * Minimal IPC subset for the housekeeper profile (design note §1.1):
+   * ping, daemon.status, schedule.status, housekeeper.* plus read-only
+   * task.list/get/stats over the receipt store. Conversational methods
+   * (chat.send, memory.*, behaviors.*, autonomous.*, task.submit/cancel,
+   * automation.*, provider-watch.*, rooms.*) are never registered here.
+   */
+  _registerHousekeeperIPCMethods() {
+    this.ipcServer.registerMethods({
+      'ping': () => ({ pong: true, timestamp: new Date().toISOString() }),
+
+      'daemon.status': () => this._daemonStatusPayload(),
+
+      'schedule.status': () => {
+        return this.scheduledTaskRunner ? this.scheduledTaskRunner.getStatus() : { started: false };
+      },
+
+      'housekeeper.status': () => this.getHousekeeperStatus(),
+
+      'housekeeper.jobs': () => {
+        const schedules = this.taskStore ? this.taskStore.getSchedules() : [];
+        return {
+          jobs: schedules.map(record => ({
+            id: record.job.id,
+            kind: record.job.kind || null,
+            state: record.state,
+            lastReceipt: record.lastReceipt || null,
+            nextRun: record.nextRun || null,
+          })),
+        };
+      },
+
+      'task.list': (params) => {
+        return this.taskStore.getTasks({
+          state: params?.state,
+          limit: params?.limit || 20,
+        });
+      },
+
+      'task.get': (params) => {
+        if (!params.taskId) {
+          const err = new Error('Missing required parameter: taskId');
+          err.code = 'INVALID_PARAMS';
+          throw err;
+        }
+        const task = this.taskStore.getTask(params.taskId);
+        if (!task) {
+          const err = new Error(`Task not found: ${params.taskId}`);
+          err.code = 'INVALID_PARAMS';
+          throw err;
+        }
+        return task;
+      },
+
+      'task.stats': () => {
+        return this.taskStore.getStats();
+      },
+    });
+  }
+
+  /**
    * Register IPC method handlers for CLI communication
    */
   _registerIPCMethods() {
     this.ipcServer.registerMethods({
       // Daemon status
-      'daemon.status': () => ({
-        pid: process.pid,
-        uptime_seconds: Math.floor((Date.now() - this.startTime) / 1000),
-        started_at: new Date(this.startTime).toISOString(),
-        health: 'healthy',
-        subsystems: {
-          ipc: { clients: this.ipcServer.clientCount },
-          supervisor: this.supervisor.getStatus(),
-          automation: this.automationEngine.getStatus(),
-          file_watcher: this.fileWatcher?.getStats() || { enabled: false },
-          scheduler: this.cronScheduler?.getStats() || { enabled: false },
-          messaging: this.messagingBus ? { enabled: true, adapters: this.messagingBus.adapterCount } : { enabled: false },
-          provider_watcher: this.providerWatcher ? { enabled: true, ...this.providerWatcher.getStatus() } : { enabled: false },
-          behaviors: this.behaviorLoader ? this.behaviorLoader.getStatus() : { active: {}, count: 0 },
-        },
-      }),
+      'daemon.status': () => this._daemonStatusPayload(),
 
       // Task management
       'task.submit': (params) => {
@@ -918,4 +1118,12 @@ class DaemonMain {
 }
 
 const daemon = new DaemonMain();
-daemon.start();
+// Importing this module must not start a daemon: unit tests import
+// DaemonMain to prove the housekeeper profile never constructs the
+// conversational stack (#3353 B5).
+if (process.env.AIWG_DAEMON_NO_AUTOSTART !== '1') {
+  daemon.start();
+}
+
+export { DaemonMain };
+export default daemon;

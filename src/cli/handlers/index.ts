@@ -51,6 +51,10 @@ import {
   daemonHandlers,
 } from './daemon.js';
 import {
+  housekeeperHandler,
+  housekeeperHandlers,
+} from './housekeeper.js';
+import {
   ralphHandler,
   ralphStatusHandler,
   ralphAbortHandler,
@@ -278,6 +282,7 @@ export {
   // Daemon
   behaviorHandler,
   daemonInitHandler,
+  housekeeperHandler,
 
   // Ralph
   ralphHandler,
@@ -330,6 +335,7 @@ export {
   workspaceHandlers,
   utilityHandlers,
   scaffoldingHandlers,
+  housekeeperHandlers,
   ralphHandlers,
   subcommandHandlers,
   mcHandlers,
@@ -457,6 +463,7 @@ export const allHandlers: CommandHandler[] = [
 
   // Daemon
   ...daemonHandlers,
+  ...housekeeperHandlers,
 
   // Config
   configHandler,
