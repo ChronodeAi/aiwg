@@ -141,6 +141,39 @@ describe('per-index adapters and freshness', () => {
     expect((await project()).pendingWork).toBe(0);
   });
 
+  it('rolls back a failed staged publication without advancing verification', async () => {
+    await buildIndex(root, { graph: 'project', quiet: true });
+    const before = snapshot();
+    const verified = await project();
+    put('.aiwg/requirements/one.md', '# Edited before publication failure');
+    const rename = fs.renameSync;
+    vi.spyOn(fs, 'renameSync').mockImplementation((source, target) => {
+      if (String(source).includes('/.build-') && String(source).endsWith('/metadata.json')
+        && !String(source).includes('/.previous/')) throw new Error('synthetic publication failure');
+      return rename(source, target);
+    });
+    await expect(buildIndex(root, { graph: 'project', quiet: true })).rejects.toThrow('synthetic publication failure');
+    expect(snapshot()).toEqual(before);
+    expect(await project()).toMatchObject({ status: 'degraded', lastVerifiedDigest: verified.lastVerifiedDigest,
+      lastVerifiedAt: verified.lastVerifiedAt, pendingWork: 1 });
+  });
+
+  it('renews no-op freshness from the receipt scan and detects subsequent changes', async () => {
+    await buildIndex(root, { graph: 'project', quiet: true });
+    const before = snapshot();
+    const verified = await project();
+    const now = Date.parse(verified.lastVerifiedAt!) + 1000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const copies = vi.spyOn(fs, 'copyFileSync');
+    await buildIndex(root, { graph: 'project', quiet: true });
+    expect(copies).not.toHaveBeenCalled();
+    expect(snapshot()['metadata.json']).toBe(before['metadata.json']);
+    expect(await project()).toMatchObject({ status: 'fresh', lastVerifiedDigest: verified.lastVerifiedDigest,
+      lastVerifiedAt: new Date(now).toISOString(), pendingWork: 0 });
+    put('.aiwg/requirements/one.md', '# Changed after the no-op verification');
+    expect(await project()).toMatchObject({ status: 'stale', pendingWork: 1 });
+  });
+
   it('leaves changes during a build pending and reconciles them on the next run', async () => {
     const real = backends.createGraphBackend;
     vi.spyOn(backends, 'createGraphBackend').mockImplementationOnce(async (...args) => {

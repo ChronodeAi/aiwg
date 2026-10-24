@@ -1056,7 +1056,7 @@ export async function buildIndex(cwd: string, options: BuildOptions = {}): Promi
     : [resolveProjectAiwgDir(cwd)];
   if (!scanDirs.some(dir => fs.existsSync(dir))) {
     // Keep the owner's missing-root diagnostic/exit path before creating output directories.
-    await buildIndexSnapshot(cwd, options, '');
+    await buildIndexSnapshot(cwd, options, () => '');
     return;
   }
   const directory = options.outputDir
@@ -1073,14 +1073,20 @@ export async function buildIndex(cwd: string, options: BuildOptions = {}): Promi
     const adapter = !options.scope && !options.includeIgnored
       ? indexAdapterRegistry(cwd).find(item => item.name === (options.graph ?? 'project')) : undefined;
     owned = adapter && directory === path.dirname(adapter.statePath) ? adapter : undefined;
-    const observation: { before?: string; selection: NonNullable<ArtifactDiscoveryOptions['selection']> } = { selection: {} };
-    fs.mkdirSync(directory, { recursive: true });
-    staging = fs.mkdtempSync(path.join(directory, '.build-'));
-    await buildIndexSnapshot(cwd, options, staging, owned ? observation : undefined);
-    const after = owned ? await graphIndexDigest(cwd, options.graph, { selection: observation.selection }) : undefined;
+    const observation: BuildObservation = { selection: {} };
+    const preparePublication = (): string => {
+      fs.mkdirSync(directory, { recursive: true });
+      return staging ??= fs.mkdtempSync(path.join(directory, '.build-'));
+    };
+    await buildIndexSnapshot(cwd, options, preparePublication, owned ? observation : undefined);
+    // A receipt hit verifies the existing snapshot directly against the scan's
+    // stats. There is no extraction interval to recheck. Real builds still probe
+    // again after preparation so concurrent source changes remain pending.
+    const after = owned ? observation.unchanged ? observation.before
+      : await graphIndexDigest(cwd, options.graph, { selection: observation.selection }) : undefined;
     // All extraction and backend work has succeeded before any live file moves.
     if (owned) recordIndexVerification(owned, cwd, { before: observation.before, after, wallMs: Date.now() - start }, staging);
-    publishIndexFiles(staging, directory);
+    if (staging) publishIndexFiles(staging, directory);
   } catch (error) {
     if (owned) {
       try { recordIndexVerification(owned, cwd, { error: error instanceof Error ? error.message : String(error), wallMs: Date.now() - start }); }
@@ -1093,11 +1099,17 @@ export async function buildIndex(cwd: string, options: BuildOptions = {}): Promi
   }
 }
 
+interface BuildObservation {
+  before?: string;
+  unchanged?: boolean;
+  selection: NonNullable<ArtifactDiscoveryOptions['selection']>;
+}
+
 async function buildIndexSnapshot(
   cwd: string,
   options: BuildOptions,
-  publicationDir: string,
-  observation?: { before?: string; selection: NonNullable<ArtifactDiscoveryOptions['selection']> },
+  preparePublication: () => string,
+  observation?: BuildObservation,
 ): Promise<void> {
   const { force = false, verbose = false, scope, includeIgnored = false, outputDir, graph, explicit = true } = options;
   const workers = resolveIndexWorkers(options.workers);
@@ -1173,7 +1185,7 @@ async function buildIndexSnapshot(
     const { buildSourceGraphIndex } = await import('./source-graph.js');
     await buildSourceGraphIndex({
       cwd,
-      outputDir: publicationDir,
+      outputDir: preparePublication(),
       effectiveOutputCwd,
       verbose,
     });
@@ -1277,12 +1289,16 @@ async function buildIndexSnapshot(
       manifestStats.checked = files.length;
       manifestStats.statSkipped = files.length;
       const buildTimeMs = Date.now() - startTime;
-      writeIndexFile(effectiveOutputCwd, 'stats.json', { ...stats, builtAt: new Date().toISOString(), buildTimeMs }, publicationDir);
+      // Only stats changes on a receipt hit; its existing atomic writer is
+      // sufficient under the owner lock, without staging or backup copies.
+      writeIndexFile(effectiveOutputCwd, 'stats.json', { ...stats, builtAt: new Date().toISOString(), buildTimeMs }, indexOutputDir);
+      if (observation) observation.unchanged = true;
       reportBuild(buildTimeMs, files.length);
       return;
     }
   }
 
+  const publicationDir = preparePublication();
   const existingIndex = force ? null : outputDir
     ? loadIndexFromDir<ArtifactIndex>(indexOutputDir, 'metadata.json')
     : loadGraphIndexFile<ArtifactIndex>(effectiveOutputCwd, 'metadata.json', graph);
