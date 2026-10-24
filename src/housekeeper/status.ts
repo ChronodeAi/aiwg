@@ -37,6 +37,15 @@ export interface HousekeeperStatusTotals {
   never: number;
 }
 
+export interface HousekeeperInstallOutcome {
+  state: string;
+  reason: string | null;
+  finishedAt: string | null;
+  summary: string | null;
+  oldVersion: string | null;
+  newVersion: string | null;
+}
+
 export interface HousekeeperStatusEnvelope {
   contractVersion: number;
   command: 'housekeeper.status';
@@ -52,6 +61,7 @@ export interface HousekeeperStatusEnvelope {
     checkOnly: true;
     lastCheck: string | null;
     available: boolean | null;
+    lastInstall: HousekeeperInstallOutcome | null;
   };
 }
 
@@ -84,6 +94,8 @@ export interface BuildHousekeeperStatusInput {
   jobs?: HousekeeperJobStatus[];
   freshness?: HousekeeperFreshnessEntry[];
   lastCheck?: string | null;
+  available?: boolean | null;
+  lastInstall?: HousekeeperInstallOutcome | null;
 }
 
 /** Assemble the envelope; every field is always present. */
@@ -103,7 +115,8 @@ export function buildHousekeeperStatus(input: BuildHousekeeperStatusInput): Hous
       channel: 'stable',
       checkOnly: true,
       lastCheck: input.lastCheck ?? null,
-      available: null,
+      available: input.available ?? null,
+      lastInstall: input.lastInstall ?? null,
     },
   };
 }

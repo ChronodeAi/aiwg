@@ -18,13 +18,16 @@ const RACY_WINDOW_MS = 2000;
 export class FileWatcher extends EventEmitter {
   // Timers use the ambient clock (injectable by fake timers); filesystem and
   // delivery seams keep recovery tests independent of native watch reliability.
-  constructor(config, debounceMs = config.debounce_ms ?? 500, { filesystem = fs, watch, deliver } = {}) {
+  constructor(config, debounceMs = config.debounce_ms ?? 500, { filesystem = fs, watch, deliver, maxHandles = null } = {}) {
     super();
     this.config = config;
     this.debounceMs = debounceMs;
     this.fs = filesystem;
     this.watch = watch || ((...args) => this.fs.watch(...args));
     this.deliver = deliver;
+    // Watch-handle cap (B6 resource bounds): roots beyond the cap stay on
+    // polling per the B3 reconciliation contract instead of failing.
+    this.maxHandles = maxHandles ?? config.max_handles ?? Infinity;
     this.watchers = [];
     this.timers = new Map();
     this.pending = new Map();
@@ -233,6 +236,12 @@ export class FileWatcher extends EventEmitter {
     // Attach shallowest first; logical nested roots still get independent scans.
     for (const root of [...this.roots].sort((a, b) => a.path.length - b.path.length || compare(a.path, b.path))) {
       if (!root.available || root.polling || root.watcher || this.covered(root)) continue;
+      if (this.watchers.length >= this.maxHandles) {
+        root.polling = true;
+        this.emit('watch-unavailable', { path: root.path, polling: true,
+          error: Object.assign(new Error(`Watch-handle cap reached (${this.maxHandles}); polling instead`), { code: 'WATCH_CAP' }) });
+        continue;
+      }
       try {
         root.watcher = this.watchPath(root.config);
         if (root.watcher) this.watchers.push(root.watcher);
@@ -357,6 +366,8 @@ export class FileWatcher extends EventEmitter {
   getStats() {
     return {
       enabled: this.config.enabled,
+      max_handles: Number.isFinite(this.maxHandles) ? this.maxHandles : null,
+      watch_handles: this.watchers.length,
       paths: this.config.paths.map(p => p.path),
       events_received: this.eventsReceived,
       unavailable_roots: this.roots.filter(root => !root.available).map(root => root.path),

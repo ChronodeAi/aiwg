@@ -24,6 +24,7 @@ export const MAINTENANCE_KINDS: readonly string[] = Object.freeze([
   'index.reconcile',
   'cache.retention',
   'update.check',
+  'update.install',
   'index.freshness',
   'index.refresh',
   'cache.prune',
@@ -36,7 +37,9 @@ export interface DaemonJobConfig {
   schedule?: string;
   timezone?: string;
   missedRunPolicy?: string;
-  args?: Record<string, string>;
+  // Update-install policies carry booleans, arrays and windows alongside the
+  // string args of the other kinds (see tools/daemon/update-policy.mjs).
+  args?: Record<string, unknown>;
   timeoutMs?: number;
   retries?: number;
 }

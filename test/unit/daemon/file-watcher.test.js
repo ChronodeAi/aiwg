@@ -165,6 +165,8 @@ describe('FileWatcher', () => {
 
       expect(stats).toEqual({
         enabled: true,
+        max_handles: null,
+        watch_handles: 0,
         paths: ['.aiwg/'],
         events_received: 0,
         unavailable_roots: [],

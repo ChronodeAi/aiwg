@@ -55,6 +55,7 @@ import {
   normalizeJobState,
   toFreshnessEntry,
   type HousekeeperFreshnessEntry,
+  type HousekeeperInstallOutcome,
   type HousekeeperJobStatus,
 } from '../../housekeeper/status.js';
 import {
@@ -417,6 +418,70 @@ export function readLocalLastCheck(cwd: string, config: Record<string, unknown>)
   }
 }
 
+/** Offline install outcome: the latest update.install receipt, if any. */
+export function readLocalLastInstall(cwd: string): HousekeeperInstallOutcome | null {
+  try {
+    const raw = fs.readFileSync(path.join(cwd, '.aiwg', 'daemon', 'tasks.json'), 'utf8');
+    const parsed = JSON.parse(raw) as {
+      schedules?: Array<{
+        job?: { kind?: string };
+        lastReceipt?: {
+          state?: unknown; reason?: unknown; finishedAt?: unknown; summary?: unknown;
+          detail?: { oldVersion?: unknown; newVersion?: unknown };
+        };
+      }>;
+    };
+    const installs = (parsed.schedules ?? [])
+      .filter((s) => s?.job?.kind === 'update.install' && typeof s.lastReceipt?.finishedAt === 'string')
+      .sort((a, b) => ((a.lastReceipt!.finishedAt as string) < (b.lastReceipt!.finishedAt as string) ? -1 : 1));
+    const last = installs.pop()?.lastReceipt;
+    if (!last) return null;
+    return {
+      state: typeof last.state === 'string' ? last.state : 'unknown',
+      reason: typeof last.reason === 'string' ? last.reason : null,
+      finishedAt: typeof last.finishedAt === 'string' ? last.finishedAt : null,
+      summary: typeof last.summary === 'string' ? last.summary : null,
+      oldVersion: typeof last.detail?.oldVersion === 'string' ? last.detail.oldVersion : null,
+      newVersion: typeof last.detail?.newVersion === 'string' ? last.detail.newVersion : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Offline update availability from the latest update.check receipt detail. */
+export function readLocalUpdateAvailable(cwd: string): boolean | null {
+  try {
+    const raw = fs.readFileSync(path.join(cwd, '.aiwg', 'daemon', 'tasks.json'), 'utf8');
+    const parsed = JSON.parse(raw) as {
+      schedules?: Array<{ job?: { kind?: string }; lastReceipt?: { detail?: { available?: unknown } } }>;
+    };
+    for (const s of parsed.schedules ?? []) {
+      if (s?.job?.kind !== 'update.check') continue;
+      const available = s.lastReceipt?.detail?.available;
+      if (typeof available === 'boolean') return available;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeInstallOutcome(value: unknown): HousekeeperInstallOutcome | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  if (str(record['finishedAt']) === null && str(record['summary']) === null) return null;
+  return {
+    state: str(record['state']) ?? 'unknown',
+    reason: str(record['reason']),
+    finishedAt: str(record['finishedAt']),
+    summary: str(record['summary']),
+    oldVersion: str(record['oldVersion']),
+    newVersion: str(record['newVersion']),
+  };
+}
+
 async function collectFreshness(cwd: string): Promise<HousekeeperFreshnessEntry[]> {
   try {
     const { probeIndexStatus } = await import('../../artifacts/index-status.js');
@@ -469,6 +534,8 @@ async function executeStatus(c: Ctx): Promise<HandlerResult> {
   let jobs: HousekeeperJobStatus[] | null = null;
   let freshness: HousekeeperFreshnessEntry[] | null = null;
   let lastCheck: string | null = null;
+  let available: boolean | null = null;
+  let lastInstall: HousekeeperInstallOutcome | null = null;
 
   if (live) {
     mode = 'daemon';
@@ -480,6 +547,8 @@ async function executeStatus(c: Ctx): Promise<HandlerResult> {
       uptimeSeconds = typeof result['uptimeSeconds'] === 'number' ? result['uptimeSeconds'] as number : 0;
       const update = result['update'] as Record<string, unknown> | undefined;
       lastCheck = typeof update?.['lastCheck'] === 'string' ? (update['lastCheck'] as string) : null;
+      available = typeof update?.['available'] === 'boolean' ? (update['available'] as boolean) : null;
+      lastInstall = normalizeInstallOutcome(update?.['lastInstall']) ?? readLocalLastInstall(c.cwd);
     } catch {
       try {
         const result = (await requestDaemon(paths.socketPath, 'daemon.status')) as Record<string, unknown>;
@@ -487,14 +556,18 @@ async function executeStatus(c: Ctx): Promise<HandlerResult> {
       } catch { /* IPC unavailable; report what the pid file proves */ }
       jobs = readLocalJobs(c.cwd, loaded.config);
       lastCheck = readLocalLastCheck(c.cwd, loaded.config);
+      available = readLocalUpdateAvailable(c.cwd);
+      lastInstall = readLocalLastInstall(c.cwd);
     }
   } else {
     jobs = readLocalJobs(c.cwd, loaded.config);
     lastCheck = readLocalLastCheck(c.cwd, loaded.config);
+    available = readLocalUpdateAvailable(c.cwd);
+    lastInstall = readLocalLastInstall(c.cwd);
   }
   freshness ??= await collectFreshness(c.cwd);
 
-  const envelope = buildHousekeeperStatus({ mode, pid, uptimeSeconds, jobs, freshness, lastCheck });
+  const envelope = buildHousekeeperStatus({ mode, pid, uptimeSeconds, jobs, freshness, lastCheck, available, lastInstall });
   if (json) {
     return { exitCode: EXIT_CODES.OK, message: JSON.stringify(envelope, null, 2), rawOutput: true };
   }
@@ -509,6 +582,12 @@ async function executeStatus(c: Ctx): Promise<HandlerResult> {
   lines.push(`Freshness: ${envelope.freshness.length} indice(s)`);
   for (const entry of envelope.freshness) {
     lines.push(`  ${entry.index}: ${entry.state}`);
+  }
+  if (lastInstall) {
+    const versions = lastInstall.oldVersion && lastInstall.newVersion
+      ? ` ${lastInstall.oldVersion} → ${lastInstall.newVersion}` : '';
+    lines.push(`Last install: ${lastInstall.state}${versions}${lastInstall.finishedAt ? ` at ${lastInstall.finishedAt}` : ''}`);
+    if (lastInstall.summary) lines.push(`  ${lastInstall.summary}`);
   }
   return { exitCode: EXIT_CODES.OK, message: lines.join('\n') };
 }
