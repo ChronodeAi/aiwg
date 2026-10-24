@@ -619,3 +619,34 @@ epic_rule_outside_profile:
   addons/decision-engine/rules:
     decision-offload: bound
 ```
+
+### Legacy provider migration (#3457)
+
+Copilot, Factory, OpenCode, Windsurf, Antigravity, Muse, OMP and Grok Build
+use the shared transactional activation projector for direct deployments as
+well as kernel-only `use all`. Compact core bodies are first in the managed
+startup rule block; kernel bodies and the activation index follow. Core bodies
+retain the shared 1,024-byte per-body and 6,144-byte aggregate caps, with no
+imports of full rule files.
+
+| Provider | Always-loaded project surface | Loader evidence |
+|---|---|---|
+| Copilot | `.github/copilot-instructions.md` | Copilot custom instructions contract |
+| Factory | `AGENTS.md` | Factory AGENTS discovery hierarchy |
+| OpenCode | `AGENTS.md` | OpenCode rules and instructions registration |
+| Windsurf | `AGENTS.md` | Windsurf/Devin topology contract |
+| Antigravity | `AGENTS.md` | Qualified CLI 1.1.26 project context |
+| Muse | `AGENTS.md` | Muse context contract; workspace trust required |
+| OMP | `.omp/AGENTS.md` | OMP 18.1.10 context loader; shadows root context |
+| Grok Build (`grok-build`) | `AGENTS.md` | xAI project-rules hierarchical discovery |
+
+The authoritative loader evidence and source links are in
+`src/providers/provider-definitions.ts` (`CONTEXT_CONTRACTS`), with qualified
+provider documentation under `docs/providers/`. Native rule helpers remain
+available for compatibility; staged deployment lets activation projection own
+rule output and startup policy.
+
+There is no bare `grok` provider alias. Grok Bot (`grokbot`) is a separate,
+degraded target whose automatic startup loader is unverified. It cannot claim
+always-loaded core delivery; do not treat writing a conventional AGENTS file
+as proof of a Grok Bot loader.

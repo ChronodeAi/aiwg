@@ -1,4 +1,4 @@
-import { sdlcDeploymentRules, legacySdlcDeploymentRules, sourceRules } from '../unit/providers/rule-source-expectations.js';
+import { sdlcDeploymentRules, sourceRules } from '../unit/providers/rule-source-expectations.js';
 import { mkdtempSync } from '../helpers/temp-dir.js';
 /**
  * Deployment Completeness & Content Validation Tests
@@ -639,26 +639,24 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
       const indexPath = path.join(projectDir, prov.ruleDir, 'RULES-INDEX.md');
       const content = await fs.readFile(indexPath, 'utf-8');
 
-      if (providerName === 'claude') {
-        expect(content).toContain('# Rule kernel index');
-        const summaries = activationRules.filter(rule => rule.activation === 'summary');
-        // #3460: native path contracts remain in the canonical index too.
-        for (const rule of activationRules.filter(rule => rule.activation === 'paths')) {
-          expect(content).toContain(`- ${rule.data.name || rule.name} |`);
-          expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
-        }
-        for (const rule of summaries) {
-          expect(content).toContain(rule.data.summary);
-          expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
-          expect(content).not.toContain(rule.body);
-        }
-        expect([...content.matchAll(/^- (.*?) —/gm)].map(match => match[1]).sort())
-          .toEqual(activationRules.filter(rule => ['kernel', 'summary'].includes(rule.activation))
-            .map(rule => rule.data.name || rule.name).sort());
-      } else {
-        expect(content).toContain('# AIWG');
-        expect(content.length).toBeGreaterThan(500);
+      // #3457 migrates Factory/OpenCode to the shared activation projector.
+      expect(content).toContain('# Rule kernel index');
+      const summaries = activationRules.filter(rule => rule.activation === 'summary');
+      // #3457/#3460: native and emulated paths remain in the canonical index.
+      expect(content).toContain(providerName === 'claude'
+        ? '## Path rules (native)' : '## Path rules (prompt emulation)');
+      for (const rule of activationRules.filter(rule => rule.activation === 'paths')) {
+        expect(content).toContain(`- ${rule.data.name || rule.name} |`);
+        expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
       }
+      for (const rule of summaries) {
+        expect(content).toContain(rule.data.summary);
+        expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
+        expect(content).not.toContain(rule.body);
+      }
+      expect([...content.matchAll(/^- (.*?) —/gm)].map(match => match[1]).sort())
+        .toEqual(activationRules.filter(rule => ['kernel', 'summary'].includes(rule.activation))
+          .map(rule => rule.data.name || rule.name).sort());
     });
 
     it('deploys individual rule files alongside RULES-INDEX.md (PUW-016 #1117)', async () => {
@@ -667,17 +665,17 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
       const rulesDir = path.join(projectDir, prov.ruleDir);
       const files = await fs.readdir(rulesDir);
       const mdFiles = files.filter(f => f.endsWith('.md'));
-      // #3460 changes canonical projection membership. Preserve the existing
-      // full standard-addon contract for the legacy Factory/OpenCode writers.
-      const expectedRules = providerName === 'claude' ? activationRules : legacySdlcDeploymentRules(REPO_ROOT);
+      // #3457: all three providers now honor the installed activation set.
+      const expectedRules = activationRules.map(rule => ({ ...rule,
+        fileDelivered: rule.structural || rule.activation === 'kernel'
+          || (providerName === 'claude' && rule.activation === 'paths'),
+      }));
       for (const rule of expectedRules) {
         const assertion = expect(mdFiles, `${providerName}: ${rule.name} (${rule.activation})`);
         if (rule.fileDelivered) assertion.toContain(`${rule.name}.md`);
         else assertion.not.toContain(`${rule.name}.md`);
       }
-      if (providerName === 'claude') {
-        for (const rule of uninstalledRules) expect(mdFiles).not.toContain(`${rule.name}.md`);
-      }
+      for (const rule of uninstalledRules) expect(mdFiles).not.toContain(`${rule.name}.md`);
       expect(mdFiles, `${providerName}: RULES-INDEX.md still ships`).toContain('RULES-INDEX.md');
     });
   });

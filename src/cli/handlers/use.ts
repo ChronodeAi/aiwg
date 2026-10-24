@@ -503,7 +503,7 @@ export function mainDeploymentIncludesAddons(
   selectedMode: string,
   providerDeployArgs: string[],
 ): boolean {
-  return (((provider === 'claude' || provider === 'pi')
+  return (((provider === 'claude' || provider === 'pi' || provider === 'omp')
     && ['general', 'sdlc', 'both', 'all'].includes(selectedMode))
     || (provider === 'codex' && selectedMode === 'all'))
     && !providerDeployArgs.some(arg => arg === '--source' || arg.startsWith('--source='))
@@ -4046,7 +4046,14 @@ export class UseHandler implements CommandHandler {
     const allAddons = skipUtils ? [] : await getAllAddons(frameworkRoot);
     const allExtensions = skipUtils || bulkKernelOnly ? [] : await getAllExtensions(frameworkRoot);
     const mainIncludesAddons = mainDeploymentIncludesAddons(provider, mode, providerDeployArgs);
-    const additiveSources = (mainIncludesAddons ? 0 : allAddons.length) + allExtensions.length;
+    // OMP's extension sources share the root transaction and binding scan.
+    // Their CLI contributions are still registered below in source order.
+    const batchedOmpExtensions = provider === 'omp' && mainIncludesAddons ? allExtensions : [];
+    for (const extension of batchedOmpExtensions) {
+      providerDeployArgs.push('--additional-source', extensionPath(frameworkRoot, extension));
+    }
+    const additiveSources = (mainIncludesAddons ? 0 : allAddons.length)
+      + allExtensions.length - batchedOmpExtensions.length;
     // Keep the final source's rule selection and presentation, while earlier
     // full-surface passes still deploy their own agents/skills/flow resources.
     if (framework === 'all' && additiveSources > 0) providerDeployArgs.push('--defer-rule-projection');
@@ -4247,9 +4254,9 @@ export class UseHandler implements CommandHandler {
           ? ['--quiet', '--source', source, ...addonBaseArgs]
           : ['--source', source, ...addonBaseArgs];
         if (framework === 'all' && index < allExtensions.length - 1) extArgs.push('--defer-rule-projection');
-        const result = await runner.run('tools/agents/deploy-agents.mjs', extArgs, captureOpts);
-        if (result.exitCode !== 0) {
-          return result;
+        if (!batchedOmpExtensions.includes(ext)) {
+          const result = await runner.run('tools/agents/deploy-agents.mjs', extArgs, captureOpts);
+          if (result.exitCode !== 0) return result;
         }
         try {
           await registerSourceCliCommands({

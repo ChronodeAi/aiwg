@@ -91,6 +91,26 @@ describe('OMP native deployment', () => {
     expect(fs.existsSync(path.join(root, '.omp/agent/agents/leaf.md'))).toBe(true);
     expect(fs.existsSync(path.join(root, 'override/agents/leaf.md'))).toBe(false);
   });
+  it('projects additional bundles together, retaining both skills and rule selections', async () => {
+    const sources = ['primary', 'extension'].map(name => path.join(root, name));
+    for (const [index, source] of sources.entries()) {
+      const skill = path.join(source, 'skills', `kernel-${index}`);
+      fs.mkdirSync(skill, { recursive: true });
+      fs.mkdirSync(path.join(source, 'rules'));
+      fs.writeFileSync(path.join(skill, 'SKILL.md'), `---\nname: kernel-${index}\ndescription: fixture\nkernel: true\n---\nWork.`);
+      fs.writeFileSync(path.join(source, 'rules', `policy-${index}.md`), `---\nactivation: summary\nsummary: Follow bundle ${index}.\n---\nPolicy ${index}.`);
+    }
+    const target = path.join(root, 'project'); fs.mkdirSync(target);
+    await deploy({ srcRoot: sources[0], additionalSources: [sources[1]], target, mode: 'general',
+      skillsOnly: true, deploySkills: true, deployRules: true, quiet: true,
+      pinConfigs: { project: {}, user: {} } });
+    for (const index of [0, 1]) {
+      expect(fs.existsSync(path.join(target, '.agents/skills', `kernel-${index}`, 'SKILL.md'))).toBe(true);
+      expect(fs.readFileSync(path.join(target, '.omp/AGENTS.md'), 'utf8')).toContain(`Follow bundle ${index}.`);
+    }
+    const manifest = JSON.parse(fs.readFileSync(path.join(target, '.omp/rules/.aiwg-manifest.json'), 'utf8'));
+    expect(manifest.ruleSources).toEqual(expect.arrayContaining(sources.map((source, index) => path.join(source, 'rules', `policy-${index}.md`))));
+  });
   it('preserves shell-looking prompt text and reports unsupported metadata without evaluation', () => {
     const diagnostics = [];
     const prompt = transformCommand('literal.md', '---\ndescription: literal\nunknown-metadata: value\n---\n`uname` $(whoami) $HOME $$ ${1} $ARGUMENTS', { quiet: true, diagnostics });

@@ -36,6 +36,8 @@ describe('B2 use CLI contract', () => {
     ['claude,pi', true, 'project'],
     // Hermes discovers skills only under HERMES_HOME, so it deploys at user scope (#3461).
     ['claude,hermes', false, 'user'],
+    ['copilot,factory,opencode,windsurf,antigravity,muse,omp,grok-build', false, 'project'],
+    ['copilot,factory,opencode,windsurf,antigravity,muse,omp,grok-build', true, 'project'],
   ] as const)('projects rules once per provider for multi-source use all (%s, dry-run: %s, %s)', (selectedProviders, dryRun, scope) => {
     const name = `projection-${selectedProviders}-${dryRun}`;
     const trace = path.join(scratch, `${name}.jsonl`);

@@ -16,6 +16,8 @@ import fs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import yaml from 'js-yaml';
 import {
+  withRuleDeployment,
+  replaceBoundRulesBlock,
   createAgentsMdFromTemplate,
   deploySkillsWithKernelRouting,
   collectFrameworkArtifacts,
@@ -224,7 +226,17 @@ function matchesSkillSource(source, target) {
       if (relative.endsWith(path.sep)) return true;
       let content = fs.readFileSync(path.join(source, relative), 'utf8');
       if (relative === 'SKILL.md') content = injectPlatformInContent(content, 'grok-build');
-      return content === fs.readFileSync(path.join(target, relative), 'utf8');
+      const deployed = fs.readFileSync(path.join(target, relative), 'utf8');
+      if (content === deployed) return true;
+      if (relative !== 'SKILL.md' || !deployed.includes('<!-- AIWG:bound-rules:start -->')) return false;
+      // Activation projection appends generated bindings. Verify the complete
+      // deployed bytes against the receipt before comparing the authored body;
+      // an operator edit (including inside the binding block) must survive.
+      const receipt = JSON.parse(fs.readFileSync(path.join(target, '.aiwg-manifest.json'), 'utf8'));
+      const digest = `sha256:${createHash('sha256').update(deployed).digest('hex')}`;
+      return receipt.skillSource === path.resolve(source)
+        && receipt.managed?.[relative]?.hash === digest
+        && replaceBoundRulesBlock(content, []).trimEnd() === replaceBoundRulesBlock(deployed, []).trimEnd();
     });
   } catch { return false; }
 }
@@ -344,6 +356,10 @@ export function getFileExtension() {
 }
 
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const mode = normalizeDeploymentMode(opts.mode);
   if (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)) {
     assertSafeAgentsMd(opts.target);

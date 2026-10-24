@@ -36,6 +36,26 @@ function fixture() {
 }
 
 describe('staged rule deployment plans', () => {
+  it('materializes nested resources and symlink aliases with their executable modes', async () => {
+    const f = fixture();
+    const resources = path.join(f.source, 'resources', 'nested');
+    fs.mkdirSync(resources, { recursive: true });
+    fs.writeFileSync(path.join(resources, 'run.sh'), '#!/bin/sh\necho resource\n', { mode: 0o751 });
+    fs.symlinkSync('resources', path.join(f.source, 'alias'));
+    fs.symlinkSync('resources/nested/run.sh', path.join(f.source, 'run.sh'));
+    const plan = await prepareRuleDeployment(f.opts, f.provider, async opts => {
+      for (const name of ['resources/nested/run.sh', 'alias/nested/run.sh', 'run.sh']) {
+        const file = path.join(opts.srcRoot, name);
+        expect(fs.lstatSync(file).isFile()).toBe(true);
+        expect(fs.readFileSync(file, 'utf8')).toBe('#!/bin/sh\necho resource\n');
+        expect(fs.statSync(file).mode & 0o777).toBe(0o751);
+      }
+      await f.deploy(opts);
+    });
+    disposeRuleDeploymentPlan(plan);
+    expect(fs.lstatSync(path.join(f.source, 'alias')).isSymbolicLink()).toBe(true);
+  });
+
   it('hands a child-prepared stage to its coordinator without child promotion', async () => {
     const f = fixture();
     const coordinatorPool = createRuleDeploymentInputPool(f.source);

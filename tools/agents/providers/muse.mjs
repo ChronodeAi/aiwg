@@ -35,6 +35,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  withRuleDeployment,
   collectFrameworkArtifacts,
   createAgentsMdFromTemplate,
   deploySkillsWithKernelRouting,
@@ -265,6 +266,10 @@ export async function postDeploy(targetDir, opts = {}) {
 }
 
 export async function deploy(opts = {}) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,

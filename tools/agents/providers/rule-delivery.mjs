@@ -1,4 +1,4 @@
-/** Activation-selected deployment, shared by the six provider projections (#2939). */
+/** Activation-selected deployment shared by provider projections. */
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -67,6 +67,13 @@ function promoteDirectories(source, destination, skip = () => false, prefix = ''
 }
 const read = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
 const structural = file => /^(RULES-INDEX|RULES-ONDEMAND)\.(md|mdc)$/.test(path.basename(file));
+// Verified startup owners from provider-definitions.ts. These providers do not
+// need a prose fetch of AIWG.md to activate their compact core contracts.
+const inlineStartup = {
+  copilot: '.github/copilot-instructions.md', factory: 'AGENTS.md', opencode: 'AGENTS.md',
+  windsurf: 'AGENTS.md', antigravity: 'AGENTS.md', muse: 'AGENTS.md',
+  omp: '.omp/AGENTS.md', 'grok-build': 'AGENTS.md',
+};
 
 /** Collect selected source contracts, before any tier filter or projection. */
 export function collectDeploymentRuleSources(opts) {
@@ -112,7 +119,7 @@ export function collectDeploymentRuleSources(opts) {
   if (invoked && !opts.kernelOnly) select(invoked.id);
   // Include the invocation being installed before its config entry is saved.
   if (!opts.kernelOnly) for (const framework of getFrameworksForMode(opts.srcRoot, opts.mode === 'all' && names.length ? 'general' : opts.mode)) select(framework.id);
-  const roots = [...(!invoked || !opts.kernelOnly ? [opts.srcRoot] : []), ...[...selected].map(bundle => bundle.root)];
+  const roots = [...(!invoked || !opts.kernelOnly ? [opts.srcRoot] : []), ...(opts.additionalSources || []), ...[...selected].map(bundle => bundle.root)];
   for (const entry of Object.values(installed)) if (entry?.localPath) roots.push(path.resolve(opts.target, entry.localPath));
   const files = roots.flatMap(root => listMdFiles(path.join(root, 'rules'))).filter(file => !structural(file));
   const behaviors = roots.flatMap(root => walk(path.join(root, 'behaviors')).filter(file => path.basename(file) === 'BEHAVIOR.md'));
@@ -474,7 +481,7 @@ function projectRules(opts, provider) {
     if (!body) {
       // No activation-selected startup contract: retain legacy context owners
       // without inventing an empty policy file or a dangling bootstrap read.
-      const contexts = ['AIWG.md', 'AGENTS.md', 'WARP.md', '.hermes.md'].map(name => path.join(opts.target, name));
+      const contexts = ['AIWG.md', 'AGENTS.md', 'WARP.md', '.hermes.md', inlineStartup[provider.name]].filter(Boolean).map(name => path.join(opts.target, name));
       if (opts.activeWorkspace) contexts.push(path.join(opts.activeWorkspace, 'AGENTS.md'));
       for (const file of contexts) {
         if (!fs.existsSync(file)) continue;
@@ -484,7 +491,12 @@ function projectRules(opts, provider) {
       }
       return;
     }
-    if (provider.name === 'hermes') {
+    if (inlineStartup[provider.name]) {
+      // Retire the B1 indirect startup block when migrating to the actual loader.
+      const former = path.join(opts.target, 'AIWG.md');
+      if (fs.existsSync(former)) put(former, block(read(former), ''));
+      putStartup(path.join(opts.target, inlineStartup[provider.name]), body);
+    } else if (provider.name === 'hermes') {
       const dest = path.join(opts.target, 'AGENTS.md');
       putStartup(dest, body);
       putStartup(path.join(opts.target, '.hermes.md'), 'Read and follow `AGENTS.md` in this directory before every task and subagent task.');
@@ -505,7 +517,7 @@ function finishBindings(opts, provider) {
   const roots = [opts.target, opts.deploymentHome,
     ...[opts.kernelSkillsPath, opts.activeWorkspace, ...Object.values(provider.paths)].filter(p => p && path.isAbsolute(p))];
   const files = [...new Set(roots.flatMap(walk))];
-  const indexRel = `.${provider.name}/RULES-BOUND.md`;
+  const indexRel = provider.name === 'copilot' ? '.github/RULES-BOUND.md' : `.${provider.name}/RULES-BOUND.md`;
   const indexFile = path.join(opts.target, indexRel);
   const anchor = target => `${target.type}-${target.name}`.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
   const sections = new Map();
@@ -612,7 +624,8 @@ function projectBoundFlowSkills(opts, provider, selected) {
     if (!fs.existsSync(file) || receipt?.flowSource === entry.source) {
       const body = read(entry.source);
       const markdown = entry.source.endsWith('.md') ? body : `---\nname: ${name}\nnamespace: aiwg\ndescription: Invoke ${name}.\n---\n\n\`\`\`yaml\n${body}\n\`\`\`\n`;
-      const content = managed(replaceBoundRulesBlock(markdown, opts.ruleDelivery.bindings.get(entry.source)), opts);
+      const projected = provider.transformSkillMd ? provider.transformSkillMd(markdown, opts) : markdown;
+      const content = managed(replaceBoundRulesBlock(projected, opts.ruleDelivery.bindings.get(entry.source)), opts);
       put(file, content);
       put(path.join(dir, '.aiwg-managed'), 'true\n');
       put(receiptFile, `${JSON.stringify({ flowSource: entry.source,
@@ -634,7 +647,7 @@ export function warpRuleContent(content) {
 
 function startupFiles(opts, provider) {
   const bridgeNames = { claude: ['CLAUDE.md'], cursor: ['AGENTS.md'], codex: ['AGENTS.md'], hermes: ['AGENTS.md', '.hermes.md'], pi: ['AGENTS.md'], warp: ['WARP.md'], openclaw: [] };
-  const paths = ['AIWG.md', 'WORKSPACE.md', '.aiwg/AIWG.md', ...(bridgeNames[provider.name] || ['AGENTS.md'])].map(name => path.join(opts.target, name));
+  const paths = ['AIWG.md', 'WORKSPACE.md', '.aiwg/AIWG.md', ...(bridgeNames[provider.name] || ['AGENTS.md']), inlineStartup[provider.name]].filter(Boolean).map(name => path.join(opts.target, name));
   if (opts.activeWorkspace) paths.push(path.join(opts.activeWorkspace, 'AGENTS.md'));
   if (['claude', 'cursor', 'openclaw'].includes(provider.name)) {
     const dir = path.isAbsolute(provider.paths.rules) ? provider.paths.rules : path.join(opts.target, provider.paths.rules);
@@ -684,17 +697,23 @@ function capturePreimage(file, ancestors = new Set()) {
 }
 // cpSync materializes links; compare its output with the recursively resolved
 // content while retaining the original link-shaped preimage for commit drift.
-function materializeInput(from, to, ancestors = new Set()) {
-  if (!fs.existsSync(from)) return;
-  const real = fs.realpathSync(from);
-  if (ancestors.has(real)) throw new Error(`Cyclic deployment input: ${from}`);
-  const stat = fs.statSync(from);
+function materializeInput(from, to, ancestors = new Set(), parentReady = false) {
+  let stat;
+  try { stat = fs.statSync(from); } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
   if (stat.isDirectory()) {
+    // Only directories can lead back to an ancestor. Resolve them once and
+    // share the immutable ancestry set with their children, including aliases.
+    const real = fs.realpathSync(from);
+    if (ancestors.has(real)) throw new Error(`Cyclic deployment input: ${from}`);
+    const children = new Set([...ancestors, real]);
     fs.mkdirSync(to, { recursive: true });
-    for (const name of fs.readdirSync(from)) materializeInput(path.join(from, name), path.join(to, name), new Set([...ancestors, real]));
+    for (const name of fs.readdirSync(from)) materializeInput(path.join(from, name), path.join(to, name), children, true);
     fs.chmodSync(to, stat.mode & 0o7777);
   } else if (stat.isFile()) {
-    fs.mkdirSync(path.dirname(to), { recursive: true });
+    if (!parentReady) fs.mkdirSync(path.dirname(to), { recursive: true });
     fs.copyFileSync(from, to); fs.chmodSync(to, stat.mode & 0o7777);
   } else throw new Error(`Unsupported deployment input: ${from}`);
 }
@@ -971,7 +990,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
   const selectedRules = collectDeploymentRuleSources({ ...original, previousRuleSources: previous.ruleSources || [] });
   const initialPreimages = [...(pool ? pool.preimages : snapshotPreimages([sourceTree, path.join(corpusRoot, 'prebuilt', 'framework-relations'), path.join(corpusRoot, 'package.json'), path.join(corpusRoot, 'schemas')])), ...snapshotPreimages([path.join(corpusRoot, '.aiwg', '.index'),
     manifestFile, path.join(original.target, '.aiwg', 'aiwg.config'), path.join(original.target, '.aiwg', 'AIWG.md'), path.join(original.target, '.aiwg', 'skills'), path.join(original.target, '.aiwg-location'), ...projectGraphFiles, ...userGraphFiles, ...localSources,
-    ...(path.resolve(original.srcRoot) === path.resolve(corpusRoot) ? [] : [original.srcRoot]), ...selectedRules, ...selectedRules.map(file => path.dirname(file)),
+    ...(path.resolve(original.srcRoot) === path.resolve(corpusRoot) ? [] : [original.srcRoot]), ...(original.additionalSources || []), ...selectedRules, ...selectedRules.map(file => path.dirname(file)),
     userConfigFile('aiwg.config'), process.env.AIWG_USER_REGISTRY_PATH || userConfigFile('installed.json'),
     ...(original.ruleSources || []), ...(previous.ruleSources || []), ...(original.bindingEntries || []).map(entry => entry.path)])];
   let manifestState = initialPreimages.find(item => item.path === path.resolve(manifestFile)).state;
@@ -1053,7 +1072,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
       if (JSON.stringify(capturePreimage(to)) !== JSON.stringify(materializedPreimage(expected || { kind: 'missing' }))) throw new Error(`Project-local input changed while preparing snapshot: ${from}`);
       sourceMappings.push({ from, to });
     }
-    const externalInputs = [...new Set([...(path.resolve(original.srcRoot) === path.resolve(corpusRoot) ? [] : [original.srcRoot]), ...(original.ruleSources || []), ...(previous.ruleSources || []),
+    const externalInputs = [...new Set([...(path.resolve(original.srcRoot) === path.resolve(corpusRoot) ? [] : [original.srcRoot]), ...(original.additionalSources || []), ...(original.ruleSources || []), ...(previous.ruleSources || []),
       ...(original.bindingEntries || []).map(entry => entry.path)].map(file => path.resolve(file)))];
     for (const [index, from] of externalInputs.entries()) {
       if (sourceMappings.some(item => from === item.from || from.startsWith(`${item.from}${path.sep}`))) continue;
@@ -1088,6 +1107,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
       return result.split(snapshotRoot).join(corpusRoot);
     };
     original = { ...original, config: effectiveConfig, srcRoot: mapSource(original.srcRoot), pinConfigs, mapInputPath: mapSource, logicalInputPath,
+      ...(original.additionalSources ? { additionalSources: original.additionalSources.map(mapSource) } : {}),
       ...(original.ruleSources ? { ruleSources: original.ruleSources.map(mapSource) } : {}),
       ...(original.bindingEntries ? { bindingEntries: original.bindingEntries.map(entry => ({ ...entry, path: mapSource(entry.path) })) } : {}) };
     const target = path.resolve(original.target);
@@ -1110,6 +1130,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
     fs.mkdirSync(path.join(stage, '.aiwg'), { recursive: true });
     if (fs.existsSync(projectSnapshot)) materializeInput(projectSnapshot, path.join(stage, '.aiwg', 'aiwg.config'));
     const rootNames = ['AGENTS.md', 'AIWG.md', 'WORKSPACE.md', 'CLAUDE.md', 'WARP.md', '.hermes.md', '.aiwg/AIWG.md', '.aiwg/frameworks/registry.json'];
+    if (provider.name === 'windsurf') rootNames.push('.windsurfrules');
     for (const framework of getFrameworksForMode(original.srcRoot, original.mode)) {
       for (const entry of framework.manifest?.memory?.creates || []) {
         if (typeof entry?.path !== 'string' || !entry.path.startsWith('.aiwg/') || !path.extname(entry.path)) continue;
@@ -1223,7 +1244,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
     if (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly && opts.deployBehaviors !== false) {
       deployEmulatedBehaviors(delivery.rules.filter(rule => rule.behavior).map(rule => path.dirname(rule.file)), provider.name, stage, opts);
     }
-    const selectedRoots = [original.srcRoot, ...getFrameworksForMode(original.srcRoot, original.mode).map(framework => framework.path), ...discoverAddons(original.srcRoot).map(addon => addon.path)];
+    const selectedRoots = [original.srcRoot, ...(original.additionalSources || []), ...getFrameworksForMode(original.srcRoot, original.mode).map(framework => framework.path), ...discoverAddons(original.srcRoot).map(addon => addon.path)];
     const selected = entry => selectedRoots.some(root => /^(agents|skills|commands|flows|workflows)[/\\]/.test(path.relative(root, entry.source)));
     opts.definitionRoutes = [];
     if (provider.name === 'hermes' && !opts.kernelOnly && !opts.skillsOnly && !opts.commandsOnly && !opts.rulesOnly) {
@@ -1243,7 +1264,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
       }
     }
     if (!opts.deferRuleProjection) {
-      if (opts.kernelOnly || opts.deployRules || opts.rulesOnly || (!opts.skillsOnly && !opts.commandsOnly && ['hermes', 'warp'].includes(provider.name))) projectRules(opts, provider);
+      if (opts.kernelOnly || opts.deployRules || opts.rulesOnly || (!opts.skillsOnly && !opts.commandsOnly && (inlineStartup[provider.name] || ['hermes', 'warp'].includes(provider.name)))) projectRules(opts, provider);
       finishBindings(opts, provider);
     }
     // Normalize all generated path wrappers before counting or promoting bytes.
