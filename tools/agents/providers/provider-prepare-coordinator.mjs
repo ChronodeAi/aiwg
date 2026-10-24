@@ -81,6 +81,10 @@ function prepareInChild({ job, attempt, sessionRoot, poolDescriptor, workerPath,
     let outcome;
     let killTimer;
     let timedOut = false;
+    let exited = false;
+    let disconnected = false;
+    let exitCode;
+    let exitSignal;
     const finish = () => {
       if (settled) return;
       settled = true;
@@ -107,19 +111,30 @@ function prepareInChild({ job, attempt, sessionRoot, poolDescriptor, workerPath,
     timer.unref?.();
     child.once('error', error => {
       // A spawn failure has no operating-system child to reap. Every error
-      // after a pid is assigned still waits for the exit event below.
+      // after a pid is assigned still waits for exit and IPC disconnect below.
       if (!child.pid) { outcome = { error }; finish(); }
       else stop(error);
     });
-    // Settle only after the operating system reports process exit. This keeps
-    // every worker in activeChildren until it is confirmed gone, including workers
-    // that send a response and retain an unexpected live handle.
-    child.once('exit', (code, signal) => {
-      if (outcome?.value && (code !== 0 || signal)) {
-        outcome = { error: new Error(`Provider preparation worker exited ${signal || code || 'without status'} after responding for ${job.provider}`) };
+    // Exit confirms termination; disconnect confirms pending IPC messages have
+    // drained. Either event can arrive first. Keep workers active until both,
+    // including workers that respond and retain an unexpected live handle.
+    const finishAfterDisconnectAndExit = () => {
+      if (!exited || !disconnected) return;
+      if (outcome?.value && (exitCode !== 0 || exitSignal)) {
+        outcome = { error: new Error(`Provider preparation worker exited ${exitSignal || exitCode || 'without status'} after responding for ${job.provider}`) };
       }
-      if (!outcome) outcome = { error: new Error(`${timedOut ? 'Provider preparation timed out' : `Provider preparation worker exited ${code ?? 'without status'}`} for ${job.provider}${stderrBytes ? `: ${Buffer.concat(stderr).toString('utf8').trim()}` : ''}`) };
+      if (!outcome) outcome = { error: new Error(`${timedOut ? 'Provider preparation timed out' : `Provider preparation worker exited ${exitCode ?? 'without status'}`} for ${job.provider}${stderrBytes ? `: ${Buffer.concat(stderr).toString('utf8').trim()}` : ''}`) };
       finish();
+    };
+    child.once('exit', (code, signal) => {
+      exited = true;
+      exitCode = code;
+      exitSignal = signal;
+      finishAfterDisconnectAndExit();
+    });
+    child.once('disconnect', () => {
+      disconnected = true;
+      finishAfterDisconnectAndExit();
     });
     child.once('message', response => {
       try {
@@ -137,7 +152,7 @@ function prepareInChild({ job, attempt, sessionRoot, poolDescriptor, workerPath,
         if (response.type !== 'prepared') throw new Error('Invalid provider preparation worker response type');
         outcome = { value: { detached: readPlan(response, expectedPlan), scratch, attempt } };
         // Closing the IPC channel lets the single-request worker exit normally;
-        // the exit handler above confirms termination before exposing its plan.
+        // the exit/disconnect handlers confirm termination and IPC drainage.
         if (child.connected) { try { child.disconnect(); } catch {} }
       } catch (error) { stop(error); }
     });
@@ -200,6 +215,10 @@ export async function prepareProviderDeployments({
     removeSession();
   };
   const prepareOne = async (index, attempt = 0) => {
+    // Never start a worker once the session is closed: it would outlive
+    // cleanup, and anything it writes (e.g. the shared binding-index cache)
+    // would land after its owner removed it.
+    if (closed) throw new Error('Provider preparation session is closed');
     const raw = await prepareInChild({ job: jobs[index], attempt, sessionRoot, poolDescriptor, workerPath, workerEnv, activeChildren, timeoutMs });
     const plan = transaction.adopt(raw.detached, {
       scratch: raw.scratch,
@@ -212,6 +231,7 @@ export async function prepareProviderDeployments({
   try {
     await Promise.all(Array.from({ length: concurrency }, async () => {
       for (;;) {
+        if (closed) return;
         const index = next++;
         if (index >= jobs.length) return;
         prepared[index] = await prepareOne(index);
