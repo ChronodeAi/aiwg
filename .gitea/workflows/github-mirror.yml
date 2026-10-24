@@ -129,7 +129,7 @@ jobs:
           set -e
           printf '%s\n' "${PUSH_OUTPUT//${GH_TOKEN}/***}"
           if [ "$PUSH_STATUS" -ne 0 ]; then
-            if grep -qiE 'authentication failed|invalid username or password|could not read username|bad credentials|permission to .* denied|returned error: 40[13]' <<<"$PUSH_OUTPUT"; then
+            if grep -qiE 'authentication failed|invalid username or (password|token)|could not read username|bad credentials|permission to .* denied|returned error: 40[13]' <<<"$PUSH_OUTPUT"; then
               echo "ERROR: GitHub rejected the mirror token (vault ${GH_MIRROR_TOKEN_VAULT_PATH}#${GH_MIRROR_TOKEN_VAULT_FIELD}). Rotate it in vault and re-run." >&2
               exit 1
             fi
