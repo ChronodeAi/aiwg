@@ -17,6 +17,7 @@
  */
 
 import readline from 'readline';
+import { Writable } from 'node:stream';
 import * as ui from './ui.js';
 
 /**
@@ -38,6 +39,14 @@ export function createPromptInterface(): readline.Interface {
     input: process.stdin,
     output: process.stdout,
   });
+}
+
+/** Readline still owns timeout/cancellation; discard terminal echo for secret input. */
+export function createSecretPromptInterface(): readline.Interface {
+  const output = new Writable({ write(_chunk, _encoding, done) { done(); } });
+  const rl = readline.createInterface({ input: process.stdin, output, terminal: true });
+  rl.once('close', () => output.destroy());
+  return rl;
 }
 
 /**

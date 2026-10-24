@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { guidedInventory, INTERVIEW_TIME } from '../../helpers/guided-setup-fixture.js';
@@ -11,6 +11,8 @@ import { isInteractive } from '../../../src/cli/env.js';
 import { askString, createPromptInterface } from '../../../src/cli/prompt-utils.js';
 import { discoverInventory } from '../../../src/discovery/index.js';
 import { emptyConfig, readAiwgConfig, writeAiwgConfig } from '../../../src/config/aiwg-config.js';
+import { setupHandler } from '../../../src/cli/handlers/setup.js';
+import { buildInterviewPlan } from '../../../src/discovery/interview.js';
 import { initHandler } from '../../../src/cli/handlers/init.js';
 import { questionId, workspaceSlug } from '../../../src/discovery/interview.js';
 import { remainingPlanActions, unansweredPlanChoices } from '../../../src/discovery/plan-store.js';
@@ -44,15 +46,15 @@ afterEach(() => harness.cleanup());
 describe('progressive guided setup TTY', () => {
   it('asks the exact block order and skips flag-supplied questions', async () => {
     const saves = vi.spyOn(planStore, 'writeSetupPlan');
-    const script = [harness.project, 'skip', 'docs', 'solo', 'false', 'true', 'decline', 'false', '', 'env:OPENAI_API_KEY', 'false', 'false', 'skip'];
+    const script = [harness.project, 'skip', 'docs', 'solo', 'false', 'true', 'false', '', 'env:OPENAI_API_KEY', 'decline', 'false', 'false', 'skip'];
     scripted(script);
-    await initHandler.execute(harness.ctx(['--scope', 'project']));
+    await initHandler.execute(harness.ctx(['--jev', 'decline', '--scope', 'project']));
     const id = (block: Parameters<typeof questionId>[0], topic: string, provider = 'shared') => questionId(block, topic, harness.project, provider);
     expect(promptedIds()).toEqual([
       id('targets', 'workspaces'), questionId('targets', 'scan-opt-in'), id('intent', 'use'), id('intent', 'team'),
-      id('tools', 'provider', 'claude'), id('tools', 'provider', 'codex'), id('tools', 'worker-dispatch'), id('tools', 'scripts'),
+      id('tools', 'provider', 'claude'), id('tools', 'provider', 'codex'), id('tools', 'scripts'),
       id('locations', 'config-dir', 'codex'), id('locations', 'credential-source', 'codex'),
-      id('capabilities', 'signing'), id('capabilities', 'delivery'), id('capabilities', 'tracker'),
+      id('tools', 'worker-dispatch'), id('capabilities', 'signing'), id('capabilities', 'delivery'), id('capabilities', 'tracker'),
     ]);
     expect(script).toEqual([]);
     const plan = stored();
@@ -68,11 +70,43 @@ describe('progressive guided setup TTY', () => {
     expect(discoverInventory).toHaveBeenCalledExactlyOnceWith({ workspaceRoot: harness.project, roots: undefined });
   });
 
+  it.each(['flag', 'interview'])('defers Jev via %s without a credential and asks it first next session', async mode => {
+    const flags = ['--scope', 'project', '--providers', 'codex', '--worker-dispatch', 'decline', '--default-scripts', 'true'];
+    const jevId = questionId('capabilities', 'jev', harness.project);
+    vi.mocked(askString).mockImplementation(async () => promptedIds().at(-1) === jevId ? 'defer' : 'skip');
+    await initHandler.execute(harness.ctx([...flags, ...(mode === 'flag' ? ['--jev', 'defer'] : [])]));
+    expect(unansweredPlanChoices(stored()).find(q => q.questionId === jevId)?.deferredAt).toBe(INTERVIEW_TIME);
+    expect(stored().actions.some(a => a.kind === 'configure-jev')).toBe(false);
+    vi.mocked(console.log).mockClear();
+    await initHandler.execute(harness.ctx(flags));
+    expect(promptedIds()[0]).toBe(jevId);
+    expect(vi.mocked(console.log).mock.calls.flat().join(' ')).toContain('external service');
+  });
+
+  it('does not re-offer a worker decline loaded from the existing config field', async () => {
+    let existing: ReturnType<typeof emptyConfig> | null = null;
+    vi.mocked(readAiwgConfig).mockImplementation(async () => existing);
+    vi.mocked(writeAiwgConfig).mockImplementation(async (_root, config) => { existing = config; });
+    const inventory = guidedInventory(harness.project);
+    const declinePlan = buildInterviewPlan({ inventory, workspaceRoot: harness.project }, {
+      [questionId('targets', 'workspaces', harness.project)]: { value: [harness.project], source: 'interview', answeredAt: INTERVIEW_TIME },
+      [questionId('tools', 'worker-dispatch', harness.project)]: { value: 'decline', source: 'interview', answeredAt: INTERVIEW_TIME },
+    }, INTERVIEW_TIME);
+    await planStore.writeSetupPlan(harness.project, declinePlan);
+    expect((await setupHandler.execute(harness.ctx(['--apply', '--yes']))).exitCode).toBe(0);
+    expect(existing).toMatchObject({ setup: { worker_dispatch_offer: 'declined' } });
+    unlinkSync(planPath()); // A new session must recover the preference from config alone.
+    vi.mocked(askString).mockResolvedValue('skip');
+    await initHandler.execute(harness.ctx(['--scope', 'project', '--jev', 'decline']));
+    expect(promptedIds()).not.toContain(questionId('tools', 'worker-dispatch', harness.project));
+    expect(stored().answers[questionId('tools', 'worker-dispatch', harness.project)]).toMatchObject({ value: 'decline', source: 'existing-setting' });
+  });
+
   it('supports back and edit, showing the prior answer until it is replaced', async () => {
     const useId = questionId('intent', 'use', harness.project);
     const script = [harness.project, 'skip', 'docs', 'back', 'mixed', 'solo', 'false', '', 'skip', `edit ${useId}`, 'ops', 'false', 'false', 'skip'];
     scripted(script);
-    await initHandler.execute(harness.ctx(['--scope', 'project', '--providers', 'codex', '--worker-dispatch', 'decline']));
+    await initHandler.execute(harness.ctx(['--jev', 'decline', '--scope', 'project', '--providers', 'codex', '--worker-dispatch', 'decline']));
     expect(script).toEqual([]);
     expect(promptedIds().filter(id => id === useId)).toHaveLength(3);
     expect(vi.mocked(console.log).mock.calls.flat()).toContain('Current: "docs"');
@@ -81,7 +115,7 @@ describe('progressive guided setup TTY', () => {
   });
 
   it('resumes only unanswered choices, with deferred credentials first', async () => {
-    const flags = ['--scope', 'project', '--intent', 'docs', '--providers', 'codex', '--worker-dispatch', 'decline', '--default-scripts', 'true'];
+    const flags = ['--jev', 'decline', '--scope', 'project', '--intent', 'docs', '--providers', 'codex', '--worker-dispatch', 'decline', '--default-scripts', 'true'];
     const script = [harness.project, 'skip', 'solo', '', 'defer', 'false', 'skip', 'skip'];
     scripted(script);
     await initHandler.execute(harness.ctx(flags));
@@ -105,7 +139,7 @@ describe('progressive guided setup TTY', () => {
       if (value === 'docs') checkpoint = readFileSync(planPath(), 'utf8');
       return value;
     });
-    const result = await initHandler.execute(harness.ctx(['--scope', 'project']));
+    const result = await initHandler.execute(harness.ctx(['--jev', 'decline', '--scope', 'project']));
     expect(result.message).toContain('cancelled');
     expect(checkpoint).not.toBe('');
     expect(readFileSync(planPath(), 'utf8')).toBe(checkpoint);
@@ -116,7 +150,7 @@ describe('progressive guided setup TTY', () => {
 
   it('cancel in the first block creates no plan', async () => {
     scripted(['cancel']);
-    await initHandler.execute(harness.ctx(['--scope', 'project']));
+    await initHandler.execute(harness.ctx(['--jev', 'decline', '--scope', 'project']));
     expect(existsSync(planPath())).toBe(false);
   });
 
@@ -124,7 +158,7 @@ describe('progressive guided setup TTY', () => {
     const existing = emptyConfig(['claude']); existing.delivery = { require_signed_commits: false, mode: 'direct' };
     vi.mocked(readAiwgConfig).mockResolvedValue(existing);
     scripted([harness.project, 'skip', 'solo', '', 'skip', 'skip']);
-    await initHandler.execute(harness.ctx(['--scope', 'project', '--intent', 'docs', '--providers', 'codex', '--worker-dispatch', 'decline']));
+    await initHandler.execute(harness.ctx(['--jev', 'decline', '--scope', 'project', '--intent', 'docs', '--providers', 'codex', '--worker-dispatch', 'decline']));
     const plan = stored();
     expect(plan.answers[questionId('tools', 'provider', harness.project, 'codex')].source).toBe('explicit-flag');
     expect(plan.answers[questionId('capabilities', 'delivery', harness.project)].source).toBe('existing-setting');
@@ -136,13 +170,13 @@ describe('progressive guided setup TTY', () => {
     const inventory = guidedInventory(harness.project); inventory.projects[0].layout = 'ambiguous';
     vi.mocked(discoverInventory).mockResolvedValue(inventory);
     vi.mocked(askString).mockResolvedValue('skip');
-    await expect(initHandler.execute(harness.ctx(['--scope', 'project']))).rejects.toMatchObject({ exitCode: 2, message: expect.stringContaining('--monorepo') });
+    await expect(initHandler.execute(harness.ctx(['--jev', 'decline', '--scope', 'project']))).rejects.toMatchObject({ exitCode: 2, message: expect.stringContaining('--monorepo') });
   });
 
   it('re-enters existing settings under --force, including a previously saved session', async () => {
     const existing = emptyConfig(['codex']); existing.delivery = { mode: 'direct', require_signed_commits: false };
     vi.mocked(readAiwgConfig).mockResolvedValue(existing);
-    const flags = ['--scope', 'project', '--providers', 'codex', '--intent', 'docs', '--worker-dispatch', 'decline', '--default-scripts', 'true'];
+    const flags = ['--jev', 'decline', '--scope', 'project', '--providers', 'codex', '--intent', 'docs', '--worker-dispatch', 'decline', '--default-scripts', 'true'];
     scripted([harness.project, 'skip', 'solo', '', 'skip', 'skip']);
     await initHandler.execute(harness.ctx(flags));
     const deliveryId = questionId('capabilities', 'delivery', harness.project);
@@ -157,7 +191,7 @@ describe('progressive guided setup TTY', () => {
   it('keeps an explicitly edited existing setting on the next resume', async () => {
     const existing = emptyConfig(['codex']); existing.delivery = { mode: 'direct', require_signed_commits: false };
     vi.mocked(readAiwgConfig).mockResolvedValue(existing);
-    const flags = ['--scope', 'project', '--providers', 'codex', '--intent', 'docs', '--worker-dispatch', 'decline', '--default-scripts', 'true'];
+    const flags = ['--jev', 'decline', '--scope', 'project', '--providers', 'codex', '--intent', 'docs', '--worker-dispatch', 'decline', '--default-scripts', 'true'];
     const deliveryId = questionId('capabilities', 'delivery', harness.project);
     scripted([harness.project, 'skip', 'solo', '', 'skip', `edit ${deliveryId}`, '{"mode":"feature-branch","force_push_policy":"never"}', 'skip']);
     await initHandler.execute(harness.ctx(flags));
@@ -176,7 +210,7 @@ describe('progressive guided setup TTY', () => {
     const workspacesId = questionId('targets', 'workspaces', harness.project);
     const script = [harness.project, other, `edit ${workspacesId}`, `${harness.project},${other}`];
     vi.mocked(askString).mockImplementation(async () => script.shift() ?? 'skip');
-    await initHandler.execute(harness.ctx(['--scope', 'project', '--intent', 'docs', '--providers', 'codex', '--default-scripts', 'false', '--worker-dispatch', 'decline']));
+    await initHandler.execute(harness.ctx(['--jev', 'decline', '--scope', 'project', '--intent', 'docs', '--providers', 'codex', '--default-scripts', 'false', '--worker-dispatch', 'decline']));
     expect(discoverInventory).toHaveBeenNthCalledWith(2, { workspaceRoot: harness.project, roots: [other] });
     expect(stored().answers[questionId('tools', 'provider', other, 'codex')]).toMatchObject({ value: true, source: 'explicit-flag' });
     expect(stored().answers[questionId('tools', 'provider', other, 'claude')]).toMatchObject({ value: false, source: 'explicit-flag' });

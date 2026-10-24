@@ -1,10 +1,13 @@
+import { qualificationDigest } from '../../../src/models/qualification-digest.mjs';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadRecordedWorkerInstallations, prepareWorkerInstallationStore } from '../../../src/models/worker-installation.mjs';
-import { loadProviderModelCapabilities, WorkerRoleEffortError } from '../../../src/models/provider-policy.js';
+import { inspectRecordedWorkerQualifications, workerNegativeFixtureDigest, loadRecordedWorkerInstallations, prepareWorkerInstallationStore } from '../../../src/models/worker-installation.mjs';
+import { DEFAULT_WORKER_SELECTION, WORKER_OPERATOR_APPROVAL, loadProviderModelCapabilities, WorkerRoleEffortError } from '../../../src/models/provider-policy.js';
 
+vi.mock('node:child_process', { spy: true });
 vi.mock('node:fs/promises', { spy: true });
 // Node's native homedir ignores thread-local env changes in Vitest's pool.
 vi.mock('node:os', async importOriginal => {
@@ -19,6 +22,35 @@ afterEach(async () => {
 });
 
 describe('qualification store permission repair', () => {
+  it('projects only bound, unexpired historical approvals without probing, importing drivers, or reading auth', async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-guided-worker-evidence-')); roots.push(root);
+    const cwd = path.join(root, 'project'); const store = path.join(root, 'store');
+    await Promise.all([fs.mkdir(cwd), fs.mkdir(store, { mode: 0o700 })]);
+    vi.stubEnv('AIWG_CONFIG', store);
+    const evidence = { scopeDigest: `sha256:${'a'.repeat(64)}`, fixtureDigest: await workerNegativeFixtureDigest(),
+      verifiedAt: new Date().toISOString(), evidenceRef: WORKER_OPERATOR_APPROVAL };
+    const adapter = { provider: 'codex', qualification: { status: 'qualified', evidenceRef: WORKER_OPERATOR_APPROVAL },
+      invocationProfiles: { default: { installationQualification: evidence } } };
+    const record = { cli: 'codex', adapter, binding: { profile: 'default', cliVersion: '1', accountScope: 'test-account' },
+      installation: { cwd, profile: 'default', cliVersion: '1', effectiveConfigDigest: qualificationDigest(DEFAULT_WORKER_SELECTION), evidence } };
+    const input = { cwd, policy: DEFAULT_WORKER_SELECTION,
+      parallelism: { clis: { codex: { adapter: 'providers:codex', accountScope: 'test-account', quotaScope: 'test-quota' } } } };
+    const file = path.join(store, 'worker-installations.json');
+    const write = async () => fs.writeFile(file, JSON.stringify({ version: 1, registrations: [record] }), { mode: 0o600 });
+    await write();
+    const reads = vi.spyOn(fs, 'open');
+    expect(await inspectRecordedWorkerQualifications(input)).toEqual([{ cli: 'codex', provider: 'codex' }]);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(reads.mock.calls.every(([name]) => String(name) === file)).toBe(true);
+    record.installation.evidence.verifiedAt = '2000-01-01T00:00:00.000Z';
+    await write();
+    expect(await inspectRecordedWorkerQualifications(input)).toEqual([]);
+    record.installation.evidence.verifiedAt = new Date().toISOString();
+    record.binding.accountScope = 'other-account';
+    await write();
+    expect(await inspectRecordedWorkerQualifications(input)).toEqual([]);
+  });
+
   it('requires recorded approvals before policy prechecks, then checks policy before record validation', async () => {
     const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-policy-order-')); roots.push(root);
     const cwd = path.join(root, 'project'); const store = path.join(root, 'store');

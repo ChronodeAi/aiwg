@@ -718,7 +718,7 @@ export const initCommand: Extension = {
     triggerPhrases: ['init project', 'setup project config', 'configure providers'],
     commandHint: {
       template: 'utility',
-      argumentHint: '[--scope project|user] [--intent code|docs|ops|mixed] [--credential <provider>=env:NAME|file:PATH|stdin]',
+      argumentHint: '[--scope project|user] [--intent code|docs|ops|mixed] [--credential <provider>=env:NAME|file:PATH|stdin] [--jev enable|decline|defer]',
       allowedTools: ['Read', 'Write'],
     },
   } satisfies SkillMetadata,
@@ -751,7 +751,7 @@ export const setupCommand: Extension = {
     ],
     commandHint: {
       template: 'utility',
-      argumentHint: 'project [--yes] [--dry-run] [--review] [--apply] [--plan <id>] [--target <dir>] [--scope project|user] [--workspace <root>] [--monorepo root|package] [--package <root>] [--scan-roots <dir>] [--intent code|docs|ops|mixed] [--credential <provider>=env:NAME|file:PATH|stdin]',
+      argumentHint: 'project [--yes] [--dry-run] [--review] [--apply] [--plan <id>] [--target <dir>] [--scope project|user] [--workspace <root>] [--monorepo root|package] [--package <root>] [--scan-roots <dir>] [--intent code|docs|ops|mixed] [--credential <provider>=env:NAME|file:PATH|stdin] [--jev enable|decline|defer]',
       allowedTools: ['Read', 'Write', 'Bash'],
     },
   } satisfies SkillMetadata,

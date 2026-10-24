@@ -29,6 +29,30 @@ describe('guided interview question contract', () => {
     expect(questions.some(q => q.topic === 'install-method')).toBe(false);
   });
 
+  it('offers optional integrations without secrets, gates worker details on consent, and uses only recorded qualification', () => {
+    const selected = { [questionId('targets', 'workspaces', root)]: answer([root], 'interview') };
+    const questions = interviewQuestions(context, selected);
+    expect(questions.find(q => q.topic === 'jev')).toMatchObject({ optional: true, default: false });
+    expect(questions.find(q => q.topic === 'jev')?.explanation).toMatch(/external service.*charges/);
+    expect(questions.find(q => q.topic === 'worker-dispatch')).toMatchObject({ block: 'capabilities', default: false });
+    expect(questions.find(q => q.topic === 'worker-dispatch')?.explanation).toContain('installed-not-qualified');
+    expect(questions.some(q => q.topic === 'worker-config' || q.provider === 'jev')).toBe(false);
+    const declined = { ...selected, [questionId('tools', 'worker-dispatch', root)]: answer('decline', 'existing-setting') };
+    expect(interviewQuestions(context, declined).some(q => q.topic === 'worker-dispatch')).toBe(false);
+    const enabled = { ...selected, [questionId('tools', 'worker-dispatch', root)]: answer('enable', 'interview'),
+      [questionId('capabilities', 'jev', root)]: answer('enable', 'interview') };
+    const qualified = interviewQuestions({ ...context, qualifiedWorkers: { [root]: ['codex'] } }, enabled);
+    expect(qualified.find(q => q.topic === 'worker-dispatch')?.explanation).toContain('codex: qualified (recorded evidence');
+    expect(qualified.find(q => q.topic === 'worker-dispatch')?.explanation).toContain('claude: installed-not-qualified');
+    expect(qualified.some(q => q.topic === 'worker-config')).toBe(true);
+    expect(qualified.find(q => q.provider === 'jev' && q.input === 'credential')?.default).toBeNull();
+    const plan = buildInterviewPlan(context, enabled, INTERVIEW_TIME);
+    expect(plan.actions.map(a => a.kind)).toEqual(['configure-jev', 'configure-worker-dispatch']);
+    expect(plan.actions.find(a => a.kind === 'configure-worker-dispatch')?.dependsOn).toContainEqual({ kind: 'tool', executable: 'codex', field: 'path' });
+    const unrelated = { ...inventory, tools: [inventory.tools[0], { ...inventory.tools[1], executable: 'unrelated-cli' }] };
+    expect(interviewQuestions({ inventory: unrelated, workspaceRoot: root }, selected).some(q => q.topic === 'worker-dispatch')).toBe(false);
+  });
+
   it('hashes the canonical root and never uses inventory indexes', () => {
     const digest = createHash('sha256').update('/example/SHOP $1').digest('hex').slice(0, 8);
     expect(workspaceSlug('/example/SHOP $1')).toBe(`shop--1-${digest}`);

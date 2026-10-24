@@ -39,3 +39,8 @@ export function registerWorkerRecoveryCapabilities<T extends object>(driver: T, 
 export function getWorkerRecoveryCapabilities(driver: object | undefined | null): Readonly<WorkerRecoveryCapabilities> | null;
 
 export function prepareWorkerInstallationStore(input: { workerWritableRoots: string[]; apply?: boolean }): Promise<{ path: string; action: string }[]>;
+
+/** Historical approvals only; no driver import, probe, auth read, or launch authority. */
+export function inspectRecordedWorkerQualifications(input: {
+  cwd: string; policy: WorkerSelectionPolicy; parallelism: import('../config/aiwg-config.js').ParallelismConfig;
+}): Promise<Array<{ cli: string; provider: string }>>;

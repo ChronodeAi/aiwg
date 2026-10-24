@@ -1,7 +1,10 @@
 import { stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
+import { decisionCapabilities } from '../../decision/driver.js';
+import { ConfigLoader } from '../../models/config-loader.js';
+import { inspectRecordedWorkerQualifications } from '../../models/worker-installation.mjs';
 import type { AiwgConfig } from '../../config/aiwg-config.js';
-import { readAiwgConfig } from '../../config/aiwg-config.js';
+import { readAiwgConfig, validateParallelismConfig } from '../../config/aiwg-config.js';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
 import { discoverInventory } from '../../discovery/index.js';
 import { buildInterviewPlan, credentialEnvName, credentialReference, INSTALL_METHOD_EXPLANATION,
@@ -24,9 +27,11 @@ export interface GuidedSetupFlags {
   scanRoots?: string[];
   intent?: 'code' | 'docs' | 'ops' | 'mixed';
   credentials: Record<string, CredentialReference>;
+  jev?: 'enable' | 'decline' | 'defer';
+  jevOptions?: PlanValue;
   enabled: boolean;
 }
-const NEW_FLAGS = ['--scope', '--workspace', '--monorepo', '--package', '--scan-roots', '--intent', '--credential'];
+const NEW_FLAGS = ['--scope', '--workspace', '--monorepo', '--package', '--scan-roots', '--intent', '--credential', '--jev', '--region', '--endpoint'];
 export function parseGuidedSetupFlags(args: readonly string[], command: 'init' | 'setup'): GuidedSetupFlags {
   const usable = (name: string, raw: string): string => {
     if (!raw.trim()) throw new MissingFlagValueError(name);
@@ -43,6 +48,16 @@ export function parseGuidedSetupFlags(args: readonly string[], command: 'init' |
     if (!(options as readonly string[]).includes(raw)) throw new Error(`${name} must be one of: ${options.join(', ')}`);
     return raw as T;
   };
+  const jev = enumeration('--jev', ['enable', 'decline', 'defer']);
+  const region = value('--region');
+  const endpoint = value('--endpoint');
+  const switches = args.slice(0, args.indexOf('--') < 0 ? args.length : args.indexOf('--'));
+  const verify = switches.includes('--verify');
+  const remove = switches.includes('--remove');
+  const tokenStdin = switches.includes('--token-stdin');
+  if ((jev === 'decline' || jev === 'defer' || remove) && (tokenStdin || region || endpoint || verify)) throw new Error('Jev decline/defer/remove cannot be combined with Jev enable options.');
+  if (remove && jev === 'enable') throw new Error('--remove cannot be combined with --jev enable.');
+  const jevOptions = region || endpoint || verify || remove ? { ...(region ? { region } : {}), ...(endpoint ? { endpoint } : {}), ...(verify ? { verify } : {}), ...(remove ? { remove } : {}) } : undefined;
   const scope = enumeration('--scope', ['project', 'user']);
   const intent = enumeration('--intent', ['code', 'docs', 'ops', 'mixed']);
   const monorepo = enumeration('--monorepo', ['root', 'package']);
@@ -52,18 +67,23 @@ export function parseGuidedSetupFlags(args: readonly string[], command: 'init' |
   const credentials: GuidedSetupFlags['credentials'] = {};
   for (const raw of values('--credential')) {
     const separator = raw.indexOf('=');
-    const provider = normalizeProviderDefinitionId(raw.slice(0, separator));
+    const provider = raw.slice(0, separator) === 'jev' ? 'jev' : normalizeProviderDefinitionId(raw.slice(0, separator));
     if (separator < 1 || !provider || provider === 'generic') throw new Error('--credential requires a known <provider>=env:NAME|file:PATH|stdin.');
     credentials[provider] = credentialReference(raw.slice(separator + 1));
   }
+  if (tokenStdin) {
+    if (credentials.jev && credentials.jev.source !== 'stdin-at-apply') throw new Error('--token-stdin conflicts with --credential jev.');
+    credentials.jev = credentialReference('stdin');
+  }
+  if (jevOptions) validateJevOptions(jevOptions);
   if (monorepo === 'package' && !packageRoot) throw new Error('--monorepo package requires --package <root>.');
   if (packageRoot && monorepo !== 'package') throw new Error('--package requires --monorepo package.');
   if (command === 'init' && (workspaces.length || monorepo || packageRoot || scanRoots.length)) {
     throw new Error('--workspace, --monorepo, --package and --scan-roots are available on setup.');
   }
   // The strict helpers honor the bare -- terminator, including malformed later occurrences.
-  const enabled = NEW_FLAGS.some(name => value(name) !== undefined);
-  return { scope, intent, monorepo, packageRoot, workspaces: workspaces.length ? workspaces : undefined,
+  const enabled = NEW_FLAGS.some(name => value(name) !== undefined) || tokenStdin || verify || remove;
+  return { jev: jev ?? (remove ? 'decline' : undefined) ?? (tokenStdin || region || endpoint || verify ? 'enable' : undefined), jevOptions, scope, intent, monorepo, packageRoot, workspaces: workspaces.length ? workspaces : undefined,
     scanRoots: scanRoots.length ? scanRoots : undefined, credentials, enabled };
 }
 
@@ -125,6 +145,9 @@ function answersFromValues(context: InterviewContext, values: GuidedSuppliedValu
     }
     put(questionId('tools', 'worker-dispatch', root), values.workerDispatch);
     put(questionId('tools', 'scripts', root), values.scripts);
+    if (flags?.jev !== 'defer') put(questionId('capabilities', 'jev', root),
+      (flags?.jevOptions as Record<string, PlanValue> | undefined)?.remove === true ? 'remove' : flags?.jev);
+    put(questionId('capabilities', 'jev-options', root, 'jev'), flags?.jevOptions);
     put(questionId('capabilities', 'signing', root), values.signing);
     put(questionId('capabilities', 'delivery', root), values.delivery);
     put(questionId('capabilities', 'tracker', root), values.tracker);
@@ -136,6 +159,19 @@ function answersFromValues(context: InterviewContext, values: GuidedSuppliedValu
 function missingChoice(question: InterviewQuestion): Error {
   return new AiwgError({ code: 'ERR_MISSING_SETUP_CHOICE', exitCode: EXIT_CODES.USAGE,
     message: `Missing required choice '${question.questionId}': re-run with ${question.flag}` });
+}
+/** Jev uses the existing decision setup option names, with no credential bytes. */
+export function validateJevOptions(value: PlanValue): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Jev settings must be an object.');
+  const options = value as Record<string, PlanValue>;
+  if (Object.keys(options).some(key => !['region', 'endpoint', 'verify', 'remove'].includes(key)) ||
+    (options.region !== undefined && (typeof options.region !== 'string' || !options.region.trim())) ||
+    (options.verify !== undefined && typeof options.verify !== 'boolean') ||
+    (options.remove !== undefined && typeof options.remove !== 'boolean')) throw new Error('Invalid Jev setup settings.');
+  if (options.endpoint !== undefined) {
+    const url = new URL(String(options.endpoint));
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Jev endpoint must be HTTPS without auth, query, or fragment.');
+  }
 }
 /** Parse only the displayed value format. Invalid input never becomes an answer. */
 export function parseInterviewAnswer(question: InterviewQuestion, raw: string): PlanValue {
@@ -165,8 +201,18 @@ export function parseInterviewAnswer(question: InterviewQuestion, raw: string): 
     if (question.topic === 'tracker' && ['gitea', 'github', 'local'].includes(raw)) return { issue_provider: raw };
     // Structured policies share exactly the same JSON shape as flag answers.
     if (raw.startsWith('{')) {
-      const value: unknown = JSON.parse(raw);
-      if (value && typeof value === 'object' && !Array.isArray(value)) return value as PlanValue;
+      let value: unknown;
+      try { value = JSON.parse(raw); } catch { throw new Error('Invalid structured settings; enter a JSON object.'); }
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        if (question.topic === 'jev-options') {
+          validateJevOptions(value as PlanValue);
+          if (Object.hasOwn(value, 'remove')) throw new Error('Use the explicit --remove flag to remove Jev setup.');
+        }
+        if (question.topic === 'worker-config') {
+          if (Object.keys(value).some(key => !['clis', 'groups', 'admission', 'budgets'].includes(key)) || validateParallelismConfig(value).length) throw new Error('Invalid worker parallelism settings.');
+        }
+        return value as PlanValue;
+      }
     }
   } else if (question.options.some(o => o.value === raw)) return raw;
   throw new Error(`Invalid answer for '${question.questionId}'; use one of the displayed options.`);
@@ -182,13 +228,14 @@ export interface InterviewSessionOptions {
   now?: () => string;
   scan?: (roots: string[]) => Promise<InterviewContext['inventory']>;
   answersForInventory?: () => Promise<SetupPlan['answers']>;
+  deferJev?: boolean;
   signal?: AbortSignal;
 }
 /** The caller owns interactivity. No stdio/environment checks or credential resolution here. */
 export async function conductInterview(options: InterviewSessionOptions): Promise<{ plan: SetupPlan; cancelled: boolean }> {
   const now = options.now ?? (() => new Date().toISOString());
   let plan = buildInterviewPlan(options.context, options.answers, now(), options.previous);
-  const visited = new Set<string>();
+  const visited = new Set<string>(options.deferJev ? plan.unresolvedChoices.filter(q => q.questionId.startsWith('capabilities.jev.')).map(q => q.questionId) : []);
   const history: string[] = [];
   let active: string | undefined;
   let block: string | undefined;
@@ -274,7 +321,23 @@ export async function runGuidedSetup(ctx: HandlerContext, flags: GuidedSetupFlag
   const settings = await Promise.all(inventory.projects.map(async project => ({ root: project.root,
     values: existingValues(force ? null : await readAiwgConfig(project.root)) })));
   const context: InterviewContext = { inventory, workspaceRoot, unknownRemote, trackerRecommendation,
-    providers: [...new Set([...settings.flatMap(s => s.values.providers ?? []), ...(supplied.providers ?? []), ...Object.keys(flags.credentials)])] };
+    providers: [...new Set([...settings.flatMap(s => s.values.providers ?? []), ...(supplied.providers ?? []), ...Object.keys(flags.credentials).filter(p => p !== 'jev')])] };
+  context.jevStatus = {};
+  context.qualifiedWorkers = {};
+  // Observe existing metadata for A1's roots only. No driver import, auth read, or CLI probe.
+  for (const root of new Set(inventory.projects.flatMap(project => [project.root, ...project.packageRoots]))) {
+    try { context.jevStatus[root] = decisionCapabilities({ cwd: root, env: process.env }); }
+    catch { /* An unavailable optional status must not block core setup. */ }
+    try {
+      const config = await readAiwgConfig(root);
+      if (!config?.parallelism?.worker_dispatch) continue;
+      const models = await new ConfigLoader(root).load(config.parallelism);
+      if (!models.defaults.workerSelection) continue;
+      const recorded = await inspectRecordedWorkerQualifications({ cwd: root, parallelism: config.parallelism,
+        policy: models.defaults.workerSelection });
+      context.qualifiedWorkers[root] = recorded.map(row => row.provider);
+    } catch { context.qualifiedWorkers[root] = []; }
+  }
   const id = `setup-${workspaceSlug(workspaceRoot)}`;
   let previous: SetupPlan | undefined;
   // Use A2's loader for every persisted snapshot; an unreadable or invalid plan is never replaced silently.
@@ -308,12 +371,17 @@ export async function runGuidedSetup(ctx: HandlerContext, flags: GuidedSetupFlag
       assertPlanRedacted(incompleteTracker);
     }
   }
+  if (flags.jev === 'defer') {
+    for (const project of inventory.projects) delete answers[questionId('capabilities', 'jev', project.root)];
+    previous = buildInterviewPlan(context, answers, timestamp, previous);
+    for (const choice of previous.unresolvedChoices) if (choice.questionId.startsWith('capabilities.jev.')) choice.deferredAt = timestamp;
+  }
   let destination: string | undefined;
   const dryRun = ctx.dryRun || ctx.args.includes('--dry-run');
   const rl = interactive ? createPromptInterface() : undefined;
   try {
     if (interactive) console.log(INSTALL_METHOD_EXPLANATION);
-    const result = await conductInterview({ context, answers, previous, interactive, signal: ctx.signal,
+    const result = await conductInterview({ context, answers, previous, interactive, deferJev: flags.jev === 'defer', signal: ctx.signal,
       scan: roots => discoverInventory({ workspaceRoot: projectDir, roots }),
       answersForInventory: async () => {
         const added = await Promise.all(context.inventory.projects.filter(project => !settings.some(setting => setting.root === project.root))
