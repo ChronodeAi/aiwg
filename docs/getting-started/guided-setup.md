@@ -1,5 +1,8 @@
 # Guided setup: interview, review, apply
 
+New to AIWG? Start with [Install, connect, verify](install-connect-verify.md);
+this page covers the guided flow once the CLI is installed.
+
 After installing Node.js 24+ and the full `aiwg` package, open a terminal in
 the intended project. The [public installer](https://aiwg.io/setup.aiwg.yaml)
 can handle bootstrap and repair in your provider session. It remains a
