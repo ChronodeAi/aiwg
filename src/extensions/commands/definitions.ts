@@ -3328,6 +3328,40 @@ export const daemonInitCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
+export const housekeeperCommand: Extension = {
+  id: 'housekeeper',
+  type: 'skill',
+  name: 'Housekeeper',
+  description: 'Deterministic maintenance daemon: start/stop/status/run-once, jobs, watch roots, autostart units',
+  version: '1.0.0',
+  capabilities: ['cli', 'daemon', 'maintenance', 'scheduler'],
+  keywords: ['housekeeper', 'daemon', 'maintenance', 'schedule', 'run-once', 'autostart'],
+  category: 'daemon',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: false,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['housekeeper', 'housekeeper status', 'housekeeper start', 'maintenance daemon'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '<start|stop|status|run-once|job|watch|install|uninstall> [options]',
+      allowedTools: ['Bash', 'Read', 'Write'],
+      executionSteps: [
+        'Parse subcommand and flags',
+        'Start/stop/query the housekeeper-profile daemon or edit its config',
+        'Run one job without a daemon (run-once) or write autostart units (install)',
+        'Display result',
+      ],
+    },
+  } satisfies SkillMetadata,
+};
+
 // Config Commands
 
 export const configCommand: Extension = {
@@ -3934,7 +3968,7 @@ export const rlmCacheCommand: Extension = {
  * - SDLC Orchestration (1): sdlc-accelerate
  * - Index (1): index
  * - Reproducibility (4): execution-mode, snapshot, checkpoint, reproducibility-validate
- * - Daemon (2): behavior, daemon-init
+ * - Daemon (3): behavior, daemon-init, housekeeper
  * - Config (1): config
  * - Ops (1): ops
  * - Agentic Tools (5): chunk, fanout, rlm-prep, rlm-search, rlm-status
@@ -4088,9 +4122,10 @@ export const commandDefinitions: Extension[] = [
   checkpointCommand,
   reproducibilityValidateCommand,
 
-  // Daemon (2)
+  // Daemon (3)
   behaviorCommand,
   daemonInitCommand,
+  housekeeperCommand,
 
   // Config (1)
   configCommand,

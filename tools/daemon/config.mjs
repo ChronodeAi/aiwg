@@ -7,6 +7,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const DEFAULT_CONFIG = {
   daemon: {
+    // 'default' runs the full conversational stack; 'housekeeper' loads only
+    // the scheduler/runner/store, watcher/router and minimal IPC (epic #3353).
+    profile: 'default',
     heartbeat_interval_seconds: 30,
     max_parallel_actions: 3,
     action_timeout_minutes: 120,
@@ -138,6 +141,11 @@ export class Config {
       errors.push('Missing daemon configuration section');
     }
 
+    if (this.config.daemon?.profile !== undefined
+      && !['default', 'housekeeper'].includes(this.config.daemon.profile)) {
+      errors.push('daemon.profile must be "default" or "housekeeper"');
+    }
+
     if (this.config.watch?.enabled && !Array.isArray(this.config.watch.paths)) {
       errors.push('watch.paths must be an array');
     }
@@ -176,6 +184,16 @@ export class Config {
 
     if (this.config.schedule?.enabled && !Array.isArray(this.config.schedule.jobs)) {
       errors.push('schedule.jobs must be an array');
+    }
+
+    // The housekeeper profile runs deterministic owner operations only: no
+    // prompt-based actions, so no model calls are possible (epic #3353).
+    if (this.config.daemon?.profile === 'housekeeper' && Array.isArray(this.config.schedule?.jobs)) {
+      for (const job of this.config.schedule.jobs) {
+        if (job?.action || job?.prompt) {
+          errors.push(`schedule job "${job?.id || '?'}": action/prompt jobs are not allowed in the housekeeper profile`);
+        }
+      }
     }
 
     // Validate modes section
