@@ -50,6 +50,31 @@ function harness() {
 }
 
 describe('provider prepare subprocess coordinator', () => {
+  it('starts no further worker after a failure closes the session, even when a sibling finishes cleanly', async () => {
+    const h = harness();
+    // signal is a no-op, so the in-flight sibling is not terminated and
+    // finishes successfully after cleanup has begun. The old loop then took
+    // the next job and spawned an untracked worker that outlived the session.
+    const failed = prepareProviderDeployments({
+      srcRoot: h.root,
+      jobs: [
+        { order: 0, provider: 'fails', target: h.root, args: ['--fail'] },
+        { order: 1, provider: 'slow', target: h.root, args: ['--delay=300'] },
+        { order: 2, provider: 'late', target: h.root, args: [] },
+      ],
+      maxConcurrency: 2,
+      workerPath,
+      workerEnv: { AIWG_COORDINATOR_TRACE: h.trace },
+      transaction: h.transaction,
+      signal: () => {},
+    });
+    await expect(failed).rejects.toThrow('fails: fixture failure');
+    await new Promise(resolve => setTimeout(resolve, 700));
+    const trace = fs.readFileSync(h.trace, 'utf8');
+    expect(trace).toContain('start:1:');
+    expect(trace).not.toContain('start:2:');
+  }, 20_000);
+
   it.each([0, 7])('drains a response delivered after exit before settling (exit %i)', async exitCode => {
     const h = harness();
     const immediateWorker = path.join(h.root, 'immediate-worker.mjs');

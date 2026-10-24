@@ -215,6 +215,10 @@ export async function prepareProviderDeployments({
     removeSession();
   };
   const prepareOne = async (index, attempt = 0) => {
+    // Never start a worker once the session is closed: it would outlive
+    // cleanup, and anything it writes (e.g. the shared binding-index cache)
+    // would land after its owner removed it.
+    if (closed) throw new Error('Provider preparation session is closed');
     const raw = await prepareInChild({ job: jobs[index], attempt, sessionRoot, poolDescriptor, workerPath, workerEnv, activeChildren, timeoutMs });
     const plan = transaction.adopt(raw.detached, {
       scratch: raw.scratch,
@@ -227,6 +231,7 @@ export async function prepareProviderDeployments({
   try {
     await Promise.all(Array.from({ length: concurrency }, async () => {
       for (;;) {
+        if (closed) return;
         const index = next++;
         if (index >= jobs.length) return;
         prepared[index] = await prepareOne(index);
