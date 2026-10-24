@@ -1095,7 +1095,16 @@ async function captureOneWorker(owner, ctx) {
   };
   const graceMs = (invocation.health?.terminateGraceSeconds ?? 5) * 1000;
   const signal = value => {
-    if (settled || !signalOwnedWorker(identity, value, { supervisor })) return false;
+    if (settled) return false;
+    let delivered = signalOwnedWorker(identity, value, { supervisor });
+    // Startup can consume the whole deadline before the transport spawns
+    // its worker or publishes an owned group. We still own this attached
+    // ChildProcess: stop it before it can launch work after finalization.
+    // This proves no descendant termination; degraded mode stays uncertain.
+    if (!delivered && !identity && hasTransport && outcome.mode !== 'systemd-unit' && !sawExit) {
+      try { delivered = signalChild(child, value); } catch { /* already exited or no child handle */ }
+    }
+    if (!delivered) return false;
     deliveredSignal = value;
     return true;
   };
@@ -1552,12 +1561,13 @@ async function captureOneWorker(owner, ctx) {
 
 // ===========================================================================
 // BASED ON a4085b86a (#2915 round 8, D6).
-// Exception: finish() snapshots timeout classification before cleanup and
-// respects the winning stop cause, matching captureOneWorker's race fix.
+// Shared lifecycle fixes: finish() snapshots timeout classification before
+// cleanup and respects the winning stop cause; stop() can signal the owned
+// transport before worker identity is available (#3532).
 // The test/fixtures frozen reference remains unchanged.
 //
 // `launchOneWorkerBaseline` and `captureOneWorkerBaseline` reproduce
-// `launchOneWorker`/`captureOneWorker`, apart from the timeout race fix above,
+// `launchOneWorker`/`captureOneWorker`, apart from the lifecycle fixes above,
 // as they existed at base commit `a4085b86a` (`git show
 // a4085b86a:tools/ralph-external/session-launcher.mjs`) — before any
 // #2915 direct-recovery code existed in this file. `launchOneWorker`
@@ -1762,7 +1772,16 @@ async function captureOneWorkerBaseline(owner, ctx) {
   };
   const graceMs = (invocation.health?.terminateGraceSeconds ?? 5) * 1000;
   const signal = value => {
-    if (settled || !signalOwnedWorker(identity, value, { supervisor })) return false;
+    if (settled) return false;
+    let delivered = signalOwnedWorker(identity, value, { supervisor });
+    // Startup can consume the whole deadline before the transport spawns
+    // its worker or publishes an owned group. We still own this attached
+    // ChildProcess: stop it before it can launch work after finalization.
+    // This proves no descendant termination; degraded mode stays uncertain.
+    if (!delivered && !identity && hasTransport && outcome.mode !== 'systemd-unit' && !sawExit) {
+      try { delivered = signalChild(child, value); } catch { /* already exited or no child handle */ }
+    }
+    if (!delivered) return false;
     deliveredSignal = value;
     return true;
   };
