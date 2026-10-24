@@ -1,7 +1,9 @@
 # Local discovery library
 
 Import `discoverInventory` and its types from `src/discovery/index.ts` (ESM
-consumers use `./discovery/index.js`). There is no CLI or mutation surface.
+consumers use `./discovery/index.js`). Discovery has no CLI or mutation surface.
+The separate setup plan store below persists plans without performing installer
+actions.
 
 ```ts
 const inventory = await discoverInventory({
@@ -57,3 +59,63 @@ qualification remain unknown unless prior local `toolEvidence` is supplied.
 Versions likewise remain `null` without supplied evidence. A context file alone
 does not establish configuration, authentication, or qualification. All readiness
 dimensions use independent `yes | no | unknown` observations.
+
+## Setup plans
+
+`SetupPlan` and the plan helpers are exported from the same index. A v1 plan
+contains an ID, inventory ID, ISO timestamps, source-tagged answers keyed by
+stable question ID, recommendations with reasons, unresolved choices, planned
+actions, workspace receipts, and the original `DiscoveryInventory`. Reuse
+workspace/provider-scoped question IDs across interviews and resumes; every
+present answer counts, including `false`, `null`, and defaults. The interview
+slice must preserve explicit answers when merging new information.
+
+```ts
+const path = await writeSetupPlan(projectDir, plan);
+const saved = await readSetupPlan(projectDir, plan.id);
+const actions = remainingPlanActions(saved);
+const questions = unansweredPlanChoices(saved);
+const changes = revalidateSetupPlan(saved, freshInventory);
+```
+
+The store uses the shared artifact-root resolver and writes
+`setup/plans/<id>.json` beneath that root. It refuses an unavailable external
+root without creating it or falling back. An optional environment map supports
+isolated callers/tests. Writes validate a JSON snapshot, use an exclusive
+temporary file with mode `0600`, sync it, then rename it over the destination.
+Callers own IDs and timestamps and must serialize updates to a plan; there is
+no concurrent-writer merge or apply behavior.
+
+Readers refuse future versions with an upgrade diagnostic. `migrateSetupPlan`
+is the explicit migration entry point: the pre-release v0 compatibility fixture
+lacks `updatedAt` and `receipts`; migration supplies `createdAt` and an empty
+receipt list respectively. Reads never rewrite migrated files. Writes accept
+only v1.
+
+Credential values are refused before any filesystem write. Use only
+`{ kind: 'credential-ref', source: 'env' | 'file' | 'stdin-at-apply', name }`;
+the store never opens the referenced file or resolves an environment value.
+The guard reuses governance text redaction patterns, adds JWT and generated
+token detection, and checks sensitive field/question names recursively,
+including evidence, receipt messages, keys, and credential reference names.
+Invalid references and extra reference fields are refused. Rejections never
+echo rejected material. Pattern detection is conservative; callers must still
+collect credential locators rather than raw values.
+
+Action dependencies select project fields, tool fields, or paths represented
+in the saved inventory. Revalidation compares only those facts against fresh
+observations and returns changes grouped by action; it performs no filesystem
+or tool probes. Missing paths, removed tools, changed versions/fields, and
+unknown or incomplete observations require review. A path dependency must
+refer to a root, manifest, observed package root, AIWG directory/config/context,
+or provider file recorded by discovery. Paths absent from a complete inventory
+can represent an expected absence. This does not detect content changes at an
+unchanged path. Select every fact an action relies on, including its target
+workspace when its continued existence matters.
+
+`remainingPlanActions` excludes only actions with an `applied` receipt in their
+own workspace. Failed, skipped, and unreceipted actions remain eligible for the
+apply slice to decide retry policy. `unansweredPlanChoices` removes any choice
+with an own answer entry. Both helpers preserve the original plan. Revalidation
+reports all affected actions, including applied ones, for callers to reconcile;
+it never clears receipts or automatically authorizes remaining actions.

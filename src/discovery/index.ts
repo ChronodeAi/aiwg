@@ -9,6 +9,9 @@ import { loadProviderModelCapabilities } from '../models/provider-policy.js';
 import { listProviderDefinitions } from '../providers/provider-definitions.js';
 import type { DiscoveryDiagnosticCode, DiscoveryInventory, DiscoveryOptions, ProjectInventoryEntry } from './types.js';
 export type * from './types.js';
+export * from './plan-types.js';
+export { migrateSetupPlan, readSetupPlan, writeSetupPlan, remainingPlanActions,
+  unansweredPlanChoices, revalidateSetupPlan } from './plan-store.js';
 
 export const DISCOVERY_EXCLUSIONS = [
   'node_modules', '.git', '.hg', '.svn', '.cache', '.npm', '.pnpm-store', '.yarn',
