@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/memory/memory-taxonomy.v1.schema.json",
+  "title": "AIWG memory taxonomy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "scope",
+    "placement",
+    "lifecycle",
+    "authority",
+    "observation"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "aiwg.memory-taxonomy.v1"
+    },
+    "scope": {
+      "$ref": "#/$defs/scope"
+    },
+    "placement": {
+      "$ref": "#/$defs/placement"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/lifecycle"
+    },
+    "authority": {
+      "$ref": "#/$defs/authority"
+    },
+    "observation": {
+      "$ref": "#/$defs/observation"
+    }
+  },
+  "$defs": {
+    "scope": {
+      "enum": [
+        "global",
+        "project",
+        "provider-native",
+        "loaded/session"
+      ]
+    },
+    "placement": {
+      "enum": [
+        "resident",
+        "indexed",
+        "task-context",
+        "archived"
+      ]
+    },
+    "lifecycle": {
+      "enum": [
+        "active",
+        "superseded",
+        "retired",
+        "quarantined",
+        "purged"
+      ]
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "source",
+        "protection"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "enum": [
+            "operator",
+            "reviewer",
+            "import",
+            "generated-output-proposed"
+          ]
+        },
+        "protection": {
+          "enum": [
+            "pinned",
+            "unprotected"
+          ]
+        }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "evidence"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "observed",
+            "inferred",
+            "on-disk",
+            "absent",
+            "inaccessible",
+            "opaque",
+            "unknown"
+          ]
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "at",
+            "session",
+            "provider",
+            "version"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "session": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "provider": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "observed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "type": "object",
+                "properties": {
+                  "session": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "provider": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "version": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "session",
+                  "provider",
+                  "version"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
