@@ -507,6 +507,7 @@ export function parseArgs(args = process.argv.slice(2)) {
     strict: false,
     reportOnly: true,
     kernelOnly: false,
+    deferRuleProjection: false,
     filter: null,           // Glob pattern for agent names
     filterRole: null,       // Filter by role: reasoning|coding|efficiency
     save: false,            // Save model config to project models.json
@@ -561,6 +562,8 @@ export function parseArgs(args = process.argv.slice(2)) {
     else if (a === '--allow-over-budget') cfg.allowOverBudget = true;
     else if (a === '--report-only') cfg.reportOnly = true;
     else if (a === '--kernel-only') cfg.kernelOnly = true;
+    // Internal use orchestration: the final source owns rule presentation.
+    else if (a === '--defer-rule-projection') cfg.deferRuleProjection = true;
     else if (a === '--deploy-behaviors') cfg.deployBehaviors = true;
     else if (a === '--filter' && args[i + 1]) cfg.filter = args[++i];
     else if (a === '--filter-role' && args[i + 1]) cfg.filterRole = args[++i];
@@ -1040,7 +1043,7 @@ export async function main(args = process.argv.slice(2), internal = {}) {
     createAgentsMd: cfg.createAgentsMd,
     deployCommands: cfg.kernelOnly ? false : cfg.deployCommands,
     deploySkills: cfg.kernelOnly ? true : cfg.deploySkills,
-    deployRules: cfg.kernelOnly ? true : cfg.deployRules,
+    deployRules: !cfg.deferRuleProjection && (cfg.kernelOnly || cfg.deployRules),
     deployBehaviors: cfg.kernelOnly ? false : cfg.deployBehaviors,
     commandsOnly: cfg.commandsOnly,
     skillsOnly: cfg.skillsOnly || cfg.kernelOnly,
@@ -1049,6 +1052,7 @@ export async function main(args = process.argv.slice(2), internal = {}) {
     reportOnly: cfg.reportOnly,
     allowOverBudget: cfg.allowOverBudget === true,
     kernelOnly: cfg.kernelOnly,
+    deferRuleProjection: cfg.deferRuleProjection,
     filter: cfg.filter,
     filterRole: cfg.filterRole,
     save: cfg.save,
@@ -1071,8 +1075,11 @@ export async function main(args = process.argv.slice(2), internal = {}) {
     deployVersion: cfg.deployVersion || getDeployVersion(srcRoot),
     deploySource: cfg.deploySource || 'bundled',
   };
-  const { isRuleDeploymentPreparationActive } = await import('./providers/rule-delivery.mjs');
-  const preparationActive = isRuleDeploymentPreparationActive();
+  // Deferred kernel source passes must not load the projection dependency
+  // graph. Preparation still owns their staged deployment when a hook is active.
+  const preparationActive = cfg.kernelOnly && cfg.deferRuleProjection
+    ? Boolean(globalThis[Symbol.for('aiwg.provider-preparation-hook.v1')])
+    : (await import('./providers/rule-delivery.mjs')).isRuleDeploymentPreparationActive();
 
   // Commands → Skills migration: prompt then delete the commands directory
   // so stale command files don't create duplicates in the provider TUI.
@@ -1105,7 +1112,8 @@ export async function main(args = process.argv.slice(2), internal = {}) {
   // Delegate to provider
   try {
     if (!internal.finalizeOnly) {
-      if (cfg.kernelOnly && !['claude', 'codex', 'cursor', 'hermes', 'warp', 'openclaw', 'pi'].includes(provider.name)) {
+      if (cfg.kernelOnly && (!cfg.deferRuleProjection || preparationActive)
+        && !['claude', 'codex', 'cursor', 'hermes', 'warp', 'openclaw', 'pi'].includes(provider.name)) {
         const { deployWithRuleDelivery } = await import('./providers/rule-delivery.mjs');
         await deployWithRuleDelivery(opts, provider, staged => provider.deploy(staged));
       } else await provider.deploy(opts);

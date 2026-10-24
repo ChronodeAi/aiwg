@@ -1929,6 +1929,7 @@ function createUseScriptRunner(frameworkRoot: string) {
     async run(script: string, args: string[], options: Parameters<typeof runner.run>[2] = {}): Promise<HandlerResult> {
       if (!usePreviewActions) return runner.run(script, args, options);
       const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-use-preview-'));
+      const removeScratch = trackTemporaryDirectory(scratch);
       const stdoutFile = await fs.open(path.join(scratch, 'stdout'), 'w+');
       try {
         // Keep the shared runner's timeout/error handling and injectable
@@ -1943,7 +1944,7 @@ function createUseScriptRunner(frameworkRoot: string) {
         return { exitCode: 1, message: error instanceof Error ? error.message : String(error) };
       } finally {
         await stdoutFile.close();
-        await fs.rm(scratch, { recursive: true, force: true });
+        removeScratch();
       }
     },
   };
@@ -2504,6 +2505,7 @@ async function deploySourceDirectory(opts: {
   force: boolean;
   copyAll: boolean;
   kernelOnly?: boolean;
+  deferRuleProjection?: boolean;
   quiet: boolean;
   modelArgs: string[];
 }): Promise<HandlerResult> {
@@ -2522,6 +2524,7 @@ async function deploySourceDirectory(opts: {
   if (opts.force) args.push('--force');
   if (opts.copyAll) args.push('--copy-all');
   if (opts.kernelOnly) args.push('--kernel-only');
+  if (opts.deferRuleProjection) args.push('--defer-rule-projection');
   if (opts.quiet) args.unshift('--quiet');
 
   const runner = createUseScriptRunner(opts.frameworkRoot);
@@ -2854,9 +2857,9 @@ export class UseHandler implements CommandHandler {
       || ctx.args.includes('--workspace-signals');
     if (bypassOrchestration) return this.executeCore(ctx);
 
-    // Child deployers share one source-index snapshot for this invocation. Each
-    // addon still resolves and validates its bindings through the common query
-    // engine, without rebuilding the entire corpus on every additive pass.
+    // Projectors share one source-index snapshot for this invocation. Full
+    // addon passes validate their bindings through the common query engine;
+    // deferred kernel passes leave the shared rule set to the final projector.
     const previousBindingCache = process.env.AIWG_RULE_BINDING_INDEX_CACHE;
     const bindingCache = previousBindingCache || await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-use-bindings-'));
     const removeBindingCache = previousBindingCache ? () => {} : trackTemporaryDirectory(bindingCache);
@@ -3322,13 +3325,19 @@ export class UseHandler implements CommandHandler {
 
       for (const providerName of providersForFiltered) {
         const kernelOnly = !copyAll;
-        for (const selected of selectedFrameworks) {
-          const frameworkDir = resolveFrameworkDir(selected);
-          if (!frameworkDir) continue;
+        const sources = [
+          ...selectedFrameworks.flatMap(selected => {
+            const directory = resolveFrameworkDir(selected);
+            return directory ? [path.join(frameworkRoot, 'agentic/code/frameworks', directory)] : [];
+          }),
+          ...selectedAddons.map(selected => addonPath(frameworkRoot, selected)),
+          ...selectedExtensions.map(selected => extensionPath(frameworkRoot, selected)),
+        ];
+        for (const [index, source] of sources.entries()) {
           const result = await deploySourceDirectory({
             ctx,
             frameworkRoot,
-            source: path.join(frameworkRoot, 'agentic/code/frameworks', frameworkDir),
+            source,
             provider: providerName,
             target,
             dryRun,
@@ -3336,42 +3345,10 @@ export class UseHandler implements CommandHandler {
             force,
             copyAll,
             kernelOnly,
-            quiet,
-            modelArgs: modelDeployArgs,
-          });
-          if (result.exitCode !== 0) return result;
-        }
-
-        for (const selected of selectedAddons) {
-          const result = await deploySourceDirectory({
-            ctx,
-            frameworkRoot,
-            source: addonPath(frameworkRoot, selected),
-            provider: providerName,
-            target,
-            dryRun,
-            verbose,
-            force,
-            copyAll,
-            kernelOnly,
-            quiet,
-            modelArgs: modelDeployArgs,
-          });
-          if (result.exitCode !== 0) return result;
-        }
-
-        for (const selected of selectedExtensions) {
-          const result = await deploySourceDirectory({
-            ctx,
-            frameworkRoot,
-            source: extensionPath(frameworkRoot, selected),
-            provider: providerName,
-            target,
-            dryRun,
-            verbose,
-            force,
-            copyAll,
-            kernelOnly,
+            // Kernel rule selection is invocation-wide, independent of the
+            // source bundle. The last pass projects once over all deployed
+            // skills, including their bound-rule pointers and startup blocks.
+            deferRuleProjection: kernelOnly && index < sources.length - 1,
             quiet,
             modelArgs: modelDeployArgs,
           });
@@ -3957,8 +3934,15 @@ export class UseHandler implements CommandHandler {
         const resolved = resolveBuiltInProviderForUse(local.provider);
         if (!PREPARABLE_BUILTIN_PROVIDERS.has(resolved.provider)) { canPrepareConcurrently = false; break; }
         const args = withProviderOverride([...deployFilteredArgs], resolved.provider);
-        if (framework === 'all' && !['pi', 'omp'].includes(resolved.provider)
-          && !remainingArgs.includes('--copy-all') && !remainingArgs.includes('--copy-standard-skills')) args.push('--kernel-only');
+        if (framework === 'all') {
+          const kernelOnly = !['pi', 'omp'].includes(resolved.provider)
+            && !remainingArgs.includes('--copy-all') && !remainingArgs.includes('--copy-standard-skills');
+          if (kernelOnly) args.push('--kernel-only');
+          if (!skipUtils && ((!kernelOnly && (await getAllExtensions(frameworkRoot)).length > 0)
+            || (!mainDeploymentIncludesAddons(resolved.provider, mode, args) && (await getAllAddons(frameworkRoot)).length > 0))) {
+            args.push('--defer-rule-projection');
+          }
+        }
         preparedJobs.push({ order, provider: resolved.provider, target: path.resolve(target), args });
       }
       if (canPrepareConcurrently && preparedJobs.length === providers.length) {
@@ -4021,6 +4005,13 @@ export class UseHandler implements CommandHandler {
       && !remainingArgs.includes('--copy-all')
       && !remainingArgs.includes('--copy-standard-skills');
     if (bulkKernelOnly) providerDeployArgs.push('--kernel-only');
+    const allAddons = skipUtils ? [] : await getAllAddons(frameworkRoot);
+    const allExtensions = skipUtils || bulkKernelOnly ? [] : await getAllExtensions(frameworkRoot);
+    const mainIncludesAddons = mainDeploymentIncludesAddons(provider, mode, providerDeployArgs);
+    const additiveSources = (mainIncludesAddons ? 0 : allAddons.length) + allExtensions.length;
+    // Keep the final source's rule selection and presentation, while earlier
+    // full-surface passes still deploy their own agents/skills/flow resources.
+    if (framework === 'all' && additiveSources > 0) providerDeployArgs.push('--defer-rule-projection');
     if ((verbose || dryRun) && projectLocalProviderResolution.requestedProvider) {
       ui.dim(`  project-local provider '${projectLocalProviderResolution.requestedProvider}' extends '${provider}'`);
     } else if ((verbose || dryRun) && builtInProviderResolution.requestedProvider) {
@@ -4170,14 +4161,11 @@ export class UseHandler implements CommandHandler {
 
     // Deploy all addons (excluding disallow list) unless --no-utils
     if (!skipUtils) {
-      const allAddons = await getAllAddons(frameworkRoot);
       // These root collectors already deploy every eligible addon. Re-staging
       // the entire deployment per addon duplicates that work. Codex's skills
       // helper includes addons only in all mode; other modes retain their pass.
       // CLI contribution registration below still runs for every addon.
-      const selectedMode = MODE_MAP[framework as Framework];
-      const mainIncludesAddons = mainDeploymentIncludesAddons(provider, selectedMode, providerDeployArgs);
-      for (const addon of allAddons) {
+      for (const [index, addon] of allAddons.entries()) {
         if (verbose) {
           console.log('');
           console.log(`Deploying ${addon} addon...`);
@@ -4186,6 +4174,9 @@ export class UseHandler implements CommandHandler {
         const addonArgs = quiet
           ? ['--quiet', '--source', source, ...addonBaseArgs]
           : ['--source', source, ...addonBaseArgs];
+        if (framework === 'all' && (allExtensions.length > 0 || index < allAddons.length - 1)) {
+          addonArgs.push('--defer-rule-projection');
+        }
         if (!mainIncludesAddons) {
           const result = await runner.run('tools/agents/deploy-agents.mjs', addonArgs, captureOpts);
           if (result.exitCode !== 0) return result;
@@ -4206,11 +4197,9 @@ export class UseHandler implements CommandHandler {
       // Deploy all extensions from agentic/code/extensions/* (#1222).
       // Extensions are addon-shaped bundles (manifest type: "addon") that live
       // in a separate top-level dir to keep ops/sysops/itops/devops grouped.
-      // Kernel mode already projects kernel/core rules in the main pass.
-      // Per-extension passes merely re-project that surface from an unchanged
-      // dry-run destination (nine extensions produced ten copies of each line).
-      const allExtensions = await getAllExtensions(frameworkRoot);
-      for (const ext of bulkKernelOnly ? [] : allExtensions) {
+      // Kernel mode projects its shared rule set on the final framework/addon
+      // pass. Extension-only passes would repeat that same surface.
+      for (const [index, ext] of allExtensions.entries()) {
         if (verbose) {
           console.log('');
           console.log(`Deploying ${ext} extension...`);
@@ -4219,6 +4208,7 @@ export class UseHandler implements CommandHandler {
         const extArgs = quiet
           ? ['--quiet', '--source', source, ...addonBaseArgs]
           : ['--source', source, ...addonBaseArgs];
+        if (framework === 'all' && index < allExtensions.length - 1) extArgs.push('--defer-rule-projection');
         const result = await runner.run('tools/agents/deploy-agents.mjs', extArgs, captureOpts);
         if (result.exitCode !== 0) {
           return result;

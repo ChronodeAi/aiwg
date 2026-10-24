@@ -9,7 +9,7 @@ const scratch = mkdtempSync(path.join(tmpdir(), 'aiwg-b2-contract-'));
 const home = path.join(scratch, 'home');
 mkdirSync(home);
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
-function run(name: string, args: string[]) {
+function run(name: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   const cwd = path.join(scratch, name);
   mkdirSync(cwd, { recursive: true });
   const stdout = path.join(scratch, `${name}.stdout`);
@@ -20,7 +20,7 @@ function run(name: string, args: string[]) {
     cwd, encoding: 'utf8', timeout: 240_000, stdio: ['ignore', outFd, errFd],
     env: { ...process.env, HOME: home, USERPROFILE: home, AIWG_ROOT: root,
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_CACHE_HOME: path.join(home, '.cache'),
-      XDG_DATA_HOME: path.join(home, '.local/share'), NO_UPDATE_NOTIFIER: '1' },
+      XDG_DATA_HOME: path.join(home, '.local/share'), NO_UPDATE_NOTIFIER: '1', ...env },
   });
   closeSync(outFd);
   closeSync(errFd);
@@ -29,7 +29,34 @@ function run(name: string, args: string[]) {
 }
 
 describe('B2 use CLI contract', () => {
-  it.each(['--bogus-flag-xyz', '--dev', '--force=true', '--aiwg-provider-main-prepared'])('rejects %s before setup can write', (flag) => {
+  it.each([
+    ['claude,muse', false, 'project'],
+    ['claude,muse', true, 'user'],
+    ['claude,pi', false, 'project'],
+    ['claude,pi', true, 'project'],
+    ['claude,hermes', false, 'project'],
+  ] as const)('projects rules once per provider for multi-source use all (%s, dry-run: %s, %s)', (selectedProviders, dryRun, scope) => {
+    const name = `projection-${selectedProviders}-${dryRun}`;
+    const trace = path.join(scratch, `${name}.jsonl`);
+    const temporary = path.join(scratch, `${name}-tmp`);
+    mkdirSync(temporary);
+    const loader = path.join(root, 'test/fixtures/deployment/rule-projection-loader.mjs');
+    const result = run(name, [
+      'all', '--providers', selectedProviders, '--scope', scope, '--no-context-files', '--no-project-local',
+      ...(dryRun ? ['--dry-run'] : []),
+    ], {
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --experimental-loader=${loader}`,
+      AIWG_TEST_RULE_PROJECTION_TRACE: trace,
+      TMPDIR: temporary,
+    });
+    expect(result.code, result.output).toBe(0);
+    const providers = readFileSync(trace, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    expect(providers.sort()).toEqual(selectedProviders.split(',').sort());
+    expect(readdirSync(temporary)).toEqual([]);
+    if (dryRun) expect(readdirSync(result.cwd)).toEqual([]);
+  }, 240_000);
+
+  it.each(['--bogus-flag-xyz', '--dev', '--force=true', '--aiwg-provider-main-prepared', '--defer-rule-projection'])('rejects %s before setup can write', (flag) => {
     const result = run(flag.slice(2), ['all', '--provider', 'claude', flag]);
     expect(result.code).toBe(2);
     expect(result.output).toContain(`Unknown option '${flag}'`);

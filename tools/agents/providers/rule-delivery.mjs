@@ -1215,18 +1215,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
     preimages.push(...snapshotPreimages([...delivery.rules.map(rule => rule.file), ...delivery.targets.map(entry => entry.source), path.join(target, '.aiwg', 'aiwg.config')]));
     const opts = { ...original, target: stage, dryRun: false, ruleDelivery: delivery,
       kernelSkillsPath: kernel, deploymentHome: home, activeWorkspace, hermesLegacySkills, legacyCodexSkills, staging: true };
-    if (opts.kernelOnly && provider.name === 'warp') {
-      // Warp's legacy aggregate writer always emits agent/command definitions,
-      // even in skills-only mode. The kernel path uses the shared skill router
-      // and lets projectRules own the complete startup rule presentation.
-      const skills = [...listSkillDirs(path.join(opts.srcRoot, 'skills')),
-        ...getFrameworksForMode(opts.srcRoot, opts.mode).flatMap(bundle => listSkillDirs(path.join(bundle.path, 'skills'))),
-        ...getAddonSkillDirs(opts.srcRoot)].filter(isKernelSkill);
-      const standard = path.join(stage, provider.paths.skills);
-      for (const dir of new Set([opts.kernelSkillsPath, provider.paths.crossAgentSkills])) {
-        if (dir) deploySkillsWithKernelRouting(skills, standard, path.isAbsolute(dir) ? dir : path.join(stage, dir), opts);
-      }
-    } else await deploy(opts);
+    await deploySelectedSurface(opts, provider, deploy);
     if (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly && opts.deployBehaviors !== false) {
       deployEmulatedBehaviors(delivery.rules.filter(rule => rule.behavior).map(rule => path.dirname(rule.file)), provider.name, stage, opts);
     }
@@ -1249,8 +1238,10 @@ export async function prepareRuleDeployment(original, provider, deploy) {
         if (fs.existsSync(dest)) opts.definitionRoutes.push(`${entry.name}: .warp/agents/${path.basename(entry.source)}`);
       }
     }
-    if (opts.kernelOnly || opts.deployRules || opts.rulesOnly || (!opts.skillsOnly && !opts.commandsOnly && ['hermes', 'warp'].includes(provider.name))) projectRules(opts, provider);
-    finishBindings(opts, provider);
+    if (!opts.deferRuleProjection) {
+      if (opts.kernelOnly || opts.deployRules || opts.rulesOnly || (!opts.skillsOnly && !opts.commandsOnly && ['hermes', 'warp'].includes(provider.name))) projectRules(opts, provider);
+      finishBindings(opts, provider);
+    }
     // Normalize all generated path wrappers before counting or promoting bytes.
     const normalize = content => {
       for (const mapping of [...mappings].sort((a, b) => b.to.length - a.to.length)) content = content.split(mapping.to).join(mapping.from);
@@ -1406,6 +1397,13 @@ export function commitRuleDeploymentPlan(plan) {
 
 /** Stage and commit serially for existing provider callers. */
 export async function deployWithRuleDelivery(original, provider, deploy) {
+  // Kernel source passes share the same selected rule set. Deploy their
+  // skills directly; the final source projects rules and bindings across the
+  // complete destination. Full passes retain staging for bound flow skills
+  // and provider definitions, but defer rule presentation above.
+  if (original.kernelOnly && original.deferRuleProjection && !globalThis[PREPARATION_HOOK]) {
+    return deploySelectedSurface(original, provider, deploy);
+  }
   if (original.ruleDelivery) return deploy(original);
   const hook = globalThis[PREPARATION_HOOK];
   if (hook) {
@@ -1415,4 +1413,17 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
     return report;
   }
   return commitRuleDeploymentPlan(await prepareRuleDeployment(original, provider, deploy));
+}
+
+async function deploySelectedSurface(opts, provider, deploy) {
+  if (!opts.kernelOnly || provider.name !== 'warp') return deploy(opts);
+  // Warp's aggregate writer emits bulk definitions even in skills-only mode.
+  // Both staged and deferred kernel passes use only its shared skill router.
+  const skills = [...listSkillDirs(path.join(opts.srcRoot, 'skills')),
+    ...getFrameworksForMode(opts.srcRoot, opts.mode).flatMap(bundle => listSkillDirs(path.join(bundle.path, 'skills'))),
+    ...getAddonSkillDirs(opts.srcRoot)].filter(isKernelSkill);
+  const standard = path.join(opts.target, provider.paths.skills);
+  for (const dir of new Set([opts.kernelSkillsPath || provider.kernelSkillsPath, provider.paths.crossAgentSkills])) {
+    if (dir) deploySkillsWithKernelRouting(skills, standard, path.isAbsolute(dir) ? dir : path.join(opts.target, dir), opts);
+  }
 }

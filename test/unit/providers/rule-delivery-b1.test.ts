@@ -29,6 +29,22 @@ function deploy(source: string, target: string, provider: string, args: string[]
 }
 
 describe('B1 rule delivery regressions', () => {
+  it.each(['claude', 'codex', 'pi'])('%s: deferred kernel passes deploy skills and leave projection to the final pass', (provider) => {
+    const { source, target } = setup();
+    deploy(source, target, provider, ['--defer-rule-projection']);
+    const skill = path.join(target, provider === 'claude' ? '.claude/skills' : '.agents/skills', 'fixture-skill/SKILL.md');
+    expect(fs.readFileSync(skill, 'utf8')).toContain('Preserve this authored skill body.');
+    const rules = path.join(target, `.${provider}/rules`);
+    expect(fs.existsSync(path.join(rules, 'RULES-INDEX.md'))).toBe(false);
+    expect(fs.existsSync(path.join(target, `.${provider}/RULES-BOUND.md`))).toBe(false);
+
+    deploy(source, target, provider);
+    expect(fs.readFileSync(path.join(rules, 'fixture-kernel.md'), 'utf8')).toContain('FIXTURE_KERNEL_BODY');
+    expect(fs.readFileSync(path.join(rules, 'RULES-INDEX.md'), 'utf8')).toContain('fixture-summary');
+    expect(fs.readFileSync(skill, 'utf8')).toContain('aiwg show rule fixture-bound --body');
+    expect(fs.readFileSync(path.join(target, `.${provider}/RULES-BOUND.md`), 'utf8')).toContain('fixture-bound');
+  }, 90_000);
+
   for (const provider of ['claude', 'codex', 'cursor', 'pi', 'hermes', 'warp', 'factory', 'opencode', 'copilot']) {
     it(`${provider}: kernel-only writes core, kernel and index, without bulk definitions`, () => {
       const { source, target } = setup();

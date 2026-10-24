@@ -76,6 +76,23 @@ describe('UseHandler workspace-aware filtering (#1380)', () => {
     expect(args[args.indexOf('--mode') + 1]).toBe('dfir');
   });
 
+  it.each(['project', 'user'])('projects the selected kernel rule set only on the last source at %s scope', async (scope) => {
+    const { UseHandler } = await import('../../../../src/cli/handlers/use.js');
+    const result = await new UseHandler().execute({
+      args: ['--profile', 'forensics', '--target', tmpDir, '--dry-run', '--providers', 'claude,muse', '--scope', scope, '--no-project-local'],
+      rawArgs: [], cwd: tmpDir, frameworkRoot: '/mock/aiwg',
+    });
+    expect(result.exitCode).toBe(0);
+    const calls = mockRun.mock.calls.map(([, args]) => args as string[]);
+    expect(calls).toHaveLength(6);
+    for (const provider of ['claude', 'muse']) {
+      const passes = calls.filter(args => args[args.indexOf('--provider') + 1] === provider);
+      expect(passes).toHaveLength(3);
+      expect(passes.map(args => args.includes('--defer-rule-projection'))).toEqual([true, true, false]);
+      expect(passes.every(args => args.includes('--kernel-only'))).toBe(true);
+    }
+  });
+
   it('keeps explicit use all on the full deployment path', async () => {
     const { UseHandler } = await import('../../../../src/cli/handlers/use.js');
     const handler = new UseHandler();
