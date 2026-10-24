@@ -827,6 +827,37 @@ async function readInstallationStore(filename, expectedDigest) {
   }
 }
 
+/** Offline projection of recorded approvals only. Never imports drivers, reads auth, or probes CLIs.
+ * This is historical evidence, not current launch authority; loadRecordedWorkerInstallations
+ * performs binary/version/scope checks when dispatch actually requests a binding.
+ */
+export async function inspectRecordedWorkerQualifications({ cwd, policy, parallelism }) {
+  const filename = installationStorePath();
+  await assertTrustedStore(filename, [cwd]);
+  const { stored } = await readInstallationStore(filename);
+  const workspace = await realpath(cwd);
+  const results = [];
+  const { qualificationDigest } = await import('./qualification-digest.mjs');
+  for (const record of stored.registrations) {
+    try {
+      const { cli, installation, adapter, binding } = record;
+      const configured = parallelism?.clis?.[cli];
+      if (!configured || configured.enabled === false || !/^[a-z][a-z0-9-]{0,62}$/.test(cli)
+        || await realpath(installation.cwd) !== workspace
+        || qualificationDigest(policy) !== installation.effectiveConfigDigest
+        || configured.adapter !== `providers:${adapter.provider}` && configured.adapter !== adapter.id
+        || configured.accountScope !== binding.accountScope
+        || binding.profile !== installation.profile || binding.cliVersion !== installation.cliVersion
+        || (configured.executable && await realpath(configured.executable) !== await realpath(installation.executable))) continue;
+      const proof = adapter.invocationProfiles?.[binding.profile]?.installationQualification;
+      if (!proof || ['scopeDigest', 'fixtureDigest', 'verifiedAt', 'evidenceRef'].some(key => proof[key] !== installation.evidence?.[key])) continue;
+      await assertWorkerInstallationEvidence({ ...installation, adapter, now: Date.now(), policy }, proof.scopeDigest);
+      results.push({ cli, provider: adapter.provider });
+    } catch { /* Malformed, expired or unbound evidence is not qualification. */ }
+  }
+  return results.filter(row => results.filter(other => row.cli === other.cli).length === 1);
+}
+
 /** Explicit host operation: successful bounded qualification is required before
  * recording; credentials are reduced to names and are never written to disk. */
 export async function recordWorkerInstallation(instance, options) {

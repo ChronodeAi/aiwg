@@ -169,10 +169,6 @@ as observed, never probe.
   target?" Default `claude` (init's default,
   `src/cli/handlers/init.ts:108,365`). Flag: existing `--providers <list>`
   (`src/cli/handlers/init.ts:181-191`, `src/cli/handlers/setup.ts:210-213`).
-- `tools.worker-dispatch.<scope>` — "Two+ worker CLIs seen; run tasks in
-  parallel?" Default decline/unasked. Flag: existing `--worker-dispatch
-  enable|decline` (`src/cli/handlers/init.ts:179`,
-  `src/cli/handlers/setup.ts:209`).
 - `tools.scripts.<scope>` — "Add default scripts (deploy/doctor/sync)?"
   Default on. Flags: existing `--default-scripts true|false`,
   `--script <name>=<command>` (repeatable), `--custom-scripts true|false`
@@ -194,6 +190,38 @@ as observed, never probe.
 
 Each defaults off; declining or skipping never activates anything (§8 tests pin this).
 
+- `capabilities.jev.<scope>` — Jev decision offload. Default off, with
+  enable/decline/skip/defer. Explain that decisions go to an external
+  service requiring an account/API access with usage charges. Display the
+  offline enablement and unprobed backend status from `decisionCapabilities`
+  (the `decision status` owner); never read credentials during the interview.
+  One new flag: `--jev enable|decline|defer`. Reuse `--region`, `--endpoint`,
+  `--verify`, `--remove`, and `--token-stdin` from `decision setup jev`.
+  Enabling reveals a locator question (`locations.credential-source.<scope>.jev`),
+  using `--credential jev=env:NAME|file:PATH|stdin`, and optional region/endpoint/
+  verify settings. No reference or unavailable input defers only the optional
+  apply action. `--token-stdin` records `stdin-at-apply`; stdin is consumed only
+  at apply. Decline leaves existing Jev settings alone; explicit `--remove`
+  invokes the existing removal owner. `--jev defer` records `deferredAt`,
+  leaves the choice unanswered, and asks it first on the next session.
+- `tools.worker-dispatch.<scope>` — presented in block (e), keeping A3's
+  stable ID for saved plans. Offer only when the shared presence-only worker
+  offer owner detects at least two known CLIs, unless explicitly answered.
+  Default off. Existing `setup.worker_dispatch_offer: declined` suppresses
+  another offer. Show installed-not-qualified unless the existing installation
+  owner can project bound, unexpired local approval evidence. That projection
+  does not import drivers, read auth, or probe; historical qualification never
+  asserts current launch readiness. Launch retains its full version/scope checks.
+  Explain account quota use and shared `quotaScope` limits. Opt-in alone reveals
+  `capabilities.worker-config.<scope>` for existing parallelism JSON fields:
+  `clis` (paths/account/quota scopes), `groups` (models/roles), `admission` and
+  `budgets` (limits), validated through `validateParallelismConfig`. Skip keeps
+  current config. Reuse `--worker-dispatch enable|decline`; headless operators
+  can configure those existing fields through `aiwg config set`. Apply enables
+  dispatch through the existing setup owner and runs
+  `aiwg doctor --probe-workers --qualify --yes --json`. Only a complete recorded
+  qualification counts as success; partial/failure remains retryable. Direct
+  dispatch requires no daemon or scheduler.
 - `capabilities.signing.<scope>` — "Require signed delivery commits?"
   Default false. Flags: existing `--require-signed-commits`,
   `--signing-format`, `--signing-key`, `--signing-enforce`
@@ -213,7 +241,7 @@ Each defaults off; declining or skipping never activates anything (§8 tests pin
 
 New flags summary (all on both `init` and `setup` unless noted):
 `--scope`, `--workspace` (setup), `--monorepo` + `--package` (setup),
-`--scan-roots` (setup), `--intent`, `--credential`.
+`--scan-roots` (setup), `--intent`, `--credential`, `--jev`.
 
 ## 5. Navigation
 
@@ -283,6 +311,8 @@ contract):
 | `write-project-config` | write `.aiwg/aiwg.config` update | `path(workspace, package.json)`, `project(workspace).layout`, `path(workspace, .aiwg/aiwg.config)` |
 | `deploy-framework` | deploy suggested framework/capability | `project(workspace).layout`, `tool(provider).installed` |
 | `register-project` | registry/memory entry for workspace | `project(workspace).root`, `path(workspace, .aiwg)` |
+| `configure-jev` | invoke `aiwg decision setup jev`, API input on stdin only at apply; capture/discard owner output, persist fixed receipts; optional failure never blocks core setup | `project(workspace).layout`; opaque locator in answers, resolved only at apply |
+| `configure-worker-dispatch` | existing setup enable path plus parallelism settings, then `aiwg doctor --probe-workers --qualify`; optional and retryable | `project(workspace).layout`, detected known `tool(worker).installed`, `tool(worker).path` |
 | `record-decline` | persist an explicit decline (e.g. worker-dispatch) | none (answer-only; clears offers like setup's choice-applied path in `src/cli/handlers/setup.ts:459-464`) |
 
 Each action carries `workspace`, `provider`, `scope` (`project`|`user`),

@@ -20,9 +20,12 @@ import {
   writeAiwgConfig,
 } from '../../config/aiwg-config.js';
 import { AiwgError, EXIT_CODES } from '../errors.js';
-import { askChoice, askConsent, askString, askYesNo, createPromptInterface } from '../prompt-utils.js';
+import { askChoice, askConsent, askString, askYesNo, createPromptInterface, createSecretPromptInterface } from '../prompt-utils.js';
 import * as ui from '../ui.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
+import { join } from 'node:path';
+import { validateJevOptions } from './guided-setup.js';
+import { validateParallelismConfig } from '../../config/aiwg-config.js';
 import { readFile } from 'node:fs/promises';
 import { discoverInventory } from '../../discovery/index.js';
 import {
@@ -662,7 +665,6 @@ async function writeGuidedProjectConfig(plan: SetupPlan, action: PlannedAction):
   const signing = guidedAnswer(plan, action.workspace, 'capabilities', 'signing');
   const tracker = asRecord(guidedAnswer(plan, action.workspace, 'capabilities', 'tracker'));
   const team = guidedAnswer(plan, action.workspace, 'intent', 'team');
-  const dispatch = guidedAnswer(plan, action.workspace, 'tools', 'worker-dispatch');
   const string = (value: PlanValue | undefined): string | undefined => typeof value === 'string' ? value : undefined;
   const boolean = (value: PlanValue | undefined): boolean | undefined => typeof value === 'boolean' ? value : undefined;
   const built = await buildSetupProjectPlan({
@@ -691,7 +693,6 @@ async function writeGuidedProjectConfig(plan: SetupPlan, action: PlannedAction):
     ...(string(tracker.tracker_actor_via) ? { trackerActorVia: string(tracker.tracker_actor_via) as SetupProjectOptions['trackerActorVia'] } : {}),
     ...(string(tracker.customer_tracker_actor_login) ? { customerTrackerActorLogin: string(tracker.customer_tracker_actor_login) } : {}),
     ...(string(tracker.customer_tracker_actor_via) ? { customerTrackerActorVia: string(tracker.customer_tracker_actor_via) as SetupProjectOptions['customerTrackerActorVia'] } : {}),
-    ...(dispatch === 'enable' || dispatch === 'decline' ? { workerDispatchChoice: dispatch } : {}),
   });
   // Interview script answers merge on top of the preserved config: init owns
   // the default-script set, setup owns the policy merge above.
@@ -791,13 +792,20 @@ function defaultGuidedApplyIO(
   return {
     ...defaultPlanReviewIO(),
     readEnv: name => process.env[name],
+    // Headless apply can consume redirected stdin. Interactive apply uses the prompt below.
+    ...(!canPrompt ? { readStdinCredential: async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+      return Buffer.concat(chunks).toString('utf8');
+    } } : {}),
     readCredentialFile: async path => readFile(path, 'utf8'),
     // stdin-at-apply prompts for the value without echoing it anywhere: the
     // label names the consumer only, and the value never reaches output.
     ...(canPrompt ? { promptCredential: async (label: string) => {
-      const rl = createPromptInterface();
+      const rl = createSecretPromptInterface();
       try {
-        return await askString(rl, label, '', ctx.signal);
+        process.stdout.write(label);
+        return await askString(rl, '', '', ctx.signal);
       } finally {
         rl.close();
       }
@@ -807,6 +815,41 @@ function defaultGuidedApplyIO(
       await writeSetupPlan(projectDir, next);
     },
     owners: {
+      configureJev: async ({ action, token, options, credential }) => {
+        if (options != null) validateJevOptions(options);
+        const settings = (options ?? {}) as Record<string, PlanValue>;
+        const args = ['decision', 'setup', 'jev', ...(settings.remove === true ? ['--remove'] : ['--token-stdin']),
+          ...(typeof settings.region === 'string' ? ['--region', settings.region] : []),
+          ...(typeof settings.endpoint === 'string' ? ['--endpoint', settings.endpoint] : []),
+          ...(settings.verify === true ? ['--verify'] : [])];
+        const environment = { ...process.env };
+        delete environment.JEV_API_KEY;
+        delete environment.AIWG_DECISION_JEV_API_KEY;
+        if (credential?.source === 'env') delete environment[credential.name];
+        const child = boundedSpawnSync(process.execPath, [join(frameworkRoot, 'bin', 'aiwg.mjs'), ...args], 'network', {
+          cwd: action.workspace, env: environment, input: token ? `${token}\n` : '', encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+          maxBuffer: 1024 * 1024,
+        });
+        if (child.error || child.status !== 0) throw new Error('Jev setup failed.');
+      },
+      configureWorkerDispatch: async ({ action }) => {
+        const built = await buildSetupProjectPlan({ projectDir: action.workspace, workerDispatchChoice: 'enable' });
+        const settings = guidedAnswer(plan, action.workspace, 'capabilities', 'worker-config');
+        let next = built.next;
+        if (settings && typeof settings === 'object' && !Array.isArray(settings)) {
+          if (Object.keys(settings).some(key => !['clis', 'groups', 'admission', 'budgets'].includes(key))) throw new Error('Invalid worker settings.');
+          next = { ...next, parallelism: { ...next.parallelism, ...settings } } as AiwgConfig;
+        }
+        if (validateParallelismConfig(next.parallelism).length) throw new Error('Invalid worker settings.');
+        await writeAiwgConfig(action.workspace, next);
+        const child = boundedSpawnSync(process.execPath, [join(frameworkRoot, 'bin', 'aiwg.mjs'),
+          'doctor', '--probe-workers', '--qualify', '--yes', '--json'], 'long', {
+          cwd: action.workspace, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1024 * 1024,
+        });
+        if (child.error || child.status !== 0) throw new Error('Worker qualification failed.');
+        const report = JSON.parse(child.stdout);
+        if (report.qualification?.status !== 'recorded' || !report.qualification?.results?.length || report.qualification.results.some((row: { status: string }) => row.status !== 'qualified')) throw new Error('Worker qualification incomplete.');
+      },
       configureProvider: async ({ action, configPath }) =>
         writeGuidedProviderConfig(plan, action, configPath),
       verifyProvider: async ({ action }) =>
@@ -818,9 +861,8 @@ function defaultGuidedApplyIO(
         return `registered project '${entry.id}'`;
       },
       recordDecline: async ({ action }) => {
-        const existing = await readAiwgConfig(action.workspace);
-        const base = existing ?? emptyConfig([]);
-        await writeAiwgConfig(action.workspace, { ...base, setup: { ...base.setup, worker_dispatch_offer: 'declined' } });
+        const built = await buildSetupProjectPlan({ projectDir: action.workspace, workerDispatchChoice: 'decline' });
+        await writeAiwgConfig(action.workspace, built.next);
         return `recorded worker-dispatch decline in ${getConfigPath(action.workspace)}`;
       },
     },
@@ -906,6 +948,8 @@ Options:
   --package <root>                Observed package root (with --monorepo package)
   --scan-roots <dir>              Opt in to bounded discovery (repeatable)
   --intent code|docs|ops|mixed     Workspace usage intent
+  --jev enable|decline|defer     Optional external decision service (default off)
+  --region <r> --endpoint <url> --verify --remove --token-stdin  Existing Jev options
   --credential <provider>=env:NAME|file:PATH|stdin  Credential reference only
   --yes                           Confirm writes without prompting
   --dry-run                       Preview the setup plan

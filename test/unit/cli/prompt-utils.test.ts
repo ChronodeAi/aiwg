@@ -10,9 +10,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import readline from 'readline';
 import { EventEmitter } from 'node:events';
 import type { Interface as ReadlineInterface } from 'readline';
 import {
+  createSecretPromptInterface,
   askString,
   askYesNo,
   askChoice,
@@ -308,5 +310,22 @@ describe('askConsent', () => {
     controller.abort('user-cancel');
     await expect(promise).rejects.toBe('user-cancel');
     expect(mock.closeSpy).toHaveBeenCalled();
+  });
+});
+
+describe('secret input terminal echo', () => {
+  it('discards readline echo and destroys its output on close', () => {
+    const rl = new EventEmitter();
+    const create = vi.spyOn(readline, 'createInterface').mockReturnValue(rl as never);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      expect(createSecretPromptInterface()).toBe(rl);
+      const options = create.mock.calls[0][0] as readline.ReadLineOptions;
+      expect(options.terminal).toBe(true);
+      options.output!.write('synthetic-secret-echo');
+      expect(stdout).not.toHaveBeenCalled();
+      rl.emit('close');
+      expect(options.output!.destroyed).toBe(true);
+    } finally { create.mockRestore(); stdout.mockRestore(); }
   });
 });

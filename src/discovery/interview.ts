@@ -1,3 +1,4 @@
+import { evaluateWorkerDispatchOffer, knownWorkerCliExecutables } from '../models/worker-dispatch-offer.js';
 import { createHash } from 'node:crypto';
 import { basename, isAbsolute, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -81,6 +82,9 @@ export interface InterviewContext {
   providers?: readonly string[];
   unknownRemote?: boolean;
   trackerRecommendation?: PlanValue;
+  jevStatus?: Record<string, { enabled: boolean; backend: { status: string } }>;
+  /** Historical qualification evidence, scoped to the workspace; launch revalidates. */
+  qualifiedWorkers?: Record<string, string[]>;
 }
 export function interviewProviders(context: InterviewContext): string[] {
   return [...new Set(['claude', ...(context.providers ?? []),
@@ -89,6 +93,7 @@ export function interviewProviders(context: InterviewContext): string[] {
 }
 export function interviewQuestions(context: InterviewContext, answers: SetupPlan['answers'] = {}): InterviewQuestion[] {
   const { inventory, workspaceRoot } = context;
+  const workerExecutables = new Set(knownWorkerCliExecutables());
   const questions: InterviewQuestion[] = [];
   const add = (block: InterviewBlock, topic: string, whyItMatters: string, defaultValue: PlanValue,
     values: PlanValue[], flag: string, input: InterviewQuestion['input'] = 'choice',
@@ -117,9 +122,6 @@ export function interviewQuestions(context: InterviewContext, answers: SetupPlan
   const providers = interviewProviders(context);
   for (const project of projects) {
     for (const provider of providers) add('tools', 'provider', 'Which provider toolchains does this project target?', provider === 'claude', [true, false], '--providers <list>', 'boolean', project.root, provider);
-    if (inventory.tools.filter(t => t.installed === 'yes').length >= 2 || Object.hasOwn(answers, questionId('tools', 'worker-dispatch', project.root))) {
-      add('tools', 'worker-dispatch', 'Two+ worker CLIs seen; run tasks in parallel?', false, ['enable', 'decline'], '--worker-dispatch enable|decline', 'choice', project.root, undefined, true);
-    }
     add('tools', 'scripts', 'Add default scripts (deploy/doctor/sync)?', { defaultScripts: true, customScripts: false, scripts: {} }, [true, false], '--default-scripts true|false --script <name>=<command> --custom-scripts true|false', 'scripts', project.root);
   }
   for (const project of projects) for (const provider of providers) {
@@ -135,6 +137,34 @@ export function interviewQuestions(context: InterviewContext, answers: SetupPlan
         { kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' }], '--credential <provider>=env:NAME|file:PATH|stdin', 'credential', project.root, provider, true);
   }
   for (const project of projects) {
+    const rootChoice = answers[questionId('targets', 'root', project.root)]?.value;
+    const targetWorkspace = typeof rootChoice === 'string' && rootChoice !== 'root' ? rootChoice : project.root;
+    const detected = inventory.tools.filter(t => t.installed === 'yes' && workerExecutables.has(t.executable));
+    const dispatch = answers[questionId('tools', 'worker-dispatch', project.root)]?.value;
+    if (evaluateWorkerDispatchOffer(undefined, dispatch === 'decline' ? { worker_dispatch_offer: 'declined' } : undefined,
+      detected.map(t => t.executable)).shouldOffer || dispatch === 'enable') {
+      // Keep A3's stable question ID while presenting the offer in optional capabilities.
+      add('capabilities', 'worker-dispatch', `Direct workers use their own accounts' quota; shared quotaScope labels share limits. No daemon or scheduler is required. ${detected.map(t =>
+        `${t.executable}: ${context.qualifiedWorkers?.[targetWorkspace]?.includes(t.executable) ? 'qualified (recorded evidence; launch rechecks)' : 'installed-not-qualified'}`).join('; ')}.`,
+        false, ['enable', 'decline'], '--worker-dispatch enable|decline', 'choice', project.root, undefined, true);
+      questions[questions.length - 1].questionId = questionId('tools', 'worker-dispatch', project.root);
+    }
+    if (dispatch === 'enable') {
+      add('capabilities', 'worker-config', 'Optional worker paths (clis), model roles (groups), and limits (admission/budgets) as existing parallelism JSON; skip preserves current settings. Qualification runs only at apply.',
+        null, [null], '--worker-dispatch enable (configure parallelism with aiwg config set)', 'policy', project.root, undefined, true);
+    }
+    const jev = answers[questionId('capabilities', 'jev', project.root)]?.value;
+    const jevStatus = context.jevStatus?.[targetWorkspace];
+    add('capabilities', 'jev', `Jev status: ${jevStatus ? jevStatus.enabled ? 'enabled' : 'off' : 'unknown'}; backend ${jevStatus?.backend.status ?? 'not-probed'}. Decisions are sent to an external service; a Jev account/API access and usage charges apply. Enable decision offload?`,
+      false, ['enable', 'decline'], '--jev enable|decline|defer', 'choice', project.root, undefined, true);
+    if (jev === 'enable') {
+      add('capabilities', 'credential-source', 'Where should A4 read the Jev API input from? Enter a reference only; setup/defer works without an API input.', null,
+        [{ kind: 'credential-ref', source: 'env', name: 'JEV_API_KEY' }, { kind: 'credential-ref', source: 'file', name: join(project.root, '.credentials', 'jev') },
+          { kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' }], '--credential jev=env:NAME|file:PATH|stdin', 'credential', project.root, 'jev', true);
+      questions[questions.length - 1].questionId = questionId('locations', 'credential-source', project.root, 'jev');
+      add('capabilities', 'jev-options', 'Optional Jev settings as JSON: region, endpoint, verify. Verification sends a billable request at apply.',
+        null, [null], '--region <r> --endpoint <url> --verify', 'policy', project.root, 'jev', true);
+    }
     add('capabilities', 'signing', 'Require signed delivery commits?', false, [true, false], '--require-signed-commits --signing-format --signing-key --signing-enforce', 'policy', project.root, undefined, true);
     add('capabilities', 'delivery', 'Delivery mode and branch protections.', { mode: 'pr-required', force_push_policy: 'never' },
       [false, { mode: 'pr-required', force_push_policy: 'never' }], '--delivery-mode --default-branch --require-ci-green --auto-close-issues --issue-comment-on-cycle --force-push-policy', 'policy', project.root, undefined, true);
@@ -167,6 +197,7 @@ export function interviewRecommendations(context: InterviewContext): SetupRecomm
 /** Recompute only from current answers. Declines and unresolved optionals create no capability actions. */
 export function buildInterviewPlan(context: InterviewContext, answers: SetupPlan['answers'], now: string, previous?: SetupPlan): SetupPlan {
   const questions = interviewQuestions(context, answers);
+  const workerExecutables = new Set(knownWorkerCliExecutables());
   const actions: PlannedAction[] = [];
   const scope = answers[questionId('targets', 'scope')]?.value === 'user' ? 'user' : 'project';
   const chosen = answers[questionId('targets', 'workspaces', context.workspaceRoot)]?.value;
@@ -199,6 +230,16 @@ export function buildInterviewPlan(context: InterviewContext, answers: SetupPlan
     if (selectedProviders.length > 0) {
       add(workspace, 'shared', 'write-project-config', [path(join(workspace, 'package.json')), layout, path(join(workspace, '.aiwg', 'aiwg.config'))]);
       add(workspace, 'shared', 'register-project', [{ kind: 'project', root: workspace, field: 'root' }, path(join(workspace, '.aiwg'))]);
+    }
+    const jevChoice = answers[questionId('capabilities', 'jev', project.root)]?.value;
+    if (jevChoice === 'enable' || jevChoice === 'remove') {
+      add(workspace, 'jev', 'configure-jev', [layout]);
+    }
+    if (answers[questionId('tools', 'worker-dispatch', project.root)]?.value === 'enable') {
+      add(workspace, 'shared', 'configure-worker-dispatch', [layout, ...context.inventory.tools
+        .filter(t => t.installed === 'yes' && workerExecutables.has(t.executable))
+        .flatMap(t => [{ kind: 'tool' as const, executable: t.executable, field: 'installed' as const },
+          { kind: 'tool' as const, executable: t.executable, field: 'path' as const }])]);
     }
     if (answers[questionId('tools', 'worker-dispatch', project.root)]?.value === 'decline') add(workspace, 'shared', 'record-decline', []);
   }

@@ -35,6 +35,8 @@ export const PLAN_APPLY_KIND_ORDER = [
   'deploy-framework',
   'register-project',
   'record-decline',
+  'configure-jev',
+  'configure-worker-dispatch',
 ] as const;
 
 /**
@@ -42,7 +44,7 @@ export const PLAN_APPLY_KIND_ORDER = [
  * Integrations (framework deploys) are optional: a failing deploy must not
  * fake full success and must not prevent config/registry writes.
  */
-export const OPTIONAL_PLAN_ACTION_KINDS: ReadonlySet<string> = new Set(['deploy-framework']);
+export const OPTIONAL_PLAN_ACTION_KINDS: ReadonlySet<string> = new Set(['deploy-framework', 'configure-jev', 'configure-worker-dispatch']);
 
 export function isOptionalPlanAction(kind: string): boolean {
   return OPTIONAL_PLAN_ACTION_KINDS.has(kind);
@@ -201,6 +203,10 @@ export function destinationOf(action: PlannedAction): string {
       return `integration (framework deployment for ${action.provider} in ${action.workspace})`;
     case 'register-project':
       return `integration (project registry entry for ${action.workspace})`;
+    case 'configure-jev':
+      return 'user settings (Jev credential writer via aiwg decision setup jev)';
+    case 'configure-worker-dispatch':
+      return `integration (direct workers in ${action.workspace})`;
     case 'record-decline':
       return `per-workspace ${action.workspace} (decline marker)`;
     default:
@@ -237,6 +243,10 @@ export function diffOfAction(plan: SetupPlan, action: PlannedAction): string {
     }
     case 'register-project':
       return `register ${action.workspace} in the project memory registry`;
+    case 'configure-jev':
+      return 'configure Jev through aiwg decision setup jev; API input via stdin at apply only';
+    case 'configure-worker-dispatch':
+      return 'enable direct dispatch and qualify with aiwg doctor --probe-workers --qualify; installed CLIs are not ready until qualified';
     case 'record-decline':
       return `record explicit decline in ${action.workspace} config (no activation)`;
     default:
@@ -316,10 +326,11 @@ export async function reviewGuidedPlan(plan: SetupPlan, fresh: DiscoveryInventor
   for (const action of plan.actions) {
     const { blocking: actionStale, advisory } = splitStale(action, staleByAction.get(action.id));
     const conflicts = await detectConflicts(action, install);
-    const reference = action.kind === 'configure-provider'
+    const reference = action.kind === 'configure-provider' || action.kind === 'configure-jev'
       ? credentialReferenceFor(plan, action.workspace, action.provider)
       : undefined;
-    const needsCredential = action.kind === 'configure-provider' && !reference;
+    const needsCredential = (action.kind === 'configure-provider' || (action.kind === 'configure-jev' &&
+      answerFor(plan, action.workspace, 'capabilities', 'jev') !== 'remove')) && !reference;
     const status: PlanActionStatus = appliedIds.has(action.id)
       ? 'applied'
       : actionStale
@@ -368,7 +379,14 @@ export async function reviewGuidedPlan(plan: SetupPlan, fresh: DiscoveryInventor
     // Axes with no member actions report ready with a zero denominator.
     axis('workspace', kinds(['write-project-config', 'register-project', 'record-decline']));
     axis('provider', kinds(['configure-provider', 'verify-provider']));
-    axis('integration', kinds(['deploy-framework']));
+    axis('integration', kinds(['deploy-framework', 'configure-jev', 'configure-worker-dispatch']));
+    if (group.some(preview => preview.kind === 'configure-worker-dispatch')) {
+      const entry = readiness.at(-1)!;
+      entry.ready = false;
+      entry.detail = group.some(preview => preview.kind === 'configure-worker-dispatch' && preview.status === 'applied')
+        ? 'Qualification recorded at apply; current launch readiness has not been checked.'
+        : 'Workers installed; qualification pending. Apply runs doctor --probe-workers --qualify.';
+    }
   }
   const deferred = plan.unresolvedChoices.filter(choice => choice.deferredAt).map(choice => choice.questionId);
   const unanswered = plan.unresolvedChoices
@@ -443,6 +461,7 @@ function formatFactValue(value: PlanValue | Observation | undefined): string {
 // ---------------------------------------------------------------------------
 
 export interface CredentialIO {
+  readStdinCredential?(): Promise<string>;
   readEnv(name: string): string | undefined;
   readCredentialFile(path: string): Promise<string>;
   /** Interactive prompt for stdin-at-apply. Absent when headless. Rendered label only; the value never reaches output. */
@@ -477,10 +496,14 @@ export async function resolveCredential(
       return { ok: false, message: `Credential-file ${reference.name} for ${provider} is unreadable; fix the path or re-answer locations.credential-source.` };
     }
   }
+  if (io.readStdinCredential) {
+    const value = (await io.readStdinCredential()).trim();
+    return value ? { ok: true, value } : { ok: false, message: `No stdin-at-apply input for ${provider}; retry with env:/file:.` };
+  }
   if (!io.promptCredential) {
     return { ok: false, message: `Stdin-at-apply input for ${provider} needs an interactive terminal; re-run interactively or re-answer with env:/file:.` };
   }
-  const value = await io.promptCredential(`Enter ${provider} credential (input is not stored): `);
+  const value = await io.promptCredential(`Enter ${provider} API input (kept out of the setup plan): `);
   if (!value) return { ok: false, message: `No stdin-at-apply input given for ${provider}; the action stays eligible for a later run.` };
   return { ok: true, value };
 }
@@ -498,6 +521,8 @@ export interface PlanActionOwnerInput {
 }
 
 export interface PlanApplyOwners {
+  configureJev?(input: PlanActionOwnerInput & { token?: string; options: PlanValue | undefined }): Promise<void>;
+  configureWorkerDispatch?(input: PlanActionOwnerInput): Promise<void>;
   configureProvider(input: PlanActionOwnerInput & { configPath: string | undefined }): Promise<string>;
   verifyProvider(input: PlanActionOwnerInput): Promise<string>;
   writeProjectConfig(input: PlanActionOwnerInput): Promise<string>;
@@ -577,6 +602,36 @@ export async function applyGuidedPlan(plan: SetupPlan, fresh: DiscoveryInventory
     const advisoryNote = advisory.length > 0
       ? ` (note: ${advisory.map(change => `${describeFact(change.fact)} unobserved; qualified from fresh inventory`).join(', ')})`
       : '';
+    if (action.kind === 'configure-jev') {
+      // Never persist owner output or exceptions: either can contain API bytes.
+      try {
+        const recordedOptions = answerFor(current, action.workspace, 'capabilities', 'jev-options', 'jev');
+        const remove = answerFor(current, action.workspace, 'capabilities', 'jev') === 'remove';
+        const options = recordedOptions && typeof recordedOptions === 'object' && !Array.isArray(recordedOptions)
+          ? { ...recordedOptions, remove } : { remove };
+        let token: string | undefined;
+        let reference: CredentialReference | undefined;
+        if (!remove) {
+          reference = credentialReferenceFor(current, action.workspace, 'jev');
+          if (!reference) { await record('skipped', 'Jev setup deferred: choose --credential jev=env:NAME|file:PATH|stdin.'); continue; }
+          const resolved = await resolveCredential(reference, 'jev', io);
+          if (!resolved.ok) { await record('skipped', 'Jev setup deferred: API input unavailable; core setup can proceed.'); continue; }
+          token = resolved.value;
+        }
+        if (!io.owners.configureJev) throw new Error('Missing Jev owner');
+        await io.owners.configureJev({ action, token, options, credential: reference });
+        await record('applied', remove ? 'Removed Jev setup through its existing owner.' : 'Configured Jev through its existing owner.');
+      } catch { await record('failed', 'Jev setup failed; retry the existing decision setup command.'); }
+      continue;
+    }
+    if (action.kind === 'configure-worker-dispatch') {
+      try {
+        if (!io.owners.configureWorkerDispatch) throw new Error('Missing worker owner');
+        await io.owners.configureWorkerDispatch({ action });
+        await record('applied', 'Enabled direct workers; doctor qualification succeeded. Launch rechecks availability.');
+      } catch { await record('failed', 'Worker qualification incomplete; installed CLIs remain unqualified. Retry aiwg doctor --probe-workers --qualify.'); }
+      continue;
+    }
     if (action.kind === 'configure-provider') {
       const reference = credentialReferenceFor(current, action.workspace, action.provider);
       if (!reference) {
@@ -608,7 +663,8 @@ export async function applyGuidedPlan(plan: SetupPlan, fresh: DiscoveryInventory
             ? await io.owners.deployFramework({ action, intent: answerFor(current, action.workspace, 'intent', 'use') })
             : action.kind === 'register-project'
               ? await io.owners.registerProject({ action })
-              : await io.owners.recordDecline({ action });
+              : action.kind === 'record-decline' ? await io.owners.recordDecline({ action })
+                : await Promise.reject(new Error('Unsupported setup action kind.'));
       await record('applied', `${message}${advisoryNote}`);
     } catch (error) {
       await record('failed', error instanceof Error ? error.message : String(error));

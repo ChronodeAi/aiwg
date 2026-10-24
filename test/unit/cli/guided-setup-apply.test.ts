@@ -3,6 +3,10 @@ import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { guidedInventory } from '../../helpers/guided-setup-fixture.js';
 import { guidedHarness } from '../../helpers/guided-setup-harness.js';
+import { writeSetupPlan } from '../../../src/discovery/plan-store.js';
+import { buildInterviewPlan, questionId } from '../../../src/discovery/interview.js';
+import { INTERVIEW_TIME } from '../../helpers/guided-setup-fixture.js';
+import type { SetupPlan, PlanValue } from '../../../src/discovery/plan-types.js';
 import { workspaceSlug } from '../../../src/discovery/interview.js';
 
 vi.mock('../../../src/cli/env.js', () => ({ isInteractive: vi.fn() }));
@@ -65,6 +69,98 @@ afterEach(() => {
 });
 
 describe('guided setup review and apply', () => {
+  async function integrationPlan(kind: 'jev' | 'workers', reference?: PlanValue, options?: PlanValue): Promise<void> {
+    const answers: SetupPlan['answers'] = {};
+    const put = (id: string, value: PlanValue) => { answers[id] = { value, source: 'interview', answeredAt: INTERVIEW_TIME }; };
+    put(questionId('targets', 'workspaces', harness.project), [harness.project]);
+    if (kind === 'jev') {
+      put(questionId('capabilities', 'jev', harness.project), 'enable');
+      if (reference) put(questionId('locations', 'credential-source', harness.project, 'jev'), reference);
+      if (options) put(questionId('capabilities', 'jev-options', harness.project, 'jev'), options);
+    } else {
+      put(questionId('tools', 'worker-dispatch', harness.project), 'enable');
+      if (options) put(questionId('capabilities', 'worker-config', harness.project), options);
+    }
+    await writeSetupPlan(harness.project, buildInterviewPlan({ inventory, workspaceRoot: harness.project }, answers, INTERVIEW_TIME));
+  }
+
+  it('passes Jev bytes only on owner stdin at apply; output and receipts stay canary-free', async () => {
+    await integrationPlan('jev', { kind: 'credential-ref', source: 'env', name: SENTINEL_ENV }, { region: 'eu', verify: true });
+    expect(readFileSync(planPath(), 'utf8')).not.toContain(SENTINEL_VALUE);
+    const review = await setupHandler.execute(harness.ctx(['--review', '--json']));
+    expect(review.message).not.toContain(SENTINEL_VALUE);
+    const result = await setupHandler.execute(harness.ctx(['--apply', '--yes']));
+    expect(result.exitCode).toBe(0);
+    const call = vi.mocked(boundedSpawnSync).mock.calls.find(([, args]) => args.includes('--token-stdin'))!;
+    expect(call[1]).toEqual(expect.arrayContaining(['decision', 'setup', 'jev', '--region', 'eu', '--verify']));
+    expect(call[1].join(' ')).not.toContain(SENTINEL_VALUE);
+    expect(call[3]?.env).not.toHaveProperty(SENTINEL_ENV);
+    expect(call[3]).toMatchObject({ cwd: harness.project, input: `${SENTINEL_VALUE}\n`, stdio: ['pipe', 'pipe', 'pipe'] });
+    expect(`${result.message}${readFileSync(planPath(), 'utf8')}${JSON.stringify(vi.mocked(console.log).mock.calls)}`).not.toContain(SENTINEL_VALUE);
+  });
+
+  it('removes Jev through the existing owner without resolving any API input', async () => {
+    await initHandler.execute(harness.ctx(['--remove', '--yes']));
+    const plan: SetupPlan = JSON.parse(readFileSync(planPath(), 'utf8'));
+    // Focus this saved-plan apply on the explicitly requested integration.
+    plan.actions = plan.actions.filter(action => action.kind === 'configure-jev');
+    await writeSetupPlan(harness.project, plan);
+    const input = vi.spyOn(process.stdin, Symbol.asyncIterator);
+    const result = await setupHandler.execute(harness.ctx(['--apply', '--yes']));
+    expect(result.exitCode).toBe(0);
+    const call = vi.mocked(boundedSpawnSync).mock.calls.find(([, args]) => args.includes('jev') && args.includes('--remove'))!;
+    expect(call[1]).not.toContain('--token-stdin');
+    expect(call[3]).toMatchObject({ input: '' });
+    expect(input).not.toHaveBeenCalled();
+    // A later decline must not resurrect the previous removal action.
+    await initHandler.execute(harness.ctx(['--jev', 'decline', '--yes']));
+    const declined: SetupPlan = JSON.parse(readFileSync(planPath(), 'utf8'));
+    expect(declined.actions.some(action => action.kind === 'configure-jev')).toBe(false);
+  });
+
+  it('consumes a stdin reference only at apply and keeps it out of output', async () => {
+    const input = vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () { yield Buffer.from(SENTINEL_VALUE); });
+    await integrationPlan('jev', { kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' });
+    expect(input).not.toHaveBeenCalled();
+    const result = await setupHandler.execute(harness.ctx(['--apply', '--yes']));
+    expect(result.exitCode).toBe(0);
+    expect(input).toHaveBeenCalledOnce();
+    expect(vi.mocked(boundedSpawnSync).mock.calls.find(([, args]) => args.includes('--token-stdin'))?.[3]).toMatchObject({ input: `${SENTINEL_VALUE}\n` });
+    expect(`${result.message}${readFileSync(planPath(), 'utf8')}`).not.toContain(SENTINEL_VALUE);
+  });
+
+  it.each([undefined, { kind: 'credential-ref', source: 'env', name: 'AIWG_TEST_MISSING_JEV' }])('keeps missing Jev input optional and retryable (%j)', async reference => {
+    vi.stubEnv('AIWG_TEST_MISSING_JEV', '');
+    await integrationPlan('jev', reference as PlanValue | undefined);
+    const result = await setupHandler.execute(harness.ctx(['--apply', '--yes', '--json']));
+    expect(JSON.parse(result.message!)).toMatchObject({ classification: 'partial', results: [{ optional: true, status: 'skipped' }] });
+    expect(vi.mocked(boundedSpawnSync).mock.calls.some(([, args]) => args.includes('--token-stdin'))).toBe(false);
+  });
+
+  it('does not persist a Jev owner error containing the API input', async () => {
+    await integrationPlan('jev', { kind: 'credential-ref', source: 'env', name: SENTINEL_ENV });
+    vi.mocked(boundedSpawnSync).mockImplementation(() => { throw new Error(SENTINEL_VALUE); });
+    const result = await setupHandler.execute(harness.ctx(['--apply', '--yes', '--json']));
+    expect(JSON.parse(result.message!)).toMatchObject({ classification: 'partial', results: [{ status: 'failed' }] });
+    expect(`${result.message}${readFileSync(planPath(), 'utf8')}`).not.toContain(SENTINEL_VALUE);
+  });
+
+  it.each(['recorded', 'partial', 'failed'])('enables direct dispatch and reports doctor qualification %s accurately', async status => {
+    const settings = { clis: { codex: { adapter: 'providers:codex', executable: '/synthetic/codex', accountScope: 'test-account', quotaScope: 'test-quota' } },
+      groups: { coding: { members: [{ id: 'coder', cli: 'codex', model: 'gpt-5.4', roles: ['coding'] }], maxParallel: 1 } },
+      admission: { cliCaps: { codex: 1 } } };
+    await integrationPlan('workers', undefined, settings);
+    const review = JSON.parse((await setupHandler.execute(harness.ctx(['--review', '--json']))).message!);
+    expect(review.readiness.find((entry: { area: string }) => entry.area === 'integration').ready).toBe(false);
+    vi.mocked(boundedSpawnSync).mockReturnValue({ status: status === 'recorded' ? 0 : 1,
+      stdout: JSON.stringify({ qualification: { status, results: [{ cli: 'codex', status: 'qualified' }] } }), stderr: '' } as never);
+    const result = await setupHandler.execute(harness.ctx(['--apply', '--yes', '--json']));
+    expect(JSON.parse(result.message!).classification).toBe(status === 'recorded' ? 'success' : 'partial');
+    expect(writeAiwgConfig).toHaveBeenCalledWith(harness.project, expect.objectContaining({ parallelism: expect.objectContaining({ worker_dispatch: true, ...settings }) }));
+    expect(vi.mocked(boundedSpawnSync).mock.calls.some(([, args]) => args.includes('doctor') && args.includes('--probe-workers') && args.includes('--qualify'))).toBe(true);
+    expect(vi.mocked(boundedSpawnSync).mock.calls.flatMap(([, args]) => args)).not.toContain('--daemon');
+  });
+
   it('--review renders per workspace and provider and writes nothing', async () => {
     await recordPlan();
     const before = snapshotTree(harness.scratch);
