@@ -1,6 +1,8 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { once } from "node:events";
+import { Agent, get, type IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -154,6 +156,38 @@ describe("signed web release resolver", () => {
     expect(release.selectorKind).toBe("channel");
     expect(release.channelSequence).toBe(7);
     expect(release.manifestDigest).toBe(published.manifestDigest);
+  });
+
+  it("closes fixture sockets on 200, 304, and 404 responses even when the client requests keep-alive", async () => {
+    const published = fixture.publishRelease();
+    fixture.publishChannel("stable", 7, published);
+    const agent = new Agent({ keepAlive: true });
+    let etag: string | undefined;
+
+    try {
+      for (const status of [200, 304, 404]) {
+        const pathname = status === 404 ? "/missing" : "/resources/channels/stable.json";
+        const response = await new Promise<IncomingMessage>((resolve, reject) => {
+          get(`${fixture.baseUrl}${pathname}`, {
+            agent,
+            headers: status === 304 ? { "if-none-match": etag! } : {},
+          }, resolve).once("error", reject);
+        });
+        // Subscribe before draining: close may arrive immediately after end.
+        const closed = once(response.socket, "close");
+        const ended = once(response, "end");
+        response.resume();
+        await ended;
+
+        expect(response.statusCode).toBe(status);
+        expect(fixture.requestHeaders.at(-1)?.connection).toBe("keep-alive");
+        expect(response.headers.connection).toBe("close");
+        await closed;
+        etag = response.headers.etag;
+      }
+    } finally {
+      agent.destroy();
+    }
   });
 
   it("enforces additive signed channel expiry while accepting legacy metadata without it", async () => {
