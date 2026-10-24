@@ -1,13 +1,15 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { fork, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { prepareProviderDeployments } from '../../../tools/agents/providers/provider-prepare-coordinator.mjs';
 import { main as deployProvider } from '../../../tools/agents/deploy-agents.mjs';
 import { signalChild } from '../../../src/process/signal-child.mjs';
+
+vi.mock('node:child_process', { spy: true });
 
 const roots = [];
 afterEach(() => roots.splice(0).forEach(root => fs.rmSync(root, { recursive: true, force: true })));
@@ -48,6 +50,62 @@ function harness() {
 }
 
 describe('provider prepare subprocess coordinator', () => {
+  it.each([0, 7])('drains a response delivered after exit before settling (exit %i)', async exitCode => {
+    const h = harness();
+    const immediateWorker = path.join(h.root, 'immediate-worker.mjs');
+    fs.writeFileSync(immediateWorker, `
+      import fs from 'node:fs';
+      import { createHash } from 'node:crypto';
+      process.once('message', request => {
+        const body = Buffer.from(JSON.stringify({ order: request.order, attempt: request.attempt }));
+        const file = request.scratch + '/plan.json';
+        fs.writeFileSync(file, body);
+        process.send({ version: 1, type: 'prepared', capability: request.capability, jobId: request.jobId,
+          plan: { path: file, size: body.length, sha256: createHash('sha256').update(body).digest('hex') }
+        }, () => process.exit(${exitCode}));
+      });
+    `);
+    const { fork: realFork } = await vi.importActual('node:child_process');
+    const events = [];
+    vi.mocked(fork).mockImplementationOnce((...args) => {
+      const child = realFork(...args);
+      const emit = child.emit;
+      let exited = false;
+      let pendingMessage;
+      let pendingDisconnect = false;
+      // Delay delivery at the parent's event boundary, simulating slow IPC
+      // draining without relying on scheduler timing or machine load. Keep the
+      // real process exit, IPC channel and close events intact.
+      child.emit = function (event, ...values) {
+        if (event === 'message' && !exited) { pendingMessage = values; return true; }
+        if (event === 'disconnect' && !exited) { pendingDisconnect = true; return true; }
+        if (event === 'exit') {
+          exited = true;
+          events.push(event);
+          const result = emit.call(this, event, ...values);
+          if (pendingMessage) this.emit('message', ...pendingMessage);
+          if (pendingDisconnect) this.emit('disconnect');
+          return result;
+        }
+        if (event === 'message' || event === 'disconnect' || event === 'close') events.push(event);
+        return emit.call(this, event, ...values);
+      };
+      return child;
+    });
+    const preparing = prepareProviderDeployments({ srcRoot: h.root,
+      jobs: [{ order: 0, provider: 'immediate', target: h.root, args: [] }],
+      workerPath: immediateWorker, transaction: h.transaction });
+    if (exitCode === 0) {
+      const session = await preparing;
+      try { expect(await session.commit(0)).toEqual({ order: 0 }); }
+      finally { await session.dispose(); }
+    } else {
+      await expect(preparing).rejects.toThrow('worker exited 7 after responding for immediate');
+      expect(h.committed).toEqual([]);
+    }
+    expect(events.slice(0, 3)).toEqual(['exit', 'message', 'disconnect']);
+  });
+
   it('keeps a worker alive until an unref-only asynchronous preparation sends its reply', async () => {
     const h = harness();
     await expect(prepareProviderDeployments({ srcRoot: h.root,
