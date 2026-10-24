@@ -1317,6 +1317,8 @@ export function resolveParallelism(
 export interface IndexConfig {
   /** Default graph backend. Individual graph definitions take precedence. */
   graphBackend?: 'json' | 'graphology' | 'sqlite';
+  /** Per adapter name (or group), measured verification age targets. */
+  freshness?: Record<string, { targetStaleAfterMs?: number; maxRetriesPerDay?: number; measureConvergence?: boolean }>;
   graphs?: Record<string, IndexGraphDef | IndexMarkdownIndices>;
   graphOverrides?: {
     project?: IndexBuiltinGraphOverride;
@@ -1394,6 +1396,27 @@ export function validateIndexConfig(index: unknown): string[] {
   const indexObject = index as Record<string, unknown>;
   if (indexObject.graphBackend !== undefined && !GRAPH_BACKENDS.includes(indexObject.graphBackend as string)) {
     errors.push(`index.graphBackend: must be one of ${GRAPH_BACKENDS.join(' | ')}`);
+  }
+  if (indexObject.freshness !== undefined) {
+    const policies = indexObject.freshness;
+    if (!policies || typeof policies !== 'object' || Array.isArray(policies)) {
+      errors.push('index.freshness: must map adapter names to policies');
+    } else for (const [name, policy] of Object.entries(policies)) {
+      const where = `index.freshness.${name}`;
+      if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+        errors.push(`${where}: must be an object`);
+        continue;
+      }
+      for (const [key, value] of Object.entries(policy)) {
+        if (key === 'measureConvergence') {
+          if (typeof value !== 'boolean') errors.push(`${where}.${key}: must be a boolean`);
+        } else if (key === 'targetStaleAfterMs' || key === 'maxRetriesPerDay') {
+          if (!Number.isSafeInteger(value) || (value as number) < (key === 'targetStaleAfterMs' ? 1 : 0)) {
+            errors.push(`${where}.${key}: must be a ${key === 'targetStaleAfterMs' ? 'positive' : 'non-negative'} integer`);
+          }
+        } else errors.push(`${where}.${key}: unknown policy key`);
+      }
+    }
   }
   const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
 

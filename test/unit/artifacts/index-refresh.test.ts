@@ -35,6 +35,7 @@ function snapshot(directory: string): Record<string, string> {
   const files: Record<string, string> = {};
   if (!fs.existsSync(directory)) return files;
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === 'freshness.json') continue;
     const file = path.join(directory, entry.name);
     if (entry.isDirectory()) Object.assign(files, snapshot(file));
     else files[file] = `${fs.statSync(file).mtimeMs}:${fs.readFileSync(file, 'base64')}`;

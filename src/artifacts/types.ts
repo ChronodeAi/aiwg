@@ -1173,6 +1173,14 @@ export function loadGlobalGraphConfigs(diagnostics?: GraphConfigWarning[]): stri
 /** Module-scoped guard so the config.yaml deprecation note prints at most once per process. */
 let yamlIndexDeprecationWarned = false;
 
+/** Reload one workspace's registrations, including removals between daemon runs. */
+export function loadWorkspaceGraphs(workspace: string, diagnostics?: GraphConfigWarning[]): void {
+  for (const name of Object.keys(GRAPH_CONFIGS)) delete GRAPH_CONFIGS[name];
+  Object.assign(GRAPH_CONFIGS, structuredClone(BUILTIN_GRAPH_CONFIGS));
+  loadUserGraphConfigs(workspace, diagnostics);
+  loadGlobalGraphConfigs(diagnostics);
+}
+
 /**
  * Get the index output directory for a given graph type
  *

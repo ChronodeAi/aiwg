@@ -19,6 +19,7 @@ import type {
   GraphType,
 } from './types.js';
 import { getGraphIndexDir, getProjectIndexRoot } from './types.js';
+import { loadManifest, writeManifest } from './checksum-manifest.js';
 
 /**
  * Load a JSON file from the index directory
@@ -126,5 +127,44 @@ export function loadGraphIndexFile<T>(cwd: string, filename: string, graph?: Gra
     return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as T;
   } catch {
     return null;
+  }
+}
+
+/** Publish a prepared snapshot with the existing atomic file writes under the owner lock. */
+export function publishIndexFiles(staging: string, directory: string): void {
+  const files = fs.readdirSync(staging).filter(file => fs.statSync(path.join(staging, file)).isFile())
+    .sort((a, b) => Number(a === 'metadata.json') - Number(b === 'metadata.json'));
+  const backups = path.join(staging, '.previous');
+  fs.mkdirSync(backups);
+  for (const file of files) {
+    const target = path.join(directory, file);
+    if (fs.existsSync(target)) fs.copyFileSync(target, path.join(backups, file));
+  }
+  const published: string[] = [];
+  try {
+    for (const file of files) {
+      fs.renameSync(path.join(staging, file), path.join(directory, file));
+      published.push(file);
+    }
+    // Receipts bind to final inode signatures, after the atomic renames.
+    if (files.includes('checksum-manifest.json')) {
+      const manifest = loadManifest(directory);
+      const signature = (file: string) => {
+        const stat = fs.statSync(path.join(directory, file), { bigint: true });
+        return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
+      };
+      if (manifest.receipt) {
+        manifest.receipt.metadataSignature = signature('metadata.json');
+        if (manifest.receipt.relations) manifest.receipt.relations.signature = signature('relations.json');
+        writeManifest(directory, manifest);
+      }
+    }
+  } catch (error) {
+    for (const file of published.reverse()) {
+      const backup = path.join(backups, file);
+      if (fs.existsSync(backup)) fs.renameSync(backup, path.join(directory, file));
+      else fs.rmSync(path.join(directory, file), { force: true });
+    }
+    throw error;
   }
 }

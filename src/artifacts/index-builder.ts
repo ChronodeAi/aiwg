@@ -32,7 +32,7 @@ import {
   resolveGraphBackendType,
 } from './types.js';
 import { parseCitationSidecar, citationResultToEdges, buildRefToPathMap } from './citation-parser.js';
-import { writeIndexFile, resolveIndexDir, loadGraphIndexFile } from './index-reader.js';
+import { writeIndexFile, resolveIndexDir, loadGraphIndexFile, publishIndexFiles } from './index-reader.js';
 import { loadManifest, writeManifest, statMatches, makeEntry, type ChecksumManifest, type ManifestStats } from './checksum-manifest.js';
 import { FRAMEWORK_RELATIONS_REVISION } from './framework-source-digest.js';
 import { normalizeOperationalState } from './operational-state.js';
@@ -42,10 +42,13 @@ import {
 } from '../config/project-artifacts.js';
 import { normalizeStateTransferProjection } from './state-transfer.js';
 import { resolveIndexWorkers, runIndexPreparation, type IndexPreparationJob, type IndexPreparationResult } from './index-preparation.js';
-import { collectGraphIndexFiles, findArtifactFiles, indexPathFor } from './index-files.js';
+import { collectGraphIndexFiles, findArtifactFiles, indexPathFor, type ArtifactDiscoveryOptions } from './index-files.js';
+import { acquireDirectoryLock } from './prebuilt-build-lock.js';
+import { graphIndexDigest, indexAdapterRegistry, recordIndexVerification, type IndexAdapter } from './index-adapters.js';
 
 export interface BuildOptions {
   force?: boolean;
+  lockWaitMs?: number;
   /** Bound independent preparation processes; 0/1 keeps serial extraction. */
   workers?: number;
   onDiagnostic?: (message: string) => void;
@@ -1045,9 +1048,56 @@ function extractIndexArtifact(job: IndexPreparationJob, bindingOnly: boolean): I
   return { checksum, entry };
 }
 
-export async function buildIndex(
+export async function buildIndex(cwd: string, options: BuildOptions = {}): Promise<void> {
+  loadUserGraphConfigs(cwd);
+  loadGlobalGraphConfigs();
+  const scanDirs = options.scope ? [path.join(cwd, options.scope)] : options.graph
+    ? GRAPH_CONFIGS[options.graph]?.scanDirs.map(dir => resolveGraphScanDir(cwd, dir)) ?? []
+    : [resolveProjectAiwgDir(cwd)];
+  if (!scanDirs.some(dir => fs.existsSync(dir))) {
+    // Keep the owner's missing-root diagnostic/exit path before creating output directories.
+    await buildIndexSnapshot(cwd, options, '');
+    return;
+  }
+  const directory = options.outputDir
+    ? path.join(options.outputDir, options.graph ? `.aiwg/.index/${options.graph}` : INDEX_DIR)
+    : resolveIndexDir(cwd, options.graph);
+  // Manual and background builds acquire the same per-output owner lock.
+  const release = await acquireDirectoryLock(`${directory}.build.lock`, {
+    timeoutMs: options.lockWaitMs ?? 180_000, reclaimDeadOwner: true,
+  });
+  let staging: string | undefined;
+  const start = Date.now();
+  let owned: IndexAdapter | undefined;
+  try {
+    const adapter = !options.scope && !options.includeIgnored
+      ? indexAdapterRegistry(cwd).find(item => item.name === (options.graph ?? 'project')) : undefined;
+    owned = adapter && directory === path.dirname(adapter.statePath) ? adapter : undefined;
+    const observation: { before?: string; selection: NonNullable<ArtifactDiscoveryOptions['selection']> } = { selection: {} };
+    fs.mkdirSync(directory, { recursive: true });
+    staging = fs.mkdtempSync(path.join(directory, '.build-'));
+    await buildIndexSnapshot(cwd, options, staging, owned ? observation : undefined);
+    const after = owned ? await graphIndexDigest(cwd, options.graph, { selection: observation.selection }) : undefined;
+    // All extraction and backend work has succeeded before any live file moves.
+    if (owned) recordIndexVerification(owned, cwd, { before: observation.before, after, wallMs: Date.now() - start }, staging);
+    publishIndexFiles(staging, directory);
+  } catch (error) {
+    if (owned) {
+      try { recordIndexVerification(owned, cwd, { error: error instanceof Error ? error.message : String(error), wallMs: Date.now() - start }); }
+      catch { /* Preserve the original build failure if recording is unavailable. */ }
+    }
+    throw error;
+  } finally {
+    try { if (staging) fs.rmSync(staging, { recursive: true, force: true }); }
+    finally { await release(); }
+  }
+}
+
+async function buildIndexSnapshot(
   cwd: string,
-  options: BuildOptions = {}
+  options: BuildOptions,
+  publicationDir: string,
+  observation?: { before?: string; selection: NonNullable<ArtifactDiscoveryOptions['selection']> },
 ): Promise<void> {
   const { force = false, verbose = false, scope, includeIgnored = false, outputDir, graph, explicit = true } = options;
   const workers = resolveIndexWorkers(options.workers);
@@ -1119,10 +1169,11 @@ export async function buildIndex(
   const effectiveOutputCwd = outputDir ?? cwd;
 
   if (graph === 'source') {
+    if (observation) observation.before = await graphIndexDigest(cwd, graph, { selection: observation.selection });
     const { buildSourceGraphIndex } = await import('./source-graph.js');
     await buildSourceGraphIndex({
       cwd,
-      outputDir: indexOutputDir,
+      outputDir: publicationDir,
       effectiveOutputCwd,
       verbose,
     });
@@ -1142,7 +1193,7 @@ export async function buildIndex(
     : loadManifest(indexOutputDir);
   const useFilenameMetadata = graphConfig?.nodeStrategy === 'filename-metadata';
   const reusable = !useFilenameMetadata && !graphConfig?.metadataSupplements?.length && !graphConfig?.edgeExtraction;
-  const fileStats = !force && reusable ? new Map<string, fs.Stats>() : undefined;
+  const fileStats = observation || (!force && reusable) ? new Map<string, fs.Stats>() : undefined;
   const nextManifestEntries: Record<string, import('./checksum-manifest.js').ManifestEntry> = {};
   const manifestStats: ManifestStats = {
     checked: 0,
@@ -1153,7 +1204,8 @@ export async function buildIndex(
   };
 
   // Collect files from all scan directories
-  const files = await collectGraphIndexFiles(cwd, graph, { scope, includeIgnored, fileStats });
+  const files = await collectGraphIndexFiles(cwd, graph, { scope, includeIgnored, fileStats, selection: observation?.selection });
+  if (observation) observation.before = await graphIndexDigest(cwd, graph, { files, fileStats });
   const entries: Record<string, MetadataEntry> = {};
   const tagIndex: TagIndex = {};
   const depGraph: DependencyGraph = {};
@@ -1194,7 +1246,7 @@ export async function buildIndex(
   const entriesDigest = (values: ChecksumManifest['entries']): string =>
     createHash('sha256').update(JSON.stringify(values)).digest('hex');
   const writeBuildManifest = (values: ChecksumManifest['entries']): void => {
-    writeManifest(indexOutputDir, { version: 1, generated: new Date().toISOString(), entries: values,
+    writeManifest(publicationDir, { version: 1, generated: new Date().toISOString(), entries: values,
       ...(reusable ? { receipt: {
         indexVersion: INDEX_VERSION, extractorVersion: INDEX_EXTRACTOR_VERSION, buildConfigHash,
         sourceRoot: path.resolve(cwd), metadataSignature: fileSignature('metadata.json'), entriesDigest: entriesDigest(values),
@@ -1225,7 +1277,7 @@ export async function buildIndex(
       manifestStats.checked = files.length;
       manifestStats.statSkipped = files.length;
       const buildTimeMs = Date.now() - startTime;
-      writeIndexFile(effectiveOutputCwd, 'stats.json', { ...stats, builtAt: new Date().toISOString(), buildTimeMs }, indexOutputDir);
+      writeIndexFile(effectiveOutputCwd, 'stats.json', { ...stats, builtAt: new Date().toISOString(), buildTimeMs }, publicationDir);
       reportBuild(buildTimeMs, files.length);
       return;
     }
@@ -1357,15 +1409,14 @@ export async function buildIndex(
       const projectionNeedsRepair = graph === 'framework' && !relationsReceiptMatches();
       if (graph === 'framework') {
         const { writeRelations } = await import('./relations-builder.js');
-        await writeRelations(entries, effectiveOutputCwd, indexOutputDir,
-          force || !relationsReceiptMatches());
+        if (force || !relationsReceiptMatches()) await writeRelations(entries, effectiveOutputCwd, publicationDir, true);
       }
       const buildTimeMs = Date.now() - startTime;
       writeIndexFile(effectiveOutputCwd, 'stats.json', {
         ...stats,
         builtAt: new Date().toISOString(),
         buildTimeMs,
-      }, indexOutputDir);
+      }, publicationDir);
       // Preserve no-op manifest bytes after output-only timestamp drift.
       // Renew receipts only for changed source stats or repaired projections.
       if (manifestStats.checksumSkipped > 0 || projectionNeedsRepair) writeBuildManifest(nextManifestEntries);
@@ -1510,8 +1561,8 @@ export async function buildIndex(
 
   if (graph === 'framework') {
     const { writeRelations } = await import('./relations-builder.js');
-    await writeRelations(entries, effectiveOutputCwd, indexOutputDir,
-      force || !relationsReceiptMatches());
+    await writeRelations(entries, effectiveOutputCwd, publicationDir,
+      force || !relationsReceiptMatches(), indexOutputDir);
   }
 
   const buildTimeMs = Date.now() - startTime;
@@ -1526,14 +1577,14 @@ export async function buildIndex(
     entries,
   };
 
-  writeIndexFile(effectiveOutputCwd, 'metadata.json', index, indexOutputDir);
-  writeIndexFile(effectiveOutputCwd, 'tags.json', tagIndex, indexOutputDir);
-  writeIndexFile(effectiveOutputCwd, 'dependencies.json', depGraph, indexOutputDir);
+  writeIndexFile(effectiveOutputCwd, 'metadata.json', index, publicationDir);
+  writeIndexFile(effectiveOutputCwd, 'tags.json', tagIndex, publicationDir);
+  writeIndexFile(effectiveOutputCwd, 'dependencies.json', depGraph, publicationDir);
 
   // Materialize the configured backend and always retain dependencies.json as
   // the stable compatibility/export contract.
   const { createGraphBackend } = await import('./graph-backend.js');
-  const persistentPath = backendType === 'sqlite' ? path.join(indexOutputDir, 'graph.db') : undefined;
+  const persistentPath = backendType === 'sqlite' ? path.join(publicationDir, 'graph.db') : undefined;
   let selectedBackend;
   try {
     selectedBackend = await createGraphBackend(backendType, persistentPath);
@@ -1600,7 +1651,7 @@ export async function buildIndex(
       orphanedArtifacts: orphaned,
       mostReferenced,
     },
-  }, indexOutputDir);
+  }, publicationDir);
   writeBuildManifest(nextManifestEntries);
 
   // Report
