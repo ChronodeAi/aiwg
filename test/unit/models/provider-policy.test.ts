@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   compileModelPolicy,
   assertOperatorWorkerNativeArgv,
+  assertWorkerLaunchMode,
   WORKER_OPERATOR_APPROVAL,
   loadProviderModelCapabilities,
   loadProviderModelCatalog,
@@ -203,8 +204,15 @@ describe('operator-approved native Codex controls', () => {
   const permissions = { sandbox: 'workspace-write', approval: 'never' };
   const argv = ['/trusted/codex', '--no-daemon', 'exec', '--ignore-user-config', '-m', selected.model,
     '-c', 'model_reasoning_effort="medium"', '-s', 'workspace-write', '-c', 'approval_policy="never"', '-'];
-  it('accepts exact model, effort, sandbox and approval flags', () => {
-    expect(() => assertOperatorWorkerNativeArgv(adapter(), argv, selected, permissions)).not.toThrow();
+  it.each(['read-only', 'workspace-write', 'external'])('accepts exact %s flags and rejects other sandbox flags', sandbox => {
+    const rendered = argv.map(token => token === 'workspace-write' ? sandbox === 'external' ? 'danger-full-access' : sandbox : token);
+    expect(() => assertOperatorWorkerNativeArgv(adapter(), rendered, selected, { ...permissions, sandbox })).not.toThrow();
+    for (const other of ['read-only', 'workspace-write', 'external'].filter(value => value !== sandbox)) {
+      expect(() => assertOperatorWorkerNativeArgv(adapter(), rendered, selected, { ...permissions, sandbox: other })).toThrow();
+    }
+  });
+  it.each(['codex', 'muse'])('keeps native-sandbox incompatible with external for %s', provider => {
+    expect(() => assertWorkerLaunchMode({ ...adapter(), provider }, { launchMode: 'native-sandbox', sandbox: 'external' })).toThrow('native-sandbox requires');
   });
   it.each(['-m', '-s', 'model_reasoning_effort="medium"'])('blocks dropped %s', control => {
     const broken = [...argv];
@@ -213,11 +221,11 @@ describe('operator-approved native Codex controls', () => {
     else broken.splice(index - 1, 2);
     expect(() => assertOperatorWorkerNativeArgv(adapter(), broken, selected, permissions)).toThrow('absent or ambiguous');
   });
-  it.each(['external', 'danger-full-access', 'unknown'])('blocks an unrenderable sandbox %s', sandbox => {
+  it.each(['danger-full-access', 'unknown'])('blocks an unrenderable sandbox %s', sandbox => {
     expect(() => assertOperatorWorkerNativeArgv(adapter(), argv, selected, { ...permissions, sandbox })).toThrow('sandbox');
   });
   it.each([
-    ['-s', 'read-only'], ['--dangerously-bypass-approvals-and-sandbox'], ['--full-auto'],
+    ['-s', 'read-only'], ['-s', 'danger-full-access'], ['--dangerously-bypass-approvals-and-sandbox'], ['--full-auto'],
     ['-c', 'model_reasoning_effort="high"'], ['--sandbox=read-only'], ['-sread-only'], ['-cmodel_reasoning_effort="high"'], ['-c', 'sandbox_mode="danger-full-access"'],
   ])('blocks ambiguous or overriding flags %j', (...extra) => {
     expect(() => assertOperatorWorkerNativeArgv(adapter(), [...argv, ...extra], selected, permissions)).toThrow();

@@ -626,6 +626,11 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
             qualifyWorkerInvocationProfile(adapter, { profile: binding.profile, transport, cliVersion: binding.cliVersion,
               policy, permissions, effort, boundary: binding.boundary,
               requiredControls: request.requiredControls, mcp: binding.mcp });
+            if (hasOperatorWorkerNativeRenderer(adapter) && transport === 'shell' && permissions.sandbox === 'external') {
+              reasons.push({ code: 'OG_SANDBOX_EXTERNAL', blocking: false,
+                pointer: `/parallelism/groups/${groupId}/execution/sandbox`,
+                message: `${adapter.provider} CLI's own sandbox is disabled by explicit external policy; isolation relies on the per-task worktree and launcher resource scope.` });
+            }
             const { maxAttempts: _maxAttempts, ...budgetLimits } = plan.ceilings;
             const budgetDimensions = { tokens: 'tokens', cost: 'costUsd', 'wall-time': 'wallSeconds' } as const;
             const enforceable = adapter.capabilities.hardBudget.map(key => budgetDimensions[key as keyof typeof budgetDimensions]);
@@ -667,6 +672,7 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
   if (plan.diagnostics.length) plan.selected = null;
   if (plan.selected) {
     plan.status = 'eligible';
+    plan.diagnostics.push(...plan.selected.diagnostics.filter(item => item.code === 'OG_SANDBOX_EXTERNAL'));
     plan.choice = { source: request.choice ? 'conductor' : 'default', rationale: request.choice?.rationale ?? 'Role group order, member priority/declaration order, then qualified effort ladder',
       ...(request.substitution && matchesChoice(plan.selected, request.substitution) ? { substitution: structuredClone(request.substitution) } : {}) };
   }

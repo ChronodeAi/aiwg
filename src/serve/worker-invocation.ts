@@ -670,6 +670,7 @@ export function workerInvocationDiagnostic(error: unknown, pointer: string,
   if (error instanceof WorkerInvocationCheckError) return { code: error.code, reason: error.reason, ...invocationChecks[error.reason] };
   const code = error instanceof WorkerPolicyError ? error.code : fallback;
   const messages: Record<WorkerPolicyDiagnostic['code'], string> = {
+    OG_SANDBOX_EXTERNAL: "The CLI's own sandbox is disabled by explicit external policy; isolation relies on the per-task worktree and launcher resource scope.",
     OG_NATIVE_SANDBOX_UNAVAILABLE: 'Native sandbox unavailable inside systemd user units; select policy launchMode native-sandbox or allow unprivileged user namespaces through host AppArmor policy.',
     OG_CONFIG_REFERENCE: 'Invalid request or configuration reference; check the paths and settings.',
     OG_PIN_MISMATCH: 'Worker selection or pinned evidence changed; resolve again.',

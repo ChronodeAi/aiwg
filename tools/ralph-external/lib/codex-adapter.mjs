@@ -75,7 +75,7 @@ const MODEL_MAP = {
  */
 export const CODEX_SUPPORTED_VERSIONS = Object.freeze(['0.161.0']);
 export const CODEX_DIRECT_EFFORT_VALUES = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh']);
-export const CODEX_DIRECT_SANDBOX_MODES = Object.freeze(['read-only', 'workspace-write']);
+export const CODEX_DIRECT_SANDBOX_MODES = Object.freeze(['read-only', 'workspace-write', 'external']);
 /** Non-prompting execution only: a requested `on-request` is refused. */
 export const CODEX_DIRECT_APPROVAL_POLICIES = Object.freeze(['never']);
 /** Brief transport for the direct profile: piped stdin, never argv. */
@@ -256,7 +256,7 @@ export class CodexAdapter extends ProviderAdapter {
       '--ignore-user-config',
       '-m', model,
       '-c', `model_reasoning_effort=${JSON.stringify(effort)}`,
-      '-s', sandbox,
+      '-s', sandbox === 'external' ? 'danger-full-access' : sandbox,
       '-C', cwd,
       '-c', `approval_policy=${JSON.stringify(approval)}`,
       '--skip-git-repo-check',

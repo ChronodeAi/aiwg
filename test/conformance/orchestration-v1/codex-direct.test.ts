@@ -549,6 +549,18 @@ describe('T-OG-15 Codex direct command contract', () => {
     expect(recordPath).toBeDefined();
   });
 
+  it.each([
+    { sandbox: 'read-only', flag: 'read-only' },
+    { sandbox: 'workspace-write', flag: 'workspace-write' },
+    { sandbox: 'external', flag: 'danger-full-access' },
+  ])('renders exact Codex $sandbox sandbox argv with approvals never', ({ sandbox, flag }) => {
+    const argv = owner.buildWorkerArgs({ selected: { model: MODEL, effort: { value: 'medium' } },
+      cwd: '/w', brief: 'Synthetic brief', finalPath: '/w/final.json' }, null, { sandbox });
+    expect(argv).toEqual(['--no-daemon', 'exec', '--ignore-user-config', '-m', MODEL,
+      '-c', 'model_reasoning_effort="medium"', '-s', flag, '-C', '/w', '-c', 'approval_policy="never"',
+      '--skip-git-repo-check', '-o', '/w/final.json', '--json', '-']);
+  });
+
   it('CX05 the driver argv carries no brief anywhere and refuses guessed or stale controls', () => {
     const input = { selected: { model: MODEL, effort: { value: 'medium' } }, cwd: '/w',
       brief: `"; rm -rf / #\n--model evil ${MARKER}`, finalPath: '/w/final.json' };
@@ -568,7 +580,6 @@ describe('T-OG-15 Codex direct command contract', () => {
     expect(() => owner.buildWorkerArgs({ ...input, cwd: 'relative' }, null, {})).toThrow(/absolute workspace/);
     expect(() => owner.buildWorkerArgs({ ...input, finalPath: 'relative.json' }, null, {})).toThrow(/absolute final-output/);
     expect(() => owner.buildWorkerArgs({ ...input }, null, { sandbox: 'danger-full-access' })).toThrow(/not a qualified direct mode/);
-    expect(() => owner.buildWorkerArgs({ ...input }, null, { sandbox: 'external' })).toThrow(/not a qualified direct mode/);
     expect(() => owner.buildWorkerArgs({ ...input }, null, { approval: 'always' })).toThrow(/not a qualified direct policy/);
     expect(() => owner.buildWorkerArgs({ ...input }, null, { approval: 'on-request' })).toThrow(/not a qualified direct policy/);
     expect(owner.getAbortInput()).toBeNull();

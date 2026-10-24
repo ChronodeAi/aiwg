@@ -15,6 +15,19 @@ afterEach(async () => {
 });
 
 describe('worker dispatch getting-started example (#3172)', () => {
+  it('documents a separate external group and launching outside the conductor sandbox', async () => {
+    const doc = await readFile(path.join(frameworkRoot, 'docs/getting-started/worker-dispatch.md'), 'utf8');
+    const section = doc.split('## Running outside the conductor sandbox')[1].split('## Worker launch boundary')[0];
+    const config = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(section)![1]);
+    expect(validateParallelismConfig(config.parallelism)).toEqual([]);
+    expect(config.parallelism.groups['muse-external'].execution).toMatchObject({ sandbox: 'external', approval: 'never' });
+    expect(section).toContain('sandbox.excludedCommands');
+    expect(section).toContain('OG_SANDBOX_EXTERNAL');
+    expect(section).toContain('Never nest sandboxes');
+    const rule = await readFile(path.join(frameworkRoot, 'agentic/code/addons/aiwg-utils/rules/subagent-scoping.md'), 'utf8');
+    expect(rule).toContain('outside your own harness sandbox');
+    expect(rule).toContain('never nest sandboxes');
+  });
   it('loads the documented files and reaches qualification for all three roles', async () => {
     const doc = await readFile(path.join(frameworkRoot, 'docs/getting-started/worker-dispatch.md'), 'utf8');
     const section = doc.split('## Configure a worker group')[1].split('## Supported CLI versions')[0];

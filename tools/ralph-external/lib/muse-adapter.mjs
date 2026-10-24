@@ -182,6 +182,7 @@ export class MuseAdapter extends ProviderAdapter {
       '--workspace', cwd, ...trust, '--approval-mode', 'never', '--approval-judge', 'off', '--max-model-steps', String(health.maxSteps),
       ...schema, '--prompt-file', briefPath];
     if (permissions.sandbox === 'read-only') args.push('--disable-write', '--disable-shell');
+    if (permissions.sandbox === 'external') args.push('--disable-sandbox');
     return args;
   }
 

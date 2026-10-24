@@ -701,6 +701,10 @@ describe('T-OG-07/12/15/19 remaining parallelism policy facts (#2893)', () => {
     expect(section).toContain(`${field}: ${keys[field]}=1`);
     expect(section).toContain('Local/self-hosted models obey these same ceilings');
     expect(section).toContain('Tier 0 conductors must self-count active workers');
+    expect(section).toContain('outside your own harness sandbox');
+    expect(section).toContain('`sandbox.excludedCommands` or an unsandboxed Bash call');
+    expect(section).toContain('never nest sandboxes');
+    expect(section).not.toContain('your own harness sandbox applies');
     expect(resolveWorkerPlan(f.snapshot, f.request).selected?.effectiveMaxParallel).toBe(1);
     f.request.maxParallel = 0;
     expect(section).toContain('a current/request capacity ceiling of zero blocks selection');
