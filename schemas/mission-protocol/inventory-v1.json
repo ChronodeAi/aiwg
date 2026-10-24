@@ -576,6 +576,16 @@
       "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
     },
     {
+      "path": "docs/housekeeper-operator-guide.md",
+      "owner": "docs/housekeeper-operator-guide.md",
+      "role": "documentation-example",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "markdown",
+      "migrationAction": "adapt",
+      "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
+    },
+    {
       "path": "docs/integrations/mcp-capability-audit.md",
       "owner": "docs/integrations",
       "role": "documentation-example",
@@ -2346,6 +2356,23 @@
       "statusVocabulary": [
         "unknown",
         "working"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "adapt",
+      "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
+    },
+    {
+      "path": "tools/daemon/update-policy.mjs",
+      "owner": "tools/daemon",
+      "role": "producer-consumer",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [
+        "aborted",
+        "done",
+        "failed",
+        "pending",
+        "running",
+        "unknown"
       ],
       "serialization": "typescript/javascript",
       "migrationAction": "adapt",
