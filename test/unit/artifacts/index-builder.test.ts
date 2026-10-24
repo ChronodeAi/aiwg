@@ -1075,6 +1075,30 @@ type: use-case
         .toBe(rebuilt.entries['.aiwg/requirements/a.md'].checksum);
     });
 
+    it.each([undefined, 'project', 'codebase'])('does no source reads, backup copies or staging on a no-op %s build', async graph => {
+      const sourceDir = path.join(tmpDir, graph === 'codebase' ? 'src' : '.aiwg/requirements');
+      fs.mkdirSync(sourceDir, { recursive: true });
+      const extension = graph === 'codebase' ? 'ts' : 'md';
+      const sources = ['one', 'two'].map(name => path.join(sourceDir, `${name}.${extension}`));
+      for (const source of sources) fs.writeFileSync(source, `# ${path.basename(source)}\n`);
+      await buildIndex(tmpDir, { graph, force: true, quiet: true });
+      const indexDir = path.join(tmpDir, INDEX_DIR, ...(graph ? [graph] : []));
+      expect(JSON.parse(fs.readFileSync(path.join(indexDir, 'stats.json'), 'utf8')).totalArtifacts).toBe(2);
+
+      const reads = vi.spyOn(fs, 'readFileSync');
+      const copies = vi.spyOn(fs, 'copyFileSync');
+      const staging = vi.spyOn(fs, 'mkdtempSync');
+      const stats = vi.spyOn(fs, 'lstatSync');
+      await buildIndex(tmpDir, { graph, quiet: true });
+
+      expect(reads.mock.calls.filter(([file]) => sources.includes(String(file)))).toHaveLength(0);
+      expect(copies).not.toHaveBeenCalled();
+      expect(staging).not.toHaveBeenCalled();
+      for (const source of sources) {
+        expect(stats.mock.calls.filter(([file]) => String(file) === source)).toHaveLength(1);
+      }
+    });
+
     it('completes a no-op 3000-artifact build in under 25 percent of a forced build', async () => {
       const sourceDir = path.join(tmpDir, 'src');
       fs.mkdirSync(sourceDir, { recursive: true });
