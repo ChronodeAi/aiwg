@@ -9,12 +9,17 @@ vi.mock('node:child_process', async importOriginal => ({
 beforeEach(() => { vi.mocked(execFile).mockReset(); });
 
 describe('Codex model-free qualification sandbox check', () => {
+  it('reports external as skipped without starting a subprocess', async () => {
+    expect(await checkCodexWorkerSandbox({ executable: '/fixture/codex', cwd: '/fixture/tree',
+      environment: {}, sandbox: 'external' })).toMatchObject({ status: 'skipped', reason: expect.stringContaining('disabled') });
+    expect(execFile).not.toHaveBeenCalled();
+  });
   it('runs a bounded shell no-op with only the supplied worker environment', async () => {
     vi.mocked(execFile).mockImplementation(((...args: any[]) => {
       args.at(-1)(null, '', '');
     }) as any);
     const environment = { PATH: '/usr/bin:/bin', HOME: '/fixture/home' };
-    await checkCodexWorkerSandbox({ executable: '/fixture/codex', cwd: '/fixture/tree', environment });
+    expect(await checkCodexWorkerSandbox({ executable: '/fixture/codex', cwd: '/fixture/tree', environment })).toEqual({ status: 'passed' });
     expect(execFile).toHaveBeenCalledExactlyOnceWith('/fixture/codex', [
       'sandbox', '-c', 'sandbox_mode="workspace-write"',
       '-c', 'sandbox_workspace_write.network_access=false', '--', '/bin/sh', '-c', 'true',

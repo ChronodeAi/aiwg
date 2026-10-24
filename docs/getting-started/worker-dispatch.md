@@ -419,7 +419,8 @@ after updating these profiles.
 Codex qualification also runs `codex sandbox` with a sandboxed `/bin/sh -c true`
 under the same cleared, allowlisted environment. A failed sandbox check blocks
 approval without calling a model. This checks shell startup, not full sandbox
-attestation or model behavior.
+attestation or model behavior. For groups with `execution.sandbox: "external"`,
+this check is reported as skipped because the CLI sandbox is intentionally off.
 
 Qualification preserves observed catalog facts and discovery timestamps. Doctor
 uses the existing read-only Codex/Muse catalog discovery or previously discovered
@@ -512,13 +513,58 @@ Turning it off only changes this one setting — any per-CLI enablement
 (`parallelism.clis`) and group configuration keep their existing values, so turning
 dispatch back on later restores the same setup.
 
+## Running outside the conductor sandbox
+
+Run the rendered worker command from your own shell **outside your own harness
+sandbox**, using Claude Code `sandbox.excludedCommands` or an unsandboxed Bash
+call. The worker CLI's native sandbox, per-task worktree and resource scope
+provide isolation. Never nest sandboxes: a CLI sandbox inside a conductor
+sandbox fails.
+
+If the worker's own sandbox cannot start on the host (for example, Muse under
+Ubuntu's AppArmor user-namespace restriction), explicitly opt in through a
+separate group. Merge this example with your existing configuration; keep the
+usual sandbox policy for other groups and add `muse-external` to the coding
+role's `groups` in `models.json`:
+
+```json
+{
+  "parallelism": {
+    "groups": {
+      "muse-external": {
+        "maxParallel": 1,
+        "members": [
+          { "id": "muse-host", "cli": "muse", "model": "muse-spark-1.3", "roles": ["coding"] }
+        ],
+        "execution": {
+          "isolation": "worktree",
+          "sandbox": "external",
+          "approval": "never",
+          "transport": "shell"
+        }
+      }
+    }
+  }
+}
+```
+
+For Codex, `external` renders `-s danger-full-access`; for Muse it renders
+`--disable-sandbox`, with approvals still `never` and Muse's judge off. Resolver
+JSON reports the non-blocking `OG_SANDBOX_EXTERNAL` diagnostic. This is opt-in,
+never the default, and cannot be combined with `launchMode: "native-sandbox"`.
+
+Disabling the CLI sandbox removes its filesystem and network enforcement;
+isolation then relies on the worktree and launcher resource scope, which do not
+replace those protections. Use this only for trusted tasks with the host access
+you intend to grant.
+
 ## Worker launch boundary on Linux
 
 This section covers AIWG's own launcher: `aiwg ralph-external --launch-worker`
 and managed-tier launches. It does not apply to Tier 0 direct
 handoff, the default. In Tier 0 the conductor runs the command rendered by
-`aiwg models resolve --transport shell --format shell` from its own shell, so the
-conductor harness's sandbox applies and no systemd unit is created.
+`aiwg models resolve --transport shell --format shell` from its own shell outside the
+conductor harness's sandbox; no systemd unit is created.
 
 Launcher workers use a systemd user unit by default (`execution.launchMode: "systemd-unit"`),
 with cgroup memory limits and a cgroup kill scope. For Codex `read-only` and

@@ -224,6 +224,40 @@ else console.log(JSON.stringify({models:[]}));
     await expect(access(path.join(f.config, 'worker-installations.json'))).rejects.toThrow();
   });
 
+  it.each([
+    { cli: 'codex', mixed: false }, { cli: 'codex', mixed: true }, { cli: 'muse', mixed: false },
+  ])('qualifies and resolves explicit $cli external sandbox policy (mixed=$mixed)', async ({ cli, mixed }) => {
+    const f = await fixture(false, false, true, cli);
+    const configPath = path.join(f.project, '.aiwg/aiwg.config');
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    if (mixed) config.parallelism.groups.enforcing = structuredClone(config.parallelism.groups.workers);
+    config.parallelism.groups.workers.execution.sandbox = 'external';
+    await writeFile(configPath, JSON.stringify(config));
+    if (cli === 'codex' && !mixed) {
+      const source = await readFile(f.binary, 'utf8');
+      const broken = source.replace("process.exit(0);\nelse process.exit(90);", "process.exit(91);\nelse process.exit(90);");
+      expect(broken).not.toBe(source);
+      await writeFile(f.binary, broken);
+    }
+    const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
+    expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
+    const report = JSON.parse(qualified.stdout);
+    expect(report.qualification.results[0].status).toBe('qualified');
+    if (cli === 'codex') expect(report.qualification.results[0].codexSandboxChecks).toEqual([
+      expect.objectContaining({ cli, group: 'workers', status: 'skipped' }),
+      ...(mixed ? [expect.objectContaining({ cli, group: 'enforcing', status: 'passed' })] : []),
+    ]);
+    const resolved = await f.resolve();
+    expect(resolved.code, resolved.stdout + resolved.stderr).toBe(0);
+    const plan = JSON.parse(resolved.stdout);
+    expect(plan.invocation.readiness).toBe('launchable');
+    expect(plan.diagnostics).toContainEqual(expect.objectContaining({ code: 'OG_SANDBOX_EXTERNAL', blocking: false,
+      message: expect.stringContaining(`${cli} CLI's own sandbox is disabled`) }));
+    expect(plan.invocation.argv).toEqual(expect.arrayContaining(cli === 'codex'
+      ? ['-s', 'danger-full-access', 'approval_policy="never"']
+      : ['--disable-sandbox', '--approval-mode', 'never', '--approval-judge', 'off']));
+  });
+
   it('passes only named environment variables to the sandbox no-op', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-sandbox-env-'));
     roots.push(root);
@@ -235,7 +269,7 @@ if (process.env.UNRELATED_SECRET || process.env.PATH !== '/usr/bin:/bin'
     vi.stubEnv('UNRELATED_SECRET', 'must-not-pass');
     try {
       await expect(checkCodexWorkerSandbox({ executable: binary, cwd: root,
-        environment: { PATH: '/usr/bin:/bin' } })).resolves.toBeUndefined();
+        environment: { PATH: '/usr/bin:/bin' } })).resolves.toEqual({ status: 'passed' });
     } finally { vi.unstubAllEnvs(); }
   });
 
@@ -266,7 +300,7 @@ if (process.env.UNRELATED_SECRET || process.env.PATH !== '/usr/bin:/bin'
 
   it('reports a blocked namespace probe as launcher-scoped and still qualifies Tier 0 direct dispatch', async () => {
     // Tier 0 direct handoff runs the rendered command from the conductor's own
-    // shell under the conductor harness's sandbox; only the systemd-unit
+    // shell outside the conductor harness's sandbox; only the systemd-unit
     // launcher needs the namespace probe, and it fails closed at launch.
     const f = await fixture(false, false, false);
     const result = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
@@ -741,8 +775,8 @@ try {
     const f = await fixture();
     const driver = path.join(f.installed, 'tools/ralph-external/lib/codex-adapter.mjs');
     const source = await readFile(driver, 'utf8');
-    expect(source).toContain("'-s', sandbox,");
-    await writeFile(driver, source.replace("'-s', sandbox,", ''));
+    expect(source).toContain("'-s', sandbox === 'external' ? 'danger-full-access' : sandbox,");
+    await writeFile(driver, source.replace("'-s', sandbox === 'external' ? 'danger-full-access' : sandbox,", ''));
     const qualified = await f.run(['doctor', '--probe-workers', '--qualify', '--yes', '--json']);
     expect(qualified.code, qualified.stdout + qualified.stderr).toBe(1);
     const report = JSON.parse(qualified.stdout);

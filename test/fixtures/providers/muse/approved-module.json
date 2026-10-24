@@ -7,7 +7,7 @@
     "packageVersion": "1",
     "modulePath": "lib/muse-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:78e6fa66326cf8030f9c45e3ec1b1ac1d8051a9729340b63d14fce7158de97ee",
+    "sha256": "sha256:bffc4cb97c8556d8b24bb4f2ef476f777f94ec50c260a1810a40358f69e108ff",
     "adapterIds": [
       "muse"
     ],

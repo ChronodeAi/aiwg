@@ -22,7 +22,7 @@ function fixture(sandbox = 'workspace-write') {
 }
 
 describe('Muse installed direct dispatch contract', () => {
-  it('resolves a Muse member through the real renderer with a fake installed driver', async () => {
+  it.each(['workspace-write', 'external'] as const)('resolves a Muse %s member through the real renderer with a fake installed driver', async sandbox => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'muse-direct-resolve-'));
     try {
       const f = workerResolutionFixture();
@@ -34,6 +34,7 @@ describe('Muse installed direct dispatch contract', () => {
       delete f.snapshot.registry.providers.codex.workerAdapter;
       f.snapshot.registry.providers.muse.workerAdapter = adapter;
       const group = f.snapshot.config.parallelism!.groups!.workers;
+      group.execution = { sandbox };
       group.members = [{ ...group.members[0], cli: 'muse', model: 'muse-spark-1.3' }];
       group.fallback = [];
       f.snapshot.models.defaults.workerSelection!.guards!.denySelfDelegation = false;
@@ -56,6 +57,9 @@ describe('Muse installed direct dispatch contract', () => {
       expect(plan.invocation!.shellCommand).toContain('< /dev/null');
       expect(plan.invocation!.argv).not.toContain('--output-schema');
       expect(plan.invocation!.argv).not.toContain('${schema}');
+      expect(plan.invocation!.argv.includes('--disable-sandbox')).toBe(sandbox === 'external');
+      expect(plan.diagnostics.filter(item => item.code === 'OG_SANDBOX_EXTERNAL')).toEqual(sandbox === 'external'
+        ? [expect.objectContaining({ blocking: false, message: expect.stringContaining("muse CLI's own sandbox is disabled") })] : []);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
@@ -74,9 +78,20 @@ describe('Muse installed direct dispatch contract', () => {
     expect(instance!.getName()).toBe('muse');
   });
 
-  it.each(['read-only', 'workspace-write'])('checks exact native %s argv', sandbox => {
+  it.each(['read-only', 'workspace-write', 'external'])('checks exact native %s argv', sandbox => {
     const f = fixture(sandbox);
     expect(() => assertOperatorWorkerNativeArgv(f.adapter, f.argv, f.selected, f.permissions)).not.toThrow();
+    expect(f.argv.includes('--disable-sandbox')).toBe(sandbox === 'external');
+    expect(f.argv.includes('--disable-write')).toBe(sandbox === 'read-only');
+    expect(f.argv.includes('--disable-shell')).toBe(sandbox === 'read-only');
+    expect(f.argv).toEqual(expect.arrayContaining(['--approval-mode', 'never', '--approval-judge', 'off']));
+    if (sandbox === 'external') {
+      expect(() => assertOperatorWorkerNativeArgv(f.adapter, f.argv.filter(x => x !== '--disable-sandbox'),
+        f.selected, f.permissions)).toThrow('sandbox');
+      for (const other of ['read-only', 'workspace-write']) {
+        expect(() => assertOperatorWorkerNativeArgv(f.adapter, f.argv, f.selected, { ...f.permissions, sandbox: other })).toThrow('sandbox');
+      }
+    }
     if (sandbox === 'read-only') {
       expect(() => assertOperatorWorkerNativeArgv(f.adapter, f.argv.filter(x => x !== '--disable-shell'),
         f.selected, f.permissions)).toThrow('read-only');

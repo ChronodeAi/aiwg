@@ -636,7 +636,8 @@ interface WorkerProfileSelection {
 
 /** The same sandbox requirement governs inspection, resolution and rendering. */
 export function requiresWorkerExternalBoundary(adapter: WorkerAdapterMetadata, selection: WorkerProfileSelection): boolean {
-  if (hasOperatorWorkerNativeRenderer(adapter) && selection.permissions?.sandbox !== 'external') return false;
+  if (hasOperatorWorkerNativeRenderer(adapter)
+    && (selection.permissions?.sandbox !== 'external' || selection.transport === 'shell')) return false;
   const providers = [adapter.id, adapter.provider].map(normalizeProviderDefinitionId);
   return requiredWorkerControls(selection).includes('sandbox')
     && (providers.some(provider => provider && ['claude', 'muse', 'hermes'].includes(provider))
@@ -682,7 +683,7 @@ export function assertOperatorWorkerNativeArgv(adapter: WorkerAdapterMetadata, a
     }
   };
   const sandbox = permissions?.sandbox ?? 'workspace-write';
-  if (!['read-only', 'workspace-write'].includes(sandbox)) throw new Error('Requested sandbox has no verified native renderer');
+  if (!['read-only', 'workspace-write', 'external'].includes(sandbox)) throw new Error('Requested sandbox has no verified native renderer');
   if (adapter.provider === 'muse') {
     requirePair('--provider', 'meta');
     requirePair('--model', selected.model);
@@ -691,6 +692,9 @@ export function assertOperatorWorkerNativeArgv(adapter: WorkerAdapterMetadata, a
     if ((permissions?.approval ?? 'never') !== 'never') throw new Error('Muse direct worker approval requires never');
     requirePair('--approval-mode', 'never');
     requirePair('--approval-judge', 'off');
+    if (args.includes('--disable-sandbox') !== (sandbox === 'external')) {
+      throw new Error('Requested native worker sandbox control does not match');
+    }
     if (sandbox === 'read-only' && (!args.includes('--disable-write') || !args.includes('--disable-shell'))) {
       throw new Error('Requested native worker read-only control is absent');
     }
@@ -700,7 +704,7 @@ export function assertOperatorWorkerNativeArgv(adapter: WorkerAdapterMetadata, a
       const flag = args[index];
       if (seen.has(flag)) throw new Error('Native worker controls could be overridden');
       seen.add(flag);
-      if (['--json', '--trust-workspace', '--disable-write', '--disable-shell'].includes(flag)) continue;
+      if (['--json', '--trust-workspace', '--disable-write', '--disable-shell', '--disable-sandbox'].includes(flag)) continue;
       if (!['--provider', '--model', '--reasoning-effort', '--workspace', '--approval-mode', '--approval-judge',
         '--max-model-steps', '--output-schema', '--prompt-file'].includes(flag) || index + 1 >= args.length) {
         throw new Error('Native worker controls could be overridden');
@@ -710,7 +714,8 @@ export function assertOperatorWorkerNativeArgv(adapter: WorkerAdapterMetadata, a
     return;
   }
   requirePair('-m', selected.model);
-  requirePair('-s', sandbox);
+  requirePair('-s', sandbox === 'external' ? 'danger-full-access' : sandbox);
+  if ((permissions?.approval ?? 'never') !== 'never') throw new Error('Codex direct worker approval requires never');
   for (const [name, value] of [['model_reasoning_effort', selected.effort.value], ['approval_policy', permissions?.approval ?? 'never']]) {
     const overrides = args.flatMap((token, index) => token === '-c' ? [args[index + 1]] : [])
       .filter(token => token?.split('=')[0] === name);
@@ -754,12 +759,8 @@ export function inspectWorkerInvocationProfile(adapter: WorkerAdapterMetadata, s
   // The direct CLI baseline trusts the installed driver's bounded renderer.
   // Explicit extra controls still require the existing qualified mappings.
   if (hasOperatorWorkerNativeRenderer(adapter) && profile.transport === 'shell') {
-    if (selection.permissions?.sandbox && !['read-only', 'workspace-write'].includes(selection.permissions.sandbox)) {
+    if (selection.permissions?.sandbox && !['read-only', 'workspace-write', 'external'].includes(selection.permissions.sandbox)) {
       throw new Error('Requested sandbox has no verified native renderer');
-    }
-    if (selection.permissions?.sandbox === 'external' && (!selection.boundary
-      || !['os', 'executor'].includes(selection.boundary.kind) || !selection.boundary.controls.includes('sandbox'))) {
-      throw new Error('Requested external sandbox requires an enforcing boundary');
     }
     for (const name of selection.requiredControls ?? []) {
       if (!['native', 'external'].includes(profile.controls[name]?.support)) {

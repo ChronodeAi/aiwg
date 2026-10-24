@@ -58,11 +58,13 @@ export async function checkWorkerSandboxLaunches({ projectDir, config, registry,
 
 /** Model-free Codex check under the exact allowlisted worker environment.
  * Never expose subprocess output: it may include environment values or paths. */
-export async function checkCodexWorkerSandbox({ executable, environment, cwd }) {
+export async function checkCodexWorkerSandbox({ executable, environment, cwd, sandbox }) {
+  if (sandbox === 'external') return { status: 'skipped', reason: 'CLI sandbox is disabled by explicit external policy' };
   try {
     await promisify(execFile)(executable, ['sandbox', '-c', 'sandbox_mode="workspace-write"',
       '-c', 'sandbox_workspace_write.network_access=false', '--', '/bin/sh', '-c', 'true'],
     { cwd, env: environment, timeout: 10_000, maxBuffer: 64 * 1024, killSignal: 'SIGKILL' });
+    return { status: 'passed' };
   } catch {
     throw new Error('Codex sandbox no-op check failed; verify PATH and host sandbox support before qualifying again');
   }
@@ -209,7 +211,7 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
   // The namespace probe describes the systemd-unit launcher path only
   // (`aiwg ralph-external --launch-worker` and managed launches), which
   // re-probes and fails closed at launch. Tier 0 direct handoff runs the
-  // rendered command from the conductor's own shell under the conductor
+  // rendered command from the conductor's own shell outside the conductor
   // harness's sandbox, so a blocked probe is reported, not a qualification
   // failure.
   const sandboxChecks = await checkWorkerSandboxLaunches({ projectDir, config, registry, cli, detectIsolation, probeNativeSandbox });
@@ -217,7 +219,7 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
   if (!dryRun && !yes) {
     const terminal = createInterface({ input: process.stdin, output: process.stderr });
     try {
-      const answer = await terminal.question(`Record installation and configured model/role approval for ${JSON.stringify(targets)} and apply store changes ${JSON.stringify(storeChanges)}? This trusts the local CLI; no live model call is performed; Codex runs a sandboxed shell no-op. ${accountScopeNotice} [y/N]: `);
+      const answer = await terminal.question(`Record installation and configured model/role approval for ${JSON.stringify(targets)} and apply store changes ${JSON.stringify(storeChanges)}? This trusts the local CLI; no live model call is performed; Codex runs a sandboxed shell no-op unless sandbox=external. ${accountScopeNotice} [y/N]: `);
       if (!/^y(es)?$/i.test(answer.trim())) return { status: 'declined', accountScopeNotice, targets, storeChanges, results: [] };
     } finally { terminal.close(); }
   }
@@ -283,8 +285,18 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
           .filter(name => process.env[name] !== undefined).map(name => [name, process.env[name]])),
         effectiveConfigDigest: workerConfigDigest(policy), accountScope, policy, permissions: {},
         boundary: { kind: 'native', identity: 'operator-approved-cli', digest: workerConfigDigest(adapter.invocation), controls: [] } };
-      if (adapter.provider === 'codex') await checkCodexWorkerSandbox({ executable,
-        environment: installation.environment, cwd: projectDir });
+      const codexSandboxChecks = [];
+      if (adapter.provider === 'codex') {
+        let nativeCheck;
+        for (const [groupId, group] of Object.entries(config.parallelism.groups ?? {})) {
+          if (!group.members.some(member => member.cli === row.cli && member.enabled !== false)) continue;
+          const sandbox = group.execution?.sandbox;
+          const check = sandbox === 'external'
+            ? await checkCodexWorkerSandbox({ sandbox })
+            : nativeCheck ??= await checkCodexWorkerSandbox({ executable, environment: installation.environment, cwd: projectDir, sandbox });
+          codexSandboxChecks.push({ cli: row.cli, group: groupId, ...check });
+        }
+      }
       const scope = await host.inspectWorkerInstallation(driver, installation);
       installation.evidence = { scopeDigest: scope.scopeDigest, fixtureDigest: adapter.qualification.fixtureDigest,
         verifiedAt, evidenceRef: WORKER_OPERATOR_APPROVAL };
@@ -299,7 +311,7 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
           ...(typeof driver.buildWorkerArtifacts === 'function' ? { artifacts: driver.buildWorkerArtifacts(input) } : {}) }),
         } });
       if (invocationChecks.some(check => check.status === 'blocked')) {
-        results.push({ cli: row.cli, status: 'failed', invocationChecks });
+        results.push({ cli: row.cli, status: 'failed', invocationChecks, ...(codexSandboxChecks.length ? { codexSandboxChecks } : {}) });
         continue;
       }
       const result = await host.recordWorkerInstallation(driver, { cli: row.cli, installation,
@@ -309,6 +321,7 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
           runtimeVersion: row.installedVersion, accountScope: 'local-account', accountBinding: accountScope, models: approvedModels } });
       if (result.status !== 'ENABLED') throw new Error(result.reason);
       results.push({ cli: row.cli, status: 'qualified', models: approvedModels.map(model => model.id), invocationChecks,
+        ...(codexSandboxChecks.length ? { codexSandboxChecks } : {}),
         ...(missing.length ? { warning: `No exact current model observations for ${missing.join(', ')}. Refresh model discovery before qualifying again.` } : {}) });
     } catch (error) { results.push({ cli: row.cli, status: 'failed', message: error.message }); }
   }
