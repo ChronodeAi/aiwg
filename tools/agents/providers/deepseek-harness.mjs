@@ -46,7 +46,7 @@ export function deployCordisPatch(target, opts) {
 }
 
 export async function postDeploy(target, opts) {
-  if (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)) createAgentsMd(target, opts.srcRoot, opts.dryRun);
+  if (opts.contextFiles !== false && (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly))) createAgentsMd(target, opts.srcRoot, opts.dryRun);
   if (!opts.quiet) console.log('DeepSeek Harness: runtime credentials remain environment-only; use a reviewed ephemeral route patch.');
 }
 

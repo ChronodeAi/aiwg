@@ -324,6 +324,7 @@ function mergeHermesContext(file, generated, kind) {
 }
 
 export function generateAgentsMd(agentCount, skillCount, targetDir, opts) {
+  if (opts.contextFiles === false) return;
   const { dryRun } = opts;
 
   // Startup is reserved for rule contracts. Workflow routing, artifact catalogs,
@@ -526,7 +527,7 @@ async function deploySelected(opts) {
   // Generate AGENTS.md (with inlined CRITICAL rule priming, #1318/#1532)
   // AND .hermes.md thin pointer (resolves #1319 doc-debt, was claimed in
   // CHANGELOG but not previously implemented).
-  if (!skillsOnly && !opts.commandsOnly && !opts.rulesOnly) {
+  if (opts.contextFiles !== false && !skillsOnly && !opts.commandsOnly && !opts.rulesOnly) {
     const artifacts = collectFrameworkArtifacts(srcRoot, normalizedMode, {
       includeAgents: true,
       includeCommands: false,

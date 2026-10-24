@@ -234,6 +234,7 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
  * Generate AGENTS.md for Windsurf with all agents aggregated
  */
 export function generateAgentsMd(files, destPath, opts) {
+  if (opts.contextFiles === false) return;
   const { dryRun } = opts;
 
   const lines = [];

@@ -223,7 +223,7 @@ export function deployExtensionBridge(target, opts = {}) {
   return writeOwned(path.join(roots(target, opts).native, 'extensions/aiwg-bridge.ts'), fs.readFileSync(src, 'utf8'), src, opts, 'omp-extension');
 }
 export async function postDeploy(target, opts) {
-  if (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)) createAgentsMd(target, opts.srcRoot, opts.dryRun);
+  if (opts.contextFiles !== false && (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly))) createAgentsMd(target, opts.srcRoot, opts.dryRun);
 }
 export const getFileExtension = () => '.md';
 export async function deploy(opts) {

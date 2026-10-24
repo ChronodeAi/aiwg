@@ -693,6 +693,10 @@ being falsely described as pinned.
   currently manage. This is the supported way to reclaim a provider directory
   left behind by an older AIWG install.
 - `--dry-run` - Preview without making changes
+- `--no-context-files` - Leave `WORKSPACE.md`, `AIWG.md`, and `AGENTS.md`
+  byte-identical, or absent if missing. This includes provider templates,
+  managed blocks, and activation-selected startup/core-rule sections. Skills,
+  standalone rules, and rule indexes still deploy.
 - `--verbose` / `-v` - Include deployment phase details, framework-index build
   time, registry diagnostics, and the provider-specific reload rationale. The
   default report stays compact for terminals, logs, and agent transcripts.
@@ -736,6 +740,16 @@ and does not deploy agents or commands. It leaves the artifacts other bundles
 deployed alone: running it after `aiwg use sdlc` does not remove the SDLC agent
 surface. In a project whose only recorded deployment is the bulk install itself,
 it still clears flat artifacts left by the pre-kernel bulk default.
+
+Hermes skills are home-scoped (`$HERMES_HOME/skills`, default `~/.hermes/skills`).
+Explicit `--scope project` is refused before deployment, including dry-run.
+Use `--scope user`, or run both AIWG and Hermes with the same isolated
+`HERMES_HOME` profile. Unflagged Hermes deployments retain home-based skills.
+
+Managed markers use the selected AIWG source/package version across providers,
+addon passes, and generated indexes. If that version cannot be resolved,
+deployment emits an explicit diagnostic identifying the package path and the
+`vunknown` fallback.
 
 Bulk deploys skip addons whose manifest sets `"devOnly": true` (`aiwg-dev`) or
 `"explicitInstall": true` (`decision-engine`). These are deployed only when

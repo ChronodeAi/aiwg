@@ -416,7 +416,7 @@ export async function postDeploy(targetDir, opts) {
   }
 
   // Hook file architecture: write AIWG.md and wire @AIWG.md into CLAUDE.md
-  if (opts.srcRoot) {
+  if (opts.srcRoot && opts.contextFiles !== false) {
     deployHookFile(targetDir, opts);
   }
 }

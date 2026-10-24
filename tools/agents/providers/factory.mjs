@@ -816,7 +816,7 @@ export async function postDeploy(targetDir, opts) {
 
   // Create/update AGENTS.md if requested
   if (opts.createAgentsMd) {
-    createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
   }
 }
 

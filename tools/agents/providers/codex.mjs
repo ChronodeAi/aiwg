@@ -401,6 +401,7 @@ export function deployRules(ruleFiles, targetDir, opts) {
  * Aggregate agents to single AGENTS.md file
  */
 export function aggregateToAgentsMd(agentFiles, destPath, opts) {
+  if (opts.contextFiles === false) return 0;
   const lines = ['# AIWG agent definitions', '', 'Read the selected definition before invoking an agent.', ''];
   for (const file of agentFiles) {
     const { metadata } = parseFrontmatter(fs.readFileSync(file, 'utf8'));
@@ -518,7 +519,7 @@ export async function postDeploy(targetDir, opts) {
   initializeFrameworkWorkspace(targetDir, opts.mode, opts.dryRun, opts.srcRoot);
 
   if (opts.createAgentsMd) {
-    createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
   }
 }
 

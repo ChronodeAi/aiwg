@@ -13,6 +13,7 @@ import {
 } from './base.mjs';
 
 const { parseRuleFrontmatter, inferRuleActivation, RULE_BINDING_TYPES, readCoreBody, validateCoreSet, CORE_RULES_START, CORE_RULES_END } = await importImpl(import.meta.url, 'rules/activation.mjs');
+const { resolveDeployVersion } = await importImpl(import.meta.url, 'providers/deploy-version.mjs');
 const { trackTemporaryDirectory } = await importImpl(import.meta.url, 'utils/temporary-directory.js');
 const { loadRulePinConfigs, installedRuleCapabilities, resolveRulePins } = await importImpl(import.meta.url, 'rules/pins.mjs');
 const { guardRulesInlineBudget } = await importImpl(import.meta.url, 'rules/inline-budget.mjs');
@@ -302,7 +303,7 @@ export function renderRuleKernelIndex(rules, nativePaths = false) {
 }
 
 function managed(content, opts) {
-  return addManagedMarker(content, opts.deployVersion || 'unknown', opts.deploySource || 'bundled');
+  return addManagedMarker(content, opts.deployVersion, opts.deploySource || 'bundled');
 }
 function put(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -322,7 +323,7 @@ function putStartup(file, body) {
 /** Tagged rules bypass legacy aggregate writers. Untagged projections retain their tier policy. */
 function projectRules(opts, provider) {
   const { rules } = opts.ruleDelivery;
-  if (provider.name === 'hermes') {
+  if (opts.contextFiles !== false && provider.name === 'hermes') {
     // The old context generator carries hardcoded corpus directives. Only the
     // selected contracts below may activate policy; preserve operator prose.
     const file = path.join(opts.target, 'AGENTS.md');
@@ -438,7 +439,7 @@ function projectRules(opts, provider) {
   }
   for (const name of Object.keys(manifest.managed)) if (!fs.existsSync(path.join(rulesDir, name))) delete manifest.managed[name];
   put(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  if (!nativePaths) {
+  if (!nativePaths && opts.contextFiles !== false) {
     // The conventional directory is not a loader: startup reaches the complete
     // selected bodies through the provider's existing context owner.
     const kernels = rules.filter(rule => rule.activation === 'kernel' &&
@@ -949,6 +950,9 @@ export async function prepareRuleDeployment(original, provider, deploy) {
   const previousText = fs.existsSync(manifestFile) ? read(manifestFile) : '';
   const previous = previousText ? JSON.parse(previousText) : {};
   const corpusRoot = resolveAiwgRoot(original.srcRoot) || original.srcRoot;
+  if (!original.deployVersion || /unknown/i.test(original.deployVersion)) {
+    original = { ...original, deployVersion: resolveDeployVersion(corpusRoot, original.deployVersion) };
+  }
   const sourceTree = fs.existsSync(path.join(corpusRoot, 'agentic', 'code'))
     ? path.join(corpusRoot, 'agentic', 'code') : original.srcRoot;
   const pool = original.inputPool && inputPools.get(original.inputPool);
@@ -1275,6 +1279,13 @@ export async function prepareRuleDeployment(original, provider, deploy) {
     const delegated = (from, rel) => mappings.some(mapping => mapping.from !== from
       && mapping.from.startsWith(`${from}${path.sep}`)
       && (path.join(from, rel) === mapping.from || path.join(from, rel).startsWith(`${mapping.from}${path.sep}`)));
+    if (original.contextFiles === false) {
+      // Keep context inputs in the snapshot for validation, but exclude them
+      // from both dry-run output and promotion (including unchanged rewrites).
+      for (let i = rootNames.length - 1; i >= 0; i--) {
+        if (['AGENTS.md', 'AIWG.md', 'WORKSPACE.md', 'CLAUDE.md', 'WARP.md', '.hermes.md', '.aiwg/AIWG.md'].includes(rootNames[i])) rootNames.splice(i, 1);
+      }
+    }
     if (pool) verifyInputPool(pool);
     if (original.previewReport) return { report: guarded.report, noop: true };
     if (original.dryRun) {
