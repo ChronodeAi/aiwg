@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/memory/memory-audit.v1.schema.json",
+  "title": "AIWG memory audit v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "at",
+    "workspace",
+    "scope",
+    "providers",
+    "items",
+    "findings",
+    "coverage"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "aiwg.memory-audit.v1"
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace": {
+      "type": "string"
+    },
+    "scope": {
+      "enum": [
+        "workspace",
+        "global",
+        "project",
+        "provider"
+      ]
+    },
+    "providers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "support",
+          "limits",
+          "diagnostic",
+          "precedence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "support": {
+            "type": "string"
+          },
+          "limits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "diagnostic": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "precedence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "sourcePath",
+          "digest",
+          "record",
+          "category",
+          "bytes",
+          "observation",
+          "exposures",
+          "trust",
+          "reviewStatus",
+          "managed"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sourcePath": {
+            "type": "string"
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "record": {
+            "anyOf": [
+              {
+                "$ref": "https://aiwg.io/schemas/memory/memory-record.v1.schema.json"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "observation": {
+            "$ref": "https://aiwg.io/schemas/memory/memory-taxonomy.v1.schema.json#/$defs/observation"
+          },
+          "exposures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "provider",
+                "kind",
+                "chain",
+                "detail"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "enum": [
+                    "eligible",
+                    "include",
+                    "reference",
+                    "store",
+                    "tool-description"
+                  ]
+                },
+                "chain": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "detail": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "trust": {
+            "type": "string"
+          },
+          "reviewStatus": {
+            "type": "string"
+          },
+          "managed": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "paths",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "complete",
+        "roots",
+        "limits",
+        "limitsHit",
+        "files",
+        "entries",
+        "exclusions"
+      ],
+      "properties": {
+        "mode": {
+          "const": "static"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxDepth",
+            "maxFiles",
+            "maxEntries",
+            "maxMs",
+            "maxFileBytes",
+            "maxExposures"
+          ],
+          "properties": {
+            "maxDepth": {
+              "type": "number"
+            },
+            "maxFiles": {
+              "type": "number"
+            },
+            "maxEntries": {
+              "type": "number"
+            },
+            "maxMs": {
+              "type": "number"
+            },
+            "maxFileBytes": {
+              "type": "number"
+            },
+            "maxExposures": {
+              "type": "number"
+            }
+          }
+        },
+        "limitsHit": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "files": {
+          "type": "number"
+        },
+        "entries": {
+          "type": "number"
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1928,9 +1928,14 @@ export const reflectionsHandler: CommandHandler = {
 export const memoryHandler: CommandHandler = {
   id: 'memory',
   name: 'Memory',
-  description: 'Memory subsystem storage operations (path, list, get, put, delete, append-log)',
+  description: 'Memory storage, project registry, and read-only audit (audit --help)',
   category: 'utility',
   aliases: [],
+
+  async help(): Promise<HandlerResult> {
+    const { MEMORY_AUDIT_USAGE } = await import('../../memory/cli.js');
+    return { exitCode: 0, message: MEMORY_AUDIT_USAGE, rawOutput: true };
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {

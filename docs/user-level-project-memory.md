@@ -77,3 +77,43 @@ Private memory roots live outside the checkout, so registering a project does
 not modify the target repository or require repository-specific `.gitignore`
 rules. The memory contents still use the normal `.aiwg` subdirectories, which
 lets existing storage commands and memory tools work with the relocated root.
+
+## Read-only memory audit
+
+`aiwg memory audit` inventories this workspace's memory, startup instructions,
+subtree instructions, eligible roles/rules/prompts/skills, static tool declarations,
+and linked context. It uses configured storage and external artifact roots without
+creating directories, indexes, baselines, or receipts.
+
+```bash
+aiwg memory audit
+aiwg memory audit --scope project --json
+aiwg memory audit --scope provider --provider codex
+aiwg memory audit --scope global --provider claude --json
+```
+
+Workspace/project/provider scans exclude provider user roots. Global selection
+explicitly inventories user stores and registered project roots; `--provider`
+filters native surfaces. The project registry's metadata and a private memory root
+resolved for the current project remain eligible in a workspace scan.
+
+JSON uses `aiwg.memory-audit.v1` (schema: `schemas/memory/memory-audit.v1.schema.json`).
+Records retain owner identity and protection metadata; each exposure retains its
+provider and traversal chain. Findings include shadow candidates, differing
+instruction copies, duplicate resident bytes, alias collisions, include cycles,
+stale references, unmanaged files, and firewall baseline/deployment drift.
+Copilot instructions combine without an asserted general precedence.
+
+This is static inventory: `on-disk` and inferred eligibility never prove live
+loading. Hidden system content and external tool descriptions remain `opaque`;
+unreadable paths are `inaccessible`, never evidence of clean coverage. No network
+or tool execution is performed. Toolsmith catalogs and JSON tool declarations are
+inventoried when available. Content bodies and configuration secrets are omitted.
+The shared firewall trust/drift classifier is reused; run `aiwg context-firewall
+scan` for its poisoning assessment and baseline review workflow.
+
+Scanning stops at 12 levels, 5,000 files, 20,000 directory/discovery entries,
+20,000 exposures, five seconds, or 2 MiB per file. `coverage.limitsHit` and
+`scan-truncated` findings identify incomplete scans. Credential files, dependency
+and build directories are excluded. Durable size never establishes injected size;
+provider ceiling findings are risks, not measured runtime truncation.

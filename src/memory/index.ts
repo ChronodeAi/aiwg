@@ -5,3 +5,4 @@ export * from './taxonomy.js';
 export * from './maintenance-record.js';
 export * from './maintenance-contract.js';
 export * from './provider-memory-adapter.js';
+export * from './audit.js';

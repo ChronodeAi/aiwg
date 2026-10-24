@@ -5559,11 +5559,13 @@ Storage operations on the AIWG memory subsystem. Routes through `resolveStorage(
 aiwg memory <subcommand>
 ```
 
-**Subcommands:** `path` / `list` / `get` / `put` / `delete` / `append-log`.
+**Subcommands:** `audit` / `path` / `list` / `get` / `put` / `delete` / `append-log` / `project`.
 
 **Examples:**
 
 ```bash
+aiwg memory audit --provider codex --json                 # read-only static workspace inventory
+aiwg memory audit --scope global --provider claude        # explicit user scope
 aiwg memory path                                         # resolved root (fs only)
 aiwg memory list --prefix research-complete/
 aiwg memory get research-complete/index.md

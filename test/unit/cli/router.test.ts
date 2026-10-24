@@ -13,6 +13,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { run, initRouter, cachedRegistry } from '../../../src/cli/router.js';
 import type { HandlerContext, HandlerResult, CommandHandler } from '../../../src/cli/handlers/types.js';
 
+import { HookExecutor } from '../../../src/cli/hooks/index.js';
+import * as channelManager from '../../../src/channel/manager.mjs';
+import * as commandLog from '../../../src/cli/command-log.js';
+import * as skillUsage from '../../../src/cli/skill-usage.js';
+
 // Store original functions
 const originalExit = process.exit;
 const originalConsoleError = console.error;
@@ -99,6 +104,27 @@ describe('router', () => {
         // Should not exit with error
         expect(exitCode).toBeUndefined();
       });
+    });
+
+    it.each([0, 1])('keeps memory audit free of hooks and telemetry at exit status %s', async status => {
+      const registry = await initRouter();
+      const handler = registry.handlerMap.get('memory')!;
+      const execute = vi.spyOn(handler, 'execute').mockResolvedValue({ exitCode: status });
+      const hooks = vi.spyOn(HookExecutor.prototype, 'execute');
+      const root = vi.spyOn(channelManager, 'getFrameworkRoot').mockResolvedValue(process.cwd());
+      const log = vi.spyOn(commandLog, 'maybeAppendCommandLog');
+      const usage = vi.spyOn(skillUsage, 'maybeAppendSkillUsage');
+      try {
+        if (status) await expect(run(['memory', 'audit', '--json'])).rejects.toThrow('process.exit called with 1');
+        else await run(['memory', 'audit', '--json']);
+        expect(execute).toHaveBeenCalledOnce();
+        expect(root).toHaveBeenCalledWith({ createIfMissing: false });
+        expect(hooks).not.toHaveBeenCalled();
+        expect(log).not.toHaveBeenCalled();
+        expect(usage).not.toHaveBeenCalled();
+      } finally {
+        execute.mockRestore(); hooks.mockRestore(); root.mockRestore(); log.mockRestore(); usage.mockRestore();
+      }
     });
 
     describe('alias resolution', () => {

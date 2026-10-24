@@ -83,6 +83,21 @@ describe('provider memory adapter contracts', () => {
     expect(adapter('grok-build').memoryRoots()).toContain('/synthetic/external/grok/skills');
   });
 
+  it('enumerates native user memory through existing home resolvers without changing project roots', () => {
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '/synthetic/native/claude');
+    vi.stubEnv('CODEX_HOME', '/synthetic/native/codex');
+    vi.stubEnv('HERMES_HOME', '/synthetic/native/hermes');
+    expect(adapter('claude').memoryRoots()).toEqual(expect.arrayContaining([
+      'CLAUDE.md', '/synthetic/native/claude/CLAUDE.md', '/synthetic/native/claude/projects/*/memory',
+    ]));
+    expect(adapter('codex').memoryRoots()).toEqual(expect.arrayContaining([
+      'AGENTS.md', '/synthetic/native/codex/AGENTS.md', '/synthetic/native/codex/AGENTS.override.md',
+    ]));
+    expect(adapter('hermes').memoryRoots()).toEqual(expect.arrayContaining([
+      '/synthetic/native/hermes/memories/MEMORY.md', '/synthetic/native/hermes/memories/USER.md',
+    ]));
+  });
+
   it('encodes the provider-specific limits without creating precedence for Copilot', () => {
     expect(adapter('claude').limits).toContain('imports-consume-startup-context');
     expect(adapter('codex').context.maxContextBytes).toBe(32 * 1024);
