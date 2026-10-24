@@ -1143,8 +1143,19 @@ async function captureOneWorker(owner, ctx) {
     }
     signal('SIGTERM');
     const remainingGrace = Math.min(graceMs, hardRemaining());
-    if (remainingGrace === 0) { signal('SIGKILL'); later(() => finish(), 100); }
-    else later(() => { signal('SIGKILL'); later(() => finish(), 100); }, remainingGrace);
+    const escalate = () => {
+      signal('SIGKILL');
+      // Startup may have no worker identity yet. Wait for our transport's
+      // exit status before settling: TERM can have killed it even if KILL
+      // was also delivered before Node observes exit (#3532). Use the unused
+      // grace plus the existing 100ms settle tick, keeping the total
+      // termination budget at graceMs + 100 on the tracked launcher timers.
+      const exitWaitMs = !identity && hasTransport && outcome.mode !== 'systemd-unit'
+        ? graceMs - remainingGrace + 100 : 100;
+      later(() => finish(), exitWaitMs);
+    };
+    if (remainingGrace === 0) escalate();
+    else later(escalate, remainingGrace);
   };
   owner.currentProcess = child;
   owner.workerStop = stop;
@@ -1563,7 +1574,9 @@ async function captureOneWorker(owner, ctx) {
 // BASED ON a4085b86a (#2915 round 8, D6).
 // Shared lifecycle fixes: finish() snapshots timeout classification before
 // cleanup and respects the winning stop cause; stop() can signal the owned
-// transport before worker identity is available (#3532).
+// transport before worker identity is available, and then uses the unused
+// termination grace to observe its exit before falling back to the last
+// delivered signal (#3532).
 // The test/fixtures frozen reference remains unchanged.
 //
 // `launchOneWorkerBaseline` and `captureOneWorkerBaseline` reproduce
@@ -1810,8 +1823,19 @@ async function captureOneWorkerBaseline(owner, ctx) {
     }
     signal('SIGTERM');
     const remainingGrace = Math.min(graceMs, hardRemaining());
-    if (remainingGrace === 0) { signal('SIGKILL'); later(() => finish(), 100); }
-    else later(() => { signal('SIGKILL'); later(() => finish(), 100); }, remainingGrace);
+    const escalate = () => {
+      signal('SIGKILL');
+      // Startup may have no worker identity yet. Wait for our transport's
+      // exit status before settling: TERM can have killed it even if KILL
+      // was also delivered before Node observes exit (#3532). Use the unused
+      // grace plus the existing 100ms settle tick, keeping the total
+      // termination budget at graceMs + 100 on the tracked launcher timers.
+      const exitWaitMs = !identity && hasTransport && outcome.mode !== 'systemd-unit'
+        ? graceMs - remainingGrace + 100 : 100;
+      later(() => finish(), exitWaitMs);
+    };
+    if (remainingGrace === 0) escalate();
+    else later(escalate, remainingGrace);
   };
   owner.currentProcess = child;
   owner.workerStop = stop;

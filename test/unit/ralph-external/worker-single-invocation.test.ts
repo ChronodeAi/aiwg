@@ -612,6 +612,55 @@ describe('launcher load races with controlled interleavings', () => {
     }
   });
 
+  it.each([true, false])('reports TERM when attached transport exit arrives after KILL was also delivered, recovery=%s (#3532)', async recovery => {
+    const f = await fixture({ hardTimeoutSeconds: 1 });
+    const child = attachedStandIn(2147483646);
+    child.exitCode = null; child.signalCode = null;
+    // Closed pipes must not accidentally delay finish() long enough to hide
+    // the race. Only the controlled exit event supplies the observed signal.
+    child.stdout.end(); child.stderr.end();
+    child.kill = vi.fn((signal: string) => {
+      if (signal === 'SIGTERM') setTimeout(() => {
+        child.signalCode = 'SIGTERM';
+        child.emit('exit', null, child.signalCode);
+        // Withhold close as well: the exit observation alone must win.
+      }, 500);
+      return true;
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+    const launched = new Promise(resolve => f.launcher.once('launched', resolve));
+    const done = f.launch({ ...(recovery ? {} : { scopedBreaker: null }),
+      sampleIdentity: () => null, sampleNativeSupervisor: () => null, sampleChildren: () => [],
+      launchIsolated: () => ({ mode: 'degraded', transportSupervisor: true, child }) });
+    await launched;
+    // Hard deadline sends both signals; the kernel's TERM status is delivered
+    // 500ms later, beyond the old fixed 100ms finalization tick.
+    await vi.advanceTimersByTimeAsync(2100);
+    const result = await done;
+    expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    expect(child.signalCode).toBe('SIGTERM');
+    expect(result.signal).toBe(child.signalCode);
+    expect(result).toMatchObject({ timedOut: true, stopReason: 'HARD_DEADLINE', termination: 'uncertain' });
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'exit.json'), 'utf8')).signal).toBe(child.signalCode);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([true, false])('keeps bounded uncertain KILL fallback when attached transport exit never arrives, recovery=%s (#3532)', async recovery => {
+    const f = await fixture({ hardTimeoutSeconds: 1 });
+    const child = attachedStandIn(2147483646);
+    child.stdout.end(); child.stderr.end(); child.kill = vi.fn(() => true);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+    const launched = new Promise(resolve => f.launcher.once('launched', resolve));
+    const done = f.launch({ ...(recovery ? {} : { scopedBreaker: null }),
+      sampleIdentity: () => null, sampleNativeSupervisor: () => null, sampleChildren: () => [],
+      launchIsolated: () => ({ mode: 'degraded', transportSupervisor: true, child }) });
+    await launched;
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(await done).toMatchObject({ signal: 'SIGKILL', timedOut: true, termination: 'uncertain' });
+    expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('records a fast-exiting direct worker from its single immediate owned leader sample', async () => {
     const f = await fixture();
     const pid = 2147483646;
