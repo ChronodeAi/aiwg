@@ -25,6 +25,7 @@ let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
 import {
+  withRuleDeployment,
   ensureDir,
   listMdFiles,
   listMdFilesRecursive,
@@ -576,6 +577,7 @@ export function deploySkills(skillDirs, targetDir, opts) {
  * Deploy rules to .factory/rules/
  */
 export function deployRules(ruleFiles, targetDir, opts) {
+  if (opts.ruleDelivery) return [];
   const destDir = path.join(targetDir, paths.rules);
   ensureDir(destDir, opts.dryRun);
   cleanupOldRuleFiles(destDir, opts);
@@ -945,6 +947,10 @@ export function getFileExtension(type) {
  * Main deployment function for Factory provider
  */
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath, transformSkillMd: transformSkillFrontmatter }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,

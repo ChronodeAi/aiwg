@@ -500,6 +500,7 @@ export function parseArgs(args = process.argv.slice(2)) {
     reportOnly: true,
     kernelOnly: false,
     deferRuleProjection: false,
+    additionalSources: [],
     filter: null,           // Glob pattern for agent names
     filterRole: null,       // Filter by role: reasoning|coding|efficiency
     save: false,            // Save model config to project models.json
@@ -523,6 +524,11 @@ export function parseArgs(args = process.argv.slice(2)) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--source' && args[i + 1]) cfg.source = path.resolve(args[++i]);
+    else if (a === '--additional-source') {
+      const source = args[++i];
+      if (!source || source.startsWith('--')) throw new Error('--additional-source requires a source directory');
+      cfg.additionalSources.push(path.resolve(source));
+    }
     else if (a === '--target' && args[i + 1]) cfg.target = path.resolve(args[++i]);
     else if (a === '--mode' && args[i + 1]) cfg.mode = String(args[++i]).toLowerCase();
     else if (a === '--scope') {
@@ -1016,6 +1022,10 @@ export async function main(args = process.argv.slice(2), internal = {}) {
 
   // Load provider module
   const provider = await loadProvider(cfg.provider);
+  if (cfg.additionalSources.length && provider.name !== 'omp') throw new Error('--additional-source requires the OMP provider');
+  for (const source of cfg.additionalSources) {
+    if (!fs.statSync(source).isDirectory()) throw new Error(`Additional source is not a directory: ${source}`);
+  }
   if (!cfg.quiet) console.log(`\nLoaded provider: ${provider.name}`);
 
   // Build options for provider
@@ -1049,6 +1059,7 @@ export async function main(args = process.argv.slice(2), internal = {}) {
     allowOverBudget: cfg.allowOverBudget === true,
     kernelOnly: cfg.kernelOnly,
     deferRuleProjection: cfg.deferRuleProjection,
+    additionalSources: cfg.additionalSources,
     filter: cfg.filter,
     filterRole: cfg.filterRole,
     save: cfg.save,
@@ -1112,7 +1123,7 @@ export async function main(args = process.argv.slice(2), internal = {}) {
   try {
     if (!internal.finalizeOnly) {
       if (cfg.kernelOnly && (!cfg.deferRuleProjection || preparationActive)
-        && !['claude', 'codex', 'cursor', 'hermes', 'warp', 'openclaw', 'pi'].includes(provider.name)) {
+        && !['claude', 'codex', 'cursor', 'hermes', 'warp', 'openclaw', 'pi', 'copilot', 'factory', 'opencode', 'windsurf', 'antigravity', 'muse', 'omp', 'grok-build'].includes(provider.name)) {
         const { deployWithRuleDelivery } = await import('./providers/rule-delivery.mjs');
         await deployWithRuleDelivery(opts, provider, staged => provider.deploy(staged));
       } else await provider.deploy(opts);

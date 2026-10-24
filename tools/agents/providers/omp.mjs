@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { importImpl } from '../../_resolve-impl.mjs';
-import { collectFrameworkArtifacts, getAddonFiles, isKernelSkill, listMdFiles, listSkillDirs, normalizeDeploymentMode, resolveAiwgRoot } from './base.mjs';
+import { withRuleDeployment, collectFrameworkArtifacts, getAddonFiles, isKernelSkill, listMdFiles, listSkillDirs, normalizeDeploymentMode, resolveAiwgRoot } from './base.mjs';
 export const name = 'omp';
 export const aliases = ['oh-my-pi'];
 export const paths = { agents: '.omp/agents', commands: '.omp/prompts', skills: '.agents/skills', rules: '.omp/rules' };
@@ -131,7 +131,7 @@ function deployType(files, target, opts, type, transform) {
 }
 export const deployAgents = (files, target, opts = {}) => deployType(files, target, opts, 'agents', transformAgent);
 export const deployCommands = (files, target, opts = {}) => deployType(files, target, opts, 'prompts', transformCommand);
-export const deployRules = (files, target, opts = {}) => deployType(files, target, opts, 'rules', transformRule);
+export const deployRules = (files, target, opts = {}) => opts.ruleDelivery ? 0 : deployType(files, target, opts, 'rules', transformRule);
 export function deploySkills(dirs, target, opts = {}) {
   let count = 0; const seen = new Map(); const root = roots(target, opts);
   for (const dir of [...new Set(dirs)]) {
@@ -227,6 +227,16 @@ export async function postDeploy(target, opts) {
 }
 export const getFileExtension = () => '.md';
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, async staged => {
+    let count = await deploySelected(staged);
+    for (const srcRoot of staged.additionalSources || []) {
+      count += await deploySelected({ ...staged, srcRoot });
+    }
+    return count;
+  });
+}
+
+async function deploySelected(opts) {
   const mode = normalizeDeploymentMode(opts.mode);
   const include = { includeAgents: true, includeCommands: opts.deployCommands || opts.commandsOnly, includeSkills: opts.deploySkills || opts.skillsOnly, includeRules: opts.deployRules || opts.rulesOnly };
   const directSource = ['agents', 'commands', 'skills', 'rules'].some(type => fs.existsSync(path.join(opts.srcRoot, type)));
@@ -251,7 +261,21 @@ export async function deploy(opts) {
   let count = 0;
   if (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly) count += deployAgents(selected('agents'), opts.target, opts);
   if (include.includeCommands && !opts.skillsOnly && !opts.rulesOnly) count += deployCommands(selected('commands'), opts.target, opts);
-  if (include.includeSkills && !opts.commandsOnly && !opts.rulesOnly) count += deploySkills(selected('skills'), opts.target, opts);
+  if (include.includeSkills && !opts.commandsOnly && !opts.rulesOnly) {
+    // Different frameworks may index same-named standard skills. With copying
+    // disabled they share only a stale-copy cleanup destination, not a native
+    // definition slot. Keep one cleanup pass; retain collision checks for every
+    // kernel skill and for explicitly copied standard skills.
+    const lazyNames = new Set();
+    const skills = selected('skills').filter(dir => {
+      if (opts.copyStandardSkills || isKernelSkill(dir)) return true;
+      const basename = path.basename(dir);
+      if (lazyNames.has(basename)) return false;
+      lazyNames.add(basename);
+      return true;
+    });
+    count += deploySkills(skills, opts.target, opts);
+  }
   if (include.includeRules && !opts.commandsOnly && !opts.skillsOnly) count += deployRules(selected('rules'), opts.target, opts);
   if (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly) count += deployExtensionBridge(opts.target, opts);
   await postDeploy(opts.target, opts); return count;

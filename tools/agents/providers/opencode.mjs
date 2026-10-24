@@ -24,6 +24,7 @@ let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
 import {
+  withRuleDeployment,
   ensureDir,
   listMdFiles,
   listMdFilesRecursive,
@@ -375,6 +376,7 @@ export function deploySkills(skillDirs, targetDir, opts) {
  * Deploy rules to .opencode/rule/
  */
 export function deployRules(ruleFiles, targetDir, opts) {
+  if (opts.ruleDelivery) return [];
   const destDir = path.join(targetDir, paths.rules);
   ensureDir(destDir, opts.dryRun);
   cleanupOldRuleFiles(destDir, opts);
@@ -527,6 +529,10 @@ export function getFileExtension(type) {
 // ============================================================================
 
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,

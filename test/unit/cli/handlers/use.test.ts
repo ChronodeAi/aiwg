@@ -102,20 +102,24 @@ describe('nextStepsFor()', () => {
 });
 
 describe('mainDeploymentIncludesAddons()', () => {
-  it('recognizes Pi root modes whose provider collector includes every addon', () => {
-    for (const mode of ['general', 'sdlc', 'both', 'all']) {
-      expect(mainDeploymentIncludesAddons('pi', mode, ['--mode', mode, '--provider', 'pi'])).toBe(true);
+  it('recognizes native Pi/OMP root modes whose provider collector includes every addon', () => {
+    for (const provider of ['pi', 'omp']) {
+      for (const mode of ['general', 'sdlc', 'both', 'all']) {
+        expect(mainDeploymentIncludesAddons(provider, mode, ['--mode', mode, '--provider', provider])).toBe(true);
+      }
     }
   });
 
   it('keeps explicit addon sources and non-collector modes on the addon deployment path', () => {
-    expect(mainDeploymentIncludesAddons('pi', 'sdlc', [
-      '--mode', 'sdlc', '--provider', 'pi', '--source', '/tmp/addon',
-    ])).toBe(false);
-    expect(mainDeploymentIncludesAddons('pi', 'research', ['--mode', 'research', '--provider', 'pi'])).toBe(false);
-    expect(mainDeploymentIncludesAddons('pi', 'sdlc', [
-      '--mode', 'sdlc', '--mode', 'all', '--provider', 'pi',
-    ])).toBe(false);
+    for (const provider of ['pi', 'omp']) {
+      expect(mainDeploymentIncludesAddons(provider, 'sdlc', [
+        '--mode', 'sdlc', '--provider', provider, '--source', '/tmp/addon',
+      ])).toBe(false);
+      expect(mainDeploymentIncludesAddons(provider, 'research', ['--mode', 'research', '--provider', provider])).toBe(false);
+      expect(mainDeploymentIncludesAddons(provider, 'sdlc', [
+        '--mode', 'sdlc', '--mode', 'all', '--provider', provider,
+      ])).toBe(false);
+    }
   });
 
   it('preserves the existing Claude and Codex collector boundaries', () => {

@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  withRuleDeployment,
   collectFrameworkArtifacts,
   createAgentsMdFromTemplate,
   deployFiles,
@@ -106,6 +107,10 @@ export async function postDeploy(target, opts) {
 export function getFileExtension() { return '.md'; }
 
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   if (opts.global || opts.user || opts.scope === 'user') {
     throw new Error('Antigravity global skill deployment is disabled: official 1.1.26 path documentation conflicts');
   }

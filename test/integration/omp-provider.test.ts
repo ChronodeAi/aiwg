@@ -18,7 +18,7 @@ function cli(args:string[],env:Record<string,string>={}){
   const entry=pathToFileURL(join(repo,'src/cli/router.ts')).href;
   const program=`import { run } from ${JSON.stringify(entry)}; await run(process.argv.slice(1)); process.exit(process.exitCode ?? 0);`;
   const result=spawnSync(process.execPath,['--import',pathToFileURL(require.resolve('tsx')).href,'--eval',program,...args],{cwd:workspace,env:{...baseEnv,...env},encoding:'utf8',timeout:120000,maxBuffer:8*1024*1024});
-  expect(result.status,result.stderr+'\n'+result.stdout).toBe(0);
+  expect(result.status,[result.error?.message,result.signal,result.stderr,result.stdout].filter(Boolean).join('\n')).toBe(0);
   return result.stdout;
 }
 function put(name:string,body:string){const file=join(workspace,name);mkdirSync(dirname(file),{recursive:true});writeFileSync(file,body);}
@@ -48,6 +48,10 @@ describe('OMP public use command integration',()=>{
     if(preservedSupport)expect(readFileSync(preservedSupport,'utf8')).toBe('Operator-owned support update');
     expect(files(join(workspace,'.agents/skills')).filter(f=>f.endsWith('/SKILL.md'))).toEqual(full);
     cli(['use','sdlc','--provider','omp','--no-project-local','--json']);
+    const startup=readFileSync(join(workspace,'.omp/AGENTS.md'),'utf8');
+    expect(startup).toContain('## Core rules');
+    expect(startup).toContain('Review tunnel access policies and credentials');
+    expect(startup).toContain('Interactive Command Gate');
     const kernel=files(join(workspace,'.agents/skills')).filter(f=>f.endsWith('/SKILL.md'));
     expect(kernel.length).toBeLessThan(full.length);
     expect(kernel.some(f=>f.includes('/aiwg-doctor/'))).toBe(true);

@@ -61,7 +61,7 @@ describe('B1 rule delivery regressions', () => {
       expect(fs.readFileSync(path.join(rules, `fixture-kernel.${ext}`), 'utf8')).toContain('FIXTURE_KERNEL_BODY');
       expect(fs.readFileSync(path.join(rules, `RULES-INDEX.${ext}`), 'utf8')).toContain('fixture-summary');
       const coreFile = ['claude', 'cursor'].includes(provider) ? path.join(rules, `core-core-policy.${ext}`)
-        : path.join(target, provider === 'hermes' ? 'AGENTS.md' : provider === 'warp' ? 'WARP.md' : 'AIWG.md');
+        : path.join(target, provider === 'copilot' ? '.github/copilot-instructions.md' : ['hermes', 'factory', 'opencode'].includes(provider) ? 'AGENTS.md' : provider === 'warp' ? 'WARP.md' : 'AIWG.md');
       expect(fs.readFileSync(coreFile, 'utf8')).toContain('CORE_POLICY');
       const agents = provider === 'opencode' ? '.opencode/agent' : provider === 'factory' ? '.factory/droids' : provider === 'copilot' ? '.github/agents' : `.${provider}/agents`;
       expect(fs.existsSync(path.join(target, agents, 'fixture-agent.md'))).toBe(false);
