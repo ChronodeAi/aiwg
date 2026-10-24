@@ -27,6 +27,9 @@ import { projectAiwgPath } from '../../config/project-artifacts.js';
 import { normalizeProviderDefinitionId } from '../../providers/provider-definitions.js';
 import { isInteractive } from '../env.js';
 import { requireFlagValue as strictFlagValue, MissingFlagValueError } from '../flag-parsing.js';
+import { parseGuidedSetupFlags, runGuidedSetup } from './guided-setup.js';
+import { parseInitArgInputs } from './init.js';
+import type { PlanValue } from '../../discovery/plan-types.js';
 import {
   detectInstalledWorkerClis,
   evaluateWorkerDispatchOffer,
@@ -604,6 +607,13 @@ export const setupHandler: CommandHandler = {
 
 Options:
   --target <dir>                  Project directory
+  --scope project|user            Record guided plan only (no config writes)
+  --workspace <root>              Observed workspace to configure (repeatable)
+  --monorepo root|package         Monorepo target selection
+  --package <root>                Observed package root (with --monorepo package)
+  --scan-roots <dir>              Opt in to bounded discovery (repeatable)
+  --intent code|docs|ops|mixed     Workspace usage intent
+  --credential <provider>=env:NAME|file:PATH|stdin  Credential reference only
   --yes                           Confirm writes without prompting
   --dry-run                       Preview the setup plan
   --non-interactive               Disable prompts
@@ -646,6 +656,12 @@ Options:
     }
 
     const args = subcommand === 'project' ? ctx.args.slice(1) : ctx.args;
+    let guidedFlags;
+    try { guidedFlags = parseGuidedSetupFlags(args, 'setup'); }
+    catch (error) {
+      throw new AiwgError({ code: 'ERR_INVALID_VALUE', exitCode: EXIT_CODES.USAGE,
+        message: error instanceof Error ? error.message : String(error) });
+    }
     const options = parseSetupProjectOptions({ ...ctx, args });
 
     // #3062 review item 12: the one shared interactive decision (TTY, TERM,
@@ -653,6 +669,46 @@ Options:
     // process.stdout.isTTY`, so a CI job with a pseudo-terminal could still
     // reach these prompts.
     const canPrompt = isInteractive(options.nonInteractive);
+
+    if (guidedFlags.enabled) {
+      const target = flagValue(args, '--target');
+      const projectDir = target ?? options.projectDir;
+      let inputs;
+      try { inputs = parseInitArgInputs(args); }
+      catch (error) {
+        throw new AiwgError({ code: 'ERR_INVALID_VALUE', exitCode: EXIT_CODES.USAGE,
+          message: error instanceof Error ? error.message : String(error) });
+      }
+      const selected = (entries: Array<[string, PlanValue | undefined]>): PlanValue | undefined => {
+        const present = entries.filter((entry): entry is [string, PlanValue] => entry[1] !== undefined);
+        return present.length ? Object.fromEntries(present) : undefined;
+      };
+      const tracker = selected([
+        ['primary', options.primary], ['issue_tracker', options.issueTracker], ['issue_provider', options.issueProvider],
+        ['customer_issue_tracker', options.customerIssueTracker], ['customer_issue_provider', options.customerIssueProvider],
+        ['ci', options.ci], ['tracker_actor_login', options.trackerActorLogin], ['tracker_actor_via', options.trackerActorVia],
+        ['customer_tracker_actor_login', options.customerTrackerActorLogin], ['customer_tracker_actor_via', options.customerTrackerActorVia],
+      ]);
+      const delivery = selected([
+        ['mode', options.deliveryMode], ['default_branch', options.defaultBranch], ['require_ci_green', options.requireCiGreen],
+        ['auto_close_issues', options.autoCloseIssues], ['issue_comment_on_cycle', options.issueCommentOnCycle], ['force_push_policy', options.forcePushPolicy],
+      ]);
+      const signing = options.requireSignedCommits === false ? false : selected([
+        ['required', options.requireSignedCommits], ['format', options.signingFormat], ['key', options.signingKey], ['enforce', options.signingEnforce],
+      ]);
+      const hasScripts = inputs.defaultScriptsArg !== undefined || inputs.customScriptsArg !== undefined || Object.keys(inputs.scriptPairs).length > 0;
+      const remotes = detectGitRemotes(projectDir);
+      const primary = options.primary ?? choosePrimary(remotes);
+      return runGuidedSetup({ ...ctx, args }, guidedFlags, { providers: inputs.providersArg,
+        workerDispatch: options.workerDispatchChoice, tracker, delivery, signing,
+        team: options.forcePushPolicy === undefined ? undefined : options.forcePushPolicy === 'never' ? 'shared' : 'solo',
+        ...(hasScripts ? { scripts: { defaultScripts: inputs.defaultScriptsArg ?? true,
+          customScripts: inputs.customScriptsArg ?? Object.keys(inputs.scriptPairs).length > 0, scripts: inputs.scriptPairs } } : {}),
+      }, canPrompt, projectDir, remotes.find(r => r.name === primary)?.provider === 'unknown',
+      remotes.length ? { primary, issue_tracker: primary, ci: primary,
+        ...(remotes.find(r => r.name === primary)?.provider !== 'unknown'
+          ? { issue_provider: remotes.find(r => r.name === primary)!.provider } : {}) } : undefined);
+    }
 
     // #3062 second review, finding 6: refuse before any child process runs
     // — `buildSetupProjectPlan()` below makes four `git` calls on its own,

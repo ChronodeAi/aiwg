@@ -10,6 +10,7 @@ import { listProviderDefinitions } from '../providers/provider-definitions.js';
 import type { DiscoveryDiagnosticCode, DiscoveryInventory, DiscoveryOptions, ProjectInventoryEntry } from './types.js';
 export type * from './types.js';
 export * from './plan-types.js';
+export * from './interview.js';
 export { migrateSetupPlan, readSetupPlan, writeSetupPlan, remainingPlanActions,
   unansweredPlanChoices, revalidateSetupPlan } from './plan-store.js';
 

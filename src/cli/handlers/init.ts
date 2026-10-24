@@ -52,6 +52,8 @@ import {
 import { EXIT_CODES } from '../errors.js';
 import type { ParallelismConfig, SetupConfig } from '../../config/aiwg-config.js';
 import { isInteractive } from '../env.js';
+import { parseGuidedSetupFlags, runGuidedSetup } from './guided-setup.js';
+import type { GuidedSetupFlags } from './guided-setup.js';
 import {
   requireFlagValue,
   collectFlagValues,
@@ -169,7 +171,7 @@ interface InitArgInputs {
   scriptPairs: Record<string, string>;
 }
 
-function parseInitArgInputs(args: string[]): InitArgInputs {
+export function parseInitArgInputs(args: string[]): InitArgInputs {
   // #3062 second review, finding 4: `precedence: 'first'` matches this
   // command's pre-existing (and, for `--providers`/`--default-scripts`/
   // `--script`/`--custom-scripts`, only) convention — see
@@ -264,6 +266,26 @@ export const initHandler: CommandHandler = {
   category: 'project',
   aliases: [],
 
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, rawOutput: true, message: `Usage: aiwg init [options]
+
+  --scope project|user            Record a guided setup plan (no config writes)
+  --intent code|docs|ops|mixed     Workspace usage intent
+  --credential <provider>=env:NAME|file:PATH|stdin  Credential reference only
+  --providers <list>              Provider IDs
+  --default-scripts true|false    Include default scripts
+  --custom-scripts true|false     Include custom scripts
+  --script <name>=<command>       Custom script (repeatable)
+  --worker-dispatch enable|decline  Worker dispatch choice
+  --force                        Re-enter existing settings
+  --non-interactive, --yes        Disable prompts
+  --dry-run                      Preview without saving
+
+The new --scope, --intent or --credential flags select guided planning.
+Progress resumes from the workspace's saved plan. Apply is a separate step.
+` };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const force = ctx.args.includes('--force');
     // `--non-interactive`/`--yes` are this command's own explicit flags for
@@ -288,11 +310,21 @@ export const initHandler: CommandHandler = {
     let defaultScriptsArg: boolean | undefined;
     let customScriptsArg: boolean | undefined;
     let scriptPairs: Record<string, string>;
+    let guidedFlags: GuidedSetupFlags;
     try {
+      guidedFlags = parseGuidedSetupFlags(ctx.args, 'init');
       ({ workerDispatchArg, providersArg, defaultScriptsArg, customScriptsArg, scriptPairs } = parseInitArgInputs(ctx.args));
     } catch (err) {
       const message = err instanceof MissingFlagValueError ? `${err.message}.` : err instanceof Error ? err.message : String(err);
       return { exitCode: EXIT_CODES.USAGE, message };
+    }
+
+    if (guidedFlags.enabled) {
+      const hasScripts = defaultScriptsArg !== undefined || customScriptsArg !== undefined || Object.keys(scriptPairs).length > 0;
+      return runGuidedSetup(ctx, guidedFlags, { providers: providersArg, workerDispatch: workerDispatchArg,
+        ...(hasScripts ? { scripts: { defaultScripts: defaultScriptsArg ?? true,
+          customScripts: customScriptsArg ?? Object.keys(scriptPairs).length > 0, scripts: scriptPairs } } : {}),
+      }, !nonInteractive, projectDir);
     }
 
     ui.blank();

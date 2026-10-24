@@ -48,7 +48,7 @@ const planSchema = z.object({
   recommendations: z.array(z.object({ questionId: text, value: valueSchema, reason: text }).strict()),
   unresolvedChoices: z.array(z.object({ questionId: text,
     options: z.array(z.object({ label: text, value: valueSchema }).strict()).min(1),
-    default: valueSchema, whyItMatters: text }).strict()),
+    default: valueSchema, whyItMatters: text, deferredAt: timestamp.optional() }).strict()),
   actions: z.array(z.object({ id: text, workspace: text, provider: text, scope: z.enum(['project', 'user']),
     kind: text, dependsOn: z.array(factSchema) }).strict()),
   receipts: z.array(z.object({ workspace: text, actions: z.record(z.object({

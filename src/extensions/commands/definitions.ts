@@ -718,6 +718,7 @@ export const initCommand: Extension = {
     triggerPhrases: ['init project', 'setup project config', 'configure providers'],
     commandHint: {
       template: 'utility',
+      argumentHint: '[--scope project|user] [--intent code|docs|ops|mixed] [--credential <provider>=env:NAME|file:PATH|stdin]',
       allowedTools: ['Read', 'Write'],
     },
   } satisfies SkillMetadata,
@@ -750,7 +751,7 @@ export const setupCommand: Extension = {
     ],
     commandHint: {
       template: 'utility',
-      argumentHint: 'project [--yes] [--dry-run] [--target <dir>]',
+      argumentHint: 'project [--yes] [--dry-run] [--target <dir>] [--scope project|user] [--workspace <root>] [--monorepo root|package] [--package <root>] [--scan-roots <dir>] [--intent code|docs|ops|mixed] [--credential <provider>=env:NAME|file:PATH|stdin]',
       allowedTools: ['Read', 'Write', 'Bash'],
     },
   } satisfies SkillMetadata,

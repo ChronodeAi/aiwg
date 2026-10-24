@@ -28,6 +28,7 @@ export interface SetupRecommendation {
 
 export interface UnresolvedChoice {
   questionId: string;
+  deferredAt?: string;
   options: Array<{ label: string; value: PlanValue }>;
   default: PlanValue;
   whyItMatters: string;
