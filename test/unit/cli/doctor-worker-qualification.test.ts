@@ -112,7 +112,12 @@ process.exitCode = result.exitCode;
   return { root, project, config, binary, installed, writeCli, run, runNode, resolve };
 }
 
-describe('doctor worker qualification through the public CLI (fake CLIs only)', () => {
+// End-to-end: each test spawns the public CLI several times (qualify, resolve,
+// sometimes execute). Locally the slowest take ~12 s; on the shared CI runner
+// they reached 27 s and then exceeded the 30 s default under load (ci.yml run
+// 90135). The suite budget is explicit here; speeding the suite itself up is
+// tracked separately so this budget is not a cover for slowness.
+describe('doctor worker qualification through the public CLI (fake CLIs only)', { timeout: 120_000 }, () => {
   it('preserves null effort for models with no applicable effort control', () => {
     const policy = { roleGuidance: { efficiency: { groups: ['workers'], tier: 'standard' as const,
       initialEffort: null, effortLadder: [], allowNotApplicableEffort: true } } };
