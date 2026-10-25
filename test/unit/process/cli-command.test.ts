@@ -3,7 +3,31 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cliCommand, resolveExecutable } from '../../../src/process/cli-command.mjs';
+import { cliCommand, resolveExecutable, helperEnvironment, HELPER_ENV_ALLOWLIST, DESKTOP_HELPER_ENV_ALLOWLIST, DEPLOYMENT_HELPER_ENV_ALLOWLIST } from '../../../src/process/cli-command.mjs';
+
+describe('helperEnvironment', () => {
+  it('copies declared plumbing only and returns a fresh environment', () => {
+    const source = { PATH: '/synthetic/bin', HOME: '/synthetic/home', API_KEY: 'synthetic-value', NODE_OPTIONS: '--require=untrusted', DISPLAY: ':7' };
+    expect(helperEnvironment(source)).toEqual({ PATH: source.PATH, HOME: source.HOME });
+    expect(helperEnvironment(source, [...HELPER_ENV_ALLOWLIST, ...DESKTOP_HELPER_ENV_ALLOWLIST]))
+      .toEqual({ PATH: source.PATH, HOME: source.HOME, DISPLAY: ':7' });
+    expect(helperEnvironment(source)).not.toBe(source);
+  });
+
+  it('rejects malformed values and supports a narrower helper declaration', () => {
+    expect(helperEnvironment({ PATH: 'bad\0path', HOME: '/synthetic/home', API_KEY: 'synthetic-value' }, ['PATH']))
+      .toEqual({});
+  });
+
+  it('preserves deployment profile locations while excluding provider authentication', () => {
+    expect(helperEnvironment({
+      PI_CONFIG_DIR: '.omp', PI_CODING_AGENT_DIR: '/synthetic-omp', OMP_PROFILE: 'fixture',
+      XDG_STATE_HOME: '/synthetic-state', OPENAI_API_KEY: 'synthetic-sensitive-value',
+    }, DEPLOYMENT_HELPER_ENV_ALLOWLIST)).toEqual({
+      PI_CONFIG_DIR: '.omp', PI_CODING_AGENT_DIR: '/synthetic-omp', OMP_PROFILE: 'fixture', XDG_STATE_HOME: '/synthetic-state',
+    });
+  });
+});
 
 describe('cliCommand', () => {
   let dir: string;

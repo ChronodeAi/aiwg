@@ -1,4 +1,7 @@
 import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
+import { helperEnvironment, HELPER_ENV_ALLOWLIST } from '../../process/cli-command.mjs';
+import { readPrivateValueFile } from '../../auth/sensitive-input.js';
+import { setupJev } from '../../decision/driver.js';
 import { existsSync } from 'fs';
 import type { Interface as ReadlineInterface } from 'readline';
 import type {
@@ -241,6 +244,7 @@ export function parseSetupProjectOptions(ctx: HandlerContext): SetupProjectOptio
 
 export function detectGitRemotes(projectDir: string): GitRemoteInfo[] {
   const result = boundedSpawnSync('git', ['-C', projectDir, 'remote', '-v'], 'quick', {
+    env: helperEnvironment(),
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -262,6 +266,7 @@ export function detectGitRemotes(projectDir: string): GitRemoteInfo[] {
 
 function detectDefaultBranch(projectDir: string): string {
   const symbolic = boundedSpawnSync('git', ['-C', projectDir, 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], 'quick', {
+    env: helperEnvironment(),
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -269,6 +274,7 @@ function detectDefaultBranch(projectDir: string): string {
   if (symbolic.status === 0 && fromOrigin) return fromOrigin;
 
   const branch = boundedSpawnSync('git', ['-C', projectDir, 'branch', '--show-current'], 'quick', {
+    env: helperEnvironment(),
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -277,6 +283,7 @@ function detectDefaultBranch(projectDir: string): string {
 
 function gitConfig(projectDir: string, key: string): string | undefined {
   const result = boundedSpawnSync('git', ['-C', projectDir, 'config', '--get', key], 'quick', {
+    env: helperEnvironment(),
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -798,7 +805,7 @@ function defaultGuidedApplyIO(
       for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
       return Buffer.concat(chunks).toString('utf8');
     } } : {}),
-    readCredentialFile: async path => readFile(path, 'utf8'),
+    readCredentialFile: async path => readPrivateValueFile(path, '--credential'),
     // stdin-at-apply prompts for the value without echoing it anywhere: the
     // label names the consumer only, and the value never reaches output.
     ...(canPrompt ? { promptCredential: async (label: string) => {
@@ -815,23 +822,19 @@ function defaultGuidedApplyIO(
       await writeSetupPlan(projectDir, next);
     },
     owners: {
-      configureJev: async ({ action, token, options, credential }) => {
+      configureJev: async ({ action, token, options }) => {
         if (options != null) validateJevOptions(options);
         const settings = (options ?? {}) as Record<string, PlanValue>;
-        const args = ['decision', 'setup', 'jev', ...(settings.remove === true ? ['--remove'] : ['--token-stdin']),
-          ...(typeof settings.region === 'string' ? ['--region', settings.region] : []),
-          ...(typeof settings.endpoint === 'string' ? ['--endpoint', settings.endpoint] : []),
-          ...(settings.verify === true ? ['--verify'] : [])];
-        const environment = { ...process.env };
-        delete environment.JEV_API_KEY;
-        delete environment.AIWG_DECISION_JEV_API_KEY;
-        if (credential?.source === 'env') delete environment[credential.name];
-        const child = boundedSpawnSync(process.execPath, [join(frameworkRoot, 'bin', 'aiwg.mjs'), ...args], 'network', {
-          cwd: action.workspace, env: environment, input: token ? `${token}\n` : '', encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
-          maxBuffer: 1024 * 1024,
-        });
-        if (child.error || child.status !== 0) throw new Error('Jev setup failed.');
-        if (settings.verify === true && settings.remove !== true && JSON.parse(child.stdout).verified !== true) {
+        // Invoke the existing owner directly. spawnSync's input option is
+        // rendered by NODE_DEBUG=child_process before the child can read it.
+        const result = await setupJev({
+          token,
+          ...(typeof settings.region === 'string' ? { region: settings.region } : {}),
+          ...(typeof settings.endpoint === 'string' ? { endpoint: settings.endpoint } : {}),
+          verify: settings.verify === true,
+          remove: settings.remove === true,
+        }, { env: process.env, cwd: action.workspace });
+        if (settings.verify === true && settings.remove !== true && result.verified !== true) {
           throw new Error('Jev verification incomplete.');
         }
       },
@@ -847,7 +850,10 @@ function defaultGuidedApplyIO(
         await writeAiwgConfig(action.workspace, next);
         const child = boundedSpawnSync(process.execPath, [join(frameworkRoot, 'bin', 'aiwg.mjs'),
           'doctor', '--probe-workers', '--qualify', '--yes', '--json'], 'long', {
-          cwd: action.workspace, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1024 * 1024,
+          cwd: action.workspace, env: helperEnvironment(process.env, [...HELPER_ENV_ALLOWLIST,
+            'AIWG_ROOT', 'AIWG_HOME', 'AIWG_CONFIG', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+            'AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH', 'AIWG_PROJECT_AIWG_DIR',
+            'AIWG_PROJECT_MEMORY_HOME', 'NO_UPDATE_NOTIFIER', 'NO_COLOR', 'CI']), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1024 * 1024,
         });
         if (child.error || child.status !== 0) throw new Error('Worker qualification failed.');
         const report = JSON.parse(child.stdout);
@@ -954,7 +960,7 @@ Options:
   --intent code|docs|ops|mixed     Workspace usage intent
   --jev enable|decline|defer     Optional external decision service (default off)
   --region <r> --endpoint <url> --verify --remove --token-stdin  Existing Jev options
-  --credential <provider>=env:NAME|file:PATH|stdin  Credential reference only
+  --credential <provider>=stdin|file:PATH|store:NAME|env:NAME  Credential reference only
   --yes                           Confirm writes without prompting
   --dry-run                       Preview the setup plan
   --review                        Render the saved guided plan per workspace/provider (writes nothing)

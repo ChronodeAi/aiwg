@@ -490,6 +490,7 @@ describe('project memory registry (#1750)', () => {
     const { resolveProjectMemoryRoot, registerProjectMemory } = await import('../../../src/memory/project-registry.js');
     const actual = await vi.importActual<typeof import('../../../src/process/bounded-child-process.mjs')>(
       '../../../src/process/bounded-child-process.mjs');
+    vi.stubEnv('AIWG_TEST_REGISTRY_INPUT', 'synthetic-registry-input');
     const remote = 'https://example.test/org/fixture.git';
     const env = { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
       GIT_CONFIG_COUNT: '0', GIT_CONFIG_PARAMETERS: '', GIT_TERMINAL_PROMPT: '0' };
@@ -511,8 +512,9 @@ describe('project memory registry (#1750)', () => {
     expect(await fs.readdir(workspace)).toEqual(['.git']);
     expect(await fs.readFile(path.join(workspace, '.git/config'))).toEqual(config);
     expect(boundedExecFileSync).toHaveBeenCalledWith('git', ['remote', '-v'], 'quick', {
-      cwd: workspace, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'],
+      cwd: workspace, env: expect.any(Object), encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'],
     });
+    expect(vi.mocked(boundedExecFileSync).mock.calls.at(-1)?.[3]?.env).not.toHaveProperty('AIWG_TEST_REGISTRY_INPUT');
   });
 
   it('uses user-level memory for storage only when project-local .aiwg is absent', async () => {

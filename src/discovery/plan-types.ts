@@ -7,7 +7,7 @@ export type AnswerSource = 'explicit-flag' | 'existing-setting' | 'interview' | 
 /** A locator only. The installer resolves it at apply time, never while planning. */
 export interface CredentialReference {
   kind: 'credential-ref';
-  source: 'env' | 'file' | 'stdin-at-apply';
+  source: 'env' | 'file' | 'store' | 'stdin-at-apply';
   name: string;
 }
 

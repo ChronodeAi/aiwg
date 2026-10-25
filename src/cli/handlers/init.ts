@@ -276,7 +276,7 @@ export const initHandler: CommandHandler = {
   --intent code|docs|ops|mixed     Workspace usage intent
   --jev enable|decline|defer     Optional external decision service (default off)
   --region <r> --endpoint <url> --verify --remove --token-stdin  Existing Jev options
-  --credential <provider>=env:NAME|file:PATH|stdin  Credential reference only
+  --credential <provider>=stdin|file:PATH|store:NAME|env:NAME  Credential reference only
   --providers <list>              Provider IDs
   --default-scripts true|false    Include default scripts
   --custom-scripts true|false     Include custom scripts

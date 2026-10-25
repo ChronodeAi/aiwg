@@ -18,6 +18,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { helperEnvironment } = await importImpl(import.meta.url, 'process/cli-command.mjs');
 
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -88,6 +91,7 @@ async function isGitWorktree(projectRoot) {
   try {
     const { stdout } = await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], {
       cwd: projectRoot,
+      env: helperEnvironment(),
       windowsHide: true,
     });
     return stdout.trim() === 'true';
@@ -106,6 +110,7 @@ async function resolveCoveredPatterns(projectRoot, patterns, lines) {
     try {
       await execFileAsync('git', ['check-ignore', '--quiet', '--', probePath(pattern)], {
         cwd: projectRoot,
+        env: helperEnvironment(),
         windowsHide: true,
       });
       return true;

@@ -312,8 +312,8 @@ trace('bin:entry');
  * Qualifying commands, and why:
  *   - `mcp profile login` — reads an API key via `--api-key-env`,
  *     `--api-key-stdin`, or `--api-key-file`.
- *   - `decision setup jev` — without `--token-stdin`, reads the token
- *     directly from `JEV_API_KEY`/`AIWG_DECISION_JEV_API_KEY`.
+ *   - `decision setup jev`, `auth secret` — resolve standard sensitive inputs.
+ *   - `init` / `setup` — apply saved credential references as well as flags.
  *
  * Checked and left out, with reasons (see the go/no-go review response):
  *   - `auth login` — an OAuth device/browser flow; it does not read a
@@ -336,6 +336,8 @@ function isCredentialHandlingCommand(args) {
   }
   if (positionals[0] === 'mcp' && positionals[1] === 'profile' && positionals[2] === 'login') return true;
   if (positionals[0] === 'decision' && positionals[1] === 'setup' && positionals[2] === 'jev') return true;
+  if (positionals[0] === 'auth' && positionals[1] === 'secret') return true;
+  if (positionals[0] === 'init' || positionals[0] === 'setup') return true;
   return false;
 }
 

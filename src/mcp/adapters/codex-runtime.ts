@@ -15,11 +15,13 @@
  * @implements #892
  */
 
+import { readPrivateValueFile } from '../../auth/sensitive-input.js';
 import { signalChild } from '../../process/signal-child.mjs';
-import { readFile, mkdir, symlink, access, readdir, chmod, lstat, open } from 'fs/promises';
+import { helperEnvironment, HELPER_ENV_ALLOWLIST, DESKTOP_HELPER_ENV_ALLOWLIST } from '../../process/cli-command.mjs';
+import { readFile, mkdir, symlink, access, readdir, chmod } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
-import { existsSync, constants } from 'fs';
+import { existsSync } from 'fs';
 import { spawn, spawnSync, type SpawnSyncReturns } from 'child_process';
 import { boundedSpawnSync, resolveSyncProcessTimeoutMs } from '../../process/bounded-child-process.mjs';
 import { isInteractive } from '../../cli/env.js';
@@ -308,70 +310,9 @@ function envWithoutSecretValue(
   return result;
 }
 
-/**
- * Read an API key from a private file (#3062 go/no-go review, blocker 1C):
- * `--api-key-file <path>` reads the key from disk instead of an
- * environment variable, so a file that does not meet the same bar the
- * decision ledger's own file writer enforces
- * (`src/decision/ledger.ts`'s `openLedgerFileForAppend`) is refused rather
- * than silently trusted. This mirrors that check for a read instead of a
- * write — there is no already-exported helper at this layer to reuse (the
- * ledger's checks are private to that module and tied to its own
- * create-if-missing write path), so this re-implements the same checks for
- * a read: never follow a symlink; the open file descriptor must resolve to
- * a regular file with exactly one hard link; and, on POSIX, must be owned
- * by the current user with no group/other permission bits. The file's
- * contents are returned trimmed; no error message here ever includes them.
- */
+/** Backward-compatible MCP export; the validation is shared by all input commands. */
 async function readApiKeyFromFile(filePath: string): Promise<string> {
-  try {
-    const pre = await lstat(filePath);
-    if (pre.isSymbolicLink()) {
-      throw new Error(`--api-key-file: "${filePath}" is a symlink; refusing to follow it.`);
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(`--api-key-file: "${filePath}" does not exist.`);
-    }
-    if (error instanceof Error && error.message.startsWith('--api-key-file:')) throw error;
-    throw new Error(`--api-key-file: cannot stat "${filePath}": ${(error as Error).message}`);
-  }
-
-  const hasNoFollow = typeof constants.O_NOFOLLOW === 'number';
-  const flags = constants.O_RDONLY | (hasNoFollow ? constants.O_NOFOLLOW : 0);
-  let handle;
-  try {
-    handle = await open(filePath, flags);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ELOOP') throw new Error(`--api-key-file: "${filePath}" is a symlink; refusing to follow it.`);
-    if (code === 'ENOENT') throw new Error(`--api-key-file: "${filePath}" does not exist.`);
-    throw new Error(`--api-key-file: cannot open "${filePath}": ${(error as Error).message}`);
-  }
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new Error(`--api-key-file: "${filePath}" is not a regular file.`);
-    }
-    if (stat.nlink !== 1) {
-      throw new Error(`--api-key-file: "${filePath}" has more than one hard link; refusing to read it.`);
-    }
-    if (process.platform !== 'win32') {
-      const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-      if (uid !== null && stat.uid !== uid) {
-        throw new Error(`--api-key-file: "${filePath}" is not owned by the current user.`);
-      }
-      if ((stat.mode & 0o077) !== 0) {
-        throw new Error(
-          `--api-key-file: "${filePath}" must not be readable or writable by group or other ` +
-          '(chmod 600 it).',
-        );
-      }
-    }
-    return (await handle.readFile({ encoding: 'utf-8' })).trim();
-  } finally {
-    await handle.close();
-  }
+  return readPrivateValueFile(filePath, '--api-key-file');
 }
 
 /**
@@ -401,18 +342,37 @@ function spawnCodexLoginWithApiKey(
   return new Promise((resolve) => {
     const child = spawn('codex', ['login', '--with-api-key'], {
       env,
-      stdio: ['pipe', 'inherit', 'inherit'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let outputBytes = 0;
+    // Buffer through close so a credential split between chunks cannot escape
+    // redaction. The combined cap bounds both memory and forwarded diagnostics.
+    const collect = (target: Buffer[], chunk: Buffer | string) => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      outputBytes += buffer.length;
+      if (outputBytes > 1024 * 1024) {
+        settle({ status: null, signal: 'SIGKILL', error: new Error('codex login output exceeded the 1 MiB limit.') });
+        return;
+      }
+      target.push(buffer);
+    };
+    const onStdout = (chunk: Buffer | string) => collect(stdout, chunk);
+    const onStderr = (chunk: Buffer | string) => collect(stderr, chunk);
+    child.stdout?.on('data', onStdout);
+    child.stderr?.on('data', onStderr);
 
     // #3062 go/no-go review, blocker 2: stdin error, write completion,
-    // child 'error', child 'exit', and the deadline all funnel through this
+    // child 'error', child 'close', and the deadline all funnel through this
     // one function, which settles exactly once, always clears the timer and
     // removes every listener this call added, and kills the child if it is
     // still alive on a failing settlement (a running process on the
     // timeout path; a process that may still be running on an unexpected
-    // stdin-write error). The 'exit' path never reaches the kill — by the
+    // stdin-write error). The 'close' path never reaches the kill — by the
     // time that event fires the child has already exited.
     const settle = (result: { status: number | null; signal: NodeJS.Signals | null; error?: Error }) => {
       if (settled) return;
@@ -420,9 +380,19 @@ function spawnCodexLoginWithApiKey(
       if (timer) clearTimeout(timer);
       child.stdin?.removeListener('error', onStdinError);
       child.removeListener('error', onChildError);
-      child.removeListener('exit', onExit);
+      child.removeListener('close', onClose);
+      child.stdout?.removeListener('data', onStdout);
+      child.stderr?.removeListener('data', onStderr);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
       if (result.error && child.exitCode === null && child.signalCode === null) {
         try { signalChild(child, 'SIGKILL'); } catch { /* already gone */ }
+      }
+      // On a failed/oversized stream, suppress buffered fragments entirely:
+      // the missing remainder might contain the rest of a credential.
+      if (!result.error) {
+        process.stdout.write(Buffer.concat(stdout).toString('utf8').split(apiKey).join('[redacted]'));
+        process.stderr.write(Buffer.concat(stderr).toString('utf8').split(apiKey).join('[redacted]'));
       }
       resolve(result);
     };
@@ -441,8 +411,8 @@ function spawnCodexLoginWithApiKey(
     const onChildError = (err: Error) => settle({ status: null, signal: null, error: err });
     child.on('error', onChildError);
 
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => settle({ status: code, signal });
-    child.on('exit', onExit);
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => settle({ status: code, signal });
+    child.on('close', onClose);
 
     // A child that exits (or closes its read end) before reading stdin
     // raises EPIPE/ECONNRESET on the *stdin stream*, not on the child
@@ -450,7 +420,7 @@ function spawnCodexLoginWithApiKey(
     // this listener it is an unhandled 'error' event, which Node turns into
     // an uncaught exception. Installed before the write/end below, per the
     // review. EPIPE/ECONNRESET specifically mean "the child already went
-    // away"; the already-firing (or about-to-fire) 'exit' event carries the
+    // away"; the already-firing (or about-to-fire) 'close' event carries the
     // real, non-secret result, so this swallows exactly those two codes and
     // lets settle() happen there instead. Anything else is a genuine,
     // unexpected stdin failure and is itself the settling error.
@@ -501,7 +471,9 @@ export async function loginInProfile(
   await ensureRuntimeHome(profile);
   const rtHome = runtimeHomePath(profile);
   const env: Record<string, string> = {
-    ...(process.env as Record<string, string>),
+    ...helperEnvironment(process.env, [
+      ...HELPER_ENV_ALLOWLIST, ...DESKTOP_HELPER_ENV_ALLOWLIST, 'NODE_EXTRA_CA_CERTS',
+    ]),
     HOME: rtHome,
     CODEX_HOME: rtHome,
     AIWG_CONFIG: resolveUserConfigDir(),

@@ -97,7 +97,15 @@ export function askWithTimeout<T>(
     const cleanup = () => {
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
+      rl.removeListener('close', onClose);
     };
+    const onClose = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(fallback);
+    };
+    rl.on('close', onClose);
     if (signal?.aborted) {
       // Fire synchronously so the caller's try/catch sees the reject without
       // awaiting a tick.

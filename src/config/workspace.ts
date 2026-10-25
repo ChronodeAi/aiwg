@@ -14,6 +14,7 @@ import { existsSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, isAbsolute, relative, resolve } from 'path';
 import { promisify } from 'util';
+import { helperEnvironment } from '../process/cli-command.mjs';
 import {
   getConfigPath,
   readAiwgConfig,
@@ -168,7 +169,7 @@ async function readRemoteUrl(repoPath: string, remote: string): Promise<string |
     const { stdout } = await execFileAsync(
       'git',
       ['-C', repoPath, 'remote', 'get-url', remote],
-      { encoding: 'utf8' },
+      { encoding: 'utf8', env: helperEnvironment() },
     );
     return stdout.trim() || undefined;
   } catch {

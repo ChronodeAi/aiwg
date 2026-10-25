@@ -87,8 +87,14 @@ aiwg setup --scope project --providers claude --credential claude=env:ANTHROPIC_
 ```
 
 `--credential claude=file:/absolute/path` references a file;
-`--credential claude=stdin` defers input until apply. The interview and review
-never resolve credential bytes.
+`--credential claude=store:claude-production` references a named entry in the
+existing native store; `--credential claude=stdin` defers input until apply. The interview and review
+never resolve credential bytes. Private files are checked for regular-file type,
+current-user ownership, no group/other access, and no symlinks or extra hard links
+on supported POSIX hosts. Windows file input fails closed pending native ACL
+validation; use stdin or a store reference.
+See [Supplying sensitive values](../cli/sensitive-values.md) for terminal entry,
+stdin, file/store/environment exposure, named-value setup and headless errors.
 
 ## Multiple roots and monorepos
 

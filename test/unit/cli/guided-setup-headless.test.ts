@@ -50,6 +50,7 @@ describe('guided setup headless contract', () => {
     expect(parseGuidedSetupFlags(['--jev', 'enable', '--credential', 'jev=env:JEV_API_KEY', '--region', 'eu', '--verify'], 'setup')).toMatchObject({
       enabled: true, jev: 'enable', jevOptions: { region: 'eu', verify: true }, credentials: { jev: { source: 'env', name: 'JEV_API_KEY' } },
     });
+    expect(parseGuidedSetupFlags(['--credential', 'codex=store:codex-main'], 'init')).toMatchObject({ credentials: { codex: { source: 'store', name: 'codex-main' } } });
     expect(parseGuidedSetupFlags(['--token-stdin'], 'init')).toMatchObject({ jev: 'enable', credentials: { jev: { source: 'stdin-at-apply' } } });
     expect(parseGuidedSetupFlags(['--remove'], 'setup')).toMatchObject({ jev: 'decline', jevOptions: { remove: true } });
     expect(() => parseGuidedSetupFlags(['--jev'], 'setup')).toThrow(/--jev/);

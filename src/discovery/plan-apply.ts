@@ -11,9 +11,10 @@
  *
  * Credential values are resolved only at apply time and are never stored on
  * the plan, in receipts, or in rendered output. Only the reference
- * (`env:NAME`, `file:PATH`, `stdin`) is ever rendered or persisted.
+ * (`env:NAME`, `file:PATH`, `store:NAME`, `stdin`) is ever rendered or persisted.
  */
 import { relative, resolve, sep, isAbsolute, join } from 'node:path';
+import { resolveSensitiveInput } from '../auth/sensitive-input.js';
 import { revalidateSetupPlan, remainingPlanActions } from './plan-store.js';
 import type { DiscoveryInventory, Observation } from './types.js';
 import { questionId } from './interview.js';
@@ -484,6 +485,7 @@ export interface CredentialIO {
   readStdinCredential?(): Promise<string>;
   readEnv(name: string): string | undefined;
   readCredentialFile(path: string): Promise<string>;
+  readCredentialStore?(name: string): Promise<string | undefined>;
   /** Interactive prompt for stdin-at-apply. Absent when headless. Rendered label only; the value never reaches output. */
   promptCredential?(label: string): Promise<string | null>;
 }
@@ -498,34 +500,32 @@ export async function resolveCredential(
   provider: string,
   io: CredentialIO,
 ): Promise<CredentialResolution> {
-  // Every message below is receipt-persisted, so wording stays hyphenated:
-  // the plan redaction gate rejects `credential <value>` phrasing.
-  if (reference.source === 'env') {
-    const value = io.readEnv(reference.name);
-    if (!value) {
-      return { ok: false, message: `Credential-source env:${reference.name} for ${provider} is not set; export it or re-answer locations.credential-source.` };
-    }
+  try {
+    const terminal = reference.source === 'stdin-at-apply' && io.promptCredential !== undefined;
+    const value = await resolveSensitiveInput({
+      prefix: 'credential',
+      ...(reference.source === 'env' ? { env: reference.name } : {}),
+      ...(reference.source === 'file' ? { file: reference.name } : {}),
+      ...(reference.source === 'store' ? { store: reference.name } : {}),
+      ...(reference.source === 'stdin-at-apply' ? terminal ? { interactive: true } : { stdin: true } : {}),
+    }, {
+      readEnv: io.readEnv,
+      readFile: io.readCredentialFile,
+      ...(io.readCredentialStore ? { readStore: async name => (await io.readCredentialStore!(name)) ?? null } : {}),
+      // An absent reader explicitly refuses headless stdin; never access the
+      // process stream behind an injected apply boundary.
+      readStdin: io.readStdinCredential ?? (async () => ''),
+      isTTY: terminal,
+      ...(io.promptCredential ? { prompt: async () => (await io.promptCredential!(
+        `Enter ${provider} API input (kept out of the setup plan): `)) ?? '' } : {}),
+    });
     return { ok: true, value };
+  } catch {
+    // Source failures can contain arbitrary external text. Receipts persist
+    // only the locator and supported alternatives, never the raw failure.
+    const source = reference.source === 'stdin-at-apply' ? 'Stdin-at-apply' : `Credential-source ${reference.source}:${reference.name}`;
+    return { ok: false, message: `${source} for ${provider} is unavailable; use --credential ${provider}=stdin|file:PATH|store:NAME|env:NAME (stdin prompts at a terminal).` };
   }
-  if (reference.source === 'file') {
-    try {
-      const value = (await io.readCredentialFile(reference.name)).trim();
-      if (!value) return { ok: false, message: `Credential-file ${reference.name} for ${provider} is empty; fix the file or re-answer locations.credential-source.` };
-      return { ok: true, value };
-    } catch {
-      return { ok: false, message: `Credential-file ${reference.name} for ${provider} is unreadable; fix the path or re-answer locations.credential-source.` };
-    }
-  }
-  if (io.readStdinCredential) {
-    const value = (await io.readStdinCredential()).trim();
-    return value ? { ok: true, value } : { ok: false, message: `No stdin-at-apply input for ${provider}; retry with env:/file:.` };
-  }
-  if (!io.promptCredential) {
-    return { ok: false, message: `Stdin-at-apply input for ${provider} needs an interactive terminal; re-run interactively or re-answer with env:/file:.` };
-  }
-  const value = await io.promptCredential(`Enter ${provider} API input (kept out of the setup plan): `);
-  if (!value) return { ok: false, message: `No stdin-at-apply input given for ${provider}; the action stays eligible for a later run.` };
-  return { ok: true, value };
 }
 
 // ---------------------------------------------------------------------------
@@ -608,7 +608,7 @@ async function executePlanAction(
       let reference: CredentialReference | undefined;
       if (!remove) {
         reference = credentialReferenceFor(plan, action.workspace, 'jev');
-        if (!reference) { return { status: 'skipped', message: 'Jev setup deferred: choose --credential jev=env:NAME|file:PATH|stdin.' }; }
+        if (!reference) { return { status: 'skipped', message: 'Jev setup deferred: choose --credential jev=stdin|file:PATH|store:NAME|env:NAME.' }; }
         const resolved = await resolveCredential(reference, 'jev', io);
         if (!resolved.ok) { return { status: 'skipped', message: 'Jev setup deferred: API input unavailable; core setup can proceed.' }; }
         token = resolved.value;

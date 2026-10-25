@@ -14,3 +14,8 @@ export function cliCommand(
   pathExt?: string,
   cwd?: string,
 ): [string, string[]];
+
+export const HELPER_ENV_ALLOWLIST: readonly string[];
+export const DESKTOP_HELPER_ENV_ALLOWLIST: readonly string[];
+export const DEPLOYMENT_HELPER_ENV_ALLOWLIST: readonly string[];
+export function helperEnvironment(source?: NodeJS.ProcessEnv, names?: readonly string[]): Record<string, string>;

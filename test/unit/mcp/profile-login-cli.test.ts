@@ -109,11 +109,13 @@ describe('aiwg mcp profile login (#3062, #3069)', () => {
     expect(existsSync(argvLogPath)).toBe(false);
   });
 
-  it('without a terminal and without any credential source, refuses naming all three flags, spawning nothing', () => {
+  it('without a terminal and without any credential source, refuses naming all five flags, spawning nothing', () => {
     const result = run(['ci-profile']);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr + result.stdout).toMatch(/interactive terminal, or a key supplied via/);
     expect(result.stderr + result.stdout).toMatch(/--api-key-env/);
+    expect(result.stderr + result.stdout).toMatch(/--api-key-store/);
+    expect(result.stderr + result.stdout).toMatch(/--api-key-interactive/);
     expect(result.stderr + result.stdout).toMatch(/--api-key-stdin/);
     expect(result.stderr + result.stdout).toMatch(/--api-key-file/);
     expect(existsSync(argvLogPath)).toBe(false);
@@ -191,13 +193,11 @@ describe('aiwg mcp profile login (#3062, #3069)', () => {
     expect(existsSync(argvLogPath)).toBe(false);
   });
 
-  it('--api-key-stdin and --api-key-env together is a usage error naming both flags', () => {
-    const result = run(['ci-profile', '--api-key-stdin', '--api-key-env', 'SOME_VAR'], {}, 'sk-ignored\n');
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain('Only one credential source may be given');
-    expect(result.stderr).toContain('--api-key-env');
-    expect(result.stderr).toContain('--api-key-stdin');
-    expect(existsSync(argvLogPath)).toBe(false);
+  it('--api-key-stdin takes precedence over a named shell variable', () => {
+    const result = run(['ci-profile', '--api-key-stdin', '--api-key-env', 'SOME_VAR'], { SOME_VAR: 'fixture-lower-priority' }, 'fixture-preferred\n');
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(stdinLogPath, 'utf8')).toBe('fixture-preferred');
+    expect(result.stdout + result.stderr).not.toContain('fixture-preferred');
   });
 
   // go/no-go review blocker 1C: --api-key-file.
@@ -254,13 +254,10 @@ describe('aiwg mcp profile login (#3062, #3069)', () => {
     expect(existsSync(argvLogPath)).toBe(false);
   });
 
-  it('--api-key-file and --api-key-stdin together is a usage error naming both flags', () => {
-    const result = run(['ci-profile', '--api-key-file', join(root, 'does-not-exist.txt'), '--api-key-stdin'], {}, 'sk-ignored\n');
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain('Only one credential source may be given');
-    expect(result.stderr).toContain('--api-key-file');
-    expect(result.stderr).toContain('--api-key-stdin');
-    expect(existsSync(argvLogPath)).toBe(false);
+  it('--api-key-stdin takes precedence over a missing private file', () => {
+    const result = run(['ci-profile', '--api-key-file', join(root, 'does-not-exist.txt'), '--api-key-stdin'], {}, 'fixture-preferred\n');
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(stdinLogPath, 'utf8')).toBe('fixture-preferred');
   });
 
   it('--api-key-file with no following value is a usage error naming the flag', () => {

@@ -6,6 +6,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { helperEnvironment } from '../process/cli-command.mjs';
 import { readAiwgConfig, type AiwgConfig } from '../config/aiwg-config.js';
 
 const execFileAsync = promisify(execFile);
@@ -23,6 +24,7 @@ export async function readConfig(projectPath: string): Promise<AiwgConfig | null
 export async function readGitRemoteUrls(projectPath: string): Promise<Record<string, string>> {
   try {
     const { stdout } = await execFileAsync('git', ['-C', projectPath, 'remote', '-v'], {
+      env: helperEnvironment(),
       maxBuffer: 1024 * 1024,
       timeout: 10_000,
     });

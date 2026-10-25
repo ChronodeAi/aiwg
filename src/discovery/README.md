@@ -93,8 +93,11 @@ receipt list respectively. Reads never rewrite migrated files. Writes accept
 only v1.
 
 Credential values are refused before any filesystem write. Use only
-`{ kind: 'credential-ref', source: 'env' | 'file' | 'stdin-at-apply', name }`;
-the store never opens the referenced file or resolves an environment value.
+`{ kind: 'credential-ref', source: 'env' | 'file' | 'store' | 'stdin-at-apply', name }`;
+the plan store never opens the referenced file or resolves an environment/native-store value.
+At apply, the shared sensitive-input resolver reads the selected locator. See
+[Supplying sensitive values](../../docs/cli/sensitive-values.md) for source precedence,
+private-file checks, named native-store values and the headless rule.
 The guard reuses governance text redaction patterns, adds JWT and generated
 token detection, and checks sensitive field/question names recursively,
 including evidence, receipt messages, keys, and credential reference names.
