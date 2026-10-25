@@ -1,5 +1,7 @@
 # Compound Memory addon
 
+Evidence status: design intent.
+
 Governed orchestration for persistent project memory across semantic-memory,
 llm-wiki, line-memory, session candidates, and generated artifacts.
 

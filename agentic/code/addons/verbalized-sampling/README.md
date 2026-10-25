@@ -1,12 +1,14 @@
 # Verbalized Sampling Addon
 
-Training-free prompting technique that improves output diversity by 1.6-2.1x by asking models to generate probability distributions over responses rather than single outputs.
+Evidence status: paper-reported ([arXiv:2510.01171](https://arxiv.org/abs/2510.01171)), not measured in AIWG.
+
+Training-free prompting technique. The paper reports it improves output diversity by 1.6-2.1x (paper-reported, not measured in AIWG) by asking models to generate probability distributions over responses rather than single outputs.
 
 ## Research
 
 Based on [Verbalized Sampling: How to Mitigate Mode Collapse and Unlock LLM Diversity](https://arxiv.org/abs/2510.01171) (arXiv:2510.01171v3).
 
-RLHF alignment reduces output diversity by 40-60%. Verbalized Sampling restores this diversity without retraining by asking models to explicitly reason about response probabilities.
+The paper reports RLHF alignment reduces output diversity by 40-60% (paper-reported, not measured in AIWG). Verbalized Sampling is designed to recover this diversity without retraining by asking models to explicitly reason about response probabilities.
 
 ## Installation
 

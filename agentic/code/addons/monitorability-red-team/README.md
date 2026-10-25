@@ -1,5 +1,7 @@
 # Monitorability Red Team
 
+Evidence status: design intent; synthetic fixtures only.
+
 This experimental security-engineering addon measures what a monitor could
 actually observe in synthetic, local multi-agent fixtures. It does not provide
 offensive instructions, contact external systems, start providers, or test

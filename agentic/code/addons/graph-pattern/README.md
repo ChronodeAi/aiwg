@@ -1,5 +1,7 @@
 # Flow Graph Pattern
 
+Evidence status: design intent.
+
 `graph-pattern` is an optional domain profile over AIWG Flow. It adds the
 `graph.flow.aiwg.io/v1` `GraphPlaybook` authoring contract, then projects valid
 documents into the existing `flow.aiwg.io/v1alpha1` `FlowGraph` composition

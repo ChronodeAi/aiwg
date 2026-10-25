@@ -1,5 +1,7 @@
 # Writing Quality Addon
 
+Evidence status: design intent.
+
 **Type**: Addon (standalone utility)
 **Version**: 1.1.0
 **Framework Dependency**: None (works with any framework or standalone)

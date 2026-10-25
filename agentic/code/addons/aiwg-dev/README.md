@@ -1,5 +1,7 @@
 # AIWG Developer Tools
 
+Evidence status: design intent.
+
 **For AIWG contributors only.** This addon provides rules and skills to help people building AIWG itself, AIWG addons, and AIWG extensions avoid common structural mistakes.
 
 This addon is **intentionally excluded from `aiwg use all`** and must be installed explicitly.

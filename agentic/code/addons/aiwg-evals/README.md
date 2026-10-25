@@ -1,5 +1,7 @@
 # AIWG Evaluations
 
+Evidence status: design intent; example scores are illustrative and targets are unmeasured.
+
 Automated evaluation framework for agent quality assessment.
 
 ## Research Foundation
@@ -192,6 +194,8 @@ aiwg eval-report --compare previous-report.json
 
 ### Quality Report
 
+The report below is an illustrative example, not measured results:
+
 ```markdown
 # Agent Quality Report
 
@@ -277,6 +281,8 @@ jobs:
 ```
 
 ## Success Metrics
+
+Unmeasured targets (no AIWG measurement yet):
 
 | Metric | Target |
 |--------|--------|

@@ -1,5 +1,7 @@
 # Droid Bridge Addon
 
+Evidence status: design intent.
+
 Bridge addon for orchestrating Factory Droid from Claude Code.
 
 ## Overview

@@ -1,5 +1,7 @@
 # Agentic Installer
 
+Evidence status: design intent.
+
 An AIWG addon that defines the `setup.aiwg.io/v1` SetupManifest language for
 cross-platform deterministic and provider-orchestrated installation workflows.
 

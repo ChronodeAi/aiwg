@@ -1,5 +1,7 @@
 # UAT-MCP Toolkit
 
+Evidence status: design intent.
+
 Agent-executable acceptance testing via MCP connections. Generate phased UAT plans from MCP tool manifests, execute them against live connections, and produce structured coverage reports.
 
 ## Quick Start

@@ -1,5 +1,7 @@
 # Network Analysis
 
+Evidence status: design intent.
+
 The `network-analysis` addon turns authorized saved PCAP and PCAPNG files into
 bounded, reproducible packet evidence. TShark provides the machine interface.
 Termshark is an optional local review surface and is never scraped or driven as

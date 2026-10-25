@@ -1,5 +1,7 @@
 # Decision Engine
 
+Evidence status: design intent.
+
 The Decision Engine packages AIWG's normalized `decision.aiwg.io/v1alpha1`
 contracts and the `decision-evaluate` dispatcher. A workflow pins a ruleset and
 binding; changing only the binding selects Jev or an ordinary LLM subagent.

@@ -1,5 +1,7 @@
 # Automatic Memory Addon
 
+Evidence status: design intent.
+
 Seed templates for Claude Code's Automatic Memory feature, providing AIWG-aware starting points for new projects.
 
 ## What is Automatic Memory?
