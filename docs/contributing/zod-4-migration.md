@@ -127,7 +127,7 @@ Open question: which Fortemi release will provide patched native-v4 schemas and 
 
 ### Report
 
-- [docs/contributing/zod-4-migration.md](../../docs/contributing/zod-4-migration.md) — Migration inventory, compatibility and verification record.
+- `docs/contributing/zod-4-migration.md` (this file) — Migration inventory, compatibility and verification record.
 
 ### Dependencies
 
