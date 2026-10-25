@@ -62,7 +62,7 @@ import {
   interpolateContextTokens
 } from './base.mjs';
 
-const { writeContextFileSync } = await importImpl(import.meta.url, 'smiths/context-pipeline/context-file-safety.js');
+import { writeContextFileSync } from './context-write.mjs';
 
 // ============================================================================
 // Provider Configuration

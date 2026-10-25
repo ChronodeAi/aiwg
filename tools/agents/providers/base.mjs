@@ -17,7 +17,7 @@ import { createHash } from 'crypto';
 import { createRequire } from 'module';
 import { importImpl } from '../../_resolve-impl.mjs';
 
-const { writeContextFileSync } = await importImpl(import.meta.url, 'smiths/context-pipeline/context-file-safety.js');
+import { writeContextFileSync } from './context-write.mjs';
 
 const { parseRuleFrontmatter, inferRuleActivation } = await importImpl(import.meta.url, 'rules/activation.mjs');
 const { resolveRulesInlineBudget, DEFAULT_RULES_INLINE_BUDGET_TOKENS } = await importImpl(import.meta.url, 'rules/inline-budget.mjs');

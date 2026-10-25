@@ -19,7 +19,7 @@ const { loadRulePinConfigs, installedRuleCapabilities, resolveRulePins } = await
 const { guardRulesInlineBudget } = await importImpl(import.meta.url, 'rules/inline-budget.mjs');
 const { userConfigFile } = await importImpl(import.meta.url, 'config/user-config-dir.mjs');
 const { resolveProjectAiwgDir } = await importImpl(import.meta.url, 'config/project-artifacts-runtime.mjs');
-const { writeContextFileSync, CONTEXT_STAGE_ENV } = await importImpl(import.meta.url, 'smiths/context-pipeline/context-file-safety.js');
+import { writeContextFileSync, CONTEXT_STAGE_ENV } from './context-write.mjs';
 const PREPARATION_HOOK = Symbol.for('aiwg.provider-preparation-hook.v1');
 
 export function installRuleDeploymentPreparationHook(hook) {
