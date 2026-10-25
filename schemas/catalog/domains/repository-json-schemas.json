@@ -2864,6 +2864,66 @@
       "consumers": []
     },
     {
+      "logicalName": "src.artifacts.fortemi.shard.contract.2.2.0.full.v1.embedding.config",
+      "id": "https://schemas.fortemi.dev/knowledge-shard/2.2.0/full-v1/embedding-config.schema.json",
+      "version": "2.2.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "runtime-artifacts"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "src/artifacts/fortemi-shard-contract/2.2.0/full-v1-embedding-config.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "src.artifacts.fortemi.shard.contract.2.2.0.full.v1.embedding.set",
+      "id": "https://schemas.fortemi.dev/knowledge-shard/2.2.0/full-v1/embedding-set.schema.json",
+      "version": "2.2.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "runtime-artifacts"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "src/artifacts/fortemi-shard-contract/2.2.0/full-v1-embedding-set.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "src.artifacts.fortemi.shard.contract.2.2.0.full.v1.manifest",
+      "id": "https://schemas.fortemi.dev/knowledge-shard/2.2.0/full-v1/manifest.schema.json",
+      "version": "2.2.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "runtime-artifacts"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "src/artifacts/fortemi-shard-contract/2.2.0/full-v1-manifest.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "schemas.uhp.uhp.2026.08.11",
       "id": "https://unifiedharnessprotocol.org/schema/uhp-2026-08-11.schema.json",
       "version": "1.0.0",
