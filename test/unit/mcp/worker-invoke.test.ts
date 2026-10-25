@@ -5968,3 +5968,41 @@ describe('registered recovery reset and cancellation guards (#2915 final review)
     } finally { breaker.destroy(); fetchSpy.mockRestore(); }
   });
 });
+
+describe('worker recovery scope status (#3049)', () => {
+  it('exposes the same live bounded owner snapshot for all and individual invocation status', async () => {
+    const root = await tempRoot();
+    let clock = 1_000_000;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => clock, jitterMs: () => 0 });
+    try {
+      for (let n = 0; n < 3; n++) {
+        const { token } = breaker.admit({ invocationId: `status-outage-${n}`, scopeKeys: ['provider:fixture'] });
+        breaker.settle(token, { kind: 'failed', reasonCode: 'NETWORK', evidenceSource: 'launcher',
+          inferenceProvider: 'fixture', confirmedStop: true });
+      }
+      const registry = createInvocationRegistry();
+      const entry = registry.create({ requestId: 'status-recovery', invocationId: 'status-owner', recoveryBreaker: breaker });
+      const tools = await captureTool(null, { projectRoot: root, registry, now: () => new Date(clock) });
+      const handler = tools.get('worker-invoke').handler;
+      const status = async (id?: string) => JSON.parse((await handler({ operation: 'status',
+        ...(id ? { invocation_id: id } : {}) })).content[0].text);
+      const before = breaker.recoveryStatus();
+      const all = await status();
+      const individual = await status(entry.invocationId);
+      expect(all.recovery).toEqual(individual.recovery);
+      expect(all.recovery).toMatchObject({ source: 'live', scopes: [{ scopeKey: 'provider:fixture', state: 'open',
+        reasons: ['NETWORK'], nextEligibleAtMs: 1_120_000, nextEligibleAt: new Date(1_120_000).toISOString(), canaryInFlight: false }] });
+      expect(breaker.recoveryStatus()).toEqual(before);
+      clock = 1_120_000;
+      const probe = breaker.admit({ invocationId: 'status-probe', scopeKeys: ['provider:fixture'], purpose: 'probe' });
+      breaker.settle(probe.token, { kind: 'succeeded', relevant: true, evidenceSource: 'launcher', confirmedStop: true });
+      const canary = breaker.admit({ invocationId: 'status-canary', scopeKeys: ['provider:fixture'] });
+      expect((await status()).recovery.scopes[0]).toMatchObject({ state: 'canary', canaryInFlight: true });
+      breaker.settle(canary.token, { kind: 'succeeded', confirmedStop: true });
+      const closed = await status();
+      expect(closed.recovery.scopes[0]).toMatchObject({ state: 'closed', nextEligibleAtMs: null, canaryInFlight: false });
+      expect(closed.recovery.transitions.map((event: any) => event.to)).toEqual(['open', 'half-open', 'canary-ready', 'canary', 'closed']);
+      expect(JSON.stringify(closed.recovery)).not.toMatch(/operatorReason|summary|action|diagnostics/);
+    } finally { breaker.destroy(); }
+  });
+});

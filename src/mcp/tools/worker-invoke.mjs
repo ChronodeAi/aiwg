@@ -2707,6 +2707,9 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
   }
 
   async function status(input) {
+    const { projectRecoveryStatus, mergeRecoveryStatuses } = await importImpl('mission-protocol/worker-status.js');
+    const recoveryStatus = breaker => projectRecoveryStatus(typeof breaker?.recoveryStatus === 'function'
+      ? { ...breaker.recoveryStatus(), observedAt: now().toISOString() } : null, 'live');
     if (!input.invocation_id) {
       // #2915 round 8 (D4): ordinary status, read-only, no id — lists every
       // invocation this server currently tracks as a `dispatched` reservation
@@ -2725,11 +2728,19 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         .filter(scope => scope.state === 'operator-intervention')
         .map(scope => ({ scopeId: scope.scopeKey, reason: scope.operatorReason,
           resetInstruction: { operation: 'reset_recovery_scope', scope_id: scope.scopeKey } })));
-      return { unresolvedReservations, interventionScopes };
+      const recovery = mergeRecoveryStatuses([...breakers].map((breaker, index) => {
+        const status = recoveryStatus(breaker);
+        if (breakers.size > 1) {
+          for (const scope of status.scopes) scope.owner = `owner-${index + 1}`;
+          for (const transition of status.transitions) transition.owner = `owner-${index + 1}`;
+        }
+        return status;
+      }));
+      return { unresolvedReservations, interventionScopes, recovery };
     }
     const entry = registry.get(input.invocation_id);
     if (!entry) throw new Error('Unknown invocation_id');
-    return publicStatus(entry, healthHook);
+    return { ...publicStatus(entry, healthHook), recovery: recoveryStatus(entry.recoveryBreaker ?? registry.recoveryOwner) };
   }
 
   /**
