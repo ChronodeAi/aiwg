@@ -140,7 +140,8 @@ describe('plugin payload links (#3204)', () => {
     const before = fs.readFileSync('agentic/code/plugins/research/skills/induct-research/SKILL.md', 'utf8');
     const bad = spawnSync(process.execPath, [packager, '--all', '--check-links'], { encoding: 'utf8', timeout: 120_000 });
     expect(bad.status).toBe(1);
-    expect(bad.stderr).toContain('agent-loop/README.md:147: missing-target: docs/examples/test-fix.md');
+    // Match the known offender by file and target, not line: README edits shift line numbers.
+    expect(bad.stderr).toMatch(/agent-loop\/README\.md:\d+: missing-target: docs\/examples\/test-fix\.md/);
     expect(bad.stderr).toContain('context-curator/README.md');
     expect(fs.readFileSync('agentic/code/plugins/research/skills/induct-research/SKILL.md', 'utf8')).toBe(before);
   });
