@@ -1,3 +1,5 @@
+import { mkdtempSync } from 'node:fs';
+import { workerSigningFixture } from '../../helpers/worker-qualification-signing.js';
 import { qualificationDigest } from '../../../src/models/qualification-digest.mjs';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
@@ -23,7 +25,7 @@ afterEach(async () => {
 
 describe('qualification store permission repair', () => {
   it('projects only bound, unexpired historical approvals without probing, importing drivers, or reading auth', async () => {
-    const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-guided-worker-evidence-')); roots.push(root);
+    const root = mkdtempSync(path.join(tmpdir(), 'aiwg-guided-worker-evidence-')); roots.push(root);
     const cwd = path.join(root, 'project'); const store = path.join(root, 'store');
     await Promise.all([fs.mkdir(cwd), fs.mkdir(store, { mode: 0o700 })]);
     vi.stubEnv('AIWG_CONFIG', store);
@@ -33,15 +35,21 @@ describe('qualification store permission repair', () => {
       invocationProfiles: { default: { installationQualification: evidence } } };
     const record = { cli: 'codex', adapter, binding: { profile: 'default', cliVersion: '1', accountScope: 'test-account' },
       installation: { cwd, profile: 'default', cliVersion: '1', effectiveConfigDigest: qualificationDigest(DEFAULT_WORKER_SELECTION), evidence } };
+    const signing = await workerSigningFixture(root, cwd);
+    signing.sign(record);
     const input = { cwd, policy: DEFAULT_WORKER_SELECTION,
       parallelism: { clis: { codex: { adapter: 'providers:codex', accountScope: 'test-account', quotaScope: 'test-quota' } } } };
     const file = path.join(store, 'worker-installations.json');
     const write = async () => fs.writeFile(file, JSON.stringify({ version: 1, registrations: [record] }), { mode: 0o600 });
     await write();
     const reads = vi.spyOn(fs, 'open');
+    const fileReads = vi.spyOn(fs, 'readFile');
+    reads.mockClear(); fileReads.mockClear();
     expect(await inspectRecordedWorkerQualifications(input)).toEqual([{ cli: 'codex', provider: 'codex' }]);
     expect(spawn).not.toHaveBeenCalled();
-    expect(reads.mock.calls.every(([name]) => String(name) === file)).toBe(true);
+    expect(reads.mock.calls.map(([name]) => String(name))).toContain(file);
+    // Only public trust is needed to project historical qualifications.
+    expect([...reads.mock.calls, ...fileReads.mock.calls].map(([name]) => String(name))).not.toContain(signing.keyPath);
     record.installation.evidence.verifiedAt = '2000-01-01T00:00:00.000Z';
     await write();
     expect(await inspectRecordedWorkerQualifications(input)).toEqual([]);
@@ -52,7 +60,7 @@ describe('qualification store permission repair', () => {
   });
 
   it('requires recorded approvals before policy prechecks, then checks policy before record validation', async () => {
-    const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-policy-order-')); roots.push(root);
+    const root = mkdtempSync(path.join(tmpdir(), 'aiwg-policy-order-')); roots.push(root);
     const cwd = path.join(root, 'project'); const store = path.join(root, 'store');
     await Promise.all([fs.mkdir(cwd), fs.mkdir(store, { mode: 0o700 })]);
     vi.stubEnv('AIWG_CONFIG', store);
@@ -69,7 +77,7 @@ describe('qualification store permission repair', () => {
   });
 
   it('selects the exact canonical workspace before validating its approval, without falling back to a peer', async () => {
-    const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-workspace-approvals-')); roots.push(root);
+    const root = mkdtempSync(path.join(tmpdir(), 'aiwg-workspace-approvals-')); roots.push(root);
     const first = path.join(root, 'first'); const second = path.join(root, 'second');
     const alias = path.join(root, 'alias'); const store = path.join(root, 'store');
     await Promise.all([fs.mkdir(first), fs.mkdir(second), fs.mkdir(store, { mode: 0o700 })]);
@@ -82,6 +90,12 @@ describe('qualification store permission repair', () => {
       { cli: 'codex', binding: {}, adapter: {}, installation: { cwd: first, environmentNames: ['AIWG_3475_ABSENT'] } },
       { cli: 'codex', binding: { profile: 'changed' }, adapter: {}, installation: { cwd: second, profile: 'original' } },
     ];
+    const signing = await workerSigningFixture(root, first);
+    for (const record of registrations) signing.sign(record);
+    // Both workspaces use the same explicitly configured public ledger.
+    await fs.mkdir(path.join(second, '.aiwg'));
+    await fs.copyFile(path.join(first, '.aiwg/aiwg.config'), path.join(second, '.aiwg/aiwg.config'));
+    await fs.copyFile(path.join(first, '.aiwg-location'), path.join(second, '.aiwg-location'));
     const filename = path.join(store, 'worker-installations.json');
     await fs.writeFile(filename, JSON.stringify({ version: 1, registrations }), { mode: 0o600 });
     for (const cwd of [first, alias]) {
@@ -99,7 +113,7 @@ describe('qualification store permission repair', () => {
   });
 
   it.each([128, 129])('bounds secret-free registration diagnostics for %s records', async count => {
-    const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-store-diagnostics-'));
+    const root = mkdtempSync(path.join(tmpdir(), 'aiwg-store-diagnostics-'));
     roots.push(root);
     const cwd = path.join(root, 'project');
     const store = path.join(root, 'store');
@@ -116,8 +130,18 @@ describe('qualification store permission repair', () => {
     expect(`${error.stack}${JSON.stringify(error)}`).not.toContain(privateText);
   });
 
+  it('keeps null registration failures inside the scoped diagnostic boundary', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'aiwg-null-registration-')); roots.push(root);
+    const cwd = path.join(root, 'project'); const store = path.join(root, 'store');
+    await fs.mkdir(cwd); await fs.mkdir(store, { mode: 0o700 });
+    vi.stubEnv('AIWG_CONFIG', store);
+    await fs.writeFile(path.join(store, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [null] }), { mode: 0o600 });
+    await expect(loadRecordedWorkerInstallations({ registry: loadProviderModelCapabilities(), cwd }))
+      .rejects.toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', details: { rejections: [{ registration: 0, reason: 'record-identity' }] } });
+  });
+
   it.each([0o775, 0o777])('refuses repair beneath a writable ancestor (%s)', async mode => {
-    const home = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-store-ancestor-'));
+    const home = mkdtempSync(path.join(tmpdir(), 'aiwg-store-ancestor-'));
     roots.push(home);
     vi.stubEnv('HOME', home);
     const ancestor = path.join(home, 'config');
@@ -136,7 +160,7 @@ describe('qualification store permission repair', () => {
   });
 
   it.each([0o755, 0o700])('repairs beneath trusted ancestors (%s)', async mode => {
-    const home = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-store-trusted-'));
+    const home = mkdtempSync(path.join(tmpdir(), 'aiwg-store-trusted-'));
     roots.push(home);
     vi.stubEnv('HOME', home);
     const ancestor = path.join(home, 'config');
@@ -153,7 +177,7 @@ describe('qualification store permission repair', () => {
   });
 
   it('refuses another owner with the path and never chmods it', async () => {
-    const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-store-owner-'));
+    const root = mkdtempSync(path.join(tmpdir(), 'aiwg-store-owner-'));
     roots.push(root);
     vi.stubEnv('AIWG_CONFIG', root);
     const { lstat: original } = await vi.importActual<typeof fs>('node:fs/promises');
@@ -168,7 +192,7 @@ describe('qualification store permission repair', () => {
   });
 
   it('never repairs a writable store file or a symlinked directory', async () => {
-    const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-store-path-'));
+    const root = mkdtempSync(path.join(tmpdir(), 'aiwg-store-path-'));
     roots.push(root);
     vi.stubEnv('AIWG_CONFIG', root);
     const filename = path.join(root, 'worker-installations.json');

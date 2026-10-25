@@ -457,6 +457,13 @@ Here `installation` is the same qualification request, including adapter metadat
 and its negative evidence. For the production loader, `effectiveConfigDigest`
 is `qualificationDigest(mergedModels.defaults.workerSelection)`.
 Environment values are reduced to names before persistence.
+The complete persisted registration (including model observations and MCP
+bindings) is signed with the configured effect-ledger key and verified against
+the existing default `delivery` keyring on load. The signature uses its own DSSE
+payload type. Restore or unlock `effects.keyProvider` and initialize the keyring
+with `aiwg effect keys init` if needed before qualifying. Unsigned legacy records
+are unqualified: this is deliberate one-time requalification, requiring
+`aiwg doctor --probe-workers --qualify` in each workspace.
 
 The host must protect this configuration directory and installed dependency
 closure from workers. The loader refuses symlinked, hardlinked or untrusted
