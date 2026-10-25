@@ -99,7 +99,8 @@ interface QualificationArtifact {
 export const QUALIFICATION_EVIDENCE_ID = /^(?:CON|POL|BCH|CTX|CNC|CAN|RTY|REC|SEC|PRV|CAL|DRF|CCP|M(?:0[1-9]|1[01]))-[A-Z0-9][A-Z0-9._-]*$/;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_ARTIFACT_BYTES = 256 * 1024;
+// Full staged-load receipt history and fixed-interval samples exceed 256 KiB.
+const DEFAULT_MAX_ARTIFACT_BYTES = 1024 * 1024;
 const DEFAULT_CONCURRENCY = 4;
 
 function boundedInteger(value: number | undefined, fallback: number, minimum: number, maximum: number): number {
@@ -506,7 +507,9 @@ export async function evaluateExecutedQualification(
     && verification.every(item => item.verified && caseIds.has(item.caseId))
     && gateVerification.every(item => item.verified);
   return { manifest, verification, gateVerification,
-    report: evaluateQualification(hardened, undefined, { artifactsVerified }) };
+    report: evaluateQualification(hardened, undefined, {
+      artifactsVerified, loadArtifactVerified: gateVerified.has('load-manifest-qualified'),
+    }) };
 }
 
 /** Executes, persists, verifies, and evaluates in one promotion-capable pipeline. */

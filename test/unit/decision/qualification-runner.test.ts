@@ -13,7 +13,7 @@ import { DERIVED_GATE_EVIDENCE } from '../../../src/decision/qualification/gate-
 import { QUALIFICATION_PRIVACY_SURFACES } from '../../../src/decision/qualification/privacy.js';
 import type { QualificationCase, QualificationRunManifest } from '../../../src/decision/qualification/types.js';
 import {
-  syntheticCalibration, syntheticCases, syntheticLoadResult, syntheticReview, syntheticSplitPlan, writeGateArtifacts,
+  syntheticCalibration, syntheticCases, syntheticLoadResult, syntheticReview, syntheticSplitPlan, syntheticStagedLoadResult, writeGateArtifacts,
 } from './qualification-gate-fixtures.js';
 
 const roots: string[] = [];
@@ -28,7 +28,7 @@ async function artifactRoot(): Promise<string> {
 function manifest(cases: QualificationCase[]): Omit<QualificationRunManifest, 'evidence' | 'evidenceFlags'> {
   return {
     schemaVersion: 'decision-qualification-run/v1', mode: 'offline', runId: 'runner-unit', generatedAt,
-    sourceCommit: '0123456789abcdef', dirty: false, cases,
+    sourceCommit: '0123456789abcdef0123456789abcdef01234567', dirty: false, cases,
   };
 }
 
@@ -350,5 +350,46 @@ describe('decision qualification executable runner', () => {
     expect(tampered.report.gates.find(item => item.id === 'G5')!.missing).toEqual(['evidence:load-manifest-qualified']);
     expect(tampered.report.gates.find(item => item.id === 'G6')!.missing).toEqual(['evidence:evidence-hashes-verified']);
     expect(tampered.report.decision).toBe('HOLD');
+  });
+
+  it('G5 validates live artifact contents, exact commit and clean-tree provenance on attachment and re-read', async () => {
+    const cases = syntheticCases();
+    const base = manifest(cases);
+    const sources = await artifactRoot();
+    const artifact = syntheticStagedLoadResult(base.sourceCommit);
+    const path = join(sources, 'staged-load.json');
+    const plan = async (run: typeof base, value: unknown) => {
+      await writeFile(path, JSON.stringify(value));
+      return executeAndEvaluateQualification({ manifest: run, artifactRoot: await artifactRoot(),
+        gateArtifacts: { 'load-manifest-qualified': path },
+        executors: Object.fromEntries(cases.map(({ id }) => [id, () => ({ outcome: 'pass' as const })])),
+      });
+    };
+    const passing = await plan(base, artifact);
+    expect(passing.report.gates.find(gate => gate.id === 'G5')?.status).toBe('pass');
+    for (const [run, value] of [
+      [{ ...base, dirty: true }, artifact],
+      [{ ...base, sourceCommit: 'f'.repeat(40) }, artifact],
+      [base, syntheticLoadResult()],
+      [base, syntheticStagedLoadResult(base.sourceCommit, 'offline-fake-provider')],
+      [base, syntheticStagedLoadResult(base.sourceCommit, 'live', { maximumActiveCalls: 8 })],
+      [base, { ...artifact, elapsedMs: artifact.elapsedMs + 1 }],
+    ] as const) {
+      const rejected = await plan(run, value);
+      expect(rejected.manifest.gateArtifacts?.['load-manifest-qualified']).toBeUndefined();
+      expect(rejected.report.gates.find(gate => gate.id === 'G5')?.status).toBe('fail');
+    }
+    // Re-validation must bind the evidence to the run being evaluated as well.
+    const root = await artifactRoot();
+    await writeFile(path, JSON.stringify(artifact));
+    const executed = await executeQualificationPlan({ manifest: base, artifactRoot: root,
+      gateArtifacts: { 'load-manifest-qualified': path },
+      executors: Object.fromEntries(cases.map(({ id }) => [id, () => ({ outcome: 'pass' as const })])),
+    });
+    for (const candidate of [{ ...executed, dirty: true }, { ...executed, sourceCommit: 'f'.repeat(40) }]) {
+      const result = await evaluateExecutedQualification(candidate, root);
+      expect(result.gateVerification).toContainEqual({ flag: 'load-manifest-qualified', verified: false, reason: 'invalid-artifact' });
+      expect(result.report.gates.find(gate => gate.id === 'G5')?.status).toBe('fail');
+    }
   });
 });
