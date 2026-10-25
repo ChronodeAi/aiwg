@@ -8,3 +8,4 @@ export * from './provider-memory-adapter.js';
 export * from './audit.js';
 export * from './maintenance-owner.js';
 export * from './maintenance.js';
+export * from './recommend.js';

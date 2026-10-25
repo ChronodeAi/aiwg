@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { dump, load } from 'js-yaml';
+import { dump } from 'js-yaml';
 import { resolveProjectAiwgDir } from '../config/project-artifacts.js';
 import { sha256 } from '../memory/context-pack.js';
-import { indexMemoryAliases, loadMemoryRecord, memoryRecordId, type MemoryRecord } from '../memory/maintenance-record.js';
+import { indexMemoryAliases, loadMemoryRecord, memoryRecordId, parseMemoryMarkdown, type MemoryRecord } from '../memory/maintenance-record.js';
 import { validateMaintenancePlan, type MaintenanceOperation } from '../memory/maintenance-contract.js';
 import type { MaintenanceOwner } from '../memory/maintenance-owner.js';
 import { getProjectIndexRoot, type ArtifactIndex, type MetadataEntry } from './types.js';
@@ -66,13 +66,6 @@ export interface ArtifactMaintenanceOptions {
   now?: () => Date;
 }
 
-function parseSource(content: string): { data: Record<string, unknown>; body: string } {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
-  if (!match) return { data: {}, body: content };
-  const data = load(match[1]) ?? {};
-  if (typeof data !== 'object' || Array.isArray(data)) throw new Error('Memory source frontmatter must be an object');
-  return { data: data as Record<string, unknown>, body: match[2] };
-}
 function ownerMetadata(data: Record<string, unknown>): OwnerMetadata {
   if (data.memoryMaintenance === undefined) return { receipts: [] };
   const value = data.memoryMaintenance as OwnerMetadata;
@@ -143,7 +136,7 @@ export class ArtifactMaintenanceOwner implements MaintenanceOwner {
     } catch { return undefined; }
     if (!fs.existsSync(file)) return undefined;
     const sourcePath = path.relative(this.root, file).replace(/\\/g, '/');
-    const { data, body } = parseSource(fs.readFileSync(file, 'utf8'));
+    const { data, body } = parseMemoryMarkdown(fs.readFileSync(file, 'utf8'));
     const digest = sha256(body);
     let stamped: MemoryRecord | undefined;
     if (data.memoryRecord !== undefined) {
@@ -358,7 +351,7 @@ export class ArtifactMaintenanceOwner implements MaintenanceOwner {
           && !await this.verifyRetrieval(operation)) {
           throw new Error('Indexed retrieval must be verified before resident removal');
         }
-        const current = parseSource(fs.readFileSync(source.file, 'utf8'));
+        const current = parseMemoryMarkdown(fs.readFileSync(source.file, 'utf8'));
         if (sha256(current.body) !== source.record.digest || JSON.stringify(current.data) !== JSON.stringify(source.data)) {
           throw new Error('Canonical source changed before the owner transaction started');
         }
@@ -367,7 +360,7 @@ export class ArtifactMaintenanceOwner implements MaintenanceOwner {
       for (const update of pending.updates) {
         const file = this.resolveSource(update.sourcePath);
         const replacement = operation.replacements?.find(item => item.key === update.replacementKey);
-        const current = fs.existsSync(file) ? parseSource(fs.readFileSync(file, 'utf8')) : undefined;
+        const current = fs.existsSync(file) ? parseMemoryMarkdown(fs.readFileSync(file, 'utf8')) : undefined;
         const body = current?.body ?? replacement?.value;
         if (body === undefined || sha256(body) !== update.record.digest) throw new Error('Source changed during pending semantic-memory transaction');
         if (sourceMetadataDigest(current?.data ?? {}) !== update.sourceMetadataDigest) {
@@ -396,13 +389,13 @@ export class ArtifactMaintenanceOwner implements MaintenanceOwner {
         for (const graph of graphs) await buildIndex(this.root, { ...(graph ? { graph } : {}), force: true, quiet: true });
       }
       for (const update of pending.updates) {
-        const current = parseSource(fs.readFileSync(this.resolveSource(update.sourcePath), 'utf8'));
+        const current = parseMemoryMarkdown(fs.readFileSync(this.resolveSource(update.sourcePath), 'utf8'));
         if (sha256(current.body) !== update.record.digest || sourceMetadataDigest(current.data) !== update.sourceMetadataDigest
           || JSON.stringify(loadMemoryRecord(current.data.memoryRecord)) !== JSON.stringify(update.record)) {
           throw new Error('Canonical source changed during index publication; owner receipt remains pending');
         }
       }
-      const anchor = parseSource(fs.readFileSync(source.file, 'utf8'));
+      const anchor = parseMemoryMarkdown(fs.readFileSync(source.file, 'utf8'));
       atomicSource(source.file, { ...anchor.data, memoryMaintenance: {
         ...boundedHistory(ownerMetadata(anchor.data)),
         receipts: [...metadata.receipts, pending.receipt],
