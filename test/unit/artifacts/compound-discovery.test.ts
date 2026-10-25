@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { syncFortemiCoreIndex } from '../../../src/artifacts/fortemi-core-sync.js';
 import { buildIndex } from '../../../src/artifacts/index-builder.js';
 import { discoverCapability, showArtifact, compoundGoverningRules, governingRuleFields, governingRuleStats } from '../../../src/artifacts/query-engine.js';
@@ -19,6 +21,16 @@ import { registerDiscoveryTools } from '../../../src/mcp/tools/discovery.mjs';
 let root: string;
 let entries: MetadataEntry[];
 let log: ReturnType<typeof vi.spyOn>;
+const compiledCli = pathToFileURL(path.resolve('dist/src/artifacts/cli.js')).href;
+// Execute the compiled parser/renderer for both sides of the parity assertion.
+// Only the transport is replaced, keeping the synthetic project and local backend isolated.
+function cliDiscover(args: string[]) {
+  const script = `const { main } = await import(${JSON.stringify(compiledCli)});
+    await main([...JSON.parse(process.argv[1]), '--graph', 'project', '--backend', 'local']);`;
+  return { code: 0, stderr: '', stdout: execFileSync(process.execPath,
+    ['--input-type=module', '--eval', script, JSON.stringify(args)],
+    { cwd: root, env: process.env, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }) };
+}
 const put = (file: string, text: string) => { const dest = path.join(root, '.aiwg', file); fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.writeFileSync(dest, text); };
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-compound-'));
@@ -58,8 +70,22 @@ describe('compound action discovery (#3292)', () => {
     const fields = governingRuleFields(rules);
     expect(fields.required_rule_checks).toHaveLength(3);
     expect(fields.required_rule_checks?.every(check => check.rule_id.startsWith('aiwg:rule:') && check.fetch_command.startsWith('aiwg show rule '))).toBe(true);
+    expect(fields.required_rule_checks).toEqual(rules.map(({ rule, applicability }) => {
+      const id = relationId(rule), fetch = `aiwg show rule ${id} --body`;
+      return { rule_id: id, applicability, fetch_command: fetch };
+    }));
     expect(fields.rule_stats).toEqual({ by_enforcement: { high: 1, critical: 1, medium: 1 }, by_activation: { bound: 1, paths: 1, 'on-demand': 1 }, required_checks: 3 });
     expect(fields.rule_check_obligation).toContain('Before governed work, fetch and follow every required rule');
+  });
+  it.each(['skill', 'agent', 'command', 'flow'])('counts the attached contracts for %s results', type => {
+    const action = { ...target('unbound'), type, governedPaths: ['src/secure/key.ts'] };
+    const fields = governingRuleFields(compoundGoverningRules(entries, action, undefined, 'secure work and approval request'));
+    const attached = fields.bound_rules!;
+    const counts = (key: 'enforcement' | 'activation') => Object.fromEntries([...new Set(attached.map(rule => rule[key] ?? 'unknown'))]
+      .map(value => [value, attached.filter(rule => (rule[key] ?? 'unknown') === value).length]));
+    expect(attached.map(rule => rule.name)).toEqual(['bound', 'paths', 'trigger']);
+    expect(fields.rule_stats).toEqual({ by_enforcement: counts('enforcement'), by_activation: counts('activation'), required_checks: attached.length });
+    expect(fields.required_rule_checks).toHaveLength(attached.length);
   });
   it('matches query paths and governed action paths, without substring triggers or unrelated path fetches', () => {
     expect(compoundGoverningRules(entries, target('unbound'), undefined, 'edit src/secure/key.ts').map(item => item.rule.name)).toEqual(['paths']);
@@ -142,14 +168,35 @@ describe('compound action discovery (#3292)', () => {
     expect(text).toContain('Required reading on every invocation'); expect(text).toContain('before starting governed work');
     expect(text).toContain('aiwg show rule bound');
   });
-  it('MCP discover forwards exactly the CLI compound JSON and required-check shape', async () => {
-    const expected = await discover('work');
-    transport.mockResolvedValueOnce({ code: 0, stdout: JSON.stringify(expected), stderr: '' });
+  it.each([
+    ['discover', { phrase: 'work approval request src/secure/key.ts', type: 'skill', limit: 10 }, ['discover', 'work approval request src/secure/key.ts', '--json', '--limit', '10', '--type', 'skill']],
+    ['skill-list', { filter: 'work', limit: 10 }, ['discover', 'work', '--type', 'skill', '--json', '--limit', '10']],
+    ['command-list', { filter: 'work' }, ['discover', 'work', '--type', 'command', '--json', '--limit', '200']],
+    ['rule-list', { filter: 'bound', limit: 10 }, ['discover', 'bound', '--type', 'rule', '--json', '--limit', '10']],
+  ] as const)('MCP %s matches independently executed compiled CLI JSON', async (tool, input, args) => {
+    put('commands/work.md', '---\nname: work\npaths: ["src/secure/**"]\n---\n# Work command\n');
+    await buildIndex(root, { graph: 'project', quiet: true });
+    const expected = JSON.parse(cliDiscover([...args]).stdout);
+    transport.mockImplementation(async (argv: string[]) => cliDiscover(argv));
     const handlers = new Map<string, any>();
     registerDiscoveryTools({ registerTool(name: string, _config: unknown, handler: unknown) { handlers.set(name, handler); } }, { corpusStore: {} });
-    const result = await handlers.get('discover')({ phrase: 'work', type: 'skill', limit: 10 });
-    expect(JSON.parse(result.content[0].text)).toEqual(expected);
-    expect(transport).toHaveBeenCalledWith(['discover', 'work', '--json', '--limit', '10', '--type', 'skill']);
+    const result = await handlers.get(tool)(input);
+    const actual = JSON.parse(result.content[0].text);
+    // Elapsed wall time is intentionally the only nondeterministic field.
+    expect({ ...actual, query_time_ms: 0 }).toEqual({ ...expected, query_time_ms: 0 });
+    expect(actual.total).toBeGreaterThan(0);
+    expect(transport).toHaveBeenCalledWith([...args]);
+    if (tool !== 'rule-list') expect(actual.rule_stats.required_checks).toBeGreaterThan(0);
+    if (tool === 'discover') {
+      const work = actual.results.find((row: any) => row.name === 'work');
+      expect(work.bound_rules.map((rule: any) => rule.name)).toEqual(['bound', 'paths', 'trigger']);
+      for (const check of work.required_rule_checks) {
+        expect(check.fetch_command).toBe(`aiwg show rule ${check.rule_id} --body`);
+        const fetched = JSON.parse(cliDiscover(['show', 'rule', check.rule_id, '--body', '--json']).stdout);
+        expect(fetched.id).toBe(check.rule_id);
+        expect(fetched.content).toContain('# ');
+      }
+    }
   });
   it('offline probe distinguishes completed-before-action fetches from missing, failed, late or parallel fetches', () => {
     const checks = [{ rule_id: 'aiwg:rule:bound', applicability: ['bound'], fetch_command: 'aiwg show rule bound' }];
