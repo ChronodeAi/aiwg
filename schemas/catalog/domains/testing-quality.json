@@ -236,7 +236,7 @@
         {
           "kind": "mirror",
           "path": "agentic/code/plugins/testing-quality/schemas/test-review.v1.schema.json",
-          "digest": "sha256:c730e091ebbc39a275b4156ac1aeb710419b626b53fc058d861ef8524c1bca7a",
+          "digest": "sha256:2439f24fcd137b4877bb241588b845302c9e759d560f77f9cf71c50450a286dc",
           "generated": true
         }
       ]

@@ -23,7 +23,7 @@ Alternate expressions and non-obvious activations (primary phrases are matched a
 
 ## Purpose
 
-This skill implements the core AIWG multi-agent documentation pattern that ensures high-quality artifacts through:
+This skill implements the core AIWG multi-agent documentation pattern that supports artifact quality through:
 - Single primary author for consistency
 - Parallel expert reviews for coverage
 - Synthesis of feedback for conflict resolution
@@ -50,7 +50,8 @@ When triggered, this skill orchestrates:
 
 4. **Parallel review dispatch**:
    - Launch 3-5 reviewers via `parallel-dispatch` skill
-   - Each reviewer analyzes from their perspective
+   - Commit each reviewer's initial answer before exposing others' judgments; retain dissent and criteria/check references
+   - Agreement is not proof, including same-vendor and cross-vendor agreement. Consequential claims require an executable check or accountable human acceptance. Prefer independent voting, or structured review with diverse initial answers and calibrated confidence, over plain debate. Record observed evaluator model/vendor/family, acceptance criteria reference, generator/evaluator disagreements and a re-review link after material fixes. Do not claim reduced human-review time. See `$AIWG_ROOT/docs/decision/evaluator-calibration.md` for calibration and REF-2922, REF-2923, REF-2919/2921 public sources.
    - Collect structured feedback
 
 5. **Synthesis**:
@@ -278,7 +279,8 @@ When reviewers disagree:
    - Security concerns take precedence
    - Compliance concerns take precedence
    - Domain expert breaks ties
-3. Record decision rationale in synthesis
+3. Record both positions and the criteria/check or human acceptance reference in synthesis; precedence and consensus do not prove correctness
+4. Re-review material fixes with fresh source bindings and link the earlier review
 
 ### Missing Template
 

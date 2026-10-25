@@ -101,7 +101,7 @@ Do not enumerate workflow names from memory. Surface the discovered skill and fe
 When the canonical skill calls for collaborative artifact generation, use this logical pattern:
 
 ```text
-Primary Author → Independent Reviewers → Synthesizer → Baseline/Archive
+Primary Author → Separate Initial Reviews → Synthesizer → Baseline/Archive
 ```
 
 Use the current provider's native agent/delegation primitives, respect configured parallelism limits, and consult steward guidance when provider mechanics differ. Claude `Task` calls are one possible provider implementation, not a provider-neutral requirement.

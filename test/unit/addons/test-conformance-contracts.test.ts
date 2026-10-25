@@ -1,15 +1,20 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { compileSchemaCatalog, SchemaResolver, SchemaValidator } from '../../../src/schema/index.js';
 // @ts-expect-error addon source is distributed JavaScript
 import { inventoryWorkspace, sampleFrame } from '../../../agentic/code/addons/testing-quality/lib/inventory.mjs';
 // @ts-expect-error addon source is distributed JavaScript
 import { normalizeResults } from '../../../agentic/code/addons/testing-quality/lib/results.mjs';
 // @ts-expect-error addon source is distributed JavaScript
-import { validateContract } from '../../../agentic/code/addons/testing-quality/lib/contracts.mjs';
+import { artifact, readDocument, validateContract } from '../../../agentic/code/addons/testing-quality/lib/contracts.mjs';
+// @ts-expect-error addon source is distributed JavaScript
+import { writeNew } from '../../../agentic/code/addons/testing-quality/lib/workspace.mjs';
+
+const reviewDirectories: string[] = [];
+afterEach(() => { for (const dir of reviewDirectories.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 const rootDir = process.cwd();
 const read = (file: string) => JSON.parse(readFileSync(path.join(rootDir, file), 'utf8'));
@@ -36,6 +41,35 @@ const additionalNegatives: Record<string, { path: string; keyword: string; chang
 };
 
 describe('governed testing-quality foundational output contracts', () => {
+  it('round-trips optional evaluator evidence through the existing review writer and loader', async () => {
+    const target = mkdtempSync(path.join(os.tmpdir(), 'test-review-evaluation-')); reviewDirectories.push(target);
+    const legacy = read('test/fixtures/testing-quality/contracts/test-review.valid.json');
+    const evaluation = {
+      evaluatorModel: 'synthetic-model-snapshot', evaluatorVendor: 'synthetic-vendor', evaluatorFamily: 'synthetic-family',
+      acceptanceCriteriaRef: 'protocol/v1#oracle', reReviewOf: 'review/previous-source-hash',
+      disagreements: [{ claimRef: 'claim/1', generatorPosition: 'accept', evaluatorPosition: 'reject', resolutionRef: 'check/negative-control' }],
+    };
+    const review = artifact(legacy.kind, { ...legacy.spec, evaluation });
+    expect(validator.validate('testing-quality.test-review', review).valid).toBe(true);
+    await validateContract(review, 'test-review.v1');
+    const file = await writeNew(target, 'review.json', review);
+    const loaded = await readDocument(file);
+    expect(loaded.spec.evaluation).toEqual(evaluation);
+    await expect(validateContract(loaded, 'test-review.v1')).resolves.toEqual(review);
+    await expect(validateContract(legacy, 'test-review.v1')).resolves.toEqual(legacy);
+    const human = { ...legacy, spec: { ...legacy.spec, evaluation: { acceptanceCriteriaRef: 'criteria/v1', disagreements: [] } } };
+    await expect(validateContract(human, 'test-review.v1')).resolves.toEqual(human);
+    for (const invalid of [null, [], { evaluatorModel: 1 }, { evaluatorVendor: '' }, { evaluatorFamily: ' ' },
+      { acceptanceCriteriaRef: false }, { reReviewOf: 1 }, { unknown: true }, { disagreements: {} },
+      { disagreements: [{ claimRef: 'c', generatorPosition: 'yes' }] },
+      { disagreements: [{ claimRef: 'c', generatorPosition: 'yes', evaluatorPosition: 'no', resolutionRef: '' }] },
+    ]) {
+      const changed = { ...review, spec: { ...review.spec, evaluation: invalid } };
+      expect(validator.validate('testing-quality.test-review', changed).valid, JSON.stringify(invalid)).toBe(false);
+      await expect(validateContract(changed, 'test-review.v1')).rejects.toThrow('Invalid');
+    }
+  });
+
   it('registers all shipped contracts under one governed domain', () => {
     expect(compiled.valid, JSON.stringify(compiled.diagnostics)).toBe(true);
     assertCompleteCatalog(manifest);

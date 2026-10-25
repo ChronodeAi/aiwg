@@ -260,6 +260,9 @@ describe('decision qualification executable runner', () => {
     const cases = syntheticCases();
     const executors = Object.fromEntries(cases.map(({ id }) => [id, () => ({ outcome: 'pass' as const })]));
     const gateArtifacts = await writeGateArtifacts(await artifactRoot(), manifest(cases));
+    const evaluation = { evaluatorModel: 'synthetic-snapshot', evaluatorVendor: 'fixture-vendor', evaluatorFamily: 'fixture-family',
+      acceptanceCriteriaRef: 'criteria/v1', disagreements: [], reReviewOf: 'review/earlier-outcomes' };
+    await writeFile(gateArtifacts['review-decision-recorded']!, JSON.stringify(syntheticReview(manifest(cases), { evaluation })));
 
     const result = await executeAndEvaluateQualification({
       manifest: manifest(cases), artifactRoot: root, executors, gateArtifacts, concurrency: 8,
@@ -273,6 +276,8 @@ describe('decision qualification executable runner', () => {
     ]);
     expect(result.report.gates.every(gate => gate.status === 'pass')).toBe(true);
     expect(result.report.decision).toBe('PROMOTE');
+    const retained = result.manifest.gateArtifacts!['review-decision-recorded']!;
+    expect(JSON.parse(await readFile(join(root, retained.artifact), 'utf8')).evaluation).toEqual(evaluation);
   });
 
   it('GATE-DERIVED-01 ignores positive callbacks for every derived flag and never invokes them', async () => {
@@ -328,6 +333,8 @@ describe('decision qualification executable runner', () => {
     const variants: Array<[string, string, unknown]> = [
       ['review-decision-recorded', 'G6', syntheticReview({ ...manifest(cases), runId: 'other-run' })],
       ['review-decision-recorded', 'G6', syntheticReview(manifest(cases), { decision: 'reject' })],
+      ['review-decision-recorded', 'G6', { ...syntheticReview(manifest(cases)), evaluation: { evaluatorModel: 42 } }],
+      ['review-decision-recorded', 'G6', { ...syntheticReview(manifest(cases)), evaluation: { disagreements: [{ claimRef: 'missing-positions' }] } }],
       ['load-manifest-qualified', 'G5', syntheticLoadResult({ maximumActiveCalls: 4, maximumQueuedCalls: 1, maximumRetryAmplificationRatio: 1 })],
       ['calibration-qualified', 'G3', syntheticCalibration(`sha256:${'f'.repeat(64)}`)],
       ['immutable-splits', 'G3', { ...syntheticSplitPlan(), minimumOverallN: 1 }],
