@@ -60,13 +60,18 @@ opt-in command logging remain governed by their existing settings.
 aiwg auth login [--device] [--device-label <label>]
 aiwg auth status [--json]
 aiwg auth logout [--all]
+aiwg auth secret set <name> [--value-interactive | --value-stdin | --value-file <path> | --value-store <name> | --value-env <NAME>]
+aiwg auth secret delete <name>
 ```
 
 Authentication uses the native operating-system credential store. A mode-0600
 file fallback requires explicit `--store file --allow-file-store` opt-in. Exit
 codes are 0 success, 2 usage, 3 not authenticated, 4 denied/expired, 5
 credential-store failure, and 6 network/protocol failure. Status output never
-contains access or refresh tokens.
+contains access or refresh tokens. Named raw values use the same native store
+through `auth secret set` and `auth secret delete`. See
+[Supplying sensitive values](sensitive-values.md) for input methods, exposure
+boundaries, and the complete command inventory.
 
 **References:**
 
@@ -110,14 +115,16 @@ given" (review item 11).
 | `aiwg init` add a custom script (name + command) | `--script <name>=<command>` (repeatable; implies yes) or `--custom-scripts true\|false` to answer the question directly without supplying one | Skipped — no custom scripts added |
 | `aiwg init` / `aiwg setup project` worker-dispatch offer | `--worker-dispatch enable\|decline` | Optional — unchanged one-line hint (now also naming `--worker-dispatch`); see [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md#answering-headlessly) |
 | `aiwg setup project` (every other prompted field: `--primary`, `--issue-provider`, `--issue-tracker`, `--ci`, `--delivery-mode`, `--default-branch`, `--require-ci-green`, `--auto-close-issues`, `--force-push-policy`, `--require-signed-commits`, `--providers`) | See `aiwg setup project --help` for the full flag list | Refuses writing without `--yes` in a non-interactive context — checked before any `git` call, not just before the final write; with `--yes`, unsupplied fields fall back to their detected/default value |
-| `aiwg mcp profile login <name>` | Exactly one of `--api-key-stdin` (most preferred), `--api-key-file <path>`, or `--api-key-env <ENV_VAR_NAME>` (least preferred) — see [Supplying credentials safely](../mcp/codex-profiles.md#supplying-credentials-safely). In every case the key reaches `codex` over stdin only — it never appears on argv, the child's own environment, logs, or error messages | Refuses, naming all three flags. More than one given is a usage error naming the flags given. If the named variable/file is unset/missing, the error names it, never a value. Requires a built CLI (`npm run build:cli`, or an installed `aiwg`) — it never falls back to loading TypeScript source directly |
-| `aiwg decision setup jev` | `--token-stdin` (preferred) or the `JEV_API_KEY`/`AIWG_DECISION_JEV_API_KEY` environment variables (least preferred) | See [Supplying credentials safely](../mcp/codex-profiles.md#supplying-credentials-safely) — the same environment-variable caveat applies |
+| `aiwg mcp profile login <name>` | Hidden terminal entry, or `--api-key-interactive`, `--api-key-stdin`, `--api-key-file <path>`, `--api-key-store <name>`, `--api-key-env <NAME>`; see [Supplying sensitive values](sensitive-values.md). Key delivery to Codex uses stdin only. | Refuses, naming every source option. Multiple sources use interactive → stdin → file → store → environment precedence; Windows file input refuses pending native ACL validation (use stdin/store). Requires a built CLI (`npm run build:cli`, or installed `aiwg`). |
+| `aiwg decision setup jev` | Hidden terminal entry, `--token-interactive`, `--token-stdin`, `--token-file <path>`, `--token-store <name>`, or `--token-env <NAME>`; see [Supplying sensitive values](sensitive-values.md). `--remove` needs no token. | Refuses, naming every source option; shell variables must be explicitly selected with `--token-env`. |
+| `aiwg auth secret set <name>` | Hidden terminal entry, `--value-interactive`, `--value-stdin`, `--value-file <path>`, `--value-store <name>`, or `--value-env <NAME>`; see [Supplying sensitive values](sensitive-values.md). | Refuses, naming every source option. |
+| Guided `aiwg init` / `aiwg setup project` / `aiwg setup --apply` | `--credential <provider>=stdin\|file:PATH\|store:NAME\|env:NAME`; plan stores references only, resolved at apply through the shared input resolver. | Missing values fail with source guidance; `stdin` can read explicit piped input or prompt with a terminal. See [Supplying sensitive values](sensitive-values.md). |
 
 No bootstrap subprocess (today: the update-notifier check `bin/aiwg.mjs` fires on
 every invocation) is ever started before `bin/aiwg.mjs` has decided whether the
 invocation is one of these two credential-handling commands, and that check never
 inherits the whole parent environment regardless of command — see
-[Supplying credentials safely](../mcp/codex-profiles.md#supplying-credentials-safely)
+[Supplying sensitive values](sensitive-values.md)
 for why, and what it protects against.
 
 `aiwg setup-run` `script`/`verify`/`detect`/`os-config` steps don't need a headless
@@ -572,6 +579,8 @@ aiwg refresh --quiet
 
 ### diagnose
 
+Sensitive diagnostic output: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Produce a shareable support bundle (logs + env + config) for bug reports.
 
 ```bash
@@ -651,6 +660,8 @@ invocation or project policy explicitly grants them with `--allow-premium`.
 ## Framework Management
 
 ### use
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Install and deploy framework or addon to your project. Skills are deployed natively for providers that support them; commands are generated from skill sources for providers that need them. Each provider receives all artifact types (agents, skills, commands, rules) regardless of native platform support.
 
@@ -1128,6 +1139,8 @@ The bundle is immediately deployable: `aiwg use <name>`.
 
 ### install
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Install an AIWG-compatible framework, addon, or extension package from a
 remote Git repository into the local registry cache. Distinct from
 `install-plugin` (Claude Code plugin format).
@@ -1167,6 +1180,8 @@ package is reported as `integrity-only`.
 ---
 
 ### marketplace
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Exchange Git-native packages through direct remotes and independently signed
 catalogs. Catalog inclusion is an observation, not an AIWG endorsement.
@@ -1311,6 +1326,8 @@ cd customer-portal
 
 ### session
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Start an agentic session with pre-flight health checks, auto-repair, optional MCP injection, and provider launch.
 
 ```bash
@@ -1389,6 +1406,8 @@ aiwg session --profile incident --persist
 
 ### serve
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Start local HTTP dashboard server for sandbox fleet management and HITL relay.
 
 ```bash
@@ -1414,7 +1433,15 @@ aiwg serve --no-open --read-only
 
 ---
 
+### agentcard
+
+Fetch and verify an executor AgentCard using `aiwg agentcard verify --host <url> --instance <id> --jwks <path|url>`. The legacy optional `--bearer <token>` places a credential directly on argv and is pending migration; see [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
+---
+
 ### local-executor
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Start a no-sandbox host-process executor that boots `DaemonSupervisor` + `ExecutorShim` and registers with `aiwg serve` for mission dispatch. Implements `executor.aiwg.io/v1` Core + HITL conformance with `isolation: none` (#1181).
 
@@ -1444,6 +1471,8 @@ aiwg local-executor serve --max-concurrency 4 --executor-id <uuid>
 
 ### init
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Initialize an AIWG project by creating `.aiwg/aiwg.config` (provider registry,
 scripts, delivery policy). Distinct from `aiwg new` (which scaffolds a
 brand-new project tree).
@@ -1466,6 +1495,8 @@ If a config already exists, the command exits without changes unless `--force` i
 ---
 
 ### setup
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 CLI helper for project-level repository policy, issue tracker routing, delivery
 mode, and signing metadata. This command is usually called by an AIWG
@@ -1532,6 +1563,8 @@ advanced cases, but the preferred user experience is the agent-led setup flow.
 ---
 
 ### issue
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Policy-plan and manage the project-local issue store. External issue-authoring
 skills use the same composition contract before their tracker-specific write.
@@ -1825,6 +1858,8 @@ aiwg mcp <subcommand>
 
 #### mcp serve
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Start the AIWG MCP server.
 
 ```bash
@@ -1860,6 +1895,8 @@ for general AIWG CLI execution, `AIWG_MCP_TOOLSETS=flows` with
 **Opt-in toolsets**: see [MCP capability audit](../integrations/mcp-capability-audit.md) and [Tool reference](../integrations/hermes-quickstart.md#tool-name-mangling) for details.
 
 #### mcp install
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Generate MCP client configuration.
 
@@ -1934,6 +1971,8 @@ aiwg mcp info
 
 #### mcp add
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Register an MCP server in the AIWG server registry (`~/.aiwg/mcp-servers.json`).
 
 ```bash
@@ -1998,6 +2037,8 @@ Note: does not remove the server from already-injected provider configs. Re-run 
 
 #### mcp update
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Update a registered server's properties.
 
 ```bash
@@ -2017,6 +2058,8 @@ aiwg mcp list
 Shows server name, type, URL or command, description, and which providers it has been injected into.
 
 #### mcp inject
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Inject registered servers into a provider's config file.
 
@@ -2085,7 +2128,7 @@ aiwg mcp profile <subcommand>
 | `import <file>`                | Import profiles from a JSON file          |
 | `export [<name>] --out <file>` | Export one or all profiles                |
 | `init-presets`                 | Install built-in preset profiles          |
-| `login <name> [--api-key-env <ENV_VAR_NAME>]` | Log in to a Codex profile's isolated runtime home (#3062, #3069) — interactive OAuth with a terminal, or headless via `--api-key-env`; see [Codex Per-Profile Runtime Homes](../mcp/codex-profiles.md#explicit-login) |
+| `login <name> [--api-key-stdin\|--api-key-file <path>\|--api-key-store <name>\|--api-key-env <NAME>]` | Log in to a Codex profile with hidden terminal API-key entry or a selected source; see [Supplying sensitive values](sensitive-values.md) and [Codex Per-Profile Runtime Homes](../mcp/codex-profiles.md#explicit-login). |
 
 **Preset Profiles** (installed via `aiwg mcp profile init-presets`):
 
@@ -3020,6 +3063,8 @@ agentic/code/frameworks/security-framework/
 
 ## Daemon Commands
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Commands for managing the AIWG daemon and its subsystems.
 
 ### behavior
@@ -3080,6 +3125,8 @@ aiwg daemon-init [profile-name] [--force]
 ## Remote Transport Commands
 
 ### uhp
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Inspect or smoke-test an explicitly selected experimental UHP endpoint profile.
 AIWG is a UHP client only and does not claim server conformance.
@@ -3312,6 +3359,8 @@ Custom teams can be placed in `.aiwg/teams/<slug>.json` for project-local overri
 Al is the iterative task execution loop with advanced control layers (Epic #26).
 
 ### ralph
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Start Al task execution loop.
 
@@ -3548,6 +3597,8 @@ aiwg ralph-abort
 ---
 
 ### ralph-resume
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Resume paused agent loop.
 
@@ -4215,6 +4266,8 @@ Top-level capability search across AIWG operational assets: skills, agents, comm
 
 ### discover
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Find AIWG operational assets by capability — index-driven on-demand discovery (#1212).
 
 ```bash
@@ -4307,6 +4360,8 @@ file to its first paragraph.
 Multi-token queries require ≥50% token overlap to surface partial matches — gibberish queries return zero results rather than incidental hits.
 
 ### show
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Show a metadata card for an AIWG skill, agent, flow, command, or rule (#3306). The card includes identity, owning capability and install state, governing rules with enforcement/activation and `rule_stats`, required rule checks, an outline with byte/line sizes, companion resources, and exact drill-in commands. The local card path uses the #3305 relationship sidecar instead of loading the full framework index; only the selected artifact is read for its outline and description.
 
@@ -5194,6 +5249,8 @@ format, the verifier rules and the exit codes.
 
 ### effect
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 ```bash
 aiwg effect id         <identity>
 aiwg effect intent     <identity> <payload> [--link key=value]...
@@ -5314,6 +5371,8 @@ prebuilt framework fallback.
 **See [`docs/storage/`](../storage/README.md) for the full guide** — overview, security model, migration walkthrough, and per-backend pages.
 
 ### storage
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Inspect and operate on the storage adapter system.
 

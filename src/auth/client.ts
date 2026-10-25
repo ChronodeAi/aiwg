@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { spawn } from "node:child_process";
+import { helperEnvironment, HELPER_ENV_ALLOWLIST, DESKTOP_HELPER_ENV_ALLOWLIST } from '../process/cli-command.mjs';
 import type { AuthClientConfig, AuthCredentials, AuthProfile, CredentialStore } from "./types.js";
 
 export type AuthFetcher = typeof globalThis.fetch;
@@ -34,7 +35,10 @@ export const defaultBrowserOpener: BrowserOpener = async (url) => {
   const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd.exe" : "xdg-open";
   const args = process.platform === "win32" ? ["/d", "/s", "/c", "start", "", url] : [url];
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true });
+    const child = spawn(command, args, {
+      detached: true, stdio: "ignore", windowsHide: true,
+      env: helperEnvironment(process.env, [...HELPER_ENV_ALLOWLIST, ...DESKTOP_HELPER_ENV_ALLOWLIST]),
+    });
     child.once("error", reject);
     child.once("spawn", () => { child.unref(); resolve(); });
   });

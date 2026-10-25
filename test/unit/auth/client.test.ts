@@ -1,12 +1,56 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { AuthClient } from "../../../src/auth/client.js";
 import { MemoryCredentialStore } from "../../../src/auth/credential-store.js";
 
 const config = { baseUrl: "https://releases.example.test", clientId: "aiwg-cli", scopes: ["releases:read"], requestTimeoutMs: 1000 };
 const token = { access_token: "aiwg_at_fixture_access", refresh_token: "aiwg_rt_fixture_refresh", token_type: "Bearer", scope: "releases:read", expires_in: 3600 };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+const temporary: string[] = [];
+afterEach(() => { for (const root of temporary.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
 describe("AuthClient", () => {
+  it.skipIf(process.platform === 'win32')('keeps shell secrets out of browser helper variables and debug logging', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-browser-environment-')); temporary.push(root);
+    const seen = path.join(root, 'seen.json');
+    const done = path.join(root, 'done');
+    const runner = path.join(root, 'runner.mjs');
+    const marker = 'synthetic-browser-shell-sensitive-value';
+    const browser = process.platform === 'darwin' ? 'open' : 'xdg-open';
+    fs.writeFileSync(path.join(root, browser), `#!${process.execPath}\n` +
+      `import fs from 'node:fs';\n` +
+      `fs.writeFileSync(${JSON.stringify(seen)}, JSON.stringify({env: process.env, argv: process.argv.slice(2)}));\n` +
+      `fs.writeFileSync(${JSON.stringify(done)}, 'done');\n`, { mode: 0o755 });
+    fs.writeFileSync(runner, `
+      import fs from 'node:fs';
+      import { defaultBrowserOpener } from ${JSON.stringify(pathToFileURL(path.resolve('dist/src/auth/client.js')).href)};
+      const observed = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { watcher.close(); reject(new Error('synthetic browser did not finish')); }, 5000);
+        const watcher = fs.watch(${JSON.stringify(root)}, () => {
+          if (fs.existsSync(${JSON.stringify(done)})) { clearTimeout(timer); watcher.close(); resolve(); }
+        });
+      });
+      await defaultBrowserOpener('https://example.invalid/authorize');
+      await observed;
+    `);
+    const result = spawnSync(process.execPath, [runner], {
+      encoding: 'utf8', timeout: 10_000,
+      env: { PATH: root, HOME: root, NODE_DEBUG: 'child_process', SYNTHETIC_AUTH_INPUT: marker },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain(marker);
+    expect(result.stderr).not.toContain(marker);
+    const observed = JSON.parse(fs.readFileSync(seen, 'utf8'));
+    expect(observed.env.SYNTHETIC_AUTH_INPUT).toBeUndefined();
+    expect(observed.env.NODE_DEBUG).toBeUndefined();
+    expect(observed.argv).toEqual(['https://example.invalid/authorize']);
+  });
+
   it("completes browser PKCE on a random loopback port", async () => {
     const store = new MemoryCredentialStore();
     let authorizeUrl = "";

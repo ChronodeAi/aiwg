@@ -2,6 +2,7 @@
 import os from 'node:os';
 import { fork, type ChildProcess } from 'node:child_process';
 import { signalChild } from '../process/signal-child.mjs';
+import { helperEnvironment, DEPLOYMENT_HELPER_ENV_ALLOWLIST } from '../process/cli-command.mjs';
 import type { MetadataEntry } from './types.js';
 export interface IndexPreparationJob { fullPath: string; relativePath: string; mtimeMs: number; birthtimeMs: number; sizeBytes: number; existingChecksum?: string }
 export interface IndexPreparationResult { checksum: string; entry?: MetadataEntry; warnings?: string[] }
@@ -72,6 +73,7 @@ export async function runIndexPreparation(jobs: IndexPreparationJob[], serial: (
         // Node during allocation before its isolate-limit error is delivered.
         // A child heap fatal/SIGABRT is instead an ordinary, recoverable exit.
         const worker = fork(new URL('./index-worker.mjs', import.meta.url), [moduleUrl], {
+          env: helperEnvironment(process.env, DEPLOYMENT_HELPER_ENV_ALLOWLIST),
           execArgv: [`--max-old-space-size=${WORKER_HEAP_MB}`, '--max-semi-space-size=16'],
           stdio: ['ignore', 'ignore', 'pipe', 'ipc'], serialization: 'advanced',
         });

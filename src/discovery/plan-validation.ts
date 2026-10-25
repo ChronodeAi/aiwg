@@ -9,7 +9,7 @@ const timestamp = dateTime({ offset: true });
 const observation = z.enum(['yes', 'no', 'unknown']);
 export const planIdSchema = text.max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/);
 const referenceSchema = z.strictObject({
-  kind: z.literal('credential-ref'), source: z.enum(['env', 'file', 'stdin-at-apply']), name: text,
+  kind: z.literal('credential-ref'), source: z.enum(['env', 'file', 'store', 'stdin-at-apply']), name: text,
 }) satisfies z.ZodType<CredentialReference>;
 const valueSchema: z.ZodType<PlanValue> = z.lazy(() => z.union([
   z.string(), z.number().finite(), z.boolean(), z.null(), z.array(valueSchema), z.record(z.string(), valueSchema),
@@ -60,7 +60,7 @@ const planSchema = z.strictObject({
 }) satisfies z.ZodType<SetupPlan>;
 
 const sensitiveKey = /(?:password|passwd|token|secret|api[_-]?key|credential|authorization|cookie|private[_-]?key|connection[_-]?string)/i;
-const secretError = () => new Error('Setup plan contains secret-looking material; use a credential-ref (env, file, or stdin-at-apply).');
+const secretError = () => new Error('Setup plan contains secret-looking material; use a credential-ref (env, file, store, or stdin-at-apply).');
 
 /** Scan the exact JSON snapshot, including keys and free-form evidence/messages. Never echo rejected values. */
 export function assertPlanRedacted(input: unknown): void {

@@ -505,6 +505,24 @@ describe('decision ask', () => {
     expect(result).toMatchObject({ configured: true, credentialSource: 'file', verified: true, model: 'jev-1.13.0' });
   });
 
+  it('verifies the supplied setup token when the shell still contains older tokens', async () => {
+    const home = await configHome();
+    const environment = { JEV_API_KEY: 'synthetic-old-primary', AIWG_DECISION_JEV_API_KEY: 'synthetic-old-alias' };
+    const fetch = vi.fn(async (_url: unknown, init: RequestInit | undefined) => {
+      expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${SECRET}`);
+      return new Response(JSON.stringify({ model: 'jev-fixture', answers: { answer: { type: 'noul', noul: 0.99 } },
+        usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    const result = await setupJev({ token: SECRET, verify: true }, {
+      configHome: home, env: environment,
+      createAdapter: ({ region }) => new JevDecisionAdapter({ region, fetch: fetch as typeof globalThis.fetch }),
+    });
+    expect(result.verified).toBe(true);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(environment).toEqual({ JEV_API_KEY: 'synthetic-old-primary', AIWG_DECISION_JEV_API_KEY: 'synthetic-old-alias' });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
   it('removes the credential file', async () => {
     const home = await configHome();
     await setupJev({ token: SECRET }, { configHome: home, env: {} });

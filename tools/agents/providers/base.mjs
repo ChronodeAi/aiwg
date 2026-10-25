@@ -21,6 +21,7 @@ const { parseRuleFrontmatter, inferRuleActivation } = await importImpl(import.me
 const { resolveRulesInlineBudget, DEFAULT_RULES_INLINE_BUDGET_TOKENS } = await importImpl(import.meta.url, 'rules/inline-budget.mjs');
 export { DEFAULT_RULES_INLINE_BUDGET_TOKENS, parseRuleFrontmatter as parseRuleActivation };
 const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { helperEnvironment } = await importImpl(import.meta.url, 'process/cli-command.mjs');
 const { extractFrameworkSlug, sameSkillOwner, canDeploySkill, pruneRecordedSkillFiles, releaseSkillOwnership } =
   await importImpl(import.meta.url, 'providers/skill-ownership.mjs');
 export { extractFrameworkSlug, sameSkillOwner, pruneRecordedSkillFiles, releaseSkillOwnership };
@@ -1840,6 +1841,7 @@ export function buildRemotesTopologyBlock(targetDir) {
   function getUrl(remote) {
     try {
       return boundedExecFileSync('git', ['-C', targetDir, 'remote', 'get-url', '--', remote], 'quick', {
+        env: helperEnvironment(),
         stdio: ['ignore', 'pipe', 'ignore'],
         encoding: 'utf8',
       }).trim();

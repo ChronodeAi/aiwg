@@ -579,6 +579,11 @@ export async function setupJev(input: DecisionSetupInput = {}, options: Decision
     next: ['Run aiwg decision ask --question "<q>" --yes-no --json.'],
   };
   if (input.verify) {
+    // Verify the credential just saved, even when the shell still names an
+    // older token. Ordinary ask calls retain their environment precedence.
+    const verificationEnv = { ...environment };
+    delete verificationEnv.JEV_API_KEY;
+    delete verificationEnv.AIWG_DECISION_JEV_API_KEY;
     const verified = await askDecision({
       question: 'Is this Jev decision setup verification request well formed?',
       mode: { kind: 'yes-no' },
@@ -586,7 +591,7 @@ export async function setupJev(input: DecisionSetupInput = {}, options: Decision
       timeoutMs: 15_000,
       passes: 1,
       escalationPasses: 1,
-    }, options);
+    }, { ...options, env: verificationEnv });
     result.verified = verified.status === 'answered';
     result.model = verified.model;
     result.usage = verified.usage;

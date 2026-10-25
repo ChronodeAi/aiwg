@@ -78,6 +78,15 @@ afterEach(() => {
 });
 
 describe('askString', () => {
+  it('settles immediately on EOF and removes its timer and close listener', async () => {
+    const mock = makeMockInterface();
+    const promise = askString(mock.iface, 'Hidden value? ', '');
+    mock.emitClose();
+    await expect(promise).resolves.toBe('');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mock.iface.listenerCount('close')).toBe(0);
+  });
+
   it('resolves to the user input on normal response', async () => {
     const mock = makeMockInterface();
     const promise = askString(mock.iface, 'Name? ');

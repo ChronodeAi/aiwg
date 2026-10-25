@@ -68,7 +68,7 @@ export function parseGuidedSetupFlags(args: readonly string[], command: 'init' |
   for (const raw of values('--credential')) {
     const separator = raw.indexOf('=');
     const provider = raw.slice(0, separator) === 'jev' ? 'jev' : normalizeProviderDefinitionId(raw.slice(0, separator));
-    if (separator < 1 || !provider || provider === 'generic') throw new Error('--credential requires a known <provider>=env:NAME|file:PATH|stdin.');
+    if (separator < 1 || !provider || provider === 'generic') throw new Error('--credential requires a known <provider>=stdin|file:PATH|store:NAME|env:NAME.');
     credentials[provider] = credentialReference(raw.slice(separator + 1));
   }
   if (tokenStdin) {

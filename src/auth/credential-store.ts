@@ -1,4 +1,5 @@
 import { signalChild } from '../process/signal-child.mjs';
+import { helperEnvironment, HELPER_ENV_ALLOWLIST, DESKTOP_HELPER_ENV_ALLOWLIST } from '../process/cli-command.mjs';
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -9,7 +10,10 @@ export interface CommandResult { stdout: string; stderr: string; exitCode: numbe
 export type CommandRunner = (command: string, args: string[], stdin?: string) => Promise<CommandResult>;
 
 export const defaultCommandRunner: CommandRunner = (command, args, stdin = "") => new Promise((resolve, reject) => {
-  const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  const child = spawn(command, args, {
+    stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+    env: helperEnvironment(process.env, [...HELPER_ENV_ALLOWLIST, ...DESKTOP_HELPER_ENV_ALLOWLIST]),
+  });
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   let outputBytes = 0;

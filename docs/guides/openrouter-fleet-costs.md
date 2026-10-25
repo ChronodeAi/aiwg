@@ -6,6 +6,8 @@ stable_id: aiwg.guide.openrouter-fleet-costs
 
 # OpenRouter fleet cost observation
 
+Credential sources, exposure and migration status: [Supplying sensitive values](../cli/sensitive-values.md).
+
 `aiwg cost-report --fleet` reports month-to-date spend for a fleet whose bots use separate OpenRouter keys. AIWG is an observer: it reads usage and correlates it with local activity. OpenRouter remains the source of truth and the enforcement point for limits and caps.
 
 ## Configure the fleet

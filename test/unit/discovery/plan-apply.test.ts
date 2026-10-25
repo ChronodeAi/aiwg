@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyGuidedPlan,
   credentialReferenceFor,
+  resolveCredential,
   renderHumanReview,
   reviewGuidedPlan,
   sortPlanActionsForApply,
@@ -409,6 +410,34 @@ describe('guided plan apply', () => {
     expect(serialized).not.toContain(SENTINEL_VALUE);
     expect(JSON.stringify(result)).not.toContain(SENTINEL_VALUE);
     expect(renderHumanReview(await reviewGuidedPlan(applied, inventory, reviewIO()))).not.toContain(SENTINEL_VALUE);
+  });
+
+  it('resolves named-store references through the same apply boundary without persisting values', async () => {
+    const readCredentialStore = vi.fn(async () => SENTINEL_VALUE);
+    const resolved = await resolveCredential({ kind: 'credential-ref', source: 'store', name: 'codex-main' }, 'codex', {
+      ...applyIO(), readCredentialStore,
+    });
+    expect(resolved).toEqual({ ok: true, value: SENTINEL_VALUE });
+    expect(readCredentialStore).toHaveBeenCalledOnce();
+    expect(readCredentialStore).toHaveBeenCalledWith('codex-main');
+  });
+
+  it('sanitizes arbitrary source failures and names every supported source', async () => {
+    const resolved = await resolveCredential({ kind: 'credential-ref', source: 'file', name: '/synthetic/input' }, 'codex', {
+      ...applyIO(), readCredentialFile: async () => { throw new Error(SENTINEL_VALUE); },
+    });
+    expect(resolved).toMatchObject({ ok: false, message: expect.stringContaining('stdin|file:PATH|store:NAME|env:NAME') });
+    expect(JSON.stringify(resolved)).not.toContain(SENTINEL_VALUE);
+  });
+
+  it('uses hidden terminal entry for a stdin-at-apply reference when a prompt exists', async () => {
+    const promptCredential = vi.fn(async () => SENTINEL_VALUE);
+    const readStdinCredential = vi.fn(async () => { throw new Error('Unexpected stdin read'); });
+    expect(await resolveCredential({ kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' }, 'codex', {
+      ...applyIO(), promptCredential, readStdinCredential,
+    })).toEqual({ ok: true, value: SENTINEL_VALUE });
+    expect(promptCredential).toHaveBeenCalledOnce();
+    expect(readStdinCredential).not.toHaveBeenCalled();
   });
 
   it('refuses stdin-at-apply credentials headless without touching the secret', async () => {

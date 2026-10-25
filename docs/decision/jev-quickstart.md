@@ -37,11 +37,18 @@ then come back here to add the addon.
 ## 2. Store the token
 
 `aiwg decision setup jev` counts as the explicit opt-in that enables `ask`.
+
+Setup uses hidden terminal entry or explicit `--token-interactive`, `--token-stdin`,
+`--token-file <path>`, `--token-store <name>`, or `--token-env <NAME>`.
+Headless setup without a source errors with these options; existing shell tokens
+need `--token-env JEV_API_KEY` or `--token-env AIWG_DECISION_JEV_API_KEY`.
+See [Supplying sensitive values](../cli/sensitive-values.md) for exposure guidance,
+manager pipes, named-store setup and the remaining runtime lookup inventory.
 It stores the credential and records `"enabled": true` in the credential file.
 Pipe the token through stdin so it never appears in shell history:
 
 ```bash
-printf '%s' "$TOKEN" | aiwg decision setup jev --token-stdin --verify
+op read 'op://Engineering/Jev/api-key' | aiwg decision setup jev --token-stdin --verify
 ```
 
 Token lookup order when running `ask`:

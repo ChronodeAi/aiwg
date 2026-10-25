@@ -11,6 +11,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { boundedExecFileSync } from '../process/bounded-child-process.mjs';
+import { helperEnvironment } from '../process/cli-command.mjs';
 import { projectAiwgPath, resolveProjectAiwgDir } from '../config/project-artifacts.js';
 
 export interface ProjectMemoryMetadata {
@@ -318,7 +319,7 @@ function sanitizeProjectId(id: string): string {
 
 function discoverGitRemotes(cwd: string): string[] {
   try {
-    const stdout = boundedExecFileSync('git', ['remote', '-v'], 'quick', { cwd, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const stdout = boundedExecFileSync('git', ['remote', '-v'], 'quick', { cwd, env: helperEnvironment(), encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
     const remotes = stdout
       .split('\n')
       .map((line) => line.trim().split(/\s+/)[1])

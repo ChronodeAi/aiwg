@@ -24,7 +24,7 @@ describe.skipIf(process.platform === 'win32')('local paths are passed without sh
 const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.WP1_ARGV_LOG, JSON.stringify({ command: path.basename(process.argv[1]), args }) + '\\n');
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ command: path.basename(process.argv[1]), args }) + '\\n');
 if (args[0] === 'clone') fs.mkdirSync(args.at(-1), { recursive: true });
 if (args.includes('get-url')) process.stdout.write('https://example.com/literal.git\\n');
 if (path.basename(process.argv[1]) === 'fsutil') process.stdout.write('Total # of free bytes : 4096000\\n');

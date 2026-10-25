@@ -98,6 +98,22 @@ describe('bounded independent index preparation',()=>{
     expect(result.results.map(item=>item.entry?.title)).toEqual(jobs.map((_,i)=>`Document ${i}`));
     expect(result.results).toEqual(jobs.map(prepareIndexArtifact));
   });
+
+  it('gives index workers declared configuration selectors without unrelated shell values', async () => {
+    vi.stubEnv('SYNTHETIC_INDEX_SECRET', 'synthetic-index-private-value');
+    vi.stubEnv('AIWG_CONFIG', '/synthetic-index-configuration');
+    const module = put('environment-probe.mjs', `
+      export function prepareIndexArtifact() {
+        return { checksum: JSON.stringify({ secret: process.env.SYNTHETIC_INDEX_SECRET, config: process.env.AIWG_CONFIG }) };
+      }
+    `);
+    const jobs = Array.from({length:70}, (_, i) => job(path.join(root, `${bundle}/docs/doc-${i}.md`)));
+    const serial = vi.fn(() => ({ checksum: 'serial-fallback' }));
+    const result = await runIndexPreparation(jobs, serial, new URL('file://' + module).href, 2);
+    expect(result.workerCount).toBe(2);
+    expect(serial).not.toHaveBeenCalled();
+    for (const entry of result.results) expect(JSON.parse(entry.checksum)).toEqual({ config: '/synthetic-index-configuration' });
+  });
   it('loads the built worker and extractor directly from dist for installed runtime layouts',()=>{
     const dist=new URL('../../../dist/src/artifacts/',import.meta.url);
     expect(fs.existsSync(new URL('index-worker.mjs',dist))).toBe(true);

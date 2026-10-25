@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe('guided setup offline CLI walkthrough', () => {
-  it('interviews, reviews, applies and verifies core setup plus Jev in an isolated home', () => {
+  it('plans with init, reviews, applies and verifies with setup without leaking values under child debug logging', () => {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-guided-walkthrough-'));
     temporary.push(scratch);
     const project = path.join(scratch, 'project');
@@ -30,7 +30,7 @@ describe('guided setup offline CLI walkthrough', () => {
 
     const requests = path.join(scratch, 'jev-requests.jsonl');
     const preload = path.join(scratch, 'offline-endpoint.mjs');
-    // The real decision setup child inherits this endpoint stub. All fetches
+    // The setup process invokes the Jev owner with this endpoint stub. All fetches
     // are intercepted; an unexpected URL fails before any network request.
     fs.writeFileSync(preload, `import { appendFileSync } from 'node:fs';
 globalThis.fetch = async (url, init) => {
@@ -53,14 +53,15 @@ globalThis.fetch = async (url, init) => {
       AIWG_WALKTHROUGH_PROVIDER_INPUT: 'fixture-provider-input',
       AIWG_WALKTHROUGH_JEV_INPUT: 'fixture-jev-input',
       NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+      NODE_DEBUG: 'child_process',
       NO_UPDATE_NOTIFIER: '1', NO_COLOR: '1', CI: '1',
       ...(process.env.AIWG_FRAMEWORK_INDEX_CACHE ? { AIWG_FRAMEWORK_INDEX_CACHE: process.env.AIWG_FRAMEWORK_INDEX_CACHE,
         AIWG_FRAMEWORK_INDEX_CACHE_SOURCE: process.env.AIWG_FRAMEWORK_INDEX_CACHE_SOURCE } : {}),
       ...(process.env.AIWG_RULE_BINDING_INDEX_CACHE ? { AIWG_RULE_BINDING_INDEX_CACHE: process.env.AIWG_RULE_BINDING_INDEX_CACHE } : {}),
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
     };
-    const run = (args: string[]) => {
-      const result = spawnSync(process.execPath, [CLI, 'setup', ...args], {
+    const run = (args: string[], command: 'init' | 'setup' = 'setup') => {
+      const result = spawnSync(process.execPath, [CLI, command, ...args], {
         // `setup --apply` runs a real `aiwg use sdlc`: about 60 s idle and up to
         // about 185 s on the shared CI runner before #3558 (main run 90503 hit
         // the old 180 s). #3558 runs the deployment passes in-process (about 38%
@@ -70,8 +71,17 @@ globalThis.fetch = async (url, init) => {
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(result.stdout).not.toMatch(/\[back \||Enter .*API input|\[y\/N\]/);
-      expect(`${result.stdout}${result.stderr}`).not.toContain(env.AIWG_WALKTHROUGH_PROVIDER_INPUT);
-      expect(`${result.stdout}${result.stderr}`).not.toContain(env.AIWG_WALKTHROUGH_JEV_INPUT);
+      const sensitiveValues = [env.AIWG_WALKTHROUGH_PROVIDER_INPUT!, env.AIWG_WALKTHROUGH_JEV_INPUT!];
+      const leakingLaunches = result.stderr.split(/(?=CHILD_PROCESS \d+: )/)
+        .filter(block => sensitiveValues.some(value => block.includes(value)))
+        .map(block => {
+          const rawArgs = block.match(/args:\s*\[([\s\S]*?)\]/)?.[1]?.replace(/\s+/g, ' ').trim() ?? '(unattributed output)';
+          const args = sensitiveValues.reduce((text, value) => text.replaceAll(value, '[sensitive]'), rawArgs);
+          const environmentKeys = [...new Set([...block.matchAll(/^\s*'([A-Za-z_][A-Za-z0-9_]*)=/gm)].map(match => match[1]))];
+          return { args, environmentKeys };
+        });
+      expect(leakingLaunches, 'Sensitive values reached child launch diagnostics (commands and variable names only).').toEqual([]);
+      expect(sensitiveValues.some(value => result.stdout.includes(value)), 'Sensitive value reached stdout.').toBe(false);
       // Deployment owners may print their progress before the raw JSON result.
       const start = result.stdout.lastIndexOf('\n{');
       return JSON.parse(result.stdout.slice(start < 0 ? 0 : start + 1));
@@ -80,7 +90,7 @@ globalThis.fetch = async (url, init) => {
     expect(fs.existsSync(artifacts)).toBe(false);
     const plan = run(['--scope', 'project', '--providers', 'codex', '--intent', 'code',
       '--credential', 'codex=env:AIWG_WALKTHROUGH_PROVIDER_INPUT', '--jev', 'enable',
-      '--credential', 'jev=env:AIWG_WALKTHROUGH_JEV_INPUT', '--verify', '--yes', '--json']);
+      '--credential', 'jev=env:AIWG_WALKTHROUGH_JEV_INPUT', '--verify', '--yes', '--json'], 'init');
     expect(plan.actions.map((action: { kind: string }) => action.kind)).toEqual(expect.arrayContaining([
       'configure-provider', 'verify-provider', 'write-project-config', 'deploy-framework', 'register-project', 'configure-jev',
     ]));

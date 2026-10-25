@@ -14,6 +14,7 @@ import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { boundedSpawnSync } from '../process/bounded-child-process.mjs';
+import { helperEnvironment, HELPER_ENV_ALLOWLIST } from '../process/cli-command.mjs';
 
 const execFileAsync = promisify(execFile);
 const GITIGNORE_PROBE_BASENAME = '.aiwg-ignore-probe';
@@ -122,6 +123,7 @@ async function isGitWorktree(projectRoot: string): Promise<boolean> {
   try {
     const { stdout } = await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], {
       cwd: projectRoot,
+      env: helperEnvironment(process.env, [...HELPER_ENV_ALLOWLIST, 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR']),
       windowsHide: true,
     });
     return stdout.trim() === 'true';
@@ -150,6 +152,7 @@ async function resolveCoveredPatterns(
     try {
       await execFileAsync('git', ['check-ignore', '--quiet', '--', probePath(pattern)], {
         cwd: projectRoot,
+        env: helperEnvironment(process.env, [...HELPER_ENV_ALLOWLIST, 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR']),
         windowsHide: true,
       });
       return true;
@@ -289,6 +292,7 @@ export function dropGitignored(targetDir: string, files: string[]): string[] {
     }
     const result = boundedSpawnSync('git', ['check-ignore', '-z', '--stdin'], 'quick', {
       cwd: targetDir,
+      env: helperEnvironment(process.env, [...HELPER_ENV_ALLOWLIST, 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR']),
       input: `${files.join('\0')}\0`,
       encoding: 'utf8',
     });

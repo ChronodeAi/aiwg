@@ -1,3 +1,4 @@
+import { resolveSensitiveInput, sensitiveInputOptions } from '../../auth/sensitive-input.js';
 import { decisionPricing } from '../../decision/pricing.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import {
@@ -43,7 +44,7 @@ function usage(): string {
     '  validate <request|definition|ruleset|binding> <path>',
     '  evaluate --request <path> [--host-policy-module <path>]',
     '  setup synthetic-classification [--output-dir <dir>]',
-    '  setup jev [--token-stdin] [--region <r>] [--endpoint <url>] [--verify] [--remove]',
+    '  setup jev [--token-interactive | --token-stdin | --token-file <path> | --token-store <name> | --token-env <name>] [--region <r>] [--endpoint <url>] [--verify] [--remove]',
     '  ask --question "<q>" (--yes-no | --choices a,b,c | --scale 1-5) [--provider <id>] [--session <id>] [--caller <tag>] [--record-text]',
     '  history [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--json]',
     '  pricing [--refresh --model jev-X.Y.Z] [--dry-run] [--offline | --allow-snapshot] [--json]',
@@ -127,7 +128,7 @@ function takeAttributionOption(args: string[], name: '--session' | '--caller', r
 }
 
 async function decisionSetupJev(rest: string[]): Promise<HandlerResult> {
-  const token = rest.includes('--token-stdin') ? (await readStdin()).trim() : undefined;
+  const token = rest.includes('--remove') ? undefined : await resolveSensitiveInput(sensitiveInputOptions(rest, 'token'));
   const result = await setupJev({
     token,
     region: takeOption(rest, '--region'),

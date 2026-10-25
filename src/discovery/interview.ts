@@ -66,9 +66,11 @@ export function credentialReference(input: string, paths: Pick<typeof import('no
   if (input === 'stdin') reference = { kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' };
   else if (input.startsWith('env:') && /^[A-Za-z_][A-Za-z0-9_]*$/.test(input.slice(4))) {
     reference = { kind: 'credential-ref', source: 'env', name: input.slice(4) };
+  } else if (input.startsWith('store:') && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(input.slice(6))) {
+    reference = { kind: 'credential-ref', source: 'store', name: input.slice(6) };
   } else if (input.startsWith('file:') && paths.isAbsolute(input.slice(5))) {
     reference = { kind: 'credential-ref', source: 'file', name: input.slice(5) };
-  } else throw new Error('--credential requires <provider>=env:NAME|file:PATH|stdin (file paths must be absolute).');
+  } else throw new Error('--credential requires <provider>=stdin|file:PATH|store:NAME|env:NAME (file paths must be absolute).');
   assertPlanRedacted(reference);
   return reference;
 }
@@ -136,9 +138,10 @@ export function interviewQuestions(context: InterviewContext, answers: SetupPlan
       ?? (resolveProviderPathValue(getProviderDefinition(provider)?.paths.configFile ?? null, targetRoot, paths) || targetRoot);
     add('locations', 'config-dir', "Where this provider's config file lives (informational; A3 writes nothing).", configPath, [configPath], '--target <dir>', 'path', project.root, provider);
     add('locations', 'credential-source', "Where should A4 read this provider's credential from?", null,
-      [{ kind: 'credential-ref', source: 'env', name: credentialEnvName(provider) },
+      [{ kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' },
         { kind: 'credential-ref', source: 'file', name: paths.join(project.root, '.credentials', provider) },
-        { kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' }], '--credential <provider>=env:NAME|file:PATH|stdin', 'credential', project.root, provider, true);
+        { kind: 'credential-ref', source: 'store', name: provider },
+        { kind: 'credential-ref', source: 'env', name: credentialEnvName(provider) }], '--credential <provider>=stdin|file:PATH|store:NAME|env:NAME', 'credential', project.root, provider, true);
   }
   for (const project of projects) {
     const rootChoice = answers[questionId('targets', 'root', project.root)]?.value;
@@ -163,8 +166,9 @@ export function interviewQuestions(context: InterviewContext, answers: SetupPlan
       false, ['enable', 'decline'], '--jev enable|decline|defer', 'choice', project.root, undefined, true);
     if (jev === 'enable') {
       add('capabilities', 'credential-source', 'Where should A4 read the Jev API input from? Enter a reference only; setup/defer works without an API input.', null,
-        [{ kind: 'credential-ref', source: 'env', name: 'JEV_API_KEY' }, { kind: 'credential-ref', source: 'file', name: paths.join(project.root, '.credentials', 'jev') },
-          { kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' }], '--credential jev=env:NAME|file:PATH|stdin', 'credential', project.root, 'jev', true);
+        [{ kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' },
+          { kind: 'credential-ref', source: 'file', name: paths.join(project.root, '.credentials', 'jev') },
+          { kind: 'credential-ref', source: 'store', name: 'jev' }, { kind: 'credential-ref', source: 'env', name: 'JEV_API_KEY' }], '--credential jev=stdin|file:PATH|store:NAME|env:NAME', 'credential', project.root, 'jev', true);
       questions[questions.length - 1].questionId = questionId('locations', 'credential-source', project.root, 'jev');
       add('capabilities', 'jev-options', 'Optional Jev settings as JSON: region, endpoint, verify. Verification sends a billable request at apply.',
         null, [null], '--region <r> --endpoint <url> --verify', 'policy', project.root, 'jev', true);

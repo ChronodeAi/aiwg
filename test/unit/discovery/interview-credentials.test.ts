@@ -32,6 +32,7 @@ describe('guided credential references', () => {
     ['env:OPENAI_API_KEY', { kind: 'credential-ref', source: 'env', name: 'OPENAI_API_KEY' }],
     ['file:/example/credential', { kind: 'credential-ref', source: 'file', name: '/example/credential' }],
     ['stdin', { kind: 'credential-ref', source: 'stdin-at-apply', name: 'stdin' }],
+    ['store:codex-main', { kind: 'credential-ref', source: 'store', name: 'codex-main' }],
   ])('accepts only a locator: %s', async (raw, expected) => {
     const reference = credentialReference(raw as string);
     expect(reference).toEqual(expected);
@@ -41,15 +42,15 @@ describe('guided credential references', () => {
     expect((await readSetupPlan(project, plan.id)).answers[id].value).toEqual(expected);
   });
 
-  it.each(['pasted-value', 'env:', 'env:bad-name', 'file:relative', 'env:ghp_abcdefgh1234567890'])('rejects raw or invalid material: %s', raw => {
+  it.each(['pasted-value', 'env:', 'env:bad-name', 'store:', 'store:bad/name', 'file:relative', 'env:ghp_abcdefgh1234567890'])('rejects raw or invalid material: %s', raw => {
     expect(() => credentialReference(raw)).toThrow();
   });
 
-  it('offers exactly three reference sources with a null default and never recommends credentials', () => {
+  it('offers all reference sources in preference order with a null default and never recommends credentials', () => {
     const questions = interviewQuestions({ inventory: plan.inventory, workspaceRoot: project }, plan.answers);
     const credential = questions.find(q => q.topic === 'credential-source')!;
     expect(credential.default).toBeNull();
-    expect(credential.options.map(o => (o.value as { source: string }).source)).toEqual(['env', 'file', 'stdin-at-apply']);
+    expect(credential.options.map(o => (o.value as { source: string }).source)).toEqual(['stdin-at-apply', 'file', 'store', 'env']);
     expect(plan.recommendations.some(r => r.questionId.includes('credential'))).toBe(false);
   });
 

@@ -139,6 +139,9 @@ bytes.
 
 ### Authentication for paid resources
 
+See [Supplying sensitive values](sensitive-values.md) for authentication input
+methods, exposure boundaries and release-token migration status.
+
 Use `aiwg auth login` for browser-based authorization-code login with PKCE, or
 `aiwg auth login --device` on a headless machine. `aiwg auth status [--json]`
 shows account, organization, scopes, plan, access reason, expiry, and the
