@@ -12,9 +12,9 @@
 
 ## RC response regression gate
 
-After the RC build and full validation, run [release comparison](release-comparison.md) against the last published package on Claude, Codex, and Hermes: the complete base/Wave 5 probe corpus plus the workflow scenarios, n=5 per side, identical subject model/settings, and a distinct blind judge model. Resolve or explicitly accept each regression with a recorded reason linked to its evidence before shipping. Invalid or incomplete runs hold the gate. Higher-consequence model spot checks supplement the complete corpus. Do not count offline stub tests or a selected smoke set as the release comparison.
+After the RC build (#3201), check the [release comparison gate](release-comparison.md). Quarterly full validation runs the complete comparison against the last published package on Claude, Codex, and Hermes: the complete base/Wave 5 probe corpus plus the workflow scenarios, n=5 per side, identical subject model/settings, and a distinct blind judge model. Routine releases require current-quarter evidence whose tested commit is the candidate or an authenticated ancestor, plus candidate-specific approval recording any reuse. Resolve or explicitly accept each regression with a recorded reason linked to its evidence before shipping. Invalid or incomplete runs hold the gate. Higher-consequence model spot checks supplement the complete corpus. Do not count offline stub tests or a selected smoke set as the release comparison.
 
-RC build → full tests → release comparison → fix or record acceptance for each regression → ship.
+RC build → required tests → quarterly comparison or verified current-quarter reuse → fix or record acceptance for each regression → ship.
 
 Review the recorded decision thresholds and per-scenario A/B/tie tallies before
 dispositioning regressions. Assertion pass-rate drops and A-passed/B-failed pairs

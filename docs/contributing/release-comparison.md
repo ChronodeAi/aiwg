@@ -32,9 +32,11 @@ Dry-run does not pack, install, deploy, or invoke either adapter. Repeat for `--
 - `tree:/absolute/path/rc`: copy a previously built RC tree, run `npm pack --ignore-scripts` in the copy, then install the resulting tarball.
 - `fixture:/absolute/path/fixture`: copy a predeployed fixture containing `project/` and either `package/` or `installation/node_modules/aiwg/`. The project needs `CLAUDE.md` for Claude, or `AGENTS.md` for Codex/Hermes. Preserve all required dependencies as ordinary files; external symlinks are omitted.
 
-Installation uses `--ignore-scripts --offline --no-audit --no-fund` by default. `--allow-network` explicitly permits package downloads for preparing published fixtures. Nothing is installed globally. An empty isolated npm cache means published-package preparation normally needs that opt-in or a prepared fixture. This implementation's validation uses only local stub fixtures; it performs no network installs.
+Installation uses `--ignore-scripts --offline --no-audit --no-fund` by default. To prepare `aiwg@2026.10.3` offline, pass `--npm-cache /path/to/populated/npm-cache`: only its `_cacache/` is copied into each isolated cache, leaving the source untouched. That cache must contain the version metadata, package and dependencies needed by npm. Alternatively supply the published package as `tarball:/path/to/aiwg-2026.10.3.tgz`. Dependencies must also be cached unless the package has none. A cache miss fails without a network fallback. `--allow-network` explicitly permits package downloads. Nothing is installed globally. Tests pack and install dependency-free synthetic packages with real npm, including an RC tree, and compare them with deterministic fake runners; no network or model calls are involved.
 
 The default deployment set is `sdlc`, `security-engineering`, `ops`, and `aiwg-utils`. Repeat `--bundle NAME` to specify a different identical set for both releases. For the final gate, select the addons needed by the Wave 5 scenarios as well and record the selection with the release evidence. A preparation failure stops the comparison rather than silently substituting the local checkout for a published package.
+
+Both packages deploy onto the same `test/fixtures/rule-binding/project/` template. `--fixture-project DIR` selects another synthetic project for both sides. Predeployed `fixture:` inputs retain their already deployed projects and homes. Every subject repetition still receives a fresh temporary copy.
 
 Packing, installing, deploying, provider homes, XDG paths, npm configuration/cache, temporary files, and AIWG artifact paths are redirected beneath fresh temporary roots. Each subject call gets a fresh copy of its deployed fixture and release-local `aiwg` executable on PATH; no previous answer is copied forward. Judge calls run in a separate empty temporary root. Source fixtures and the real HOME are never destinations. Temporary roots are removed on completion or failure.
 
@@ -145,7 +147,7 @@ The four fixed dimensions assess correctness, completeness, rule/workflow alignm
 
 ## Execute and preserve evidence
 
-Resolve the configured artifact destination with `aiwg artifacts path --json --check-write` and create an output directory beneath its `artifact_root`. Then, for the quarterly-full tested commit and after approval for the model work:
+Resolve the configured artifact destination with `aiwg artifacts path --json --check-write` and create an output directory beneath its `artifact_root`. The runner enforces this destination for JSON and Markdown, including symlink targets. Then, for the quarterly-full tested commit and after approval for the model work:
 
 ```bash
 node tools/rules/release-compare.mjs \
@@ -159,11 +161,45 @@ node tools/rules/release-compare.mjs \
 
 Repeat for Codex and Hermes. Keep model, adapter version, inference settings, deployment bundle set, fixture versions/hashes, and seed in the quarterly record. Do not run the complete A/B model corpus until the tested commit's `quarterly-full-v1` validation is complete.
 
+For a first real Claude breadth run from a built checkout, this exact command uses
+the shipped adapter and distinct dated model snapshots. It prepares the baseline
+from npm and packs the current tree; it performs paid model calls. The selected
+deployment set includes every framework/addon under test. Run it only after the
+validation and model-work approval above:
+
+```bash
+comparison_artifact_root=$(aiwg artifacts path --json --check-write | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).artifact_root))')
+mkdir -p "$comparison_artifact_root/release-comparison"
+node tools/rules/release-compare.mjs \
+  --a aiwg@2026.10.3 --b tree:. --allow-network \
+  --provider claude --model claude-haiku-4-5-20251001 \
+  --judge-model claude-sonnet-4-5-20250929 --n 5 --seed release-first-breadth \
+  --bundle all \
+  --subject-runner tools/rules/release-compare-claude.mjs \
+  --judge-runner tools/rules/release-compare-claude.mjs \
+  --output "$comparison_artifact_root/release-comparison/claude.json"
+```
+
+For offline fixture preparation, replace `--allow-network` with
+`--npm-cache /path/to/populated/npm-cache`, or supply local tarballs for both
+sides and the cache needed for their dependencies. Dry-run the same command
+with `--dry-run` to obtain the exact planned call count without installation or
+model calls. This single-provider breadth run plans 2,860 subject calls plus
+1,430 judge calls, 4,290 total; provider-internal tool turns and retries can add
+inference requests beyond the harness invocation count.
+
 The default corpus currently plans 286 scenarios × 5 repetitions = 1,430 pairs per provider. Across three providers that is 4,290 pairs, 8,580 subject calls, and 4,290 judge calls (12,870 calls total), before spot checks. Dry-run records exact call counts and the known subject-prompt byte/4 estimate. That is only one input to a spend review: loaded startup context, fetched rule/tool bodies, subject outputs, judge inputs/outputs, cache behavior, retries, and the chosen model's billing terms remain unmeasured until pilot evidence is available. Do not infer total tokens or cost from prompt bytes alone. Review a small authorized pilot before approving the full corpus; no model-price assumptions are embedded here.
 
 The harness checkpoints JSON and Markdown after each pair. Every checkpoint and final JSON binds A and B to the installed package version, SHA256 of a local/packed tarball when applicable, deterministic deployed project/home and package-tree digests, and installation-lock digest when present. The corpus digest binds the selected prompts and assertions. These hashes identify the actual tested bytes, including predeployed `fixture:` inputs; a mutable tree path alone is insufficient release evidence. Fresh samples currently copy the installed runtime as well as context; no I/O savings are claimed.
 
 The JSON retains full normalized transcripts, optional native stdout, assertion outcomes, tool calls, optional token counters, presentation mappings, and judge scores. Markdown shows regressions first, excerpts from both responses, tool/assertion evidence, and suspected causes clearly marked as hypotheses. Per-scenario pass rates use every attempted repetition, including failures.
+
+Each scenario also records `structural_diff`: B-minus-A tool/discovery call
+counts, added/removed fetched rules and skills, and token-counter deltas.
+`A.usage_totals` and `B.usage_totals` sum counters across repetitions; a counter
+missing from any repetition is unavailable, and a delta missing either side is
+`null`, never an assumed zero. Structural differences support diagnosis and do
+not independently classify a regression.
 
 Classification first treats any A-passed/B-failed pair or lower B assertion pass
 rate as a hard regression. Judge preferences use a one-sided exact binomial sign

@@ -30,8 +30,8 @@ export function claudeAdapter(request, { spawn = boundedSpawnSync, env = process
   const usage = Object.fromEntries(Object.entries(terminal?.usage ?? {}).filter(([, value]) => typeof value === 'number'));
   if (isJudge) {
     const judgment = JSON.parse(trace.text.trim().replace(/^```(?:json)?\s*|\s*```$/g, ''));
-    if (judgment.model !== request.model) throw new Error('Judge response model mismatch');
-    return { ...judgment, usage };
+    if (judgment.model !== undefined && judgment.model !== request.model) throw new Error('Judge response model mismatch');
+    return { ...judgment, model: models[0], usage };
   }
   return { model: models[0], stdout: result.stdout, usage };
 }
