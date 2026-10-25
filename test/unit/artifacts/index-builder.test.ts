@@ -1107,11 +1107,16 @@ type: use-case
         fs.writeFileSync(path.join(sourceDir, `artifact-${i}.ts`),
           `---\ntitle: Artifact ${i}\ntags: [synthetic]\n---\n# Artifact ${i}\n\n${refs}\n`);
       }
-      const start = performance.now();
-      await buildIndex(tmpDir, { graph: 'codebase', force: true, quiet: true });
-      const forcedMs = performance.now() - start;
-      // A single ~150 ms sample is dominated by scheduler noise when the suite
-      // runs in parallel; the fastest of three no-op builds measures the work.
+      // Contention on a shared runner (parallel shards) only ever adds time,
+      // so compare the fastest of three forced builds with the fastest of three
+      // no-op builds. A single forced sample against a best-of-three no-op
+      // skewed the ratio both ways under load (ci.yml run 90229).
+      let forcedMs = Infinity;
+      for (let run = 0; run < 3; run++) {
+        const start = performance.now();
+        await buildIndex(tmpDir, { graph: 'codebase', force: true, quiet: true });
+        forcedMs = Math.min(forcedMs, performance.now() - start);
+      }
       let incrementalMs = Infinity;
       for (let run = 0; run < 3; run++) {
         const incrementalStart = performance.now();
