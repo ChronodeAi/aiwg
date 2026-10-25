@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Run a Vitest lane in an owned TMPDIR and check it even when tests fail. */
+/** Run default threads or an explicit lane (deployment/WASM forks) in an owned TMPDIR. */
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readdirSync, rmSync, rmdirSync } from 'node:fs';
 import { constants as osConstants, tmpdir } from 'node:os';

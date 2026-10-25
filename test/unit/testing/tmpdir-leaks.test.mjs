@@ -59,9 +59,9 @@ describe('tmpdir leak gate (#3018)', () => {
 
 
 describe('default lane private TMPDIR', () => {
-  it('selects an owned lane config without forwarding the wrapper option', () => {
-    expect(parseLaneInvocation(['--config', 'config/vitest.deployment.config.js', '--run'])).toEqual({
-      config: 'config/vitest.deployment.config.js',
+  it.each(['deployment', 'wasm'])('selects the %s lane without forwarding the wrapper option', lane => {
+    expect(parseLaneInvocation(['--config', `config/vitest.${lane}.config.js`, '--run'])).toEqual({
+      config: `config/vitest.${lane}.config.js`,
       args: ['--run'],
     });
     expect(parseLaneInvocation(['--run'])).toEqual({

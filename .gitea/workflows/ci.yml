@@ -335,6 +335,24 @@ jobs:
           AIWG_PERF_SAMPLE_COUNT: "7"
         run: node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test -- --shard=${{ matrix.shard }}/4 --maxWorkers=4
 
+  # PGlite instantiates WebAssembly in this required offline forks lane.
+  # Worker-thread teardown can abort V8 itself (#3073); the base threads
+  # config excludes these files so native default shards never run them.
+  wasm:
+    name: WebAssembly tests (forks)
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build CLI prerequisites
+        run: npm run build:cli
+      - name: Run WebAssembly tests in forks with TMPDIR leak gate
+        run: node tools/ci/run-with-hang-report.mjs --timeout 8m -- npm run test:wasm
+
   # Full-corpus provider deployments spawn bounded child CLIs and share one
   # immutable source cache. Keep them serial and outside the general worker
   # pool while retaining them as a required build prerequisite.
@@ -431,7 +449,7 @@ jobs:
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
     timeout-minutes: 10
-    needs: [test, test-shards, deployment, d29-slow, packaging, release-discovery]
+    needs: [test, test-shards, wasm, deployment, d29-slow, packaging, release-discovery]
 
     steps:
       - name: Checkout code

@@ -29,6 +29,12 @@ export const deploymentFiles = [
   'test/integration/hermes-deployment.test.ts',
   'test/integration/guided-setup-walkthrough.test.ts',
 ];
+// PGlite's WebAssembly JIT teardown can abort V8 in worker threads (#3073,
+// runs 81094/90363). Required forks lane; keep coverage and the TMPDIR gate.
+// Runtime inventory: docs/contributing/testing-wasm-lane.md.
+export const wasmFiles = [
+  'test/unit/artifacts/fortemi-shard-export.test.ts',
+];
 // Shared S0 infrastructure and frozen contracts run in the existing offline
 // conformance lane. Mechanism suites retain their source owner's unit lane.
 export const orchestrationConformanceFiles = [

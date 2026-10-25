@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import path from 'path';
-import { artifactIndexFiles, packagingFiles, discoveryFiles, deploymentFiles, nodeFiles, d29SlowFiles, d17SlowFiles, orchestrationConformanceFiles } from './test-lanes.mjs';
+import { artifactIndexFiles, packagingFiles, discoveryFiles, deploymentFiles, wasmFiles, nodeFiles, d29SlowFiles, d17SlowFiles, orchestrationConformanceFiles } from './test-lanes.mjs';
 
 // Watch-service tests use polling so host-wide inotify quotas cannot make the
 // suite nondeterministic on shared development and CI machines.
@@ -40,6 +40,9 @@ export default defineConfig({
     exclude: [
       // Required serial packaging and corpus lanes run separately in CI.
       ...packagingFiles, ...artifactIndexFiles, ...discoveryFiles, ...deploymentFiles, ...nodeFiles, ...d29SlowFiles, ...d17SlowFiles, ...orchestrationConformanceFiles,
+      // PGlite/WASM must use vitest.wasm.config.js: V8 can abort on thread
+      // teardown (UnregisterWasmAllocation, #3073); no test can catch it.
+      ...wasmFiles,
       'test/uat/**',
       // Evidence traces use their dedicated single-fork lane and change cwd.
       'test/evidence/**',
