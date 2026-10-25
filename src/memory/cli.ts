@@ -22,6 +22,11 @@ interface ProjectMemoryCliOptions {
 }
 
 export async function main(args: string[]): Promise<void> {
+  if (args[0] === 'recommend') {
+    const { runMemoryRecommendCli } = await import('./recommend-cli.js');
+    await runMemoryRecommendCli(args.slice(1));
+    return;
+  }
   if (['plan', 'apply', 'restore'].includes(args[0])) {
     const { runMemoryMaintenanceCli } = await import('./maintenance-cli.js');
     await runMemoryMaintenanceCli(args[0], args.slice(1));
@@ -200,6 +205,7 @@ Static eligibility does not establish live context loading. JSON: aiwg.memory-au
 --cost renders the same inventory through the resident-cost view (JSON: aiwg.memory-cost.v1).
 The cost subcommand adds --demote previews, a #2936 startup-measurement report
 and caller-supplied usage evidence; all views are read-only and write nothing.
+Read-only recommendations: recommend (use --help for evidence and review export).
 Reviewed lifecycle: plan, apply, restore (use --help for exact-plan options).
 Other memory subcommands: path, list, get, put, delete, append-log, project.`;
 

@@ -118,6 +118,119 @@ Scanning stops at 12 levels, 5,000 files, 20,000 directory/discovery entries,
 and build directories are excluded. Durable size never establishes injected size;
 provider ceiling findings are risks, not measured runtime truncation.
 
+## Read-only cleanup and tier recommendations
+
+`aiwg memory recommend` ranks advisory candidates from the audit inventory and
+`cost.ts` utility/footprint attribution. It writes nothing, including telemetry,
+indexes, owner receipts, or approval records. JSON uses
+`aiwg.memory-recommendations.v1`; its schema lives beside the audit/cost schemas
+in `schemas/memory/`. It accepts the same `--scope global|project|provider`,
+`--provider`, and `--json` selections as audit/cost. Global selection is explicit.
+
+```bash
+aiwg memory recommend --provider claude
+aiwg memory recommend --scope project --provider codex --json
+aiwg memory recommend --evidence evidence.json --usage usage.json --json
+```
+
+Use audit item IDs as keys in the optional evidence input. Each entry needs a
+`source` locator identifying the operator review or supporting evidence:
+
+```json
+{
+  "thresholds": {
+    "minimumAgeDays": 30,
+    "reviewAgeDays": 90,
+    "demoteMinimumTokens": 512,
+    "taskPackCharacters": 8000
+  },
+  "items": {
+    "<audit-item-id>": {
+      "source": "owner-review:decision-42",
+      "criticality": "ordinary",
+      "ownerPinned": false,
+      "rareObligation": false,
+      "provenance": "verified",
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "reviewedAt": "2026-01-01T00:00:00.000Z",
+      "history": "known",
+      "obsolete": true,
+      "categoryCorrection": "decision"
+    }
+  }
+}
+```
+
+These threshold values are configurable **local starting points to evaluate**,
+not research-established TTLs or optimum token budgets. An old review opens an
+investigation; age, retrieval frequency, or rejection alone never justifies
+retirement. Unknown creation/history or utility evidence blocks retirement.
+Owner pins, source-frontmatter pins, critical rules and rare obligations remain
+visible as blocked candidates with protected-item exceptions. Caller evidence
+cannot clear a source pin. Dates are UTC ISO timestamps; filesystem modification
+time is never treated as creation time. Evidence IDs outside the inventory and
+invalid inputs are rejected. These are caller assertions with provenance, not
+independently observed runtime telemetry.
+
+`--usage` reuses the cost input: `{ "<audit-item-id>": { "retrieved": true,
+"used": false, "rejected": false, "evidence": "task-review:42" } }`.
+Exposure, retrieval, successful use, rejection and unknown remain distinct.
+Without telemetry, absence of successful use stays unknown. Cost estimates reuse
+the existing UTF-8 bytes estimators and confidence; unknown savings stay unknown.
+Demotion estimates subtract the retrieval-anchor overhead from `cost.ts` and are
+conditional on retrieval verification and provider regeneration. Savings across
+overlapping candidates must not be added together. Retirement retains source
+and history, so it claims no disk deletion savings.
+
+Additional item evidence accepts `conflictsWith` (audit IDs), `supersededBy`
+(audit ID), `summaryStale`, and `categoryCorrection`. Audit conflict/collision
+findings and contradictory provenance produce conflict candidates and block
+merges. Identical digests support consolidation review; originals and source
+links remain immutable. Stale summaries require source/lineage review and an
+explicit replacement rather than generated facts. No semantic contradiction
+detector is claimed: provide source conflicts that the static audit cannot see.
+
+New knowledge defaults to indexed storage. Successful-use evidence first proposes
+bounded task context through the existing `buildWorkspaceContextPack` builder,
+with the configured total character budget. The recommendation policy adds no
+body loading beyond audit and does not build a pack itself. An explicit `residentProposal` requires `owner` (the existing
+owner), `rationale`, `budgetTokens`, a future `reviewDate`, and
+`boundedPackEvaluated: true`, plus verified provenance and observed successful
+use. A missing field, unknown footprint, or exceeded budget rejects the proposal.
+Placement never grants new authority.
+
+Every candidate includes evidence, uncertainty, conditional savings with estimator
+confidence, retrieval impact, blocking reasons, and protected-item exceptions.
+Ranks prioritize conflicts, taxonomy, lineage, duplicates, demotion, promotion,
+then retirement; savings break ties. Ranking carries no mutation authority.
+
+Export one advisory candidate to stdout and save it using shell redirection:
+
+```bash
+aiwg memory recommend --evidence evidence.json --usage usage.json \
+  --candidate <candidate-id> --emit-review-input > review-input.json
+aiwg memory plan --recommendation review-input.json --reviewer operator \
+  --out reviewed-plan.json --json
+```
+
+Stdout export keeps recommend's zero-write contract. The exported JSON is still
+an advisory report containing one candidate, never an approved plan. Blocked,
+conflicting and rejected candidates cannot be exported for execution. Planning
+requires an explicit reviewer, checks the unchanged whole-source fingerprint,
+then binds the current owner's native record revision and snapshot. Audit keeps
+source fingerprints separate from Markdown body digests and reads existing
+owner placement/protection metadata. Re-audit after a source change.
+
+Recommendation handoff supports individual project-owned sources recognized by
+an existing maintenance owner. Aggregate line-memory/canonical-store files need
+explicit owner-handle review through ordinary plan flags; provider/global sources
+remain with their existing owners. Merge review additionally requires
+`--replacements <json-file>` and binds every related source. Supersession repair
+remains blocked until source facts and replacement lineage are resolved; ordinary
+plan flags accept the reviewed replacement. The existing indexed-retrieval checks
+and resident-owner limitations below still apply. Review and apply remain
+separate commands.
+
 ## Reviewed placement and retirement
 
 `aiwg memory plan`, `apply` and `restore` coordinate the existing line-memory,

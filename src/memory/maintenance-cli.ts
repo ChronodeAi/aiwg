@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
+import { sha256 } from './context-pack.js';
+import { MemoryRecommendationsSchema } from './recommend.js';
 import { MaintenanceOpSchema, type MaintenancePlan } from './maintenance-contract.js';
 import { MemoryPlacementSchema } from './taxonomy.js';
 import { indexMemoryAliases } from './maintenance-record.js';
@@ -11,6 +13,7 @@ export const MEMORY_MAINTENANCE_USAGE = `Usage:
       [--placement resident|indexed|task-context|archived] [--category <category>]
       [--replacements <json-file>] [--related <json-file>] [--link <indexed-path> ...]
       [--retirement-basis age|review] [--json]
+  aiwg memory plan --recommendation <selected-candidate-file> --reviewer <name> --out <file> [--category <category>] [--replacements <json-file>] [--link <indexed-path> ...]
   aiwg memory plan --input <exact-plan-file> [--out <file> | --preview] [--json]
   aiwg memory apply --plan <file> [--confirm <plan-digest> | --yes] [--preview] [--json]
   aiwg memory restore --plan <restore-plan-file> [--confirm <plan-digest> | --yes] [--preview] [--json]
@@ -23,7 +26,7 @@ type Options = { values: Record<string, string>; links: string[]; yes: boolean; 
 export function parseMemoryMaintenanceOptions(command: string, args: string[]): Options {
   const opts: Options = { values: {}, links: [], yes: false, json: false, preview: false, help: false };
   const valueFlags = command === 'plan'
-    ? ['--owner', '--target', '--op', '--rationale', '--reviewer', '--out', '--input', '--placement', '--category', '--replacements', '--related', '--link', '--retirement-basis']
+    ? ['--owner', '--target', '--op', '--rationale', '--reviewer', '--out', '--input', '--recommendation', '--placement', '--category', '--replacements', '--related', '--link', '--retirement-basis']
     : ['--plan', '--confirm'];
   const booleanFlags = ['--json', '--preview', '--help', '-h', ...(command === 'plan' ? [] : ['--yes'])];
   const seen = new Set<string>();
@@ -51,7 +54,10 @@ export function parseMemoryMaintenanceOptions(command: string, args: string[]): 
   if (opts.help) return opts;
   if (opts.yes && opts.values.confirm) throw new Error('--yes and --confirm are mutually exclusive');
   if (command === 'plan') {
-    if (opts.values.input) {
+    if (opts.values.recommendation) {
+      if (!opts.values.reviewer) throw new Error('--reviewer is required for recommendation review');
+      if (Object.keys(opts.values).some(key => !['recommendation', 'reviewer', 'out', 'category', 'replacements'].includes(key))) throw new Error('--recommendation cannot be combined with operation or exact-plan flags');
+    } else if (opts.values.input) {
       if (Object.keys(opts.values).some(key => !['input', 'out'].includes(key)) || opts.links.length) throw new Error('--input cannot be combined with operation flags');
     } else {
       for (const required of ['owner', 'target', 'op', 'rationale', 'reviewer']) if (!opts.values[required]) throw new Error(`--${required} is required`);
@@ -84,6 +90,46 @@ export async function runMemoryMaintenanceCli(command: string, args: string[], d
   const root = dependencies.root ?? process.cwd();
   const owners = dependencies.owners ?? await createMaintenanceOwners(root);
   const readJson = (path: string): unknown => JSON.parse(readFileSync(maintenancePath(root, path), 'utf8'));
+  let recommendationRelated: string[] | undefined;
+  let recommendationUncertainty: string | undefined;
+  if (command === 'plan' && opts.values.recommendation) {
+    const report = MemoryRecommendationsSchema.parse(readJson(opts.values.recommendation));
+    if (report.workspace !== root || report.candidates.length !== 1) throw new Error('Review input requires one candidate from this workspace');
+    const candidate = report.candidates[0];
+    if (candidate.status !== 'advisory' || candidate.blockedReasons.length) throw new Error('Blocked, rejected or conflicting recommendations cannot become plans');
+    if (candidate.kind === 'conflict') throw new Error('Conflicts require explicit source resolution');
+    if (['merge', 'supersede'].includes(candidate.kind) && !opts.values.replacements) throw new Error('Lineage recommendations require explicit owner review with --replacements');
+    const target = candidate.target;
+    if (target.scope !== 'project') throw new Error('Executable recommendation review requires a project-owned source');
+    const file = maintenancePath(root, target.sourcePath);
+    if (sha256(readFileSync(file, 'utf8')) !== candidate.sourceDigest) throw new Error('Stale recommendation source digest; rerun recommend');
+    const owner = owners.find(value => value.name === target.authority.owner);
+    if (!owner) throw new Error('Recommendation source has no executable maintenance owner');
+    // Audit fingerprints whole files. The owner binds its native body/revision and
+    // snapshot only after the reviewer selects this exact unchanged source.
+    const record = (await owner.records()).find(value => value.sourcePath === target.sourcePath);
+    if (!record) throw new Error('Recommendation source is not an individual owner target; review an owner handle explicitly');
+    if (candidate.kind === 'merge') {
+      if (candidate.related.length !== candidate.relatedTargets.length) throw new Error('Merge review requires every related source revision');
+      const records = await owner.records();
+      recommendationRelated = candidate.relatedTargets.map(binding => {
+        const related = binding.record;
+        if (related.scope !== target.scope || related.authority.owner !== owner.name) throw new Error('Merge recommendation cannot cross scope or owners');
+        if (sha256(readFileSync(maintenancePath(root, related.sourcePath), 'utf8')) !== binding.sourceDigest) throw new Error('Stale related recommendation source digest');
+        const input = records.find(value => value.sourcePath === related.sourcePath);
+        if (!input) throw new Error('Related recommendation source is not an individual owner target');
+        return input.id;
+      });
+    }
+    recommendationUncertainty = candidate.uncertainty.join('; ');
+    opts.values.owner = owner.name;
+    opts.values.target = record.id;
+    opts.values.op = candidate.kind;
+    opts.values.rationale = candidate.rationale + (candidate.residentJustification ? `; Resident justification: ${JSON.stringify(candidate.residentJustification)}` : '');
+    if (candidate.retrievalImpact.proposedPlacement) opts.values.placement = candidate.retrievalImpact.proposedPlacement;
+    opts.values.category ??= candidate.retrievalImpact.category ?? '';
+    opts.values['retirement-basis'] = 'review';
+  }
   let plan: MaintenancePlan;
   if (command === 'plan' && !opts.values.input) {
     const owner = owners.find(value => value.name === opts.values.owner);
@@ -95,7 +141,7 @@ export async function runMemoryMaintenanceCli(command: string, args: string[], d
     const op = MaintenanceOpSchema.parse(opts.values.op);
     const lifecycle = op === 'retire' ? 'retired' : ['merge', 'split', 'supersede'].includes(op) ? 'superseded' : op === 'restore' ? 'active' : record.lifecycle;
     const placement = opts.values.placement ? MemoryPlacementSchema.parse(opts.values.placement) : record.placement;
-    const relatedInput = opts.values.related ? readJson(opts.values.related) : [];
+    const relatedInput = recommendationRelated ?? (opts.values.related ? readJson(opts.values.related) : []);
     if (!Array.isArray(relatedInput) || relatedInput.some(value => typeof value !== 'string')) throw new Error('--related requires a JSON array of existing owner handles');
     const related = relatedInput.map(handle => {
       const input = aliases.get(handle);
@@ -105,7 +151,7 @@ export async function runMemoryMaintenanceCli(command: string, args: string[], d
     plan = { schemaVersion: 'aiwg.maintenance-plan.v1', operations: [{
       op, target: { id: record.id, digest: record.digest, version: record.version },
       from: { placement: record.placement, lifecycle: record.lifecycle }, to: { placement, lifecycle },
-      scope: record.scope, rationale: opts.values.rationale, uncertainty: 'Static review; live session loading is unobserved',
+      scope: record.scope, rationale: opts.values.rationale, uncertainty: recommendationUncertainty ?? 'Static review; live session loading is unobserved',
       impactedLinks: opts.links, sessionEffect: 'next-session', precondition: { digest: record.digest, version: record.version },
       owner: { name: owner.name, handle: record.aliases[0] ?? record.id, snapshot: await owner.snapshot() },
       review: { reviewer: opts.values.reviewer, retirementBasis: (opts.values['retirement-basis'] ?? 'age') as 'age' | 'review' },

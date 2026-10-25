@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { load } from 'js-yaml';
 import type { MemoryIntakeReceipt } from './intake.js';
 import { sha256 } from './context-pack.js';
 import { MemoryLifecycleSchema, MemoryTaxonomySchema } from './taxonomy.js';
@@ -130,4 +131,13 @@ export function detectMemoryIncludeCycles(graph: Readonly<Record<string, readonl
   }
   for (const locator of Object.keys(graph).sort()) visit(locator);
   return cycles;
+}
+
+/** Shared canonical Markdown parsing for inventory and the existing artifact owner. */
+export function parseMemoryMarkdown(content: string): { data: Record<string, unknown>; body: string } {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
+  if (!match) return { data: {}, body: content };
+  const data = load(match[1]) ?? {};
+  if (typeof data !== 'object' || Array.isArray(data)) throw new Error('Memory source frontmatter must be an object');
+  return { data: data as Record<string, unknown>, body: match[2] };
 }

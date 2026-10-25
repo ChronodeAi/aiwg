@@ -177,6 +177,12 @@
           },
           "managed": {
             "type": "boolean"
+          },
+          "sourceDigest": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       }

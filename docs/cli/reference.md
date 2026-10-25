@@ -5559,7 +5559,7 @@ Storage operations on the AIWG memory subsystem. Routes through `resolveStorage(
 aiwg memory <subcommand>
 ```
 
-**Subcommands:** `audit` / `cost` / `path` / `list` / `get` / `put` / `delete` / `append-log` / `project`.
+**Subcommands:** `audit` / `cost` / `recommend` / `plan` / `apply` / `restore` / `path` / `list` / `get` / `put` / `delete` / `append-log` / `project`.
 
 **Examples:**
 
@@ -5571,6 +5571,9 @@ aiwg memory restore --plan restore.json --yes --json     # reviewed restoration
 aiwg memory audit --provider codex --json                 # read-only static workspace inventory
 aiwg memory audit --scope global --provider claude        # explicit user scope
 aiwg memory audit --provider claude --cost                # resident-cost view of the same inventory
+aiwg memory recommend --provider claude --json            # advisory cleanup and tier candidates
+aiwg memory recommend --candidate <id> --emit-review-input > review.json
+aiwg memory plan --recommendation review.json --reviewer operator --out plan.json
 aiwg memory cost --provider claude --json                 # versioned cost report (aiwg.memory-cost.v1)
 aiwg memory cost --demote <id> --startup-measurement report.json  # demotion preview vs measured startup
 aiwg memory path                                         # resolved root (fs only)
@@ -5580,6 +5583,8 @@ echo "# index" | aiwg memory put research-complete/index.md
 echo '{"op":"ingest","summary":"foo"}' \
   | aiwg memory append-log research-complete/.log.jsonl
 ```
+
+**`recommend` semantics (#3283):** read-only evidence-ranked candidates for consolidation, taxonomy correction, conflicts/supersession, demotion, promotion and retirement. JSON: `aiwg.memory-recommendations.v1`. `--evidence <file>` supplies scoped owner pins, criticality, provenance, creation/review age, history, lineage and configurable local thresholds; `--usage <file>` reuses cost utility evidence. Unknown history and protected obligations block retirement. New knowledge defaults to indexed placement, bounded task packs precede residency, and incomplete resident proposals are rejected. Candidate savings retain estimator confidence; unknown stays unknown. `--candidate <id> --emit-review-input` prints one advisory review input to stdout; recommend writes nothing. `plan --recommendation <file> --reviewer <name>` separately binds unchanged source content and current owner revisions. See [input format, defaults and handoff limits](../user-level-project-memory.md#read-only-cleanup-and-tier-recommendations).
 
 **`append-log` semantics:** reads a single JSON object from stdin, appends as one JSONL line. Atomic via `adapter.append` (#976) on backends that support it.
 

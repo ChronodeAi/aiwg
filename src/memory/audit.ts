@@ -11,7 +11,7 @@ import { listProviderMemoryAdapters, type ProviderMemoryAdapter } from './provid
 import { getProviderConfigPath, type InjectProvider } from '../mcp/registry.js';
 import { getProviderDefinition } from '../providers/provider-definitions.js';
 import { MemoryObservationSchema, type MemoryObservation } from './taxonomy.js';
-import { MemoryRecordSchema, loadMemoryRecord, memoryRecordId, indexMemoryAliases, detectMemoryIncludeCycles, type MemoryRecord } from './maintenance-record.js';
+import { MemoryRecordSchema, loadMemoryRecord, memoryRecordId, parseMemoryMarkdown, indexMemoryAliases, detectMemoryIncludeCycles, type MemoryRecord } from './maintenance-record.js';
 import { sha256 } from './context-pack.js';
 import { classifyContextMemory, type ContextMemoryMetadata } from './firewall-classification.mjs';
 
@@ -21,7 +21,7 @@ const ExposureSchema = z.object({
   chain: z.array(z.string()), detail: z.string(),
 }).strict();
 const ItemSchema = z.object({
-  id: z.string(), sourcePath: z.string(), digest: z.string().nullable(),
+  id: z.string(), sourcePath: z.string(), digest: z.string().nullable(), sourceDigest: z.string().nullable().optional(),
   record: MemoryRecordSchema.nullable(), category: z.string(), bytes: z.number().nullable(),
   observation: MemoryObservationSchema, exposures: z.array(ExposureSchema),
   trust: z.string(), reviewStatus: z.string(), managed: z.boolean(),
@@ -294,6 +294,19 @@ export async function auditMemory(options: MemoryAuditOptions = {}): Promise<Mem
           if (parsed?.schemaVersion === 'aiwg.memory-record.v1') record = { ...loadMemoryRecord(parsed), observation };
         } catch { finding('unverified-metadata', [label(file)], 'JSON metadata is invalid; no owner authority inferred'); }
       }
+      if (['.md', '.mdc'].includes(path.extname(file))) {
+        try {
+          const { data, body } = parseMemoryMarkdown(content);
+          if (data.memoryRecord !== undefined) {
+            const stamped = loadMemoryRecord(data.memoryRecord);
+            if (stamped.sourcePath !== sourcePath || stamped.digest !== sha256(body)) throw new Error('Stale owner metadata');
+            record = { ...stamped, observation };
+          }
+          if (data.pinned === true) record = { ...record, authority: { ...record.authority, protection: 'pinned' } };
+        } catch {
+          finding('conflicting-owner-metadata', [sourcePath], 'Invalid or stale Markdown owner metadata; source review required');
+        }
+      }
       const manifestData = await metadata(path.join(path.dirname(real), '.aiwg-manifest.json'));
       const managedEntries = manifestData?.managed as Record<string, ContextMemoryMetadata> | undefined;
       const manifest = managedEntries?.[path.basename(real)] ?? null;
@@ -312,7 +325,7 @@ export async function auditMemory(options: MemoryAuditOptions = {}): Promise<Mem
       copies.add(real);
       physicalSources.set(record.id, copies);
       if (copies.size > 1 && record.placement === 'resident') finding('duplicate-resident-copy', [...copies].map(label), 'The same resident record identity has multiple physical copies');
-      item = prior ?? { id: record.id, sourcePath: record.sourcePath, digest: record.digest, record,
+      item = prior ?? { id: record.id, sourcePath: record.sourcePath, digest: record.digest, sourceDigest: digest, record,
         category, bytes: stat.size, observation, exposures: [], trust: state.trust, reviewStatus: state.reviewStatus, managed };
       items.set(item.id, item);
       cache.set(real, { item, content });
