@@ -35,9 +35,12 @@ const ADMISSION_CLOCK = ['performance'] as const;
 beforeEach(() => { vi.useFakeTimers({ toFake: [...ADMISSION_CLOCK] }); });
 afterEach(async () => { vi.useRealTimers(); for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const pin = heldoutDigest('d17-offline-diagnostic');
+// prepare() is deterministic and costs ~0.5 s of CPU; building it once per file and handing every
+// test a deep copy keeps multi-setup cases (AC5 runs three) far inside the timeout on a busy runner.
+const preparedOnce = prepare('d17-offline-diagnostic');
 async function setup(scoring = false) {
   const root = await mkdtemp(join(tmpdir(), 'ensemble-study-test-')); dirs.push(root); preflight.canonical = root;
-  const prepared = await prepare('d17-offline-diagnostic');
+  const prepared = structuredClone(await preparedOnce);
   const { corpus, preregistration } = prepared;
   // Only two development subjects exercise collection mechanics. This is not a frozen study analysis.
   const testRows = corpus.rows.filter(row => row.split === 'test');
