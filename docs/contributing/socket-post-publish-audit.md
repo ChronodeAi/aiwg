@@ -21,7 +21,11 @@ The baseline classifies `socketUpgradeAvailable` as informational: it advertises
 
 The workflow never converts missing evidence into a clean result. Missing credentials, HTTP errors, rate limits after bounded retries, malformed responses, delayed scans, `pendingScan`, `notFound`, and missing requested packages produce an `unavailable` report and a failed workflow.
 
-Every run uploads JSON and Markdown reports even when evaluation fails. Reports contain alert metadata but never include the API token.
+Before building the published dependency inventory, the workflow polls `npm view <pkg>@<version> version` for `aiwg`, `@aiwg/cli`, and `@aiwg/cockpit`. All three must return the exact release version. The default visibility wait is 45 minutes, with checks every 30 seconds. Registry requests and sleeps are bounded by the remaining wait; npm fetch retries are disabled.
+
+If npm still holds any package in review when the wait expires, the workflow skips dependency installation and Socket scanning. Both the job summary and uploaded `workflow-status.md` record `unavailable: npm-review-pending`, the release version/tag/commit, and the exact manual re-dispatch command. The final audit gate still fails closed for unavailable evidence; the release publication remains successful. Re-dispatch once all three versions are visible.
+
+Every run uploads workflow status evidence, including when npm visibility expires. When Socket evaluation runs, it also uploads JSON and Markdown reports even when evaluation fails. Reports contain alert metadata but never include the API token.
 
 Each finding is bound to the scanned commit and carries one provenance record per matching workspace: manifest path, lockfile path, SHA-256 lock digest, package ecosystem, and dependency path. Repeated package/artifact/rule findings collapse into one record with all affected paths. Because the query is derived from current locks, removed packages disappear on the next successful scan instead of surviving as stale root findings.
 
@@ -43,7 +47,10 @@ Configure these values in the GitHub repository:
 
 - secret `SOCKET_API_TOKEN`, restricted to Socket's `packages:list` scope;
 - variable `SOCKET_ORG_SLUG`, containing the Socket organization slug.
-- optional variable `SOCKET_PACE_QUOTA_MINUTES` (default `120`): how long the audit may wait for the next Socket quota window after HTTP 429. The job timeout (150 minutes) leaves room for that wait plus the scan. A release has roughly 800 components, more than the free plan's 500 units per hour, so pacing is on by default.
+- optional variable `SOCKET_NPM_VISIBILITY_WAIT_MINUTES` (default `45`): integer minutes from `1` to `90` to wait for all three exact npm versions. Values outside that range fail configuration validation.
+- optional variable `SOCKET_PACE_QUOTA_MINUTES` (default `120`): how long the audit may wait for the next Socket quota window after HTTP 429. A release has roughly 800 components, more than the free plan's 500 units per hour, so pacing is on by default.
+
+The job timeout is 240 minutes: the maximum 90-minute npm visibility wait + 120 minutes of Socket pacing + 30 minutes for checkout, inventory, scanning, and evidence upload. If increasing Socket pacing above 120 minutes, increase the workflow timeout to preserve that allowance.
 
 The tag-bound npm publication workflow invokes the Socket workflow directly as
 a reusable workflow after publication succeeds. This avoids relying on a
@@ -53,8 +60,8 @@ and release source commit; the audit rejects a version, tag ref, or commit
 mismatch before querying Socket.
 
 The workflow uses Socket's organization-scoped batch PURL endpoint with polling
-enabled. After service recovery or review remediation, rerun it against the
-immutable release tag rather than the public mirror's default branch:
+enabled. After service recovery or review remediation, dispatch the workflow
+definition from `main` with the immutable release tag and its peeled commit:
 
 ```bash
 VERSION=2026.9.20
@@ -62,13 +69,14 @@ TAG="v${VERSION}"
 COMMIT="$(git rev-parse "${TAG}^{commit}")"
 gh workflow run socket-post-publish.yml \
   --repo jmagly/aiwg \
-  --ref "$TAG" \
+  --ref main \
   -f version="$VERSION" \
   -f tag="$TAG" \
   -f commit="$COMMIT"
 ```
 
-The selected `--ref` and `tag` input must both identify `v<version>`. The
+The `--ref main` selects the workflow definition containing the visibility wait;
+the `tag` input selects the source checkout and must identify `v<version>`. The
 operator supplies the peeled commit from that immutable tag; the workflow fails
 before scanning if the checked-out package version, tag ref, and source commit
 do not agree.
