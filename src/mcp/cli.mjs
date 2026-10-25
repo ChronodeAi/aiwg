@@ -8,6 +8,7 @@
 
 import { startServer, createServer } from './server.mjs';
 import { assertConfigDestination, assertConfigObject, assertProjectCredentials, isPathInsideDir, classifyMcpDestination, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
+import { replaceServer } from './toml-editor.mjs';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -335,16 +336,14 @@ enabled_tools = [
           if (error.code !== 'ENOENT') throw error;
         }
 
-        // Check if AIWG MCP already configured
-        if (existing.includes('[mcp_servers.aiwg]')) {
+        // Parse before deciding whether to write, including already configured files.
+        const edited = replaceServer(existing, 'aiwg', tomlContent.trim());
+        if (edited.alreadyPresent) {
           console.log('AIWG MCP already configured in ~/.codex/config.toml');
           return true;
         }
 
-        // Append TOML config
-        const updated = existing.trimEnd() + '\n' + tomlContent.trim() + '\n';
-
-        await writeConfigAtomic(configPath, updated, { userScope: true });
+        await writeConfigAtomic(configPath, edited.text, { userScope: true });
         console.log(`MCP configuration appended to: ${configPath}`);
         console.log(`\nTo use AIWG MCP server with Codex:`);
         console.log(`  1. Restart Codex CLI`);

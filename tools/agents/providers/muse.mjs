@@ -241,7 +241,7 @@ export async function postDeploy(targetDir, opts = {}) {
   // #228 — optional MCP settings profile. Explicit opt-in only (--mcp);
   // default `aiwg use --provider muse` never touches user settings.
   if (fullDeploy && opts.mcp === true) {
-    deployMuseMcp(opts);
+    await deployMuseMcp(opts);
   }
 
   if (!opts.quiet) {

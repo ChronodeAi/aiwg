@@ -14,7 +14,7 @@
  * - writer wiring: hooks default on (--no-hooks opts out), MCP off by default
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -45,6 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -433,19 +434,19 @@ describe('mergeMcpProfile (#228)', () => {
 // ---------------------------------------------------------------------------
 
 describe('deployMuseMcp (#228)', () => {
-  it('is a no-op without the explicit opt-in flag (zero writes)', () => {
-    const result = deployMuseMcp({ dryRun: true, quiet: true, env: xdgEnv(), userHome: HOME });
+  it('is a no-op without the explicit opt-in flag (zero writes)', async () => {
+    const result = await deployMuseMcp({ dryRun: true, quiet: true, env: xdgEnv(), userHome: HOME });
     expect(result.skipped).toBe(true);
     expect(result.wrote).toBe(false);
     expect(fs.existsSync(path.join(tmpRoot, 'xdg'))).toBe(false);
   });
 
-  it('dry-run shows the planned diff with zero writes', () => {
+  it('dry-run shows the planned diff with zero writes', async () => {
     const logs: string[] = [];
     const origLog = console.log;
     console.log = (msg: string) => logs.push(String(msg));
     try {
-      const result = deployMuseMcp({ dryRun: true, mcp: true, env: xdgEnv(), userHome: HOME });
+      const result = await deployMuseMcp({ dryRun: true, mcp: true, env: xdgEnv(), userHome: HOME });
       expect(result.changed).toBe(true);
       expect(result.wrote).toBe(false);
     } finally {
@@ -458,8 +459,8 @@ describe('deployMuseMcp (#228)', () => {
     expect(out).toContain('zero writes');
   });
 
-  it('creates settings.json with schema_version 1 and records the sidecar', () => {
-    const result = deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
+  it('creates settings.json with schema_version 1 and records the sidecar', async () => {
+    const result = await deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
     expect(result.wrote).toBe(true);
     expect(result.backupPath).toBeNull();
     const doc = readJson(settingsPath());
@@ -469,12 +470,12 @@ describe('deployMuseMcp (#228)', () => {
     expect(sidecar.servers).toEqual(['aiwg']);
   });
 
-  it('backs up existing settings before writing and preserves unknown keys', () => {
+  it('backs up existing settings before writing and preserves unknown keys', async () => {
     fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
     const existing = { schema_version: 1, approvals: 'strict', mcp_servers: { other: { transport: 'stdio', command: 'x', args: [] } } };
     fs.writeFileSync(settingsPath(), JSON.stringify(existing, null, 2), 'utf8');
 
-    const result = deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
+    const result = await deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
     expect(result.wrote).toBe(true);
     expect(result.backupPath).toMatch(/\.aiwg-backup-/);
     expect(readJson(result.backupPath as string)).toEqual(existing);
@@ -485,36 +486,36 @@ describe('deployMuseMcp (#228)', () => {
     expect(doc.mcp_servers.aiwg).toEqual(aiwgMcpServerProfile());
   });
 
-  it('is idempotent on a second run', () => {
-    deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
-    const second = deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
+  it('is idempotent on a second run', async () => {
+    await deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
+    const second = await deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
     expect(second.changed).toBe(false);
     expect(second.wrote).toBe(false);
   });
 
-  it('never clobbers an operator-owned aiwg server key', () => {
+  it('never clobbers an operator-owned aiwg server key', async () => {
     fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
     const operatorOwned = { schema_version: 1, mcp_servers: { aiwg: { transport: 'stdio', command: 'mine', args: [] } } };
     fs.writeFileSync(settingsPath(), JSON.stringify(operatorOwned), 'utf8');
 
-    const result = deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
+    const result = await deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
     expect(result.skipped).toBe(true);
     expect(result.wrote).toBe(false);
     expect((result.warnings || []).join('\n')).toMatch(/operator-owned/);
     expect(readJson(settingsPath())).toEqual(operatorOwned);
   });
 
-  it('fails closed on unparseable settings.json with zero writes', () => {
+  it('fails closed on unparseable settings.json with zero writes', async () => {
     fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
     fs.writeFileSync(settingsPath(), '{ broken', 'utf8');
-    expect(() => deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME })).toThrow(/not valid JSON/);
+    await expect(deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME })).rejects.toThrow(/not valid JSON/);
     expect(fs.readFileSync(settingsPath(), 'utf8')).toBe('{ broken');
   });
 
-  it('fails closed on bad XDG metadata', () => {
-    expect(() =>
+  it('fails closed on bad XDG metadata', async () => {
+    await expect(
       deployMuseMcp({ mcp: true, quiet: true, env: { XDG_CONFIG_HOME: 'relative/path' }, userHome: HOME }),
-    ).toThrow(/XDG_CONFIG_HOME/);
+    ).rejects.toThrow(/XDG_CONFIG_HOME/);
   });
 });
 
@@ -530,13 +531,13 @@ describe('assertMuseUserSettingsPath (#228)', () => {
 });
 
 describe('pruneMuseMcp (#228)', () => {
-  it('removes only the AIWG-managed server key, keeping operator servers', () => {
-    deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
+  it('removes only the AIWG-managed server key, keeping operator servers', async () => {
+    await deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
     const doc = readJson(settingsPath());
     doc.mcp_servers.other = { transport: 'stdio', command: 'x', args: [] };
     fs.writeFileSync(settingsPath(), JSON.stringify(doc, null, 2), 'utf8');
 
-    const result = pruneMuseMcp({ quiet: true, env: xdgEnv(), userHome: HOME });
+    const result = await pruneMuseMcp({ quiet: true, env: xdgEnv(), userHome: HOME });
     expect(result.pruned).toBe(true);
     expect(result.wrote).toBe(true);
     const pruned = readJson(settingsPath());
@@ -545,20 +546,20 @@ describe('pruneMuseMcp (#228)', () => {
     expect(fs.existsSync(path.join(tmpRoot, 'xdg', 'muse', MUSE_MCP_SIDECAR_NAME))).toBe(false);
   });
 
-  it('dry-run prunes nothing', () => {
-    deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
+  it('dry-run prunes nothing', async () => {
+    await deployMuseMcp({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
     const before = fs.readFileSync(settingsPath(), 'utf8');
-    const result = pruneMuseMcp({ dryRun: true, quiet: true, env: xdgEnv(), userHome: HOME });
+    const result = await pruneMuseMcp({ dryRun: true, quiet: true, env: xdgEnv(), userHome: HOME });
     expect(result.pruned).toBe(true);
     expect(result.wrote).toBe(false);
     expect(fs.readFileSync(settingsPath(), 'utf8')).toBe(before);
   });
 
-  it('leaves an operator-owned aiwg key alone', () => {
+  it('leaves an operator-owned aiwg key alone', async () => {
     fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
     const operatorOwned = { schema_version: 1, mcp_servers: { aiwg: { transport: 'stdio', command: 'mine', args: [] } } };
     fs.writeFileSync(settingsPath(), JSON.stringify(operatorOwned), 'utf8');
-    const result = pruneMuseMcp({ quiet: true, env: xdgEnv(), userHome: HOME });
+    const result = await pruneMuseMcp({ quiet: true, env: xdgEnv(), userHome: HOME });
     expect(result.pruned).toBe(false);
     expect(readJson(settingsPath())).toEqual(operatorOwned);
   });
@@ -569,10 +570,10 @@ describe('pruneMuseMcp (#228)', () => {
 // ---------------------------------------------------------------------------
 
 describe('muse writer hooks/MCP wiring (#228)', () => {
-  it('postDeploy installs hooks by default on a full deploy', () => {
+  it('postDeploy installs hooks by default on a full deploy', async () => {
     const target = path.join(tmpRoot, 'full');
     fs.mkdirSync(target, { recursive: true });
-    postDeploy(target, { quiet: true, srcRoot: repoRoot, dryRun: false });
+    await postDeploy(target, { quiet: true, srcRoot: repoRoot, dryRun: false });
     expect(fs.existsSync(hooksPath(target))).toBe(true);
     expect(readJson(hooksPath(target)).hooks.SessionStart).toHaveLength(1);
   });
@@ -602,17 +603,17 @@ describe('muse writer hooks/MCP wiring (#228)', () => {
     expect(fs.existsSync(hooksPath(target))).toBe(false);
   });
 
-  it('postDeploy skips hooks with hooks: false (--no-hooks)', () => {
+  it('postDeploy skips hooks with hooks: false (--no-hooks)', async () => {
     const target = path.join(tmpRoot, 'no-hooks');
     fs.mkdirSync(target, { recursive: true });
-    postDeploy(target, { quiet: true, srcRoot: repoRoot, dryRun: false, hooks: false });
+    await postDeploy(target, { quiet: true, srcRoot: repoRoot, dryRun: false, hooks: false });
     expect(fs.existsSync(hooksPath(target))).toBe(false);
   });
 
-  it('postDeploy does not touch MCP settings by default', () => {
+  it('postDeploy does not touch MCP settings by default', async () => {
     const target = path.join(tmpRoot, 'no-mcp');
     fs.mkdirSync(target, { recursive: true });
-    postDeploy(target, {
+    await postDeploy(target, {
       quiet: true,
       srcRoot: repoRoot,
       dryRun: false,
@@ -622,10 +623,10 @@ describe('muse writer hooks/MCP wiring (#228)', () => {
     expect(fs.existsSync(path.join(tmpRoot, 'xdg'))).toBe(false);
   });
 
-  it('postDeploy merges the MCP profile only with mcp: true (--mcp)', () => {
+  it('postDeploy merges the MCP profile only with mcp: true (--mcp)', async () => {
     const target = path.join(tmpRoot, 'with-mcp');
     fs.mkdirSync(target, { recursive: true });
-    postDeploy(target, {
+    await postDeploy(target, {
       quiet: true,
       srcRoot: repoRoot,
       dryRun: false,
@@ -637,10 +638,10 @@ describe('muse writer hooks/MCP wiring (#228)', () => {
     expect(doc.mcp_servers.aiwg).toEqual(aiwgMcpServerProfile());
   });
 
-  it('dry-run postDeploy performs zero writes for hooks and MCP', () => {
+  it('dry-run postDeploy performs zero writes for hooks and MCP', async () => {
     const target = path.join(tmpRoot, 'dry');
     fs.mkdirSync(target, { recursive: true });
-    postDeploy(target, {
+    await postDeploy(target, {
       quiet: true,
       srcRoot: repoRoot,
       dryRun: true,
@@ -650,5 +651,77 @@ describe('muse writer hooks/MCP wiring (#228)', () => {
     });
     expect(fs.existsSync(hooksPath(target))).toBe(false);
     expect(fs.existsSync(path.join(tmpRoot, 'xdg'))).toBe(false);
+  });
+});
+
+
+describe('Muse MCP safe writes (#3565)', () => {
+  const options = () => ({ mcp: true, quiet: true, env: xdgEnv(), userHome: HOME });
+
+  async function seed(prune: boolean) {
+    fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
+    fs.writeFileSync(settingsPath(), '{ "schema_version": 1, "token": "synthetic-secret" }\n');
+    if (prune) await deployMuseMcp(options());
+    fs.chmodSync(settingsPath(), 0o600);
+  }
+
+  it.each([false, true])('keeps settings and backups private (prune=%s)', async prune => {
+    await seed(prune);
+    const before = fs.readFileSync(settingsPath(), 'utf8');
+    const result = prune ? await pruneMuseMcp(options()) : await deployMuseMcp(options());
+    expect(fs.statSync(settingsPath()).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(result.backupPath).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(result.backupPath, 'utf8')).toBe(before);
+  });
+
+  it.each([false, true])('cannot redirect a write through the old PID temp symlink (prune=%s)', async prune => {
+    await seed(prune);
+    const victim = path.join(tmpRoot, 'victim');
+    fs.writeFileSync(victim, 'untouched');
+    const temporary = path.join(path.dirname(settingsPath()), `.settings.json.tmp.${process.pid}`);
+    fs.symlinkSync(victim, temporary);
+    if (prune) await pruneMuseMcp(options());
+    else await deployMuseMcp(options());
+    expect(fs.readFileSync(victim, 'utf8')).toBe('untouched');
+    expect(fs.lstatSync(temporary).isSymbolicLink()).toBe(true);
+    expect(fs.lstatSync(settingsPath()).isSymbolicLink()).toBe(false);
+  });
+
+  it.each([false, true])('refuses a destination symlink without creating a backup (prune=%s)', async prune => {
+    await seed(prune);
+    const victim = path.join(tmpRoot, 'victim');
+    fs.renameSync(settingsPath(), victim);
+    fs.symlinkSync(victim, settingsPath());
+    const before = fs.readFileSync(victim, 'utf8');
+    const entries = fs.readdirSync(path.dirname(settingsPath()));
+    await expect(Promise.resolve().then(() => prune ? pruneMuseMcp(options()) : deployMuseMcp(options())))
+      .rejects.toThrow(/symlink/);
+    expect(fs.readFileSync(victim, 'utf8')).toBe(before);
+    expect(fs.readdirSync(path.dirname(settingsPath()))).toEqual(entries);
+  });
+
+  it('creates private backups even when the existing settings are public', async () => {
+    await seed(false);
+    fs.chmodSync(settingsPath(), 0o644);
+    const result = await deployMuseMcp(options());
+    expect(fs.statSync(result.backupPath).mode & 0o777).toBe(0o600);
+  });
+
+  it.each([false, true])('does not follow a pre-created backup symlink (prune=%s)', async prune => {
+    await seed(prune);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-02T03:04:05.000Z'));
+    const victim = path.join(tmpRoot, 'victim');
+    fs.writeFileSync(victim, 'untouched');
+    const backup = `${settingsPath()}.aiwg-backup-2026-01-02T03-04-05-000Z`;
+    fs.symlinkSync(victim, backup);
+    try {
+      if (prune) await pruneMuseMcp(options());
+      else await deployMuseMcp(options());
+    } catch (error) {
+      expect(String(error)).toMatch(/symlink|exist/i);
+    }
+    expect(fs.readFileSync(victim, 'utf8')).toBe('untouched');
+    expect(fs.lstatSync(backup).isSymbolicLink()).toBe(true);
   });
 });

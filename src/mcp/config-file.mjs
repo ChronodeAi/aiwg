@@ -187,11 +187,15 @@ export async function writeConfigAtomic(file, content, { userScope = false, proj
   if (rejectSymlinkParents) await assertNoSymlinkParents(file, symlinkRoot);
   const info = await assertConfigDestination(file, projectRoot);
   const mode = restoreMode ?? (userScope ? 0o600 : info ? info.mode & 0o7777 : newFileMode ?? 0o666);
-  await mkdir(dirname(file), { recursive: true });
+  // Restrict newly created parents for private settings, ownership and output files.
+  // Recursive mkdir leaves every existing directory's permissions unchanged.
+  await mkdir(dirname(file), { recursive: true, mode: (mode & 0o077) === 0 ? 0o700 : undefined });
   const temporary = `${file}.${randomUUID()}.tmp`;
   let handle;
+  let created = false;
   try {
     handle = await open(temporary, 'wx', mode);
+    created = true;
     await handle.writeFile(content, 'utf-8');
     if (userScope || info || restoreMode !== undefined || newFileMode !== undefined) await handle.chmod(mode);
     await handle.sync();
@@ -204,7 +208,7 @@ export async function writeConfigAtomic(file, content, { userScope = false, proj
     try {
       if (handle) await handle.close();
     } finally {
-      await unlink(temporary).catch(() => {});
+      if (created) await unlink(temporary).catch(() => {});
     }
   }
 }

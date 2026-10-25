@@ -7,11 +7,14 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-const cliPath = resolve(__dirname, '../../../src/mcp/cli.mjs');
+const cliPath = resolve(__dirname, '../../../dist/src/mcp/cli.mjs');
 let root: string;
 
-function run(args: string[]) {
-  return execFileSync(process.execPath, [cliPath, ...args], {
+function run(args: string[], permissiveUmask = false) {
+  const nodeArgs = permissiveUmask
+    ? ['--input-type=module', '-e', `process.umask(0o002); await import(${JSON.stringify(cliPath)});`, cliPath, ...args]
+    : [cliPath, ...args];
+  return execFileSync(process.execPath, nodeArgs, {
     cwd: join(root, 'project'),
     encoding: 'utf-8',
     timeout: 60_000,
@@ -49,6 +52,23 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe('ephemeral Claude settings safety', () => {
+  it.each([false, true])('creates private settings, ownership and output parents under umask 0002 (ephemeral=%s)', ephemeral => {
+    const out = join(root, 'outputs', 'nested', 'triage.json');
+    run(['inject', '--provider', 'claude', '--profile', 'triage',
+      ...(ephemeral ? ['--ephemeral', '--out', out] : [])], true);
+    const settingsDir = ephemeral ? join(root, 'outputs/nested') : join(root, 'project/.claude');
+    const settings = ephemeral ? join(settingsDir, 'triage.settings.json') : join(settingsDir, 'settings.local.json');
+    const records = join(root, 'config/claude-tool-permissions');
+    expect(statSync(settingsDir).mode & 0o777).toBe(0o700);
+    expect(statSync(settings).mode & 0o777).toBe(0o600);
+    expect(statSync(records).mode & 0o777).toBe(0o700);
+    for (const name of readdirSync(records)) expect(statSync(join(records, name)).mode & 0o777).toBe(0o600);
+    if (ephemeral) {
+      expect(statSync(join(root, 'outputs')).mode & 0o777).toBe(0o700);
+      expect(statSync(out).mode & 0o777).toBe(0o600);
+    }
+  });
+
   it('passes the deny-only sidecar to Claude and keeps both outputs private on reinjection', () => {
     const out = join(root, 'triage.json');
     const settings = join(root, 'triage.settings.json');

@@ -115,33 +115,9 @@ export class McpServerRegistry {
   async load() {
     if (this.#cache) return this.#cache;
 
-    if (this.#layers) {
-      const layered = await loadLayered(this.#layers, REGISTRY_FILENAME, 'servers', DEFAULT_REGISTRY);
-      this.#cache = layered.data;
-      this.#layering = layered.layering;
-      return this.#cache;
-    }
-
-    const filePath = this.getPath();
-    try {
-      const content = await readFile(filePath, 'utf-8');
-      const parsed = JSON.parse(content);
-      this.#cache = {
-        ...DEFAULT_REGISTRY,
-        ...parsed,
-        servers: parsed.servers || {},
-      };
-    } catch {
-      this.#cache = { ...DEFAULT_REGISTRY, servers: {} };
-    }
-
-    try {
-      resolveCredentialPolicy({ registryPolicy: this.#cache.credentialPolicy, env: {} });
-    } catch (error) {
-      this.#cache = null;
-      throw new Error(`Invalid MCP credential policy in ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-
+    const loaded = await loadLayered(this.#layers ?? [this.#configDir], REGISTRY_FILENAME, 'servers', DEFAULT_REGISTRY);
+    this.#cache = loaded.data;
+    this.#layering = this.#layers ? loaded.layering : null;
     return this.#cache;
   }
 

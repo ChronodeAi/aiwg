@@ -17,7 +17,7 @@
 
 import { lstat, mkdtemp, readFile, readlink, realpath, rmdir } from 'fs/promises';
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from 'path';
-import { assertConfigDestination, assertNoSymlinkParents, writeConfigAtomic } from './config-file.mjs';
+import { assertConfigDestination, assertConfigObject, assertNoSymlinkParents, writeConfigAtomic } from './config-file.mjs';
 import { resolveCredentialPolicy, stricterCredentialPolicy, warnCredentialPolicyRelaxation, warnDroppedOverlayPolicy } from './credentials.mjs';
 
 /**
@@ -62,9 +62,15 @@ export function resolveConfigLayers(configDirOverride, env = process.env, { plat
   return layers.length > 0 ? layers : null;
 }
 
-async function readLayer(path) {
+async function readLayer(path, collection) {
   try {
-    return JSON.parse(await readFile(path, 'utf-8'));
+    const parsed = JSON.parse(await readFile(path, 'utf-8'));
+    try {
+      assertConfigObject(parsed, collection);
+    } catch {
+      throw new Error(`Invalid MCP configuration layer ${path}: expected an object root and an object ${collection} map`);
+    }
+    return parsed;
   } catch (error) {
     if (error?.code === 'ENOENT') return null;
     if (error instanceof SyntaxError) throw new Error(`Invalid JSON in MCP configuration layer ${path}`);
@@ -115,7 +121,7 @@ export async function loadLayered(layers, filename, collection, defaults) {
   let lowerPolicySource;
   const writeLayer = layers.length - 1;
   for (const [index, dir] of layers.entries()) {
-    const parsed = await readLayer(resolve(dir, filename));
+    const parsed = await readLayer(resolve(dir, filename), collection);
     if (!parsed) continue;
     const { [collection]: entries, ...rest } = parsed;
     if (index === writeLayer) {
@@ -298,6 +304,9 @@ export async function assertLayerWriteDestination(layers, filename) {
 /** Persist atomically, then refresh ownership only after a successful write. */
 export async function saveLayerData(file, data, collection, layers, layering, explicitPolicy = false) {
   if (layers) await assertLayerWriteDestination(layers, basename(file));
+  // Validate the current bytes even if the caller loaded and cached an older
+  // version, or called save(data) on a fresh standalone registry.
+  await readLayer(file, collection);
   const persisted = layering ? writeLayerData(data, collection, layering, explicitPolicy) : data;
   // The active identity layer file is always 0600: it is the personal write
   // layer of an active AIWG_CONFIG_LAYERS configuration and may carry secrets.
