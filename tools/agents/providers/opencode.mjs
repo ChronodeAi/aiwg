@@ -23,6 +23,7 @@ const staticModelCatalog = _require('../../../agentic/code/providers/model-catal
 let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
+import { importImpl } from '../../_resolve-impl.mjs';
 import {
   withRuleDeployment,
   ensureDir,
@@ -51,6 +52,7 @@ import {
   filterCommandsAgainstSkills,
   deploySoulCompanions
 } from './base.mjs';
+const { assertConfigDestination, writeConfigAtomic } = await importImpl(import.meta.url, 'mcp/config-file.mjs');
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
 
 // ============================================================================
@@ -396,9 +398,9 @@ export function deployRules(ruleFiles, targetDir, opts) {
  * Non-destructive: a malformed existing opencode.json is left untouched (warn,
  * skip) rather than overwritten.
  *
- * @returns {boolean} true if the config was changed (or would be, in dry-run)
+ * @returns {Promise<boolean>} true if the config was changed (or would be, in dry-run)
  */
-export function mergeOpenCodeInstructions(targetDir, opts = {}) {
+export async function mergeOpenCodeInstructions(targetDir, opts = {}) {
   const RULE_GLOB = `${paths.rules}*.md`; // .opencode/rule/*.md — opencode supports globs in instructions (verified in sst/opencode session/instruction.ts)
   // opencode auto-loads AGENTS.md/CLAUDE.md/CONTEXT.md but NOT AIWG.md, and the
   // generated AGENTS.md is a thin link-index that points to AIWG.md. The
@@ -409,6 +411,7 @@ export function mergeOpenCodeInstructions(targetDir, opts = {}) {
   const AIWG = 'AIWG.md';
   const wanted = [RULE_GLOB, AGENTS, AIWG];
   const configPath = path.join(targetDir, 'opencode.json');
+  await assertConfigDestination(configPath, targetDir);
 
   let config = {};
   if (fs.existsSync(configPath)) {
@@ -435,7 +438,7 @@ export function mergeOpenCodeInstructions(targetDir, opts = {}) {
 
   // Preserve operator-authored entries; append only what's missing, deduped.
   config.instructions = [...existing, ...missing];
-  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  await writeConfigAtomic(configPath, `${JSON.stringify(config, null, 2)}\n`, { projectRoot: targetDir });
   if (opts.verbose) {
     console.log(`Wired ${missing.length} entr${missing.length === 1 ? 'y' : 'ies'} into opencode.json instructions[]: ${missing.join(', ')}`);
   }
@@ -643,7 +646,7 @@ async function deploySelected(opts) {
     // #1548: rules on disk are inert unless referenced from opencode.json
     // instructions[]. Wire them so opencode actually loads them.
     try {
-      mergeOpenCodeInstructions(target, opts);
+      await mergeOpenCodeInstructions(target, opts);
     } catch (err) {
       console.warn(`Warning: could not wire opencode.json instructions[]: ${err && err.message ? err.message : err}`);
     }

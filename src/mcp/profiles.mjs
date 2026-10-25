@@ -10,10 +10,10 @@
  * @implements #889
  */
 
-import { resolveCredentialPolicy } from './credentials.mjs';
 import { isLowerLayerEntry, loadLayered, resolveProfileExtends, resolveConfigLayers, saveLayerData } from './config-layers.mjs';
-import { readFile, writeFile } from 'fs/promises';
-import { resolve } from 'path';
+import { writeConfigAtomic } from './config-file.mjs';
+import { readFile } from 'fs/promises';
+import { parse, resolve } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
 
@@ -112,39 +112,21 @@ export class McpProfileRegistry {
   async load() {
     if (this.#cache) return this.#cache;
 
-    if (this.#layers) {
-      const layered = await loadLayered(this.#layers, PROFILES_FILENAME, 'profiles', DEFAULT_DATA);
-      this.#cache = layered.data;
-      this.#layering = layered.layering;
-      return this.#cache;
-    }
-
-    const filePath = this.getPath();
-    try {
-      const content = await readFile(filePath, 'utf-8');
-      const parsed = JSON.parse(content);
-      this.#cache = {
-        ...DEFAULT_DATA,
-        ...parsed,
-        profiles: parsed.profiles || {},
-      };
-    } catch {
-      this.#cache = { ...DEFAULT_DATA, profiles: {} };
-    }
-
-    try {
-      resolveCredentialPolicy({ registryPolicy: this.#cache.credentialPolicy, env: {} });
-    } catch (error) {
-      this.#cache = null;
-      throw new Error(`Invalid MCP credential policy in ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-
+    const loaded = await loadLayered(this.#layers ?? [this.#configDir], PROFILES_FILENAME, 'profiles', DEFAULT_DATA);
+    this.#cache = loaded.data;
+    this.#layering = this.#layers ? loaded.layering : null;
     return this.#cache;
   }
 
   async save(data = this.#cache) {
     if (!data) return;
-    await saveLayerData(this.getPath(), data, 'profiles', this.#layers, this.#layering);
+    // Load ownership before a fresh save so inherited fields stay in their layer.
+    let layering = this.#layering;
+    if (this.#layers && !layering) {
+      await this.load();
+      layering = this.#layering;
+    }
+    await saveLayerData(this.getPath(), data, 'profiles', this.#layers, layering);
     this.#cache = data;
     if (this.#layers) {
       this.clearCache();
@@ -402,7 +384,11 @@ export class McpProfileRegistry {
       throw new Error(`Profile "${profileName}" not found.`);
     }
 
-    await writeFile(filePath, JSON.stringify({ profiles: toExport }, null, 2) + '\n', 'utf-8');
+    await writeConfigAtomic(filePath, JSON.stringify({ profiles: toExport }, null, 2) + '\n', {
+      userScope: true,
+      rejectSymlinkParents: true,
+      symlinkRoot: parse(resolve(filePath)).root,
+    });
   }
 
   /** Install preset profiles (does not overwrite existing) */

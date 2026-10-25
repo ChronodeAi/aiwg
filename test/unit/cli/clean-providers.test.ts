@@ -24,7 +24,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join, resolve } from 'path';
@@ -413,5 +413,46 @@ describe('tools/cli/clean-providers.mjs', () => {
     await runCleanProviders(projectDir);
 
     await expect(readFile(join(projectDir, 'opencode.json'), 'utf-8')).resolves.toBe(raw);
+  });
+});
+
+
+describe('cleanup safe writes (#3565)', () => {
+  it('refuses a symlinked merge target without modifying external bytes', async () => {
+    const project = await makeScratchProject();
+    const outsideDir = await makeScratchProject();
+    const outside = join(outsideDir, 'operator.json');
+    const original = '{ "theme": "keep", "instructions": ["AIWG.md"] }\n';
+    await writeFile(outside, original);
+    await symlink(outside, join(project, 'opencode.json'));
+    await expect(runCleanProviders(project)).rejects.toThrow(/symlink/);
+    expect(await readFile(outside, 'utf8')).toBe(original);
+  });
+
+  it('refuses a symlinked descendant directory without modifying external bytes', async () => {
+    const project = await makeScratchProject();
+    const outsideDir = await makeScratchProject();
+    const configDir = await makeScratchConfigDir();
+    await writeMcpRegistry(configDir, { aiwg: { injectedProviders: ['cursor'] } });
+    const outside = join(outsideDir, 'mcp.json');
+    const original = '{ "theme": "keep", "mcpServers": { "aiwg": { "command": "aiwg" } } }\n';
+    await writeFile(outside, original);
+    await symlink(outsideDir, join(project, '.cursor'));
+    await expect(runCleanProviders(project, { configDir })).rejects.toThrow(/symlink/);
+    expect(await readFile(outside, 'utf8')).toBe(original);
+  });
+
+  it('atomically replaces merge targets and keeps project modes', async () => {
+    const project = await makeScratchProject();
+    const file = join(project, 'opencode.json');
+    const snapshot = join(project, 'snapshot.json');
+    const original = '{ "theme": "keep", "instructions": ["AIWG.md"] }\n';
+    await writeFile(file, original);
+    await chmod(file, 0o640);
+    await link(file, snapshot);
+    await runCleanProviders(project);
+    expect(await readFile(snapshot, 'utf8')).toBe(original);
+    expect((await stat(file)).mode & 0o777).toBe(0o640);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ theme: 'keep' });
   });
 });
