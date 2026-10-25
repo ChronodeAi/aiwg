@@ -24,7 +24,7 @@ export const WINDSURF_ADAPTER_VERSION = DEVIN_DESKTOP_ADAPTER_VERSION;
 /** @deprecated Compatibility export. */
 export const WINDSURF_TRANSCRIPT_SCHEMA_VERSION = DEVIN_DESKTOP_TRANSCRIPT_SCHEMA_VERSION;
 
-const StepSchema = z.object({
+const StepSchema = z.looseObject({
   schema_version: z.string().optional(),
   type: z.string().min(1),
   status: z.string().min(1),
@@ -33,13 +33,13 @@ const StepSchema = z.object({
   event_id: z.string().min(1).optional(),
   timestamp: z.string().optional(),
   model_name: z.string().optional(),
-  model: z.union([z.string(), z.record(z.unknown())]).optional(),
-  sensitive_content_warning: z.union([z.boolean(), z.string(), z.record(z.unknown())]).optional(),
-  user_input: z.record(z.unknown()).optional(),
-  planner_response: z.record(z.unknown()).optional(),
-  code_action: z.record(z.unknown()).optional(),
-  tool_info: z.record(z.unknown()).optional(),
-}).passthrough();
+  model: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+  sensitive_content_warning: z.union([z.boolean(), z.string(), z.record(z.string(), z.unknown())]).optional(),
+  user_input: z.record(z.string(), z.unknown()).optional(),
+  planner_response: z.record(z.string(), z.unknown()).optional(),
+  code_action: z.record(z.string(), z.unknown()).optional(),
+  tool_info: z.record(z.string(), z.unknown()).optional(),
+});
 
 type Step = z.infer<typeof StepSchema>;
 

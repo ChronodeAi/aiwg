@@ -17,6 +17,7 @@
  */
 
 import { z } from 'zod';
+import { integer } from '../../schema/zod-validation.mjs';
 import {
   runAiwgCli,
   loadCommandAllowList,
@@ -31,10 +32,10 @@ export function registerCommandRunTool(server) {
     description: 'Dispatch to any allow-listed AIWG CLI command (`aiwg <command> [args...]`). The full surface of ~94 commands is reachable. Destructive commands require `confirmed: true`.',
     inputSchema: {
       command: z.string().describe('Command name from `command-list` (e.g. "use", "discover", "doctor")'),
-      args: z.array(z.string()).default([]).describe('Argument array (never shell-interpreted)'),
+      args: z.array(z.string()).prefault([]).describe('Argument array (never shell-interpreted)'),
       project_dir: z.string().optional().describe('Working directory for the command'),
       confirmed: z.boolean().default(false).describe('Required for destructive commands (true to proceed)'),
-      timeout_ms: z.number().int().min(1000).max(600_000).default(120_000).describe('Timeout (1s–10min, default 2min)'),
+      timeout_ms: integer().min(1000).max(600_000).default(120_000).describe('Timeout (1s–10min, default 2min)'),
     },
     annotations: {
       destructiveHint: true,  // conservative default; many subcommands are read-only but the surface is broad

@@ -10,6 +10,7 @@
 
 import { readFile, stat } from 'node:fs/promises';
 import { z } from 'zod';
+import { integer, dateTime } from '../../schema/zod-validation.mjs';
 import { assertNoWorkerBinding, mcpError, mcpJson } from '../helpers.mjs';
 
 const FLEET_VERSION = 'agentic-orchestration/v1';
@@ -173,15 +174,15 @@ const scopeSchema = {
   instance_id: z.string().min(1).max(255).regex(/^[^\r\n]+$/),
   agent_id: z.string().min(1).max(255).regex(/^[^\r\n]+$/),
 };
-const activityFilterSchema = z.object({
+const activityFilterSchema = z.strictObject({
   event_name: z.string().min(1).max(255).optional(), collector: z.string().min(1).max(255).optional(),
   trust: z.string().min(1).max(255).optional(), plane: z.string().min(1).max(255).optional(),
   outcome: z.string().min(1).max(255).optional(), session_id: z.string().min(1).max(255).optional(),
   mission_id: z.string().min(1).max(255).optional(), task_id: z.string().min(1).max(255).optional(),
   tool_call_id: z.string().min(1).max(255).optional(), command_id: z.string().min(1).max(255).optional(),
   process_id: z.string().min(1).max(255).optional(), trace_id: z.string().regex(/^[0-9a-f]{32}$/).optional(),
-  since: z.string().datetime().optional(), until: z.string().datetime().optional(), limit: z.number().int().min(1).max(1000).optional(),
-}).strict().optional();
+  since: dateTime().optional(), until: dateTime().optional(), limit: integer().min(1).max(1000).optional(),
+}).optional();
 
 function scopeHeaders(args) {
   return Object.fromEntries(Object.entries(SCOPE_HEADERS).map(([key, header]) => [header, args[key]]));
@@ -206,17 +207,17 @@ export function registerAgenticSandboxToolset(server, { client = new AgenticSand
     () => client.request('/api/v2/fleet/workloads', { validate: requireInventory }));
   register('sandbox-fleet-get', { title: 'Get Agentic Sandbox fleet workload', description: 'Read one revisioned fleet workload by child identity.', inputSchema: { contract_version: z.literal(FLEET_VERSION).default(FLEET_VERSION), child_id: z.string().min(1).max(255) }, annotations: { readOnlyHint: true, destructiveHint: false } },
     ({ child_id }) => client.request(`/api/v2/fleet/workloads/${encodeURIComponent(child_id)}`, { validate: requireFleetRecord }));
-  register('sandbox-fleet-reconcile-preview', { title: 'Preview fleet reconciliation', description: 'Compute a read-only reconciliation preview from inventory; never calls POST /reconcile.', inputSchema: { contract_version: z.literal(FLEET_VERSION).default(FLEET_VERSION), before_revision: z.number().int().min(0), child_ids: z.array(z.string().min(1).max(255)).max(1000) }, annotations: { readOnlyHint: true, destructiveHint: false } },
+  register('sandbox-fleet-reconcile-preview', { title: 'Preview fleet reconciliation', description: 'Compute a read-only reconciliation preview from inventory; never calls POST /reconcile.', inputSchema: { contract_version: z.literal(FLEET_VERSION).default(FLEET_VERSION), before_revision: integer().min(0), child_ids: z.array(z.string().min(1).max(255)).max(1000) }, annotations: { readOnlyHint: true, destructiveHint: false } },
     async ({ before_revision, child_ids }) => client.request('/api/v2/fleet/workloads', { validate: (value) => {
       const inventory = requireInventory(value);
       const byId = new Map(inventory.records.map((record) => [record.lineage.child_id, record]));
       return { document_type: 'reconciliation-preview', api_version: FLEET_VERSION, before_revision, inventory_revision: inventory.inventory_revision, stale: before_revision !== inventory.inventory_revision, rows: child_ids.map((child_id) => ({ child_id, present: byId.has(child_id), observed_state: byId.get(child_id)?.status?.observed_state ?? 'unknown', revision: byId.get(child_id)?.status?.revision ?? null })) };
     } }));
-  register('sandbox-fleet-admit', { title: 'Admit Agentic Sandbox fleet workload', description: 'Mutating fleet admission; requires an exact v1 workload and confirmed=true.', inputSchema: { contract_version: z.literal(FLEET_VERSION).default(FLEET_VERSION), workload: z.record(z.unknown()), confirmed: z.boolean().default(false) }, annotations: { readOnlyHint: false, destructiveHint: true } },
+  register('sandbox-fleet-admit', { title: 'Admit Agentic Sandbox fleet workload', description: 'Mutating fleet admission; requires an exact v1 workload and confirmed=true.', inputSchema: { contract_version: z.literal(FLEET_VERSION).default(FLEET_VERSION), workload: z.record(z.string(), z.unknown()), confirmed: z.boolean().default(false) }, annotations: { readOnlyHint: false, destructiveHint: true } },
     ({ workload, confirmed }) => confirmed ? client.request('/api/v2/fleet/workloads', { method: 'POST', body: requireFleetRecord(workload), validate: (value) => ({ replayed: value?.replayed === true, workload: requireFleetRecord(value?.workload) }) }) : confirmationError('sandbox-fleet-admit'));
-  register('sandbox-fleet-observe', { title: 'Record fleet workload observation', description: 'Mutating monotonic observation update; requires confirmed=true and expected revision.', inputSchema: { contract_version: z.literal(FLEET_VERSION).default(FLEET_VERSION), child_id: z.string().min(1).max(255), expected_revision: z.number().int().min(0), status: z.record(z.unknown()), runtime_identity: z.object({ session_id: z.string().optional(), task_id: z.string().optional(), command_id: z.string().optional() }).strict().optional(), confirmed: z.boolean().default(false) }, annotations: { readOnlyHint: false, destructiveHint: true } },
+  register('sandbox-fleet-observe', { title: 'Record fleet workload observation', description: 'Mutating monotonic observation update; requires confirmed=true and expected revision.', inputSchema: { contract_version: z.literal(FLEET_VERSION).default(FLEET_VERSION), child_id: z.string().min(1).max(255), expected_revision: integer().min(0), status: z.record(z.string(), z.unknown()), runtime_identity: z.strictObject({ session_id: z.string().optional(), task_id: z.string().optional(), command_id: z.string().optional() }).optional(), confirmed: z.boolean().default(false) }, annotations: { readOnlyHint: false, destructiveHint: true } },
     ({ child_id, expected_revision, status, runtime_identity, confirmed }) => confirmed ? client.request(`/api/v2/fleet/workloads/${encodeURIComponent(child_id)}/observations`, { method: 'POST', body: requireSafePayload({ expected_revision, status, ...(runtime_identity ? { runtime_identity } : {}) }, 'fleet observation'), validate: requireFleetRecord }) : confirmationError('sandbox-fleet-observe'));
-  register('sandbox-fleet-reconcile', { title: 'Reconcile fleet workloads', description: 'Mutating restart reconciliation; requires confirmed=true.', inputSchema: { contract_version: z.literal(FLEET_VERSION).default(FLEET_VERSION), before_revision: z.number().int().min(0), child_ids: z.array(z.string().min(1).max(255)).max(1000), confirmed: z.boolean().default(false) }, annotations: { readOnlyHint: false, destructiveHint: true } },
+  register('sandbox-fleet-reconcile', { title: 'Reconcile fleet workloads', description: 'Mutating restart reconciliation; requires confirmed=true.', inputSchema: { contract_version: z.literal(FLEET_VERSION).default(FLEET_VERSION), before_revision: integer().min(0), child_ids: z.array(z.string().min(1).max(255)).max(1000), confirmed: z.boolean().default(false) }, annotations: { readOnlyHint: false, destructiveHint: true } },
     ({ before_revision, child_ids, confirmed }) => confirmed ? client.request('/api/v2/fleet/reconcile', { method: 'POST', body: { before_revision, child_ids }, validate: requireReconciliation }) : confirmationError('sandbox-fleet-reconcile'));
 
   for (const [kind, eventsRequired] of [['coverage', false], ['timeline', true]]) {

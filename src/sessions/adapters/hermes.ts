@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { number } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -28,31 +29,31 @@ export interface HermesLocalSessionsTransport {
 const sqliteBoolean = z.union([z.boolean(), z.literal(0), z.literal(1)])
   .transform((value) => Boolean(value));
 
-function nullableOptional<T extends z.ZodTypeAny>(schema: T) {
+function nullableOptional<T extends z.ZodType>(schema: T) {
   return z.preprocess((value) => value === null ? undefined : value, schema.optional());
 }
 
-const MessageSchema = z.object({
-  id: z.union([z.string(), z.number()]),
+const MessageSchema = z.looseObject({
+  id: z.union([z.string(), number()]),
   role: z.string().min(1),
   content: z.unknown().optional(),
   tool_call_id: nullableOptional(z.string()),
   tool_calls: z.unknown().optional(),
   tool_name: nullableOptional(z.string()),
-  timestamp: z.number().optional(),
-  token_count: nullableOptional(z.number()),
+  timestamp: number().optional(),
+  token_count: nullableOptional(number()),
   finish_reason: nullableOptional(z.string()),
   reasoning: nullableOptional(z.string()),
   reasoning_content: nullableOptional(z.string()),
   reasoning_details: z.unknown().optional(),
   codex_reasoning_items: z.unknown().optional(),
-}).passthrough();
+});
 
-const ExportSchema = z.object({
+const ExportSchema = z.looseObject({
   // Hermes CLI exports currently omit a schema marker. They use the same
   // schema-23 record shape that the adapter already validates; explicit
   // markers still pass through the major-version gate below.
-  schemaVersion: z.union([z.string(), z.number()]).default(HERMES_NATIVE_SCHEMA_VERSION),
+  schemaVersion: z.union([z.string(), number()]).default(HERMES_NATIVE_SCHEMA_VERSION),
   id: z.string().min(1),
   source: z.string().min(1),
   user_id: z.string().nullable().optional(),
@@ -60,27 +61,27 @@ const ExportSchema = z.object({
   model_config: z.unknown().optional(),
   parent_session_id: z.string().nullable().optional(),
   compressed_from_session_id: z.string().nullable().optional(),
-  started_at: z.number(),
-  ended_at: z.number().nullable().optional(),
+  started_at: number(),
+  ended_at: number().nullable().optional(),
   end_reason: z.string().nullable().optional(),
   archived: sqliteBoolean.optional(),
   inactive: sqliteBoolean.optional(),
   cwd: z.string().nullable().optional(),
   git_branch: z.string().nullable().optional(),
   routing_key: z.string().nullable().optional(),
-  input_tokens: z.number().optional(),
-  output_tokens: z.number().optional(),
-  cache_read_tokens: z.number().optional(),
-  cache_write_tokens: z.number().optional(),
-  reasoning_tokens: z.number().optional(),
-  estimated_cost_usd: z.number().nullable().optional(),
-  actual_cost_usd: z.number().nullable().optional(),
+  input_tokens: number().optional(),
+  output_tokens: number().optional(),
+  cache_read_tokens: number().optional(),
+  cache_write_tokens: number().optional(),
+  reasoning_tokens: number().optional(),
+  estimated_cost_usd: number().nullable().optional(),
+  actual_cost_usd: number().nullable().optional(),
   billing_provider: z.string().nullable().optional(),
   messages: z.array(MessageSchema),
-  export_deleted_at: z.number().nullable().optional(),
-  provider_deleted_at: z.number().nullable().optional(),
+  export_deleted_at: number().nullable().optional(),
+  provider_deleted_at: number().nullable().optional(),
   snapshotConsistency: z.enum(['sqlite-backup']).optional(),
-}).passthrough();
+});
 
 type HermesExport = z.infer<typeof ExportSchema>;
 type HermesMessage = z.infer<typeof MessageSchema>;

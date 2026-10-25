@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { multilineSecrets, multilineSecretValue, strictScannerPatterns, syntheticSecrets } from '../../fixtures/sessions/redaction-secrets.js';
 import { median } from '../../helpers/cli-perf-policy.js';
-import { SessionRejectionDetailSchema } from '../../../src/sessions/contracts.js';
+import { ImportCheckpointSchema, IntelligenceCandidateSchema, SessionRejectionDetailSchema } from '../../../src/sessions/contracts.js';
 import {
   SESSION_PROVIDER_IDS,
   SessionContractError,
@@ -48,12 +48,51 @@ describe('session contracts', () => {
     expect(schemaRejectionDetail(many.error)).toHaveProperty('issues.length', 20);
   });
 
+  it('preserves diagnostic codes and locations for enums, formats and nested discriminators', () => {
+    const schema = z.object({
+      provider: z.enum(['claude', 'codex']),
+      occurredAt: z.string().datetime(),
+      event: z.discriminatedUnion('kind', [
+        z.object({ kind: z.literal('user') }),
+        z.object({ kind: z.literal('assistant') }),
+      ]),
+    });
+    const result = schema.safeParse({ provider: 'synthetic-marker', occurredAt: 'synthetic-marker', event: {} });
+    if (result.success) throw new Error('expected validator failure');
+    expect(schemaRejectionDetail(result.error)).toEqual({ issues: [
+      { path: 'provider', code: 'invalid_enum_value' },
+      { path: 'occurredAt', code: 'invalid_string' },
+      { path: 'event.kind', code: 'invalid_union_discriminator' },
+    ] });
+  });
+
+  it('preserves unbounded number acceptance and one-sided numeric limits', () => {
+    expect(SessionRejectionDetailSchema.parse({ limit: 'synthetic', configured: Infinity, observed: -Infinity }))
+      .toEqual({ limit: 'synthetic', configured: Infinity, observed: -Infinity });
+    const checkpoint = { cursor: '', recordsRead: 0, bytesRead: 0 };
+    expect(ImportCheckpointSchema.parse({ ...checkpoint, sourceMtimeMs: Infinity }).sourceMtimeMs).toBe(Infinity);
+    const negative = ImportCheckpointSchema.safeParse({ ...checkpoint, sourceMtimeMs: -Infinity });
+    if (negative.success) throw new Error('expected negative mtime rejection');
+    expect(negative.error.issues).toMatchObject([{ path: ['sourceMtimeMs'], code: 'too_small' }]);
+    expect(ImportCheckpointSchema.safeParse({ ...checkpoint, sourceMtimeMs: NaN }).success).toBe(false);
+  });
+
+  it('parses candidate security defaults independently for each candidate', () => {
+    const security = IntelligenceCandidateSchema.shape.security;
+    const first = security.parse(undefined);
+    first.warnings.push('instruction-like');
+    expect(security.parse(undefined)).toEqual({
+      disposition: 'clear', warnings: [], requiresAcknowledgement: false,
+      acknowledged: false, policyVersion: '1.0.0',
+    });
+  });
+
   it('redacts session diagnostics and dynamic validator paths before they can reach receipts', () => {
     const canary = 'redaction-canary-diagnostic';
     const error = new SessionContractError('MALFORMED_SOURCE', canary, { issues: [{ path: canary, code: 'custom' }] });
     expect(error.message).not.toContain(canary);
     expect(JSON.stringify(error.detail)).not.toContain(canary);
-    const result = z.record(z.string()).safeParse({ [canary]: 42 });
+    const result = z.record(z.string(), z.string()).safeParse({ [canary]: 42 });
     if (result.success) throw new Error('expected validator failure');
     expect(JSON.stringify(schemaRejectionDetail(result.error))).not.toContain(canary);
   });
@@ -70,15 +109,16 @@ describe('session contracts', () => {
     );
   });
 
-  it('fails closed on unknown schema majors but preserves unknown event kinds', () => {
+  it.each(['2026-10-25T09:30Z', '2026-10-25T09:30:00+0200'])(
+    'preserves minute and basic-offset timestamps (%s) and represented large integers', occurredAt => {
     expect(() => assertSupportedSchemaMajor('2.0.0')).toThrowError(
       expect.objectContaining({ code: 'UNKNOWN_SCHEMA_MAJOR' }),
     );
     const event = SessionEventSchema.parse({
       contractVersion: '1.0.0',
       eventId: 'event-1', sessionId: 'session-1', sourceId: 'source-1',
-      importRunId: 'run-1', nativeId: null, sequence: 0,
-      kind: 'provider.future-event', role: null, occurredAt: null,
+      importRunId: 'run-1', nativeId: null, sequence: 2 ** 54,
+      kind: 'provider.future-event', role: null, occurredAt,
       searchableText: '', digest: sha256('future'),
       rawReference: { locatorClass: 'fixture', sequence: 0 },
       adapterVersion: '1.0.0', consistency: 'complete',
@@ -86,6 +126,8 @@ describe('session contracts', () => {
       extensions: { 'native.claude': { future: true } },
     });
     expect(event.opaque).toBe(true);
+    expect(event.sequence).toBe(2 ** 54);
+    expect(event.occurredAt).toBe(occurredAt);
   });
 
   it('enforces fixture dispositions', () => {

@@ -10,6 +10,7 @@
  */
 
 import { z } from 'zod';
+import { integer } from '../schema/zod-validation.mjs';
 import type { ContributorKind } from './types.js';
 
 /**
@@ -17,8 +18,8 @@ import type { ContributorKind } from './types.js';
  */
 const DetectionSpecSchema = z.object({
   glob: z.array(z.string()).min(1, 'detect.glob must have at least one pattern'),
-  minCount: z.number().int().positive().optional(),
-  conditions: z.record(z.string()).optional(),
+  minCount: integer().positive().optional(),
+  conditions: z.record(z.string(), z.string()).optional(),
 });
 
 /**
@@ -45,6 +46,7 @@ export const StatusContributorSchema = ContributorBaseSchema.extend({
    */
   fields: z
     .record(
+      z.string(),
       z.object({
         type: z.enum(['string', 'number', 'date']),
         source: z.string(),
@@ -68,7 +70,7 @@ export const ResearchContributorSchema = ContributorBaseSchema.extend({
     })
     .optional(),
   focus_areas: z.array(z.string()).min(1, 'research contributors must declare at least one focus area'),
-  recency_default_months: z.number().int().positive().optional(),
+  recency_default_months: integer().positive().optional(),
 });
 
 /**
@@ -123,7 +125,7 @@ export function validateContributor(
   if (!result.success) {
     return {
       ok: false,
-      errors: result.error.errors.map(e => `${e.path.join('.') || '<root>'}: ${e.message}`),
+      errors: result.error.issues.map(e => `${e.path.join('.') || '<root>'}: ${e.message}`),
     };
   }
   return { ok: true, data: result.data };

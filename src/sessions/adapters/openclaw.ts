@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { integer, number } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -26,68 +27,68 @@ export interface OpenClawGatewayTransport {
   snapshot(source: SelectedSource): Promise<unknown[]>;
 }
 
-const LineageSchema = z.object({
+const LineageSchema = z.looseObject({
   kind: z.enum(['reset', 'fork', 'rewind', 'compaction']),
   fromSessionId: z.string().optional(),
   checkpointId: z.string().optional(),
   reason: z.string().optional(),
-}).passthrough();
+});
 
-const EventSchema = z.object({
+const EventSchema = z.looseObject({
   id: z.string().min(1),
   parentId: z.string().nullable().optional(),
   type: z.string().min(1),
-  timestamp: z.union([z.string(), z.number()]).optional(),
+  timestamp: z.union([z.string(), number()]).optional(),
   role: z.string().optional(),
   text: z.string().optional(),
-  model: z.record(z.unknown()).optional(),
-  tool: z.record(z.unknown()).optional(),
-  media: z.record(z.unknown()).optional(),
-  usage: z.record(z.unknown()).optional(),
+  model: z.record(z.string(), z.unknown()).optional(),
+  tool: z.record(z.string(), z.unknown()).optional(),
+  media: z.record(z.string(), z.unknown()).optional(),
+  usage: z.record(z.string(), z.unknown()).optional(),
   lineage: LineageSchema.optional(),
   opaque: z.unknown().optional(),
   idempotencyKey: z.string().optional(),
-}).passthrough();
+});
 
-const SessionSchema = z.object({
+const SessionSchema = z.looseObject({
   id: z.string().min(1),
   sessionKey: z.string().min(1),
   conversationId: z.string().optional(),
   agentId: z.string().optional(),
   identityKey: z.string().optional(),
-  stateVersion: z.number().int().nonnegative().optional(),
-  startedAt: z.union([z.string(), z.number()]).optional(),
-  updatedAt: z.union([z.string(), z.number()]).optional(),
-  archivedAt: z.union([z.string(), z.number()]).nullable().optional(),
+  stateVersion: integer().nonnegative().optional(),
+  startedAt: z.union([z.string(), number()]).optional(),
+  updatedAt: z.union([z.string(), number()]).optional(),
+  archivedAt: z.union([z.string(), number()]).nullable().optional(),
   recovered: z.boolean().optional(),
   active: z.boolean().optional(),
-  window: z.object({
-    firstSequence: z.number().int().nonnegative().optional(),
-    lastSequence: z.number().int().nonnegative().optional(),
+  window: z.looseObject({
+    firstSequence: integer().nonnegative().optional(),
+    lastSequence: integer().nonnegative().optional(),
     historyGap: z.boolean().optional(),
-  }).passthrough().optional(),
+  }).optional(),
   events: z.array(EventSchema),
-}).passthrough();
+});
 
-const SnapshotSchema = z.object({
-  schemaVersion: z.union([z.string(), z.number()]),
-  eventVersion: z.union([z.string(), z.number()]),
+const SnapshotSchema = z.looseObject({
+  schemaVersion: z.union([z.string(), number()]),
+  eventVersion: z.union([z.string(), number()]),
   snapshotConsistency: z.enum(['sqlite-backup']).optional(),
-  gateway: z.object({
+  gateway: z.looseObject({
     mode: z.enum(['local', 'remote']).optional(),
     hostId: z.string().optional(),
     expectedHostId: z.string().optional(),
-  }).passthrough().optional(),
+  }).optional(),
   incognito: z.boolean().optional(),
-  projection: z.object({
+  projection: z.looseObject({
     kind: z.enum(['canonical', 'bounded-history', 'html', 'trajectory']),
     complete: z.boolean(),
-    omittedBefore: z.union([z.string(), z.number()]).optional(),
+    omittedBefore: z.union([z.string(), number()]).optional(),
     limitation: z.string().optional(),
-  }).passthrough().optional(),
+  }).optional(),
   sessions: z.array(SessionSchema),
-  providerDeletedAt: z.union([z.string(), z.number()]).nullable().optional(),
-}).passthrough();
+  providerDeletedAt: z.union([z.string(), number()]).nullable().optional(),
+});
 
 type OpenClawSnapshot = z.infer<typeof SnapshotSchema>;
 type OpenClawSession = z.infer<typeof SessionSchema>;

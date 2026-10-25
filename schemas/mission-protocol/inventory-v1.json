@@ -1618,6 +1618,18 @@
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
     },
     {
+      "path": "test/fixtures/mcp/tool-json-schema.v3.json",
+      "owner": "test/fixtures",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [
+        "cancelled"
+      ],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
       "path": "test/fixtures/ralph-recovery-baseline/src/config/aiwg-config.ts",
       "owner": "test/fixtures",
       "role": "fixture-or-test",

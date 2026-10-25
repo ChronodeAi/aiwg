@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { dirname, extname, join, resolve } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
+import { integer } from '../schema/zod-validation.mjs';
 import { getWritingChannelPack, type WritingChannel } from '../writing/channel-packs.js';
 import { WriterProfileStore } from '../writing/writer-profile-store.js';
 import { compileWriterProfile } from '../writing/writer-profile.js';
@@ -17,28 +18,28 @@ const STAGE_ORDER = ['semantic', 'voice', 'controlled-language', 'structure', 'p
 
 const modeIdSchema = z.string().regex(MODE_ID_PATTERN, 'must start with a lowercase letter or number and contain only lowercase letters, numbers, dots, or hyphens');
 const uniqueModeIds = z.array(modeIdSchema).refine(values => new Set(values).size === values.length, 'must not contain duplicates');
-const outputModeProfileSchema = z.object({
+const outputModeProfileSchema = z.strictObject({
   id: modeIdSchema,
   version: z.string().min(1),
   description: z.string().min(1),
   kind: z.enum(['voice', 'controlled-language', 'structure', 'presentation']),
   stage: z.enum(STAGE_ORDER),
-  order: z.number().int().optional(),
+  order: integer().optional(),
   instructions: z.string(),
-  provenance: z.object({ source: z.string().min(1), license: z.string().min(1) }).strict(),
-  validation: z.object({
+  provenance: z.strictObject({ source: z.string().min(1), license: z.string().min(1) }),
+  validation: z.strictObject({
     level: z.enum(['advisory', 'validated', 'conformance']),
     hook: z.string().min(1).optional(),
     standardVersion: z.string().min(1).optional(),
-  }).strict(),
+  }),
   compatible: uniqueModeIds.optional(),
   conflicts: uniqueModeIds.optional(),
   requires: uniqueModeIds.optional(),
   supersedes: uniqueModeIds.optional(),
   protectedContent: z.array(z.enum(PROTECTED)).refine(values => new Set(values).size === values.length, 'must not contain duplicates').optional(),
-  contextCost: z.number().int().nonnegative().optional(),
+  contextCost: integer().nonnegative().optional(),
   mergeStrategy: z.literal('weighted-voice').optional(),
-}).strict().superRefine((profile, ctx) => {
+}).superRefine((profile, ctx) => {
   if (profile.validation.level !== 'advisory' && !profile.validation.hook) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['validation', 'hook'], message: `${profile.validation.level} modes require a validator hook` });
   }

@@ -1,62 +1,63 @@
 import { z } from 'zod';
+import { dateTime, number } from '../schema/zod-validation.mjs';
 import { redactText } from '../governance/redaction.js';
 import type { DiscoveryInventory } from './types.js';
 import { SETUP_PLAN_SCHEMA_VERSION, type CredentialReference, type PlanValue, type SetupPlan } from './plan-types.js';
 
 const text = z.string().min(1);
-const timestamp = z.string().datetime({ offset: true });
+const timestamp = dateTime({ offset: true });
 const observation = z.enum(['yes', 'no', 'unknown']);
 export const planIdSchema = text.max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/);
-const referenceSchema = z.object({
+const referenceSchema = z.strictObject({
   kind: z.literal('credential-ref'), source: z.enum(['env', 'file', 'stdin-at-apply']), name: text,
-}).strict() satisfies z.ZodType<CredentialReference>;
+}) satisfies z.ZodType<CredentialReference>;
 const valueSchema: z.ZodType<PlanValue> = z.lazy(() => z.union([
-  z.string(), z.number().finite(), z.boolean(), z.null(), z.array(valueSchema), z.record(valueSchema),
+  z.string(), z.number().finite(), z.boolean(), z.null(), z.array(valueSchema), z.record(z.string(), valueSchema),
 ]));
-const projectSchema = z.object({
+const projectSchema = z.strictObject({
   root: text, sources: z.array(z.enum(['workspace', 'registry', 'selected'])),
   vcs: z.enum(['git', 'worktree', 'none', 'unknown']), layout: z.enum(['project', 'package', 'monorepo', 'ambiguous']),
   packageManifest: text.nullable(), workspacePatterns: z.array(z.string()), packageRoots: z.array(text),
-  aiwg: z.object({ directory: z.boolean(), configFile: text.nullable(), contextFile: text.nullable() }).strict(),
-  providerFiles: z.array(z.object({ provider: text, path: text, kind: z.enum(['config', 'context', 'artifacts']) }).strict()),
-}).strict();
-const toolSchema = z.object({
+  aiwg: z.strictObject({ directory: z.boolean(), configFile: text.nullable(), contextFile: text.nullable() }),
+  providerFiles: z.array(z.strictObject({ provider: text, path: text, kind: z.enum(['config', 'context', 'artifacts']) })),
+});
+const toolSchema = z.strictObject({
   executable: text, path: text.nullable(), installed: observation, configured: observation,
   authenticated: observation, qualified: observation, version: text.nullable(), evidence: z.array(z.string()),
-}).strict();
-const inventorySchema = z.object({
+});
+const inventorySchema = z.strictObject({
   projects: z.array(projectSchema), tools: z.array(toolSchema),
-  diagnostics: z.array(z.object({
+  diagnostics: z.array(z.strictObject({
     code: z.enum(['depth-limit', 'entry-limit', 'time-limit', 'file-limit', 'inaccessible', 'invalid-metadata',
       'symlink-skipped', 'outside-root', 'ambiguous', 'excluded', 'home-scan-refused']),
     path: z.string(), message: z.string(),
-  }).strict()),
-  limits: z.object({ maxDepth: z.number().nonnegative(), maxEntries: z.number().nonnegative(),
-    timeBudgetMs: z.number().nonnegative(), maxFileBytes: z.number().nonnegative() }).strict(),
-  stats: z.object({ entriesInspected: z.number().nonnegative(), elapsedMs: z.number().nonnegative(), truncated: z.boolean() }).strict(),
-}).strict() satisfies z.ZodType<DiscoveryInventory>;
+  })),
+  limits: z.strictObject({ maxDepth: number().check(z.gte(0)).meta({ type: 'number', minimum: 0 }), maxEntries: number().check(z.gte(0)).meta({ type: 'number', minimum: 0 }),
+    timeBudgetMs: number().check(z.gte(0)).meta({ type: 'number', minimum: 0 }), maxFileBytes: number().check(z.gte(0)).meta({ type: 'number', minimum: 0 }) }),
+  stats: z.strictObject({ entriesInspected: number().check(z.gte(0)).meta({ type: 'number', minimum: 0 }), elapsedMs: number().check(z.gte(0)).meta({ type: 'number', minimum: 0 }), truncated: z.boolean() }),
+}) satisfies z.ZodType<DiscoveryInventory>;
 const factSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('project'), root: text, field: projectSchema.keyof() }).strict(),
-  z.object({ kind: z.literal('tool'), executable: text, field: toolSchema.keyof() }).strict(),
-  z.object({ kind: z.literal('path'), workspace: text, path: text }).strict(),
+  z.strictObject({ kind: z.literal('project'), root: text, field: projectSchema.keyof() }),
+  z.strictObject({ kind: z.literal('tool'), executable: text, field: toolSchema.keyof() }),
+  z.strictObject({ kind: z.literal('path'), workspace: text, path: text }),
 ]);
-const planSchema = z.object({
+const planSchema = z.strictObject({
   schemaVersion: z.literal(SETUP_PLAN_SCHEMA_VERSION), id: planIdSchema, inventoryId: text,
   createdAt: timestamp, updatedAt: timestamp,
-  answers: z.record(z.object({ value: valueSchema,
-    source: z.enum(['explicit-flag', 'existing-setting', 'interview', 'default', 'discovered']), answeredAt: timestamp }).strict()),
-  recommendations: z.array(z.object({ questionId: text, value: valueSchema, reason: text }).strict()),
-  unresolvedChoices: z.array(z.object({ questionId: text,
-    options: z.array(z.object({ label: text, value: valueSchema }).strict()).min(1),
-    default: valueSchema, whyItMatters: text, deferredAt: timestamp.optional() }).strict()),
-  actions: z.array(z.object({ id: text, workspace: text, provider: text, scope: z.enum(['project', 'user']),
-    kind: text, dependsOn: z.array(factSchema) }).strict()),
-  receipts: z.array(z.object({ workspace: text, actions: z.record(z.object({
+  answers: z.record(z.string(), z.strictObject({ value: valueSchema,
+    source: z.enum(['explicit-flag', 'existing-setting', 'interview', 'default', 'discovered']), answeredAt: timestamp })),
+  recommendations: z.array(z.strictObject({ questionId: text, value: valueSchema, reason: text })),
+  unresolvedChoices: z.array(z.strictObject({ questionId: text,
+    options: z.array(z.strictObject({ label: text, value: valueSchema })).min(1),
+    default: valueSchema, whyItMatters: text, deferredAt: timestamp.optional() })),
+  actions: z.array(z.strictObject({ id: text, workspace: text, provider: text, scope: z.enum(['project', 'user']),
+    kind: text, dependsOn: z.array(factSchema) })),
+  receipts: z.array(z.strictObject({ workspace: text, actions: z.record(z.string(), z.strictObject({
     status: z.enum(['applied', 'failed', 'skipped']), startedAt: timestamp, completedAt: timestamp,
     message: z.string().optional(),
-  }).strict()) }).strict()),
+  })) })),
   inventory: inventorySchema,
-}).strict() satisfies z.ZodType<SetupPlan>;
+}) satisfies z.ZodType<SetupPlan>;
 
 const sensitiveKey = /(?:password|passwd|token|secret|api[_-]?key|credential|authorization|cookie|private[_-]?key|connection[_-]?string)/i;
 const secretError = () => new Error('Setup plan contains secret-looking material; use a credential-ref (env, file, or stdin-at-apply).');

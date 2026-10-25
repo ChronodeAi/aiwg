@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { integer, url } from '../schema/zod-validation.mjs';
 import { homedir } from 'os';
 import { isAbsolute, join } from 'path';
 import type { Platform } from '../agents/types.js';
@@ -186,11 +187,11 @@ const ProviderDefinitionSchema = z.object({
   status: z.enum(['stable', 'experimental', 'deprecated']),
   builtIn: z.boolean(),
   upstream: z.object({
-    source: z.string().url(),
+    source: url(),
     version: z.string().min(1),
     revision: z.string().regex(/^[0-9a-f]{40}$/).refine(
       (value) => value !== '0'.repeat(40),
-      { message: 'upstream.revision must be a real reviewed SHA, not all-zero' },
+      { error: 'upstream.revision must be a real reviewed SHA, not all-zero' },
     ),
     runtime: z.string().min(1),
     lastVerified: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -218,7 +219,7 @@ const ProviderDefinitionSchema = z.object({
     env: z.array(z.string().min(1)),
     process: z.array(z.string().min(1)),
     capabilityId: z.string().min(1),
-    runtimeEnvPriority: z.number().int().positive().optional(),
+    runtimeEnvPriority: integer().positive().optional(),
   }),
   paths: z.object({
     deployTarget: z.enum(['project', 'home', 'mixed']),
@@ -246,8 +247,8 @@ const ProviderDefinitionSchema = z.object({
     includeSyntax: z.string().nullable(),
     configRegistration: z.object({ file: z.string().min(1), key: z.string().min(1) }).nullable(),
     bootstrapTargets: z.array(z.string().min(1)),
-    maxContextBytes: z.number().int().positive().nullable(),
-    recommendedMaxLines: z.number().int().positive().nullable(),
+    maxContextBytes: integer().positive().nullable(),
+    recommendedMaxLines: integer().positive().nullable(),
     nestedContext: z.boolean(),
     support: z.enum(['supported', 'degraded', 'unsupported']),
     verification: z.object({
@@ -270,8 +271,8 @@ const ProviderDefinitionSchema = z.object({
     pathType: z.enum(['project', 'home-dir']),
     skillsBaseDir: z.string().min(1),
     subdirLayout: z.boolean(),
-    maxNameLength: z.number().int().positive().optional(),
-    maxDescriptionLength: z.number().int().positive().optional(),
+    maxNameLength: integer().positive().optional(),
+    maxDescriptionLength: integer().positive().optional(),
     appendToDescription: z.string().min(1).optional(),
   }),
   adapters: z.object({
@@ -283,8 +284,8 @@ const ProviderDefinitionSchema = z.object({
   }),
   capabilities: z.object({
     matrixRef: z.string().nullable(),
-    nativeFeatures: z.record(z.boolean()),
-    emulation: z.record(z.string().nullable()),
+    nativeFeatures: z.record(z.string(), z.boolean()),
+    emulation: z.record(z.string(), z.string().nullable()),
   }),
 }) satisfies z.ZodType<ProviderDefinition>;
 

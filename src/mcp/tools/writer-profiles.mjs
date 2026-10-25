@@ -32,7 +32,7 @@ export function registerWriterProfileResources(server, options = {}) {
   server.registerResource('writer-profile', new ResourceTemplate('aiwg://writer-profiles/{scope}/{id}', { list: undefined }), {
     title: 'Shared Writer Profile', description: 'Explicit scoped read using profile sharing approvals; private exports are unavailable through this resource.', mimeType: 'application/json',
   }, async (uri, variables) => {
-    const selection = z.object({ scope: z.enum(['project', 'user']), id: z.string().regex(/^[a-z0-9][a-z0-9.-]{0,79}$/) }).strict().parse(variables);
+    const selection = z.strictObject({ scope: z.enum(['project', 'user']), id: z.string().regex(/^[a-z0-9][a-z0-9.-]{0,79}$/) }).parse(variables);
     const cwd = await projectRoot(); const { WriterProfileStore, exportWriterProfile } = await api();
     const profile = await new WriterProfileStore({ cwd, scope: selection.scope }).read(selection.id);
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(exportWriterProfile(profile, 'shared')) }] };

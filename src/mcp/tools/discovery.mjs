@@ -22,6 +22,7 @@
  */
 
 import { z } from 'zod';
+import { integer } from '../../schema/zod-validation.mjs';
 import { runAiwgCli, mcpError, mcpJson, AIWG_ROOT } from '../helpers.mjs';
 import path from 'node:path';
 import { pinContainedRoot, readContainedFile, listContainedFiles, validateContainedPath } from '../../utils/contained-filesystem.mjs';
@@ -64,7 +65,7 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
     inputSchema: {
       phrase: z.string().describe('Natural-language capability description (e.g. "create intake form")'),
       type: z.enum(['skill', 'agent', 'command', 'rule', 'flow', 'runbook', 'template', 'behavior']).optional().describe('Restrict to one artifact type'),
-      limit: z.number().int().min(1).max(50).default(5).describe('Maximum results (default 5)'),
+      limit: integer().min(1).max(50).default(5).describe('Maximum results (default 5)'),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
   }, async ({ phrase, type, limit }) => {
@@ -89,7 +90,7 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
     description: 'Enumerate available AIWG skills from the canonical corpus. Optional filter by name pattern.',
     inputSchema: {
       filter: z.string().optional().describe('Substring or glob filter on skill name'),
-      limit: z.number().int().min(1).max(500).default(50).describe('Maximum results'),
+      limit: integer().min(1).max(500).default(50).describe('Maximum results'),
     },
     annotations: { readOnlyHint: true },
   }, async ({ filter, limit }) => {
@@ -189,7 +190,7 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
     description: 'Enumerate AIWG enforcement rules (e.g. skill-discovery, no-attribution, anti-laziness, citation-policy). Top-7 CRITICAL/HIGH rules are inlined into Hermes AGENTS.md priming (skill-discovery added #1347); this tool reaches the rest.',
     inputSchema: {
       filter: z.string().optional().describe('Substring filter on rule name'),
-      limit: z.number().int().min(1).max(200).default(50),
+      limit: integer().min(1).max(200).default(50),
     },
     annotations: { readOnlyHint: true },
   }, async ({ filter, limit }) => {

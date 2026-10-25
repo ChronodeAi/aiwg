@@ -4,6 +4,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
+import { dateTime, number } from '../schema/zod-validation.mjs';
 import { resolveProjectAiwgDir } from '../config/project-artifacts.js';
 import { storageConfigPath, validateStorageConfig, resolveSubsystemRootRuntime } from '../storage/config.js';
 import { projectMemoryHome, projectMemoryManifestPath } from './project-registry.js';
@@ -15,33 +16,33 @@ import { MemoryRecordSchema, loadMemoryRecord, memoryRecordId, parseMemoryMarkdo
 import { sha256 } from './context-pack.js';
 import { classifyContextMemory, type ContextMemoryMetadata } from './firewall-classification.mjs';
 
-const ExposureSchema = z.object({
+const ExposureSchema = z.strictObject({
   path: z.string(), provider: z.string().nullable(),
   kind: z.enum(['eligible', 'include', 'reference', 'store', 'tool-description']),
   chain: z.array(z.string()), detail: z.string(),
-}).strict();
-const ItemSchema = z.object({
+});
+const ItemSchema = z.strictObject({
   id: z.string(), sourcePath: z.string(), digest: z.string().nullable(), sourceDigest: z.string().nullable().optional(),
-  record: MemoryRecordSchema.nullable(), category: z.string(), bytes: z.number().nullable(),
+  record: MemoryRecordSchema.nullable(), category: z.string(), bytes: number().nullable(),
   observation: MemoryObservationSchema, exposures: z.array(ExposureSchema),
   trust: z.string(), reviewStatus: z.string(), managed: z.boolean(),
-}).strict();
-export const MemoryAuditSchema = z.object({
+});
+export const MemoryAuditSchema = z.strictObject({
   schemaVersion: z.literal('aiwg.memory-audit.v1'),
-  at: z.string().datetime(), workspace: z.string(), scope: z.enum(['workspace', 'global', 'project', 'provider']),
-  providers: z.array(z.object({
+  at: dateTime(), workspace: z.string(), scope: z.enum(['workspace', 'global', 'project', 'provider']),
+  providers: z.array(z.strictObject({
     id: z.string(), support: z.string(), limits: z.array(z.string()), diagnostic: z.string().nullable(),
     precedence: z.array(z.string()),
-  }).strict()),
+  })),
   items: z.array(ItemSchema),
-  findings: z.array(z.object({ code: z.string(), paths: z.array(z.string()), detail: z.string() }).strict()),
-  coverage: z.object({
+  findings: z.array(z.strictObject({ code: z.string(), paths: z.array(z.string()), detail: z.string() })),
+  coverage: z.strictObject({
     mode: z.literal('static'), complete: z.boolean(), roots: z.array(z.string()),
-    limits: z.object({ maxDepth: z.number(), maxFiles: z.number(), maxEntries: z.number(), maxMs: z.number(), maxFileBytes: z.number(), maxExposures: z.number() }).strict(),
-    limitsHit: z.array(z.string()), files: z.number(), entries: z.number(),
+    limits: z.strictObject({ maxDepth: number(), maxFiles: number(), maxEntries: number(), maxMs: number(), maxFileBytes: number(), maxExposures: number() }),
+    limitsHit: z.array(z.string()), files: number(), entries: number(),
     exclusions: z.array(z.string()),
-  }).strict(),
-}).strict();
+  }),
+});
 export type MemoryAudit = z.infer<typeof MemoryAuditSchema>;
 type AuditItem = MemoryAudit['items'][number];
 type Exposure = z.infer<typeof ExposureSchema>;

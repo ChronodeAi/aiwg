@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { OutputRegistrationRequestSchema } from '../../../src/sessions/output-registration.js';
 import {
   FilesystemOutputRegistrationStore,
   FilesystemDerivedOutputIndex,
@@ -60,6 +61,49 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe('derived output registration', () => {
+  it('rejects oversized source collections before validating any source element', () => {
+    let calls = 0;
+    const sources = OutputRegistrationRequestSchema.shape.contextPack.shape.sources;
+    const instrumented = sources.clone({
+      ...sources.def,
+      element: sources.element.superRefine(() => { calls++; }),
+    });
+    const schema = OutputRegistrationRequestSchema.extend({
+      contextPack: OutputRegistrationRequestSchema.shape.contextPack.extend({ sources: instrumented }),
+    });
+    expect(schema.safeParse(request).success).toBe(true);
+    expect(calls).toBe(2);
+    calls = 0;
+    const result = schema.safeParse({
+      ...request,
+      contextPack: { ...request.contextPack, sources: Array(257).fill(request.contextPack.sources[0]) },
+    });
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected source collection rejection');
+    expect(result.error.issues).toMatchObject([{ code: 'too_big', path: ['contextPack', 'sources'] }]);
+    expect(calls).toBe(0);
+  });
+
+  it.each(['supersedes', 'conflictsWith'] as const)(
+    'rejects oversized %s before validating any reference element', field => {
+      let calls = 0;
+      const references = OutputRegistrationRequestSchema.shape[field].unwrap();
+      const instrumented = references.clone({
+        ...references.def,
+        element: references.element.superRefine(() => { calls++; }),
+      });
+      const schema = OutputRegistrationRequestSchema.extend({ [field]: instrumented.default([]) });
+      expect(schema.safeParse({ ...request, [field]: ['artifact:synthetic'] }).success).toBe(true);
+      expect(calls).toBe(1);
+      calls = 0;
+      const result = schema.safeParse({ ...request, [field]: Array(129).fill('artifact:synthetic') });
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error('expected reference collection rejection');
+      expect(result.error.issues).toMatchObject([{ code: 'too_big', path: [field] }]);
+      expect(calls).toBe(0);
+    },
+  );
+
   it('previews without mutation and records exact minimized lineage after confirmation', async () => {
     const store = new FilesystemOutputRegistrationStore(root);
     const sink = new IndexSink();

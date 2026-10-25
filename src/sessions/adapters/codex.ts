@@ -1,6 +1,7 @@
 import { opendir } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { z } from 'zod';
+import { integer } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -23,15 +24,15 @@ import {
 export const CODEX_ADAPTER_VERSION = '1.0.0';
 export const CODEX_SOURCE_SCHEMA_VERSION = '1.0.0';
 
-const AppServerEnvelopeSchema = z.object({
+const AppServerEnvelopeSchema = z.looseObject({
   schemaVersion: z.string().optional(),
   productVersion: z.string().optional(),
   method: z.string().min(1),
   result: z.unknown().optional(),
   params: z.unknown().optional(),
-}).passthrough();
+});
 
-const ThreadSchema = z.object({
+const ThreadSchema = z.looseObject({
   id: z.string().min(1),
   sessionId: z.string().min(1).optional(),
   parentThreadId: z.string().nullable().optional(),
@@ -40,8 +41,8 @@ const ThreadSchema = z.object({
   preview: z.string().optional(),
   modelProvider: z.string().optional(),
   cliVersion: z.string().optional(),
-  createdAt: z.number().int().optional(),
-  updatedAt: z.number().int().optional(),
+  createdAt: integer().optional(),
+  updatedAt: integer().optional(),
   cwd: z.string().optional(),
   path: z.string().nullable().optional(),
   ephemeral: z.boolean().optional(),
@@ -49,14 +50,14 @@ const ThreadSchema = z.object({
   source: z.unknown().optional(),
   gitInfo: z.unknown().optional(),
   turns: z.array(z.unknown()).optional(),
-}).passthrough();
+});
 
-const RolloutEnvelopeSchema = z.object({
+const RolloutEnvelopeSchema = z.looseObject({
   schemaVersion: z.string().optional(),
   timestamp: z.string().optional(),
   type: z.string().min(1),
-  payload: z.unknown(),
-}).passthrough();
+  payload: z.unknown().optional(),
+});
 
 type Thread = z.infer<typeof ThreadSchema>;
 

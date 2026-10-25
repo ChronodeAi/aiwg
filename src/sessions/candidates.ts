@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { integer } from '../schema/zod-validation.mjs';
 import {
   IntelligenceCandidateSchema,
   IntelligenceCandidateTypeSchema,
@@ -10,21 +11,21 @@ import {
 } from './contracts.js';
 import type { SessionSearchDocument } from './repository.js';
 
-export const ExtractedCandidateDraftSchema = z.object({
+export const ExtractedCandidateDraftSchema = z.strictObject({
   type: IntelligenceCandidateTypeSchema,
   assertion: z.string().min(1),
   subject: z.string().min(1).nullable(),
   predicate: z.string().min(1).nullable(),
   object: z.string().min(1).nullable(),
-  evidence: z.array(z.object({
+  evidence: z.array(z.strictObject({
     eventId: z.string().min(1),
-    start: z.number().int().nonnegative(),
-    end: z.number().int().positive(),
-  }).strict()).min(1),
+    start: integer().nonnegative(),
+    end: integer().positive(),
+  })).min(1),
   confidence: z.number().min(0).max(1),
   conflictsWith: z.array(z.string().min(1)).default([]),
   supersedes: z.array(z.string().min(1)).default([]),
-}).strict().superRefine((candidate, context) => {
+}).superRefine((candidate, context) => {
   if (candidate.type === 'relationship'
     && (!candidate.subject || !candidate.predicate || !candidate.object)) {
     context.addIssue({

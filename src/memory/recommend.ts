@@ -1,19 +1,20 @@
 import { z } from 'zod';
+import { integer, dateTime, number } from '../schema/zod-validation.mjs';
 import type { MemoryAudit } from './audit.js';
 import { costMemory, CostConfidenceSchema, type MemoryCostOptions } from './cost.js';
 import { sha256 } from './context-pack.js';
 import { MemoryDigestSchema, MemoryRecordSchema } from './maintenance-record.js';
 
 const Text = z.string().min(1);
-const DateTime = z.string().datetime();
+const DateTime = dateTime();
 /** Local starting points for workload evaluation, not research-established thresholds. */
-export const RecommendationThresholdsSchema = z.object({
-  minimumAgeDays: z.number().int().nonnegative().default(30),
-  reviewAgeDays: z.number().int().nonnegative().default(90),
-  demoteMinimumTokens: z.number().int().nonnegative().default(512),
-  taskPackCharacters: z.number().int().min(256).max(65536).default(8000),
-}).strict();
-const ItemEvidenceSchema = z.object({
+export const RecommendationThresholdsSchema = z.strictObject({
+  minimumAgeDays: integer().nonnegative().default(30),
+  reviewAgeDays: integer().nonnegative().default(90),
+  demoteMinimumTokens: integer().nonnegative().default(512),
+  taskPackCharacters: integer().min(256).max(65536).default(8000),
+});
+const ItemEvidenceSchema = z.strictObject({
   source: Text,
   criticality: z.enum(['ordinary', 'critical']).optional(),
   ownerPinned: z.boolean().optional(),
@@ -24,51 +25,51 @@ const ItemEvidenceSchema = z.object({
   obsolete: z.boolean().optional(),
   supersededBy: Text.optional(), conflictsWith: z.array(Text).optional(),
   categoryCorrection: Text.optional(), summaryStale: z.boolean().optional(),
-  residentProposal: z.object({
-    owner: Text.optional(), rationale: Text.optional(), budgetTokens: z.number().int().positive().optional(),
+  residentProposal: z.strictObject({
+    owner: Text.optional(), rationale: Text.optional(), budgetTokens: integer().positive().optional(),
     reviewDate: DateTime.optional(), boundedPackEvaluated: z.boolean().optional(),
-  }).strict().optional(),
-}).strict();
-export const RecommendationInputsSchema = z.object({
-  thresholds: RecommendationThresholdsSchema.default({}),
-  items: z.record(z.string(), ItemEvidenceSchema).default({}),
-}).strict();
-const CandidateSchema = z.object({
+  }).optional(),
+});
+export const RecommendationInputsSchema = z.strictObject({
+  thresholds: RecommendationThresholdsSchema.prefault({}),
+  items: z.record(z.string(), ItemEvidenceSchema).prefault({}),
+});
+const CandidateSchema = z.strictObject({
   id: Text,
   kind: z.enum(['merge', 'recategorize', 'conflict', 'supersede', 'demote', 'promote', 'retire']),
   target: MemoryRecordSchema,
   sourceDigest: MemoryDigestSchema.nullable(),
   related: z.array(Text),
-  relatedTargets: z.array(z.object({ record: MemoryRecordSchema, sourceDigest: MemoryDigestSchema.nullable() }).strict()),
+  relatedTargets: z.array(z.strictObject({ record: MemoryRecordSchema, sourceDigest: MemoryDigestSchema.nullable() })),
   status: z.enum(['advisory', 'blocked', 'rejected', 'conflict']),
-  advisoryRank: z.number().int().positive(),
+  advisoryRank: integer().positive(),
   rationale: Text,
-  evidence: z.array(z.object({ source: Text, detail: Text }).strict()).min(1),
+  evidence: z.array(z.strictObject({ source: Text, detail: Text })).min(1),
   uncertainty: z.array(Text).min(1),
   blockedReasons: z.array(Text), protectedItemExceptions: z.array(Text),
-  expectedSavings: z.object({
-    residentTokens: z.number().nullable(), estimator: Text, confidence: CostConfidenceSchema, basis: Text,
-  }).strict(),
-  retrievalImpact: z.object({
+  expectedSavings: z.strictObject({
+    residentTokens: number().nullable(), estimator: Text, confidence: CostConfidenceSchema, basis: Text,
+  }),
+  retrievalImpact: z.strictObject({
     detail: Text, requiresVerification: z.literal(true),
     proposedPlacement: z.enum(['indexed', 'task-context', 'resident']).nullable(),
     category: Text.nullable(),
-    taskPack: z.object({ builder: z.literal('buildWorkspaceContextPack'), totalCharacters: z.number().int().positive() }).strict(),
-  }).strict(),
-  residentJustification: z.object({
-    owner: Text.optional(), rationale: Text.optional(), budgetTokens: z.number().int().positive().optional(),
+    taskPack: z.strictObject({ builder: z.literal('buildWorkspaceContextPack'), totalCharacters: integer().positive() }),
+  }),
+  residentJustification: z.strictObject({
+    owner: Text.optional(), rationale: Text.optional(), budgetTokens: integer().positive().optional(),
     reviewDate: DateTime.optional(), boundedPackEvaluated: z.boolean().optional(),
-  }).strict().nullable(),
-}).strict();
-export const MemoryRecommendationsSchema = z.object({
+  }).nullable(),
+});
+export const MemoryRecommendationsSchema = z.strictObject({
   schemaVersion: z.literal('aiwg.memory-recommendations.v1'),
   at: DateTime, workspace: Text, scope: Text,
   advisoryOnly: z.literal(true), defaultPlacement: z.literal('indexed'),
   thresholds: RecommendationThresholdsSchema,
-  coverage: z.object({ complete: z.boolean(), limitsHit: z.array(Text), exclusions: z.array(Text) }).strict(),
+  coverage: z.strictObject({ complete: z.boolean(), limitsHit: z.array(Text), exclusions: z.array(Text) }),
   candidates: z.array(CandidateSchema),
   notes: z.array(Text),
-}).strict();
+});
 export type MemoryRecommendations = z.infer<typeof MemoryRecommendationsSchema>;
 export type MemoryRecommendation = MemoryRecommendations['candidates'][number];
 export type RecommendationInputs = z.input<typeof RecommendationInputsSchema>;

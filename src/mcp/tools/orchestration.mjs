@@ -9,6 +9,7 @@
  */
 
 import { z } from 'zod';
+import { integer } from '../../schema/zod-validation.mjs';
 import { showDrillInSchema, showDrillInArgs } from './discovery.mjs';
 import { parse as parseYaml } from 'yaml';
 import fs from 'node:fs/promises';
@@ -187,7 +188,7 @@ export function registerFlowToolset(server) {
       name: z.string().describe('Flow name (e.g. flow-release)'),
       framework: z.string().optional().describe('Optional framework disambiguator'),
       project_dir: z.string().optional().describe('Project directory where the Flow should operate'),
-      args: z.array(z.string()).default([]).describe('Operator arguments to pass conceptually to the wrapper skill'),
+      args: z.array(z.string()).prefault([]).describe('Operator arguments to pass conceptually to the wrapper skill'),
       confirmed: z.boolean().default(false).describe('Required because Flows can run shell commands and write artifacts'),
     },
     annotations: { destructiveHint: true, openWorldHint: true },
@@ -242,13 +243,13 @@ export function registerMissionToolset(server) {
       session_id: z.string().describe('Existing Mission Control session id from mc-start / mc-list'),
       objective: z.string().describe('Mission objective'),
       completion: z.string().describe('Measurable completion criterion'),
-      max_iterations: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Ralph iteration cap'),
-      max_total_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative token ceiling'),
-      max_output_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative output-token ceiling'),
-      max_tool_calls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative tool-call ceiling'),
+      max_iterations: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Ralph iteration cap'),
+      max_total_tokens: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative token ceiling'),
+      max_output_tokens: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative output-token ceiling'),
+      max_tool_calls: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative tool-call ceiling'),
       max_total_cost: z.number().positive().finite().optional().describe('Hard cumulative provider-reported spend ceiling'),
       max_wall_clock_minutes: z.number().positive().finite().optional().describe('Hard cumulative runtime ceiling'),
-      exploration_quota: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Require structural variant after this many flat cycles (off unless declared; no default K)'),
+      exploration_quota: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Require structural variant after this many flat cycles (off unless declared; no default K)'),
       budget_stop_policy: z.enum(['completion-wins', 'budget-wins']).optional().describe('Stop semantics when the completing iteration crosses a ceiling (default: completion-wins)'),
       project_dir: z.string().optional().describe('Project directory for CLI dispatch'),
       worker_dispatch: z.string().optional().describe('Absolute prepared managed worker dispatch JSON path inside the project'),
@@ -334,7 +335,7 @@ export function registerWorkerResolveTool(server) {
   server.registerTool('worker-resolve', {
     title: 'Resolve Worker Invocation',
     description: 'Resolve a nonlaunching qualified worker plan without Mission or MC state.',
-    inputSchema: z.object({
+    inputSchema: z.strictObject({
       role: z.enum(['efficiency', 'coding', 'reasoning']),
       task: z.string().min(1),
       group: z.string().min(1).regex(/^[a-z][a-z0-9-]{0,62}$/),
@@ -344,7 +345,7 @@ export function registerWorkerResolveTool(server) {
       transport: z.enum(['shell', 'mcp']).default('shell'),
       format: z.enum(['shell', 'json']).optional(),
       project_dir: z.string().min(1).optional(),
-    }).strict(),
+    }),
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   }, async input => {
     try {

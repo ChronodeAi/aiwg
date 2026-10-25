@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { dateTime, number } from '../schema/zod-validation.mjs';
 import { guardRulesInlineBudget, resolveRulesInlineBudget } from '../rules/inline-budget.mjs';
 import type { MemoryAudit } from './audit.js';
 
@@ -29,135 +30,135 @@ export const CostClassSchema = z.enum([
 ]);
 export const CostItemLayerSchema = z.enum(['startup', 'per-task', 'overhead', 'stored', 'unknown']);
 
-const LayerCostSchema = z.object({
-  bytes: z.number().nullable(),
-  tokens: z.number().nullable(),
+const LayerCostSchema = z.strictObject({
+  bytes: number().nullable(),
+  tokens: number().nullable(),
   estimator: z.string().min(1),
   confidence: CostConfidenceSchema,
   basis: z.string().min(1),
-}).strict();
+});
 
-const UtilitySchema = z.object({
-  exposures: z.number(),
+const UtilitySchema = z.strictObject({
+  exposures: number(),
   exposureKinds: z.array(z.string()),
   retrieved: z.boolean().nullable(),
   used: z.boolean().nullable(),
   rejected: z.boolean().nullable(),
   outcome: z.enum(['unknown', 'retrieved-unused', 'used', 'rejected']),
   evidence: z.string().nullable(),
-}).strict();
+});
 
-export const CostAttributionSchema = z.object({
+export const CostAttributionSchema = z.strictObject({
   id: z.string().min(1),
   sourcePath: z.string().min(1),
   costClass: CostClassSchema,
-  bytes: z.number().nullable(),
-  tokens: z.number().nullable(),
+  bytes: number().nullable(),
+  tokens: number().nullable(),
   estimator: z.string().min(1),
   confidence: CostConfidenceSchema,
   layer: CostItemLayerSchema,
   imported: z.boolean(),
   duplicateGroup: z.string().nullable(),
   utility: UtilitySchema,
-}).strict();
+});
 
-const ClassTotalSchema = z.object({
-  items: z.number(),
-  bytes: z.number().nullable(),
-  tokens: z.number().nullable(),
+const ClassTotalSchema = z.strictObject({
+  items: number(),
+  bytes: number().nullable(),
+  tokens: number().nullable(),
   estimator: z.string().min(1),
   confidence: CostConfidenceSchema,
-}).strict();
+});
 
-const DemotionAnchorSchema = z.object({
+const DemotionAnchorSchema = z.strictObject({
   kind: z.enum(['indexed-record', 'include-stub', 'discovery-query']),
   locator: z.string().min(1),
-  bytes: z.number(),
-  tokens: z.number(),
+  bytes: number(),
+  tokens: number(),
   estimator: z.string().min(1),
   confidence: CostConfidenceSchema,
   note: z.string().min(1),
-}).strict();
+});
 
-const DemotionTargetSchema = z.object({
+const DemotionTargetSchema = z.strictObject({
   id: z.string().min(1),
   sourcePath: z.string().min(1),
   reachable: z.boolean(),
-  before: z.object({ bytes: z.number().nullable(), tokens: z.number().nullable() }).strict(),
-  after: z.object({ residentBytes: z.number(), residentTokens: z.number(), anchorBytes: z.number(), anchorTokens: z.number() }).strict(),
+  before: z.strictObject({ bytes: number().nullable(), tokens: number().nullable() }),
+  after: z.strictObject({ residentBytes: number(), residentTokens: number(), anchorBytes: number(), anchorTokens: number() }),
   anchors: z.array(DemotionAnchorSchema),
   warnings: z.array(z.string().min(1)),
-}).strict();
+});
 
 const StartupMeasurementSchema = z.object({
-  version: z.number().optional(),
+  version: number().optional(),
   token_estimate: z.string().optional(),
   providers: z.record(
     z.string(),
-    z.object({ startup: z.object({ bytes: z.number(), estimated_tokens: z.number() }).catchall(z.unknown()) }).catchall(z.unknown()),
+    z.object({ startup: z.object({ bytes: number(), estimated_tokens: number() }).catchall(z.unknown()) }).catchall(z.unknown()),
   ),
 }).catchall(z.unknown());
 
-export const MemoryCostSchema = z.object({
+export const MemoryCostSchema = z.strictObject({
   schemaVersion: z.literal('aiwg.memory-cost.v1'),
-  at: z.string().datetime(),
+  at: dateTime(),
   workspace: z.string().min(1),
   scope: z.string().min(1),
   estimator: z.string().min(1),
-  summary: z.object({
-    byClass: z.record(CostClassSchema, ClassTotalSchema),
+  summary: z.strictObject({
+    byClass: z.partialRecord(CostClassSchema, ClassTotalSchema),
     imported: ClassTotalSchema,
     duplicated: ClassTotalSchema,
-    layers: z.object({
+    layers: z.strictObject({
       startup: LayerCostSchema,
       perTask: LayerCostSchema,
       overhead: LayerCostSchema,
       usageBilling: LayerCostSchema,
       cacheDiscounts: LayerCostSchema,
-    }).strict(),
-  }).strict(),
+    }),
+  }),
   items: z.array(CostAttributionSchema),
-  inlineBudget: z.object({
+  inlineBudget: z.strictObject({
     estimator: z.string().min(1),
-    limit: z.number(),
+    limit: number(),
     configSource: z.string().min(1),
-    providers: z.array(z.object({
+    providers: z.array(z.strictObject({
       provider: z.string().min(1),
-      selected_bytes: z.number(),
-      selected_tokens: z.number(),
+      selected_bytes: number(),
+      selected_tokens: number(),
       exceeded: z.boolean(),
-      contributors: z.array(z.object({ path: z.string().min(1), bytes: z.number(), estimated_tokens: z.number() }).strict()),
+      contributors: z.array(z.strictObject({ path: z.string().min(1), bytes: number(), estimated_tokens: number() })),
       scopeNote: z.string().min(1),
-    }).strict()),
-  }).strict(),
-  startupMeasurement: z.object({
+    })),
+  }),
+  startupMeasurement: z.strictObject({
     status: z.enum(['matched', 'unknown']),
     estimator: z.string().min(1),
-    providers: z.array(z.object({
+    providers: z.array(z.strictObject({
       provider: z.string().min(1),
-      measuredStartupBytes: z.number().nullable(),
-      measuredStartupTokens: z.number().nullable(),
-      staticResidentBytes: z.number().nullable(),
+      measuredStartupBytes: number().nullable(),
+      measuredStartupTokens: number().nullable(),
+      staticResidentBytes: number().nullable(),
       note: z.string().min(1),
-    }).strict()),
+    })),
     note: z.string().min(1),
-  }).strict(),
-  telemetry: z.object({
+  }),
+  telemetry: z.strictObject({
     store: z.string().nullable(),
     writesNewTelemetry: z.boolean(),
     retention: z.string().min(1),
     auditComplete: z.boolean(),
     exclusions: z.array(z.string()),
-  }).strict(),
-  demotionPreview: z.object({
+  }),
+  demotionPreview: z.strictObject({
     targets: z.array(DemotionTargetSchema),
-    totals: z.object({
-      beforeTokens: z.number().nullable(),
-      afterAnchorTokens: z.number(),
-      residentTokensRemoved: z.number().nullable(),
-    }).strict(),
-  }).strict().nullable(),
-}).strict();
+    totals: z.strictObject({
+      beforeTokens: number().nullable(),
+      afterAnchorTokens: number(),
+      residentTokensRemoved: number().nullable(),
+    }),
+  }).nullable(),
+});
 
 export type MemoryCost = z.infer<typeof MemoryCostSchema>;
 export type CostAttribution = z.infer<typeof CostAttributionSchema>;

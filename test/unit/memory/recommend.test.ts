@@ -5,7 +5,7 @@ import type { MemoryAudit } from '../../../src/memory/audit.js';
 import { memoryRecordId } from '../../../src/memory/maintenance-record.js';
 import { costMemory } from '../../../src/memory/cost.js';
 import { sha256 } from '../../../src/memory/context-pack.js';
-import { recommendMemory, MemoryRecommendationsSchema, formatMemoryRecommendations, type RecommendationInputs } from '../../../src/memory/recommend.js';
+import { recommendMemory, RecommendationInputsSchema, MemoryRecommendationsSchema, formatMemoryRecommendations, type RecommendationInputs } from '../../../src/memory/recommend.js';
 import { parseMemoryRecommendOptions } from '../../../src/memory/recommend-cli.js';
 
 const at = '2026-10-24T12:00:00.000Z';
@@ -36,6 +36,15 @@ const inputs = (audit: MemoryAudit): RecommendationInputs => ({ items: {
 } });
 
 describe('evidence-ranked memory recommendations', () => {
+  it('materializes nested thresholds when recommendation inputs omit them', () => {
+    expect(RecommendationInputsSchema.parse({})).toEqual({
+      thresholds: { minimumAgeDays: 30, reviewAgeDays: 90, demoteMinimumTokens: 512, taskPackCharacters: 8000 },
+      items: {},
+    });
+    expect(RecommendationInputsSchema.parse({ thresholds: { minimumAgeDays: 14 } }).thresholds)
+      .toEqual({ minimumAgeDays: 14, reviewAgeDays: 90, demoteMinimumTokens: 512, taskPackCharacters: 8000 });
+  });
+
   it('explains all candidate kinds from inventory, cost and explicit utility', () => {
     const audit = fixture();
     const report = recommendMemory(audit, inputs(audit), { usage: usage(audit) });

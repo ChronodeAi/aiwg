@@ -11,6 +11,7 @@
  */
 
 import { z } from 'zod';
+import { integer, dateTime, url, number } from '../schema/zod-validation.mjs';
 import type {
   ExtensionType,
 } from './types.js';
@@ -90,7 +91,7 @@ export const PlatformCompatibilitySchema = z.object({
   generic: PlatformSupportSchema.optional(),
 }).refine(
   (data) => Object.values(data).some((val) => val !== undefined),
-  { message: 'At least one platform must be specified' }
+  { error: 'At least one platform must be specified' }
 );
 
 /**
@@ -98,7 +99,7 @@ export const PlatformCompatibilitySchema = z.object({
  */
 export const DeploymentConfigSchema = z.object({
   pathTemplate: z.string().min(1, 'Path template is required'),
-  pathOverrides: z.record(z.string()).optional(),
+  pathOverrides: z.record(z.string(), z.string()).optional(),
   additionalFiles: z.array(z.string()).optional(),
   autoInstall: z.boolean().optional().default(false),
   core: z.boolean().optional().default(false),
@@ -124,7 +125,7 @@ export const MemoryFootprintSchema = z.object({
  * Deprecation information
  */
 export const DeprecationSchema = z.object({
-  date: z.string().datetime({ message: 'Date must be ISO 8601 format' }),
+  date: dateTime({ error: 'Date must be ISO 8601 format' }),
   successor: z.string().optional(),
   reason: z.string().min(1, 'Deprecation reason is required'),
 });
@@ -133,7 +134,7 @@ export const DeprecationSchema = z.object({
  * Installation state
  */
 export const InstallationSchema = z.object({
-  installedAt: z.string().datetime({ message: 'Install timestamp must be ISO 8601 format' }),
+  installedAt: dateTime({ error: 'Install timestamp must be ISO 8601 format' }),
   installedFrom: z.enum(['builtin', 'registry', 'local', 'git']),
   installedPath: z.string().min(1),
   enabled: z.boolean(),
@@ -164,7 +165,7 @@ export const AgentMetadataSchema = z.object({
   }),
   tools: z.array(z.string()).min(1, 'At least one tool is required'),
   template: z.string().optional(),
-  maxTools: z.number().int().positive().optional(),
+  maxTools: integer().positive().optional(),
   canDelegate: z.boolean().optional(),
   readOnly: z.boolean().optional(),
   workflow: z.array(z.string()).optional(),
@@ -180,8 +181,8 @@ export const CommandArgumentSchema = z.object({
   description: z.string().min(1),
   required: z.boolean(),
   type: z.enum(['string', 'number', 'boolean']),
-  default: z.union([z.string(), z.number(), z.boolean()]).optional(),
-  position: z.number().int().nonnegative().optional(),
+  default: z.union([z.string(), number(), z.boolean()]).optional(),
+  position: integer().nonnegative().optional(),
 });
 
 /**
@@ -191,7 +192,7 @@ export const CommandOptionSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
   type: z.enum(['string', 'boolean', 'number', 'array']),
-  default: z.union([z.string(), z.boolean(), z.number()]).optional(),
+  default: z.union([z.string(), z.boolean(), number()]).optional(),
   short: z.string().length(1).optional(),
   long: z.string().min(2).optional(),
 });
@@ -257,12 +258,13 @@ export const SkillReferenceSchema = z.object({
  * natural-language invocation. Do NOT relax this rule — a blank description
  * is what caused the 107-file regression we are guarding against.
  */
-export const SkillFrontmatterSchema = z.object({
+export const SkillFrontmatterSchema = z.looseObject({
   name: z.string().min(1, 'Skill name is required'),
   description: z
     .string({
-      required_error:
-        'Description is required (Codex rejects SKILL.md without it)',
+      error: issue => issue.input === undefined
+        ? 'Description is required (Codex rejects SKILL.md without it)'
+        : undefined,
     })
     .min(1, 'Description is required and must be non-empty'),
   version: z.string().regex(
@@ -280,7 +282,7 @@ export const SkillFrontmatterSchema = z.object({
     .array(
       z
         .string()
-        .refine((s) => s.trim().length > 0, { message: 'trigger phrases must be non-empty' }),
+        .refine((s) => s.trim().length > 0, { error: 'trigger phrases must be non-empty' }),
     )
     .min(1, 'triggers is declared but empty — add at least one phrase or remove the field (empty-triggers anti-pattern, #1623)')
     .optional(),
@@ -297,8 +299,8 @@ export const SkillFrontmatterSchema = z.object({
   context: z.enum(['fork', 'inherit']).optional(),
   author: z.string().optional(),
   license: z.string().optional(),
-  metadata: z.record(z.unknown()).optional(),
-}).passthrough();
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
 
 /**
  * Inferred SKILL.md frontmatter type
@@ -358,10 +360,10 @@ export const SkillMetadataSchema = z.object({
 export const HookMetadataSchema = z.object({
   type: z.literal('hook'),
   event: HookEventSchema,
-  priority: z.number().int().optional().default(100),
+  priority: integer().optional().default(100),
   canModify: z.boolean().optional().default(false),
   canBlock: z.boolean().optional().default(false),
-  configSchema: z.record(z.unknown()).optional(),
+  configSchema: z.record(z.string(), z.unknown()).optional(),
 });
 
 /**
@@ -372,11 +374,11 @@ export const ToolMetadataSchema = z.object({
   category: z.enum(['core', 'languages', 'utilities', 'custom']),
   executable: z.string().min(1, 'Executable path is required'),
   verificationStatus: z.enum(['verified', 'unverified']).optional(),
-  lastVerified: z.string().datetime().optional(),
+  lastVerified: dateTime().optional(),
   manPage: z.string().optional(),
   aliases: z.array(z.string()).optional(),
   relatedTools: z.array(z.string()).optional(),
-  platformNotes: z.record(z.string()).optional(),
+  platformNotes: z.record(z.string(), z.string()).optional(),
   installHint: z.string().optional(),
 });
 
@@ -396,7 +398,7 @@ export const MCPServerMetadataSchema = z.object({
   type: z.literal('mcp-server'),
   mcpVersion: z.string().min(1, 'MCP version is required'),
   transport: z.enum(['stdio', 'http']),
-  port: z.number().int().positive().optional(),
+  port: integer().positive().optional(),
   capabilities: z.object({
     tools: z.boolean(),
     resources: z.boolean(),
@@ -406,9 +408,9 @@ export const MCPServerMetadataSchema = z.object({
   }),
   sourceType: z.enum(['cli', 'api', 'catalog', 'nl', 'extension']),
   sourceCommand: z.string().optional(),
-  sourceBaseUrl: z.string().url().optional(),
+  sourceBaseUrl: url().optional(),
   workingDirectory: z.string().optional(),
-  environment: z.record(z.string()).optional(),
+  environment: z.record(z.string(), z.string()).optional(),
   tools: z.array(MCPToolSummarySchema).optional(),
   resources: z.array(z.string()).optional(),
   prompts: z.array(z.string()).optional(),
@@ -428,8 +430,8 @@ export const FrameworkMetadataSchema = z.object({
     templates: z.array(z.string()).optional(),
     prompts: z.array(z.string()).optional(),
   }),
-  configSchema: z.record(z.unknown()).optional(),
-  defaultConfig: z.record(z.unknown()).optional(),
+  configSchema: z.record(z.string(), z.unknown()).optional(),
+  defaultConfig: z.record(z.string(), z.unknown()).optional(),
 });
 
 /**
@@ -541,16 +543,16 @@ export const ExtensionSchema = z.object({
   requires: z.array(z.string()).optional(),
   recommends: z.array(z.string()).optional(),
   conflicts: z.array(z.string()).optional(),
-  systemDependencies: z.record(z.string()).optional(),
+  systemDependencies: z.record(z.string(), z.string()).optional(),
 
   // Metadata & Documentation
   author: z.string().optional(),
   license: z.string().optional(),
-  repository: z.string().url().optional(),
-  homepage: z.string().url().optional(),
-  bugs: z.string().url().optional(),
-  documentation: z.record(z.string()).optional(),
-  researchCompliance: z.record(z.array(z.string())).optional(),
+  repository: url().optional(),
+  homepage: url().optional(),
+  bugs: url().optional(),
+  documentation: z.record(z.string(), z.string()).optional(),
+  researchCompliance: z.record(z.string(), z.array(z.string())).optional(),
   memory: MemoryFootprintSchema.optional(),
 
   // Type-Specific Data
@@ -566,7 +568,7 @@ export const ExtensionSchema = z.object({
   signature: SignatureSchema.optional(),
 }).refine(
   (data) => data.type === data.metadata.type,
-  { message: 'Extension type must match metadata type' }
+  { error: 'Extension type must match metadata type' }
 );
 
 // ============================================

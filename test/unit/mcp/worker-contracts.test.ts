@@ -1,11 +1,20 @@
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { fixtureJson, materialize, validators, type ContractVector } from '../../conformance/mission-v1/worker-contract-fixtures.js';
 
-const { cli } = vi.hoisted(() => ({ cli: vi.fn() }));
+const { cli, projectRoot } = vi.hoisted(() => ({ cli: vi.fn(), projectRoot: vi.fn() }));
 vi.mock('../../../src/mcp/helpers.mjs', async importOriginal => ({
-  ...await importOriginal<typeof import('../../../src/mcp/helpers.mjs')>(), runAiwgCli: cli,
+  ...await importOriginal<typeof import('../../../src/mcp/helpers.mjs')>(), runAiwgCli: cli, findProjectRoot: projectRoot,
 }));
+vi.mock('../../../src/mcp/tools/worker-stdin-runtime.mjs', async importOriginal => ({
+  ...await importOriginal<typeof import('../../../src/mcp/tools/worker-stdin-runtime.mjs')>(), sweepWorkerStdin: vi.fn(),
+}));
+// @ts-expect-error — source module is intentionally ESM JavaScript
+import { createServer } from '../../../src/mcp/server.mjs';
+
 // @ts-expect-error — .mjs untyped, matching the orchestration test lane
 import { registerMissionToolset, registerWorkerResolveTool } from '../../../src/mcp/tools/orchestration.mjs';
 
@@ -121,5 +130,64 @@ describe('frozen worker MCP descriptors (T-OG-17; B-OG-35 runtime handoff)', () 
     expect(tools.has('worker-resolve')).toBe(true);
     expect(tools.has('worker-invoke')).toBe(false);
     expect(cli).not.toHaveBeenCalled();
+  });
+});
+
+
+// Normalize only equivalent JSON Schema representations: local references and
+// nullable primitive unions. Every validation keyword remains part of the test.
+function schemaMeaning(value: any, root = value): any {
+  if (Array.isArray(value)) return value.map(child => schemaMeaning(child, root));
+  if (!value || typeof value !== 'object') return value;
+  if (typeof value.$ref === 'string' && value.$ref.startsWith('#/')) {
+    const referenced = value.$ref.slice(2).split('/').reduce((node: any, key: string) => node[key.replaceAll('~1', '/').replaceAll('~0', '~')], root);
+    return schemaMeaning(referenced, root);
+  }
+  const normalized = Object.fromEntries(Object.entries(value).filter(([, child]) => child !== undefined).map(([key, child]) => [key, schemaMeaning(child, root)]));
+  if (normalized.anyOf?.every((branch: any) => branch.type && Object.keys(branch).length === 1)) {
+    normalized.type = normalized.anyOf.flatMap((branch: any) => branch.type);
+    delete normalized.anyOf;
+  }
+  if (Array.isArray(normalized.type)) normalized.type.sort();
+  return normalized;
+}
+
+describe('native Zod MCP schema contracts', () => {
+  let root: string | undefined;
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    projectRoot.mockReset();
+    if (root) rmSync(root, { recursive: true, force: true });
+    root = undefined;
+  });
+
+  it('preserves all 88 registered input and output JSON Schemas', async () => {
+    root = mkdtempSync(join(tmpdir(), 'aiwg-mcp-schema-contract-'));
+    mkdirSync(join(root, '.aiwg'));
+    projectRoot.mockResolvedValue(root);
+    vi.spyOn(process, 'cwd').mockReturnValue(root);
+    vi.stubEnv('AIWG_MCP_TOOLSETS', 'all,workers');
+    const baseline = JSON.parse(readFileSync(new URL('../../fixtures/mcp/tool-json-schema.v3.json', import.meta.url), 'utf8'));
+    const server = await createServer();
+    try {
+      const listed = await server.server._requestHandlers.get('tools/list')({ method: 'tools/list' }, {});
+      expect(listed.tools).toHaveLength(88);
+      const shapes = server._registeredTools;
+      expect(shapes['worker-invoke'].inputSchema.shape.invocation_id.safeParse('00000000-0000-0000-0000-000000000001').success).toBe(true);
+      expect(shapes['sandbox-fleet-reconcile-preview'].inputSchema.shape.before_revision.safeParse(Number.MAX_SAFE_INTEGER + 1).success).toBe(true);
+      expect(shapes['sandbox-activity-timeline'].inputSchema.shape.filter.unwrap().shape.since.safeParse('2026-10-25T13:00Z').success).toBe(true);
+
+      expect(listed.tools.map((tool: any) => tool.name).sort()).toEqual(Object.keys(baseline).sort());
+      for (const tool of listed.tools) {
+        const registered = server._registeredTools[tool.name];
+        expect(registered.inputSchema).toBeInstanceOf(z.ZodObject);
+        expect(schemaMeaning(tool.inputSchema), `${tool.name} input`).toEqual(schemaMeaning(baseline[tool.name].input));
+        if (tool.outputSchema) {
+          expect(registered.outputSchema).toBeInstanceOf(z.ZodObject);
+          expect(schemaMeaning(tool.outputSchema), `${tool.name} output`).toEqual(schemaMeaning(baseline[tool.name].output));
+        } else expect(baseline[tool.name].output).toBeUndefined();
+      }
+    } finally { await server.close(); }
   });
 });
