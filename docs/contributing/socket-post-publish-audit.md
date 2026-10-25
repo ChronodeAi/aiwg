@@ -31,6 +31,7 @@ Configure these values in the GitHub repository:
 
 - secret `SOCKET_API_TOKEN`, restricted to Socket's `packages:list` scope;
 - variable `SOCKET_ORG_SLUG`, containing the Socket organization slug.
+- optional variable `SOCKET_PACE_QUOTA_MINUTES` (default `120`): how long the audit may wait for the next Socket quota window after HTTP 429. The job timeout (150 minutes) leaves room for that wait plus the scan. A release has roughly 800 components, more than the free plan's 500 units per hour, so pacing is on by default.
 
 The tag-bound npm publication workflow invokes the Socket workflow directly as
 a reusable workflow after publication succeeds. This avoids relying on a
