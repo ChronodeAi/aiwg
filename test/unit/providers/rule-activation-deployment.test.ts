@@ -4,6 +4,7 @@ import { join, resolve, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileWithCapture as execFileSync } from '../../helpers/exec-file-capture.js';
 import { parse } from 'yaml';
+import { stableRecordId } from '../../../src/artifacts/browser-export.js';
 import { sourceRules } from './rule-source-expectations.js';
 
 const repo = resolve(__dirname, '../../..');
@@ -167,6 +168,27 @@ describe('activation-selected provider deployment (#2939)', () => {
     const root = setup();
     deploy(root, 'claude', { bindingEntries: undefined });
     expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).toContain('RULES-BOUND.md#');
+  }, 90_000);
+
+  it('resolves canonical package IDs in a cold source snapshot without installing external targets', () => {
+    const root = setup();
+    const source = join(root, 'cold-source');
+    const selected = 'agentic/code/addons/example/skills/shared/SKILL.md';
+    for (const owner of ['example', 'other']) {
+      const file = join(source, 'agentic/code/addons', owner, 'skills/shared/SKILL.md');
+      mkdirSync(resolve(file, '..'), { recursive: true });
+      writeFileSync(file, '---\nname: shared\ndescription: Synthetic action.\n---\n# Shared action\nInspect only.\n');
+    }
+    mkdirSync(join(source, 'agentic/code/addons/example/rules'), { recursive: true });
+    writeFileSync(join(source, 'agentic/code/addons/example/rules/canonical.md'), `---\nname: canonical\nactivation: bound\nenforcement: high\nsummary: Follow the selected canonical policy.\nbound_to:\n  skills: [${stableRecordId('aiwg.skill', selected)}]\n---\n# Canonical rule\n`);
+    deploy(root, 'claude', { srcRoot: source, config: { installed: { example: {} } }, bindingEntries: undefined, deploySkills: false,
+      deployCommands: false, rulesOnly: true });
+    expect(walk(join(root, 'target')).filter(file => file.endsWith('/shared/SKILL.md'))).toEqual([]);
+    // Validation still runs when rulesOnly has no invoked definition to decorate.
+    const rule = join(source, 'agentic/code/addons/example/rules/canonical.md');
+    writeFileSync(rule, readFileSync(rule, 'utf8').replace(stableRecordId('aiwg.skill', selected), 'aiwg:skill:0000000000000000'));
+    expect(() => deploy(root, 'claude', { srcRoot: source, config: { installed: { example: {} } }, bindingEntries: undefined,
+      deploySkills: false, deployCommands: false, rulesOnly: true })).toThrow();
   }, 90_000);
 
   it('preserves authored flow skill bodies and prunes opt-in projections without deleting operator resources', () => {

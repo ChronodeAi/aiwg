@@ -391,6 +391,22 @@ for all CRITICAL rules. For example, CRITICAL `versioning` is release-scoped.
 > operator decision per rule before any rule file changes. The re-derived U1
 > figures assume every proposed move and are therefore not adopted.
 
+> **U5 live probe result 2026-10-25: no move ships.** The four
+> operator-approved candidate moves (`instruction-comprehension` and
+> `research-before-decision` to summary, `artifact-output-policy` and
+> `citation-policy` to bound) were implemented on a candidate package and
+> probed live through compound discovery (Codex gpt-6.1-sol, low effort, n=5,
+> 12 scenarios, 60 calls, `test/uat/rule-binding/kernel-moves-probes.yaml`).
+> Positive compliance, meaning that the governing rule was retrieved and
+> followed before acting: instruction-comprehension 0.1,
+> research-before-decision 0.1, artifact-output-policy 0.2, citation-policy
+> 0.8 (0.6 on a second paired run). Negatives were 1.0 for all four. No
+> candidate passed its U5 gate. The citation-policy U7 comparison against a
+> kernel baseline (positive 0.0, because a kernel rule is never fetched)
+> also failed. Under the failed-move rule, all four keep their kernel
+> placement. The probe definitions remain for a future attempt after
+> discovery and delivery improve.
+
 
 Compound discovery is implemented: every action result carries its governing
 rules (`bound_rules[]`), per-result and whole-response `rule_stats`, and

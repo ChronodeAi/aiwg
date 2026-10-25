@@ -191,14 +191,17 @@ export async function prepareRuleDelivery(opts) {
       const key = `${anchor}\0${entry.path}`;
       if (!entryPaths.has(key)) entryPaths.set(key, path.resolve(anchor, entry.path));
       const resolvedPath = entryPaths.get(key);
-      return { ...entry, path: opts.mapInputPath ? opts.mapInputPath(resolvedPath) : resolvedPath };
+      // Canonical IDs hash the indexed package-relative path. Keep it through
+      // resolution; the selected target is anchored to root below.
+      return { ...entry, path: entry.path.startsWith('agentic/code/') ? entry.path
+        : opts.mapInputPath ? opts.mapInputPath(resolvedPath) : resolvedPath };
     });
     let rebuilt = false;
     const cacheDir = process.env.AIWG_RULE_BINDING_INDEX_CACHE;
     const cacheFile = cacheDir && path.join(cacheDir, `${contentHash(opts.logicalInputPath ? opts.logicalInputPath(root) : root)}.json`);
     const buildSourceEntries = async (refresh = false) => {
       if (!refresh && cacheFile) {
-        try { return JSON.parse(fs.readFileSync(cacheFile, 'utf8')).map(entry => ({ ...entry, path: opts.mapInputPath ? opts.mapInputPath(entry.path) : entry.path })); }
+        try { return JSON.parse(fs.readFileSync(cacheFile, 'utf8')).map(entry => ({ ...entry, path: path.isAbsolute(entry.path) && opts.mapInputPath ? opts.mapInputPath(entry.path) : entry.path })); }
         catch (error) {
           if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
         }
@@ -207,7 +210,8 @@ export async function prepareRuleDelivery(opts) {
       const sourceEntries = await collectRuleBindingEntries(root,
         root === opts.srcRoot && !fs.existsSync(path.join(root, 'agentic')) ? '.' : 'agentic/code');
       rebuilt = true;
-      const entries = sourceEntries.map(entry => ({ ...entry, path: path.resolve(root, entry.path) }));
+      const entries = sourceEntries.map(entry => ({ ...entry, path: entry.path.startsWith('agentic/code/')
+        ? entry.path : path.resolve(root, entry.path) }));
       if (cacheFile) {
         fs.mkdirSync(cacheDir, { recursive: true });
         // Workers may publish the same immutable source snapshot concurrently.

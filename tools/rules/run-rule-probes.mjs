@@ -377,7 +377,8 @@ export function evaluateCompoundTrace(trace, actionPattern, expected = {}, ident
     return { status: 'invalid', pass: false, reason: 'Malformed or empty required checks' };
   if (expected.rule && (!Array.isArray(row.bound_rules) || row.bound_rules.length !== row.required_rule_checks.length
     || !row.bound_rules.some((rule, index) => rule.name === expected.rule && row.required_rule_checks[index]?.rule_id
-      && row.required_rule_checks[index]?.fetch_command?.endsWith(` ${row.required_rule_checks[index].rule_id}`))))
+      && (row.required_rule_checks[index]?.fetch_command?.endsWith(` ${row.required_rule_checks[index].rule_id}`)
+        || row.required_rule_checks[index]?.fetch_command?.endsWith(` ${row.required_rule_checks[index].rule_id} --body`)))))
     return { status: 'invalid', pass: false, reason: 'Expected scenario rule missing from selected checklist' };
   const checks = evaluateRequiredRuleChecks(row.required_rule_checks, trace, actionPattern, identities, boundary, row.bound_rules);
   return { status: 'checked', pass: checks.every(check => check.pass), checks };

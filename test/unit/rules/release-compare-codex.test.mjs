@@ -191,7 +191,7 @@ describe('Codex release comparison subject adapter', () => {
   it('admits only the qualified Codex host-state names and preserves bounded postcheck diagnostics', async () => {
     const { root, env, request } = setup();
     const account = env.AIWG_RELEASE_CODEX_ACCOUNT_HOME;
-    for (const name of ['.sandbox_migration', 'installation_id', 'models_cache.json', 'goals_1.sqlite', 'logs_2.sqlite',
+    for (const name of ['.sandbox_migration', '.sqlite-maintenance.lock', 'installation_id', 'models_cache.json', 'goals_1.sqlite', 'logs_2.sqlite',
       'memories_1.sqlite', 'memories_1.sqlite-shm', 'memories_1.sqlite-wal', 'queue_1.sqlite', 'queue_1.sqlite-wal',
       'state_5.sqlite', 'state_5.sqlite-shm', 'state_5.sqlite-wal']) fs.writeFileSync(path.join(account, name), 'host-state');
     fs.mkdirSync(path.join(account, 'shell_snapshots')); fs.mkdirSync(path.join(account, 'tmp'));
