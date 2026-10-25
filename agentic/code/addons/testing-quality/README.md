@@ -1,5 +1,7 @@
 # Testing Quality
 
+Evidence status: design intent.
+
 Reusable test conformance and normalization tooling for AIWG. Point it at a target root, define the test contract,
 reconcile runner discovery with execution, review the actual assertions, and retain source-bound evidence for every
 decision. The existing TDD, mutation, flake, factory and test-sync skills remain available.

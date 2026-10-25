@@ -1,5 +1,7 @@
 # Guided Implementation Addon
 
+Evidence status: design intent.
+
 Bounded iteration control for autonomous issue-to-code implementation.
 
 ## Overview

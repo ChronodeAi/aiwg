@@ -1,5 +1,7 @@
 # LLM Wiki
 
+Evidence status: design intent.
+
 An LLM-maintained markdown wiki that compounds as sources are ingested. Thin topology declaration on the semantic memory kernel — ships schema profiles and page templates, no custom mechanics.
 
 ## What It Is

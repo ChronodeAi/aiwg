@@ -1,18 +1,20 @@
 # RLM — Recursive Language Models Addon
 
+Evidence status: paper-reported ([REF-089](https://arxiv.org/abs/2512.24601)), not measured in AIWG.
+
 **Version**: 1.0.0
-**Status**: Production Ready
-**Research Foundation**: REF-089 (Zhang et al., 2026)
+**Status**: Experimental (effectiveness unmeasured in AIWG)
+**Research Foundation**: REF-089 (Zhang et al., 2026) — [arXiv:2512.24601](https://arxiv.org/abs/2512.24601)
 
 ## Overview
 
 The Recursive Language Models (RLM) addon enables AIWG agents to process arbitrarily large codebases, documentation corpora, and multi-file operations through recursive sub-agent delegation and programmatic environment interaction. Instead of loading entire contexts into the conversation window, RLM treats context as an external environment accessed selectively through code.
 
-**Key insight from REF-089**: Long prompts should not be fed into the neural network directly but should instead be treated as part of the environment that the LLM is tasked to symbolically and recursively interact with. This approach is lossless, cost-efficient, and scales to 10M+ tokens through recursive composition.
+**Key insight from REF-089**: Long prompts should not be fed into the neural network directly but should instead be treated as part of the environment that the LLM is tasked to symbolically and recursively interact with. In the paper, this approach is lossless, cost-efficient, and scales to 10M+ tokens through recursive composition (paper-reported, not measured in AIWG).
 
 **AIWG alignment**: Claude Code already operates this way through Read, Grep, and Glob tools. RLM formalizes and extends these patterns with recursive decomposition, parallel fan-out processing, and explicit task tree management.
 
-Research demonstrates up to 3x cost reduction compared to summarization approaches while maintaining stronger performance, because the agent can selectively access only relevant portions of context.
+The RLM paper reports up to 3x cost reduction compared to summarization approaches while maintaining stronger performance (paper-reported, not measured in AIWG; see [arXiv:2512.24601](https://arxiv.org/abs/2512.24601)), attributing it to the agent selectively accessing only relevant portions of context.
 
 ## Quick Start
 
@@ -163,7 +165,7 @@ nodes:
 
 ### Cost Impact
 
-Model tiering typically yields 40-60% cost reduction over uniform Opus usage while maintaining equivalent output quality, because most nodes in a tree perform simple tasks.
+Model tiering is intended to cost less than uniform Opus usage (unmeasured in AIWG; no cost comparison has been run), on the assumption that most nodes in a tree perform simple tasks.
 
 ## Chunking Strategies
 
@@ -323,7 +325,7 @@ addons:
 
 **REF-089: Recursive Language Models (Zhang et al., 2026)**
 
-Key findings:
+Key findings reported in the paper (paper-reported, not measured in AIWG):
 - **10M+ token processing**: Scales beyond any fixed context window through recursion
 - **3x cost reduction**: Selective access cheaper than loading full context
 - **Superior performance**: Maintains details lost to summarization
@@ -335,7 +337,7 @@ Key findings:
 3. **Recursive composition**: Decompose problems into sub-problems solved by sub-agents
 4. **Selective reading**: Access only relevant portions, not entire corpus
 
-**Research quote**:
+**Research quote** (from [REF-089](https://arxiv.org/abs/2512.24601); paper-reported, not measured in AIWG):
 > "Compared to the summarization agent which ingests the entire input context, RLMs are up to 3× cheaper while maintaining stronger performance across all tasks because the RLM is able to selectively view context."
 
 ## Integration Points
@@ -478,7 +480,7 @@ See documentation in `docs/`:
 
 ## Performance Characteristics
 
-Based on REF-089 benchmarks:
+Based on REF-089 paper benchmarks (paper-reported, not measured in AIWG):
 
 | Metric | RLM | Summarization | Direct Context |
 |--------|-----|---------------|----------------|
@@ -487,12 +489,12 @@ Based on REF-089 benchmarks:
 | **Quality** | High (lossless) | Medium (lossy) | N/A (fails) |
 | **Latency** | Variable (parallel) | High (sequential) | N/A (fails) |
 
-**When RLM excels**:
+**When RLM is expected to help (design intent, unmeasured)**:
 - Information-dense tasks requiring full detail
 - Tasks that decompose naturally into independent sub-problems
 - Operations benefiting from parallelism
 
-**When alternatives better**:
+**When alternatives may fit better (design intent)**:
 - Small contexts (<50K tokens) where direct reading works
 - Tasks requiring global understanding that cannot decompose
 - Real-time latency-critical operations

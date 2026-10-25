@@ -1,5 +1,7 @@
 # Civic Action
 
+Evidence status: design intent.
+
 Civic Action is an opt-in, vendor-neutral AIWG addon for evidence-bound civic
 research, public-meeting reconciliation, public-records planning, public
 technology review, local-resource indexing, corrections, and publication QA.

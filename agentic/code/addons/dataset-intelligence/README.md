@@ -1,5 +1,7 @@
 # Dataset Intelligence
 
+Evidence status: design intent.
+
 Dataset Intelligence is AIWG's core, auto-installed interaction layer for
 turning a source and desired outcome into a governed dataset plan. It is usable
 from SDLC, research, knowledge-base, media, marketing, operations, and

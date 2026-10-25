@@ -1,5 +1,7 @@
 # Star Prompt Addon
 
+Evidence status: design intent.
+
 Tasteful repository star prompt for successful command completions.
 
 ## Overview

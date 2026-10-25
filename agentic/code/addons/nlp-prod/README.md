@@ -1,5 +1,7 @@
 # nlp-prod — NLP Production Pipeline Toolkit
 
+Evidence status: design intent.
+
 An AIWG addon for designing and productionizing LLM inference pipelines. Pattern-guided, slim by default, eval-first.
 
 **Guiding philosophy**: manageable, maintainable, cost-effective — good TCO and real use.

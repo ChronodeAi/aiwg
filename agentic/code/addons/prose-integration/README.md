@@ -1,5 +1,7 @@
 # OpenProse Integration Addon
 
+Evidence status: design intent.
+
 **Version**: 0.1.0
 **Status**: Experimental
 **Requires**: OpenProse installed (cloned to `/tmp/prose` or configured path)

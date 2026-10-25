@@ -1,5 +1,7 @@
 # Century-Scale Readiness Review
 
+Evidence status: design intent.
+
 This addon asks what future maintainers need to preserve obligations, replace
 dependencies, rehearse migrations, degrade safely, audit decisions, and retain
 meaning—not whether a system can literally be guaranteed for a century.

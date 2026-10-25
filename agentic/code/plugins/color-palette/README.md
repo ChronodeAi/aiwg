@@ -1,5 +1,7 @@
 # Color Palette Addon
 
+Evidence status: design intent.
+
 Standalone addon for color palette selection, analysis, and trend research. Helps users explore, evaluate, and select desirable color palettes using color theory fundamentals, current trend research, and cultural context from architecture, film, and design.
 
 ## Installation

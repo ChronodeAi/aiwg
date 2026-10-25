@@ -1,5 +1,7 @@
 # Line Memory
 
+Evidence status: design intent.
+
 Line Memory is a small optional AIWG memory addon: one human-readable file,
 one retained memory per nonblank line, a configurable retention limit, and
 least-recently-used behavior implemented by moving referenced lines to the end.

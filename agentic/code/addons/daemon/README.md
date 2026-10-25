@@ -1,5 +1,7 @@
 # Daemon Session
 
+Evidence status: design intent.
+
 Persistent daemon session capabilities: Concierge front-end, session memory, and interaction rules.
 
 ## Overview

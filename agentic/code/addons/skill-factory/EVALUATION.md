@@ -1,5 +1,7 @@
 # Skill-Factory Addon Evaluation Plan
 
+> This document is an evaluation plan, not results. No evaluation has been run against it; the checklists and gates below are unchecked and no scores are reported.
+
 ## Overview
 
 This document defines the evaluation criteria, test scenarios, and quality gates for the skill-factory addon skills.
