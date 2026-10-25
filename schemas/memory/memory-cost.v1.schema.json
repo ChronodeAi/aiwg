@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/memory/memory-cost.v1.schema.json",
+  "title": "AIWG memory cost v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "at",
+    "workspace",
+    "scope",
+    "estimator",
+    "summary",
+    "items",
+    "inlineBudget",
+    "startupMeasurement",
+    "telemetry",
+    "demotionPreview"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "aiwg.memory-cost.v1"
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "string"
+    },
+    "estimator": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["byClass", "imported", "duplicated", "layers"],
+      "properties": {
+        "byClass": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "instruction", "role", "rule", "skill", "tool-schema",
+            "native-memory", "stored", "imported", "other"
+          ],
+          "properties": {
+            "instruction": { "$ref": "#/$defs/classTotal" },
+            "role": { "$ref": "#/$defs/classTotal" },
+            "rule": { "$ref": "#/$defs/classTotal" },
+            "skill": { "$ref": "#/$defs/classTotal" },
+            "tool-schema": { "$ref": "#/$defs/classTotal" },
+            "native-memory": { "$ref": "#/$defs/classTotal" },
+            "stored": { "$ref": "#/$defs/classTotal" },
+            "imported": { "$ref": "#/$defs/classTotal" },
+            "other": { "$ref": "#/$defs/classTotal" }
+          }
+        },
+        "imported": { "$ref": "#/$defs/classTotal" },
+        "duplicated": { "$ref": "#/$defs/classTotal" },
+        "layers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["startup", "perTask", "overhead", "usageBilling", "cacheDiscounts"],
+          "properties": {
+            "startup": { "$ref": "#/$defs/layerCost" },
+            "perTask": { "$ref": "#/$defs/layerCost" },
+            "overhead": { "$ref": "#/$defs/layerCost" },
+            "usageBilling": { "$ref": "#/$defs/layerCost" },
+            "cacheDiscounts": { "$ref": "#/$defs/layerCost" }
+          }
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "sourcePath", "costClass", "bytes", "tokens",
+          "estimator", "confidence", "layer", "imported",
+          "duplicateGroup", "utility"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "sourcePath": { "type": "string" },
+          "costClass": {
+            "enum": [
+              "instruction", "role", "rule", "skill", "tool-schema",
+              "native-memory", "stored", "imported", "other"
+            ]
+          },
+          "bytes": { "type": ["number", "null"] },
+          "tokens": { "type": ["number", "null"] },
+          "estimator": { "type": "string" },
+          "confidence": { "enum": ["measured", "inferred", "unknown"] },
+          "layer": { "enum": ["startup", "per-task", "overhead", "stored", "unknown"] },
+          "imported": { "type": "boolean" },
+          "duplicateGroup": { "type": ["string", "null"] },
+          "utility": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "exposures", "exposureKinds", "retrieved", "used",
+              "rejected", "outcome", "evidence"
+            ],
+            "properties": {
+              "exposures": { "type": "number" },
+              "exposureKinds": { "type": "array", "items": { "type": "string" } },
+              "retrieved": { "type": ["boolean", "null"] },
+              "used": { "type": ["boolean", "null"] },
+              "rejected": { "type": ["boolean", "null"] },
+              "outcome": { "enum": ["unknown", "retrieved-unused", "used", "rejected"] },
+              "evidence": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "inlineBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["estimator", "limit", "configSource", "providers"],
+      "properties": {
+        "estimator": { "type": "string" },
+        "limit": { "type": "number" },
+        "configSource": { "type": "string" },
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "provider", "selected_bytes", "selected_tokens",
+              "exceeded", "contributors", "scopeNote"
+            ],
+            "properties": {
+              "provider": { "type": "string" },
+              "selected_bytes": { "type": "number" },
+              "selected_tokens": { "type": "number" },
+              "exceeded": { "type": "boolean" },
+              "contributors": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path", "bytes", "estimated_tokens"],
+                  "properties": {
+                    "path": { "type": "string" },
+                    "bytes": { "type": "number" },
+                    "estimated_tokens": { "type": "number" }
+                  }
+                }
+              },
+              "scopeNote": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "startupMeasurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "estimator", "providers", "note"],
+      "properties": {
+        "status": { "enum": ["matched", "unknown"] },
+        "estimator": { "type": "string" },
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "provider", "measuredStartupBytes", "measuredStartupTokens",
+              "staticResidentBytes", "note"
+            ],
+            "properties": {
+              "provider": { "type": "string" },
+              "measuredStartupBytes": { "type": ["number", "null"] },
+              "measuredStartupTokens": { "type": ["number", "null"] },
+              "staticResidentBytes": { "type": ["number", "null"] },
+              "note": { "type": "string" }
+            }
+          }
+        },
+        "note": { "type": "string" }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["store", "writesNewTelemetry", "retention", "auditComplete", "exclusions"],
+      "properties": {
+        "store": { "type": ["string", "null"] },
+        "writesNewTelemetry": { "type": "boolean" },
+        "retention": { "type": "string" },
+        "auditComplete": { "type": "boolean" },
+        "exclusions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "demotionPreview": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["targets", "totals"],
+          "properties": {
+            "targets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id", "sourcePath", "reachable", "before",
+                  "after", "anchors", "warnings"
+                ],
+                "properties": {
+                  "id": { "type": "string" },
+                  "sourcePath": { "type": "string" },
+                  "reachable": { "type": "boolean" },
+                  "before": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["bytes", "tokens"],
+                    "properties": {
+                      "bytes": { "type": ["number", "null"] },
+                      "tokens": { "type": ["number", "null"] }
+                    }
+                  },
+                  "after": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["residentBytes", "residentTokens", "anchorBytes", "anchorTokens"],
+                    "properties": {
+                      "residentBytes": { "type": "number" },
+                      "residentTokens": { "type": "number" },
+                      "anchorBytes": { "type": "number" },
+                      "anchorTokens": { "type": "number" }
+                    }
+                  },
+                  "anchors": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind", "locator", "bytes", "tokens",
+                        "estimator", "confidence", "note"
+                      ],
+                      "properties": {
+                        "kind": { "enum": ["indexed-record", "include-stub", "discovery-query"] },
+                        "locator": { "type": "string" },
+                        "bytes": { "type": "number" },
+                        "tokens": { "type": "number" },
+                        "estimator": { "type": "string" },
+                        "confidence": { "enum": ["measured", "inferred", "unknown"] },
+                        "note": { "type": "string" }
+                      }
+                    }
+                  },
+                  "warnings": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            },
+            "totals": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["beforeTokens", "afterAnchorTokens", "residentTokensRemoved"],
+              "properties": {
+                "beforeTokens": { "type": ["number", "null"] },
+                "afterAnchorTokens": { "type": "number" },
+                "residentTokensRemoved": { "type": ["number", "null"] }
+              }
+            }
+          }
+        },
+        { "type": "null" }
+      ]
+    }
+  },
+  "$defs": {
+    "classTotal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "bytes", "tokens", "estimator", "confidence"],
+      "properties": {
+        "items": { "type": "number" },
+        "bytes": { "type": ["number", "null"] },
+        "tokens": { "type": ["number", "null"] },
+        "estimator": { "type": "string" },
+        "confidence": { "enum": ["measured", "inferred", "unknown"] }
+      }
+    },
+    "layerCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "tokens", "estimator", "confidence", "basis"],
+      "properties": {
+        "bytes": { "type": ["number", "null"] },
+        "tokens": { "type": ["number", "null"] },
+        "estimator": { "type": "string" },
+        "confidence": { "enum": ["measured", "inferred", "unknown"] },
+        "basis": { "type": "string" }
+      }
+    }
+  }
+}
