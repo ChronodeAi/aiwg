@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { importImpl } from '../../_resolve-impl.mjs';
 import { withRuleDeployment, collectFrameworkArtifacts, getAddonFiles, isKernelSkill, listMdFiles, listSkillDirs, normalizeDeploymentMode, resolveAiwgRoot } from './base.mjs';
+
+import { writeContextFileSync } from './context-write.mjs';
 export const name = 'omp';
 export const aliases = ['oh-my-pi'];
 export const paths = { agents: '.omp/agents', commands: '.omp/prompts', skills: '.agents/skills', rules: '.omp/rules' };
@@ -168,7 +170,7 @@ export function createAgentsMd(target, srcRoot, dryRun = false) {
   const content = current.includes(start) && current.includes(end) ? current.slice(0, current.indexOf(start)) + block + current.slice(current.indexOf(end) + end.length) : `${current}${current ? '\n\n' : ''}${block}\n`;
   if (!dryRun) {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    if (content !== current) fs.writeFileSync(dest, content);
+    if (content !== current) writeContextFileSync(dest, content);
     const receiptPath = path.join(path.dirname(dest), '.aiwg-manifest.json');
     // Block ownership must never claim the operator's complete context file.
     receipt.managed['AGENTS.md'] = { blockHash: `sha256:${hash(block)}`, source: 'omp-bootstrap', provider: 'omp', transformation: 'managed-block' };

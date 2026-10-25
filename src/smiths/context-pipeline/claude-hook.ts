@@ -29,7 +29,7 @@ import {
   dedupeProviderBootstrap,
 } from './workspace-context.js';
 import { dominantLineEnding, withLineEnding } from './line-endings.js';
-import { assertSafeContextFile } from './context-file-safety.js';
+import { assertSafeContextFile, writeContextFileSync } from './context-file-safety.js';
 
 export const CLAUDE_HOOK_START = '<!-- AIWG:claude-md-hook:start -->';
 export const CLAUDE_HOOK_END = '<!-- AIWG:claude-md-hook:end -->';
@@ -126,7 +126,7 @@ export async function ensureClaudeMdHook(
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       const minimal = `${block}\n`;
-      await fs.writeFile(claudeMdPath, minimal, 'utf8');
+      writeContextFileSync(claudeMdPath, minimal, 'utf8');
       result.action = 'created';
       return result;
     }
@@ -161,7 +161,7 @@ export async function ensureClaudeMdHook(
         existing.substring(0, bootstrapStartIdx)
         + block
         + existing.substring(bootstrapEndIdx);
-      await fs.writeFile(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
+      writeContextFileSync(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
       result.action = 'updated';
       return result;
     }
@@ -176,7 +176,7 @@ export async function ensureClaudeMdHook(
     // Ensure the file ends with a single newline before appending.
     const trimmed = existing.replace(/(?:\r?\n)+$/, lineEnding);
     const updated = `${trimmed}${lineEnding}${block}${lineEnding}`;
-    await fs.writeFile(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
+    writeContextFileSync(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
     result.action = 'inserted';
     return result;
   }
@@ -192,12 +192,12 @@ export async function ensureClaudeMdHook(
     // With --force, back up and append a fresh block.
     if (opts.detectExistingFiles !== false) {
       const backupPath = `${claudeMdPath}.bak.${new Date().toISOString().replace(/[:.]/g, '-')}`;
-      await fs.writeFile(backupPath, existing, 'utf8');
+      writeContextFileSync(backupPath, existing, 'utf8');
       result.backupPath = backupPath;
     }
     const trimmed = existing.replace(/(?:\r?\n)+$/, lineEnding);
     const updated = `${trimmed}${lineEnding}${block}${lineEnding}`;
-    await fs.writeFile(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
+    writeContextFileSync(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
     result.action = 'inserted';
     return result;
   }
@@ -208,7 +208,7 @@ export async function ensureClaudeMdHook(
 
   if (currentBlock === block) {
     if (repaired) {
-      await fs.writeFile(claudeMdPath, existing, 'utf8');
+      writeContextFileSync(claudeMdPath, existing, 'utf8');
       result.action = 'updated';
       return result;
     }
@@ -221,7 +221,7 @@ export async function ensureClaudeMdHook(
   // the case where an operator made deliberate edits inside the block).
   if (opts.force) {
     const backupPath = `${claudeMdPath}.bak.${new Date().toISOString().replace(/[:.]/g, '-')}`;
-    await fs.writeFile(backupPath, existing, 'utf8');
+    writeContextFileSync(backupPath, existing, 'utf8');
     result.backupPath = backupPath;
   } else {
     result.warnings.push(
@@ -230,7 +230,7 @@ export async function ensureClaudeMdHook(
   }
 
   const updated = existing.substring(0, startIdx) + block + existing.substring(blockEndOffset);
-  await fs.writeFile(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
+  writeContextFileSync(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
   result.action = 'updated';
   return result;
 }

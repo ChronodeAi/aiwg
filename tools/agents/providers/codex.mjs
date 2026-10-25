@@ -1,3 +1,4 @@
+import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * OpenAI Codex Provider
  *
@@ -67,6 +68,8 @@ import {
   parseFrontmatter,
   resolveAiwgRoot
 } from './base.mjs';
+
+import { writeContextFileSync } from './context-write.mjs';
 
 function resolveCodexHelperRoot(srcRoot) {
   const resolved = resolveAiwgRoot(srcRoot);
@@ -403,7 +406,7 @@ export function aggregateToAgentsMd(agentFiles, destPath, opts) {
   }
   const out = `${lines.join('\n')}\n`;
   if (opts.dryRun) console.log(`[dry-run] write ${destPath}`);
-  else fs.writeFileSync(destPath, out, 'utf8');
+  else writeContextFileSync(destPath, out, 'utf8');
 
 }
 

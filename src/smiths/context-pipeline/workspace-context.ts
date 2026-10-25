@@ -1,3 +1,4 @@
+import { writeContextFileSync } from './context-file-safety.js';
 /**
  * Canonical cross-provider workspace context graph (#1811).
  *
@@ -185,15 +186,7 @@ async function readOptional(filePath: string): Promise<string | null> {
 }
 
 async function atomicWrite(filePath: string, content: string): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const temporary = path.join(path.dirname(filePath), `.${path.basename(filePath)}.tmp.${process.pid}`);
-  await fs.writeFile(temporary, content, 'utf8');
-  try {
-    await fs.rename(temporary, filePath);
-  } catch (error) {
-    await fs.rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  writeContextFileSync(filePath, content);
 }
 
 function resolveProjectRelative(projectPath: string, relativePath: string): string {
@@ -645,7 +638,7 @@ export async function ensureWorkspaceContext(
   }
 
   const backupPath = `${workspacePath}.bak.${new Date().toISOString().replace(/[:.]/g, '-')}`;
-  await fs.writeFile(backupPath, existing, 'utf8');
+  writeContextFileSync(backupPath, existing, 'utf8');
   await atomicWrite(workspacePath, buildWorkspaceDocument(projectPath, existing, providerFiles, residentMemory));
   return { path: workspacePath, action: 'updated', backupPath, warnings };
 }
@@ -1280,7 +1273,7 @@ export async function migrateWorkspaceContext(
     let preimage: string | null = null;
     if (existing !== null) {
       preimage = path.relative(projectPath, path.join(preimageDir, safePreimageName(relativePath))).replace(/\\/g, '/');
-      await fs.writeFile(path.join(projectPath, preimage), existing, 'utf8');
+      writeContextFileSync(path.join(projectPath, preimage), existing, 'utf8');
       backups.push(preimage);
     }
     manifest.files.push({ path: relativePath, existed: existing !== null, preimage, outputChecksum: sha256(content) });

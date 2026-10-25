@@ -1,3 +1,4 @@
+import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * Devin Desktop Provider (Windsurf compatibility adapter)
  *
@@ -54,6 +55,8 @@ import {
   filterCommandsAgainstSkills,
   deploySoulCompanions
 } from './base.mjs';
+
+import { writeContextFileSync } from './context-write.mjs';
 
 // ============================================================================
 // Provider Configuration
@@ -285,7 +288,7 @@ export function generateAgentsMd(files, destPath, opts) {
   if (dryRun) {
     console.log(`[dry-run] Would write AGENTS.md with ${agents.length} agents`);
   } else {
-    fs.writeFileSync(destPath, output, 'utf8');
+    writeContextFileSync(destPath, output, 'utf8');
     console.log(`Created AGENTS.md with ${agents.length} agents at ${path.relative(process.cwd(), destPath)}`);
   }
 
@@ -409,7 +412,7 @@ export function generateWindsurfRules(srcRoot, target, opts) {
     console.log(`[dry-run] Would write .windsurf/rules/aiwg-orchestration.md (trigger: always_on)`);
   } else {
     ensureDir(rulesDir);
-    fs.writeFileSync(orchestrationPath, output, 'utf8');
+    writeContextFileSync(orchestrationPath, output, 'utf8');
     console.log(`Created .windsurf/rules/aiwg-orchestration.md (trigger: always_on)`);
   }
 
@@ -430,7 +433,7 @@ export function generateWindsurfRules(srcRoot, target, opts) {
   if (dryRun) {
     console.log(`[dry-run] Would write .windsurfrules (deprecated stub)`);
   } else {
-    fs.writeFileSync(stubPath, stubLines.join('\n'), 'utf8');
+    writeContextFileSync(stubPath, stubLines.join('\n'), 'utf8');
     console.log(`Created .windsurfrules (deprecated stub → .windsurf/rules/aiwg-orchestration.md)`);
   }
 }

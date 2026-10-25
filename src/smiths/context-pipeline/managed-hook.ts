@@ -15,7 +15,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { buildProviderBootstrapBlock } from './workspace-context.js';
 import { dominantLineEnding, withLineEnding } from './line-endings.js';
-import { assertSafeContextFile } from './context-file-safety.js';
+import { assertSafeContextFile, writeContextFileSync } from './context-file-safety.js';
 
 export const CONTEXT_HOOK_START = '<!-- AIWG:context-hook:start -->';
 export const CONTEXT_HOOK_END = '<!-- AIWG:context-hook:end -->';
@@ -66,7 +66,7 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
     existing = await fs.readFile(filePath, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      await fs.writeFile(filePath, `${block}\n`, 'utf8');
+      writeContextFileSync(filePath, `${block}\n`, 'utf8');
       result.action = 'created';
       return result;
     }
@@ -88,7 +88,7 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
   // No managed block — append it to the end, preserving everything above.
   if (s === -1 && e === -1) {
     const trimmed = existing.replace(/(?:\r?\n)+$/, lineEnding);
-    await fs.writeFile(filePath, `${trimmed}${lineEnding}${block}${lineEnding}`, 'utf8');
+    writeContextFileSync(filePath, `${trimmed}${lineEnding}${block}${lineEnding}`, 'utf8');
     result.action = 'inserted';
     return result;
   }
@@ -97,7 +97,7 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
   if (s === -1 || e === -1) {
     if (opts.force) {
       const trimmed = existing.replace(/(?:\r?\n)+$/, lineEnding);
-      await fs.writeFile(filePath, `${trimmed}${lineEnding}${block}${lineEnding}`, 'utf8');
+      writeContextFileSync(filePath, `${trimmed}${lineEnding}${block}${lineEnding}`, 'utf8');
       result.action = 'inserted';
       return result;
     }
@@ -112,7 +112,7 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
     result.action = 'unchanged';
     return result;
   }
-  await fs.writeFile(filePath, existing.substring(0, s) + block + existing.substring(endOff), 'utf8');
+  writeContextFileSync(filePath, existing.substring(0, s) + block + existing.substring(endOff), 'utf8');
   result.action = 'updated';
   return result;
 }
