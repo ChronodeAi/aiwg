@@ -7,6 +7,8 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'src/artifacts/fortemi-shard-export.ts'
+      - 'src/artifacts/fortemi-shard-contract/**'
+      - 'src/api/index.ts'
       - 'test/unit/artifacts/fortemi-shard-export.test.ts'
       - 'test/fixtures/fortemi-shard/**'
       - 'schemas/artifacts/aiwg-fortemi-shard-receipt.v1.schema.json'
@@ -93,7 +95,7 @@ jobs:
 
       - name: Verify AIWG core-v1 and full-v1 consumer receipts
         run: |
-          npx vitest run test/unit/artifacts/fortemi-shard-export.test.ts
+          npx vitest run --config config/vitest.wasm.config.js test/unit/artifacts/fortemi-shard-export.test.ts
           node tools/ci/verify-aiwg-fortemi-shard-receipt.mjs
 
       - name: Clean checkout pinned Fortemi consumer

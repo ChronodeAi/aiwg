@@ -47,6 +47,12 @@ describe('Fortemi shard conformance workflow', () => {
     )
   })
 
+  it('qualifies candidate reader changes in the existing WASM shard lane', () => {
+    expect(workflow).toContain("'src/artifacts/fortemi-shard-contract/**'")
+    expect(workflow).toContain("'src/api/index.ts'")
+    expect(workflow).toContain('npx vitest run --config config/vitest.wasm.config.js test/unit/artifacts/fortemi-shard-export.test.ts')
+  })
+
   it('uses run-scoped resources and always removes them', () => {
     expect(workflow).toContain('DB_IMAGE="aiwg-fortemi-testdb:${GITHUB_RUN_ID}"')
     expect(workflow).toContain('DB_CONTAINER="aiwg-fortemi-${GITHUB_RUN_ID}"')
