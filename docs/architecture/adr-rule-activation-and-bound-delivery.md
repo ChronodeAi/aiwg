@@ -3,7 +3,7 @@
 Status: accepted
 Date: 2026-10-18
 Decision owners: AIWG maintainers
-Related: #2935, #2936–#2945, #3222, #2562, #2839, #2645, #2646
+Related: #2935, #2936–#2945, #3222, #2562, #2839, #2645, #2646, #3292, #3568
 
 ## Context
 
@@ -380,6 +380,80 @@ long bodies still require trimming and validation in #2944. Additional
 authorship, secret disclosure, and fabricated claims across roles. Their
 examples remain candidates for extraction in #2945, not blanket exemptions
 for all CRITICAL rules. For example, CRITICAL `versioning` is release-scoped.
+
+#### Amendment 2026-10-25 (proposed): root kernel re-evaluated for compound discovery (#3292 item 3)
+
+Compound discovery is implemented: every action result carries its governing
+rules (`bound_rules[]`), per-result and whole-response `rule_stats`, and
+machine-checkable `required_rule_checks[]` with a fetch-and-follow obligation
+(`839f3a46f` in [`query-engine.ts`](../../src/artifacts/query-engine.ts),
+tests in #3568). The governing rules now arrive at the point of action, so
+kernel admission is re-evaluated. The root kernel becomes the small set of
+universal safety rules plus the routing rule (`skill-discovery`) that obliges
+agents to run discovery and follow the rules it returns. This amendment moves
+or removes no rule file; implementing the dispositions below is a later issue.
+
+Revised admission: checks 1, 3, 4, and 5 above are unchanged. For placements
+decided after this date, check 2 reads as the **discovery-first test**: a rule
+stays kernel only if a compliant agent could violate its invariant before it
+can run discovery or load any scoped artifact. When compound discovery or the
+selected component's binding reliably delivers the rule first, that route is
+the placement. Severity and byte targets still cannot demote a rule, and a
+failed move retains the prior placement.
+
+Census method: kernel rules are the rule files under `agentic/code/**/rules/`
+whose frontmatter declares the scalar `activation: kernel` (validated by
+[`rule-activation.ts`](../../src/lint/rule-activation.ts);
+`npm run lint:rule-activation`). Skill `kernel: true` is a separate
+artifact-index flag, not rule admission, and `RULES-INDEX.md` files are
+summary-and-path indexes the artifact index excludes from the rule census. On
+2026-10-25 that census is **19 files holding 18 distinct rules**:
+`skill-discovery` ships as two byte-identical bodies (`addons/aiwg-utils` and
+`plugins/utils`; counted once below, deduplication without semantic change is
+later work), and `citation-policy` uses the equivalent quoted form
+`activation: "kernel"`.
+
+Disposition of the 18 distinct kernel rules under the revised criteria:
+
+| Rule | Disposition | Reason |
+|---|---|---|
+| `human-authorization` | Stay kernel | Acting on a finding can precede any discovery call, so no binding delivers it first. |
+| `token-security` | Stay kernel | A secret can leak in the first reply before any artifact is selected. |
+| `skill-discovery` | Stay kernel, one canonical copy | The routing obligation cannot be delivered by the discovery it mandates. |
+| `instruction-comprehension` | Move to `summary` | Universal but not safety; a startup one-liner plus discovery-delivered detail suffices. |
+| `research-before-decision` | Move to `summary` | Governed decisions always follow task framing that discovery can see. |
+| `artifact-output-policy` | Move to `bound` | Artifact production always follows scoped workflow selection; bind to artifact-producing workflows. |
+| `no-attribution` | Move to `bound` | Attribution obligations attach to delivery output; bind to delivery/release artifacts. |
+| `citation-policy` | Move to `bound` | Claims travel with research outputs; deliver with the research artifacts that produce them. |
+| `dev-pipeline-safety` | Kernel when extension installed | Suppressing a CI signal happens in the first pipeline command, before discovery. |
+| `it-change-control` | Kernel when extension installed | Network/identity changes are destructive before any scoped artifact loads. |
+| `net-change-blast-radius` | Kernel when extension installed | Blast-radius assessment must precede the change itself. |
+| `sec-key-material-handling` | Kernel when extension installed | Key-material exposure precedes artifact selection. |
+| `sec-luks-dual-phase` | Kernel when extension installed | Disk-encryption operations are irreversible without the gate. |
+| `stream-safety` | Kernel when extension installed | Stream credential exposure precedes scoped work. |
+| `sys-hardware-safety` | Kernel when extension installed | Firmware/partition operations are destructive before discovery runs. |
+| `sys-interactive-gate` | Kernel when extension installed | Interactive shell commands occur before artifact loading. |
+| `ops-safety` | Kernel when ops framework installed | Destructive-command approval precedes discovery. |
+| `ops-information-governance` | Kernel when ops framework installed | Operational payloads reach responses before scoped selection. |
+
+Re-derived Wave 4 U1 target: the base always-loaded profile (aiwg-utils plus
+sdlc-complete) currently holds 8 kernel files totalling 26,177 B. Under the
+dispositions above the retained root kernel is 3 rules totalling 9,429 B
+(`human-authorization` 2,672 + `token-security` 3,475 + `skill-discovery`
+3,282, canonical copy); 16,748 B across the 5 moved rules leaves the kernel,
+returning only summaries and index pointers as I. The emitted rule-byte
+formula is unchanged (K + I + P, plus separately reported B), and the Wave 4
+target stays ≤45,000 B, so I + P + delivery overhead must fit the remaining
+35,571 B once the complete retained set is measured. Extension kernels
+(8 rules, 33,246 B) and ops-framework kernels (2 rules, 10,501 B) are excluded
+from the base-profile count and measured inside their own profiles. This
+re-derivation raises no target and drops no safety contract to manufacture a
+pass.
+
+U5 probe re-runs of every moved rule through compound discovery are pending:
+per operator direction 2026-10-20, full verification runs quarterly, so no
+disposition above ships before its n=5 positive/negative gate and the release
+comparison pass.
 
 ### Starting disposition: the epic's 20 rules
 
