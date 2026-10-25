@@ -142,6 +142,59 @@ describe('run-once', () => {
 });
 
 describe('job management', () => {
+  it.each(['memory.audit', 'memory.recommend'])('registers %s scope and inputs and shows the kind in status', async kind => {
+    const extra = kind === 'memory.recommend' ? ['--evidence', 'evidence.json', '--usage', 'usage.json'] : [];
+    const result = await housekeeperHandler.execute(makeCtx(['job', 'register', '--id', 'memory', '--kind', kind,
+      '--schedule', '0 2 * * *', '--scope', 'provider', '--provider', 'claude', ...extra, '--non-interactive']));
+    expect(result.exitCode).toBe(0);
+    const listed = JSON.parse((await housekeeperHandler.execute(makeCtx(['job', 'list', '--json']))).message!);
+    expect(listed.jobs[0]).toMatchObject({ kind, args: { scope: 'provider', provider: 'claude',
+      ...(kind === 'memory.recommend' ? { evidence: 'evidence.json', usage: 'usage.json' } : {}) } });
+    const status = JSON.parse((await housekeeperHandler.execute(makeCtx(['status', '--json']))).message!);
+    expect(status.jobs[0].kind).toBe(kind);
+    expect(housekeeperHelpText()).toContain(kind);
+  });
+
+  it('registers a one-shot reviewed apply with an explicit authority message', async () => {
+    const base = ['job', 'register', '--id', 'reviewed', '--kind', 'memory.apply', '--non-interactive'];
+    for (const extra of [[], ['--plan', 'reviewed.json'], ['--confirmed-digest', 'sha256:recorded']]) {
+      const refused = await housekeeperHandler.execute(makeCtx([...base, ...extra]));
+      expect(refused.exitCode).toBe(2);
+      expect(refused.message).toContain('args.plan and args.confirmedDigest');
+    }
+    const result = await housekeeperHandler.execute(makeCtx([...base, '--plan', 'reviewed.json', '--confirmed-digest', 'sha256:recorded']));
+    expect(result.exitCode).toBe(0);
+    expect(result.message).toContain("only the named reviewed plan 'reviewed.json'");
+    const listed = JSON.parse((await housekeeperHandler.execute(makeCtx(['job', 'list', '--json']))).message!);
+    expect(listed.jobs[0]).toMatchObject({ kind: 'memory.apply', args: { plan: 'reviewed.json', confirmedDigest: 'sha256:recorded' } });
+    expect(listed.jobs[0].cron).toBeUndefined();
+    expect(housekeeperHelpText()).toContain('memory.apply');
+  });
+
+  it('retains configured maintenance windows when re-registering an apply plan', async () => {
+    const windows = [{ start: '01:00', end: '02:00', timezone: 'UTC' }];
+    writeConfig({ daemon: { profile: 'housekeeper' }, schedule: { jobs: [{ id: 'reviewed', kind: 'memory.apply',
+      schedule: '0 1 * * *', args: { plan: 'old.json', confirmedDigest: 'old', windows } }] } });
+    expect((await housekeeperHandler.execute(makeCtx(['job', 'register', '--id', 'reviewed', '--kind', 'memory.apply',
+      '--plan', 'new.json', '--confirmed-digest', 'new', '--non-interactive']))).exitCode).toBe(0);
+    const job = JSON.parse((await housekeeperHandler.execute(makeCtx(['job', 'list', '--json']))).message!).jobs[0];
+    expect(job.args).toEqual({ plan: 'new.json', confirmedDigest: 'new', windows });
+    expect(job.schedule).toBeUndefined();
+    expect(job.cron).toBeUndefined();
+  });
+
+  it.each([
+    ['memory.audit', '--plan', 'unexpected.json'],
+    ['memory.audit', '--scope', 'provider'],
+    ['memory.recommend', '--provider', 'unknown'],
+    ['memory.apply', '--plan', 'reviewed.json', '--confirmed-digest', 'digest', '--scope', 'global'],
+  ])('rejects invalid memory owner arguments %j', async (...flags) => {
+    const [kind, ...args] = flags;
+    const result = await housekeeperHandler.execute(makeCtx(['job', 'register', '--id', 'bad', '--kind', kind,
+      '--schedule', '0 2 * * *', ...args, '--non-interactive']));
+    expect(result.exitCode).toBe(2);
+  });
+
   it('fails headless naming --id when required values are missing', async () => {
     const result = await housekeeperHandler.execute(makeCtx(['job', 'register', '--non-interactive']));
     expect(result.exitCode).toBe(2);

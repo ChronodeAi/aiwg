@@ -2,8 +2,8 @@
 
 The housekeeper is the deterministic maintenance profile of the AIWG daemon:
 cron-scheduled owner operations with persisted receipts, optional file-watch
-hints, and a minimal IPC surface. It never runs prompts, agents, memory
-writes, or model calls. Design boundary:
+hints, and a minimal IPC surface. It never runs prompts, agents, or model calls. Memory content changes require
+an exact reviewed owner plan and its recorded digest. Design boundary:
 `docs/architecture/housekeeper-daemon-boundary.md`.
 
 ## Setup
@@ -20,17 +20,67 @@ Register check-only jobs with `aiwg housekeeper job register --id <id>
 --kind <kind> --schedule "<cron>" [--timezone <IANA>]`. Known kinds:
 `index.verify`, `index.reconcile`, `cache.retention`, `update.check`,
 `update.install` (opt-in, see below), `index.freshness`, `index.refresh`,
-`cache.prune`.
+`cache.prune`, `memory.audit`, `memory.recommend`, `memory.apply`.
 
 ## Exclusions (not scheduled here)
 
-- **Memory-maintenance jobs are out of scope.** Their owner contracts
-  (#3282–#3284) are not delivered, so this slice adds no memory job kinds.
 - Scheduled jobs never redeploy providers or frameworks. `update.install`
   performs the package step only; re-deploy separately with
   `aiwg update --skip-check` when ready.
 - The housekeeper profile never constructs the conversational stack (agents,
   behaviors, messaging, web server); those IPC methods are not registered.
+
+## Memory maintenance
+
+Audit and recommendations are read-only owner views. Reports use
+`aiwg.memory-audit.v1` and `aiwg.memory-recommendations.v1`, respectively,
+and are written under `<artifact_root>/reports/memory/` using existing artifact
+routing (`AIWG_ARTIFACTS_PATH` / `.aiwg-location`). An unavailable external
+root fails closed. Receipts record report paths, counts, findings status and
+coverage. Findings are a normal outcome: the job settles `ok` (exit 0) with
+findings status `findings`, and is not retried. Source content is unchanged;
+recommendations never produce plans.
+
+```bash
+aiwg housekeeper job register --id nightly-memory --kind memory.audit --schedule "0 2 * * *" --scope project
+aiwg housekeeper job register --id weekly-memory --kind memory.recommend --schedule "0 3 * * 0" --scope project --evidence reviewed-evidence.json --usage usage.json
+```
+
+Both accept `--scope project|global|provider` and `--provider <id>`;
+provider scope requires a provider. Omitting scope uses the memory owner's
+workspace default. Evidence and usage are optional JSON input files, relative
+to the workspace or absolute, following `aiwg memory recommend` conventions.
+
+For a one-shot apply, first prepare and review a plan through `aiwg memory
+plan` (including reviewer, rationale, version and source checks), then record
+its exact digest from the preview. Registration requires both fields:
+
+```bash
+aiwg memory plan --input reviewed-plan.json --preview --json
+aiwg housekeeper job register --id reviewed-memory --kind memory.apply --plan reviewed-plan.json --confirmed-digest 'sha256:<digest-from-reviewed-preview>'
+aiwg housekeeper run-once --job reviewed-memory --json
+aiwg housekeeper job disable --id reviewed-memory
+```
+
+Omitting `--schedule` on `memory.apply` creates a manual one-shot entry; the
+cron scheduler never runs it. A cron may also be supplied explicitly. The
+registration message confirms that only the named reviewed plan executes.
+The plan path follows the owner's workspace-contained path contract. The
+job always recomputes its digest; registration never confirms a replacement
+plan automatically. Set optional `args.windows` in the config using the same
+window format as update installs below. Outside the window it defers without
+loading an apply owner; all runner resource bounds still apply.
+
+Scheduling adds no mutation authority: owner pins, rare obligations, review
+basis, source facts, provenance, preview/version and restore rules remain in
+force. Digest mismatches, stale plans, protected-item refusals, partial applies,
+and verification findings retain a blocked schedule for inspection through
+the existing recovery path; none are automatically retried or resumed. An
+already fully applied plan is verified read-only and succeeds without writing.
+Inspect owner receipts and `aiwg memory verify --plan reviewed-plan.json` before
+acknowledging with `run-once --resolve`. Restore uses a separately reviewed
+`aiwg memory restore` plan; acknowledgement grants no new owner authority.
+Job kinds and outcomes appear in `job list` and `status` (including JSON).
 
 ## Update policy
 

@@ -10,7 +10,7 @@ import { importImpl } from '../_resolve-impl.mjs';
 const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 /**
- * @typedef {'index.verify'|'index.reconcile'|'cache.retention'|'update.check'|'index.freshness'|'index.refresh'|'cache.prune'} MaintenanceKind
+ * @typedef {'index.verify'|'index.reconcile'|'cache.retention'|'update.check'|'update.install'|'index.freshness'|'index.refresh'|'cache.prune'|'memory.audit'|'memory.recommend'|'memory.apply'} MaintenanceKind
  * @typedef {Object} MaintenanceJob
  * @property {string} id Stable configured job identity
  * @property {MaintenanceKind} kind Closed owner operation; never a prompt
@@ -25,6 +25,7 @@ const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.
 export const MAINTENANCE_KINDS = Object.freeze([
   'index.verify', 'index.reconcile', 'cache.retention', 'update.check',
   'index.freshness', 'index.refresh', 'cache.prune', 'update.install',
+  'memory.audit', 'memory.recommend', 'memory.apply',
 ]);
 
 /** Equal jitter: [ceiling/2, ceiling], capped before jitter; retries never loop in a tick. */
@@ -216,6 +217,10 @@ export class ScheduledTaskRunner extends EventEmitter {
   async runOnce(job, { fireTime } = {}) {
     if (!this.#taskStore) throw new Error('Maintenance requires a persistent TaskStore');
     if (!job.id) throw new Error('Maintenance requires a job ID');
+    if (job.kind?.startsWith('memory.')) {
+      const { validateMemoryJobArgs } = await importImpl(import.meta.url, 'housekeeper/daemon-config.js');
+      validateMemoryJobArgs(job.kind, job.args);
+    }
     // Do not persist event envelope fields as configuration.
     const { job_id: _jobId, fireTime: _fireTime, ...configuration } = job;
     job = configuration;
@@ -317,8 +322,8 @@ export class ScheduledTaskRunner extends EventEmitter {
       else if (job.prompt || job.args?.force || (job.args?.install && job.kind !== 'update.install')) {
         result = { exitStatus: 2, summary: 'Maintenance cannot accept prompts, install, or force authority' };
       } else {
-        // update.install carries its own install opt-in; every other kind
-        // stays check-only. Clamp the owner deadline to the global ceiling.
+        // Mutation authority stays with each owner (including the exact
+        // reviewed memory plan). Clamp deadlines to the global ceiling.
         const boundedJob = { ...job,
           timeoutMs: Math.min(job.timeoutMs || 60000, this.resources.maxTimeoutMs) };
         await this.acquireSlot();
@@ -334,6 +339,12 @@ export class ScheduledTaskRunner extends EventEmitter {
       }
       if (!result || (result.exitStatus !== null && !Number.isInteger(result.exitStatus))) {
         result = { exitStatus: null, uncertain: true, summary: 'Invalid owner receipt; inspect effects' };
+      }
+      // A mutating memory result must establish a complete, verified success.
+      // Even a definite owner refusal requires inspection rather than replay.
+      if (job.kind === 'memory.apply' && result.exitStatus !== 0
+        && !(result.state === 'deferred' && ['outside-maintenance-window', 'gate-denied'].includes(result.reason))) {
+        result = { ...result, uncertain: true };
       }
     } catch (error) {
       // A thrown executor error does not establish whether it launched work.
@@ -513,7 +524,7 @@ export async function runManualSchedule(flags, { now = Date.now, executeOwner } 
   if (flags.resolve) {
     receipt = store.resolveSchedule(job.id, flags.resolve).lastReceipt;
   } else {
-    const runner = new ScheduledTaskRunner({ taskStore: store, now, executeOwner });
+    const runner = new ScheduledTaskRunner({ taskStore: store, now, executeOwner, resources: config.get('resources') });
     receipt = await runner.runOnce(job, { fireTime: flags['fire-time'] });
   }
   console.log(flags.json ? JSON.stringify(receipt) : `${receipt.jobId}: ${receipt.state}: ${receipt.summary}`);

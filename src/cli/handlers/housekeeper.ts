@@ -30,6 +30,7 @@ import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import {
   HOUSEKEEPER_PROFILE,
   MAINTENANCE_KINDS,
+  validateMemoryJobArgs,
   getDaemonProfile,
   getScheduleJobs,
   getWatchPaths,
@@ -80,6 +81,7 @@ const VALUE_FLAGS = [
   '--job', '--id', '--kind', '--schedule', '--cron', '--timezone',
   '--timeout-ms', '--retries', '--path', '--events', '--extensions',
   '--fire-time', '--calendar', '--state-dir',
+  '--scope', '--provider', '--evidence', '--usage', '--plan', '--confirmed-digest',
 ] as const;
 
 const SWITCH_FLAGS = new Set([
@@ -148,6 +150,10 @@ export function housekeeperHelpText(): string {
     '',
     `Maintenance kinds: ${MAINTENANCE_KINDS.join(', ')}`,
     'Update checks are check-only by default; installs need an explicit opt-in.',
+    'Memory audit/recommend: [--scope project|global|provider] [--provider <id>].',
+    'Memory recommend also accepts [--evidence <file>] [--usage <file>]; never creates plans.',
+    'Memory apply requires --plan <reviewed-file> --confirmed-digest <recorded-digest>.',
+    'It executes only the named reviewed plan; omitting --schedule registers a one-shot run-once job.',
     '',
     'Platforms: Linux + systemd (documented) · Linux w/o systemd and macOS',
     '(foreground start, cron/launchd calling run-once; launchd plist best-effort).',
@@ -714,7 +720,8 @@ async function executeJobRegister(c: Ctx, rest: string[]): Promise<HandlerResult
   if (typeof resolvedId !== 'string') return resolvedId.error;
   const resolvedKind = await requireValueOrPrompt(c, '--kind', kind, `  Kind (${MAINTENANCE_KINDS.join('|')}): `);
   if (typeof resolvedKind !== 'string') return resolvedKind.error;
-  const resolvedSchedule = await requireValueOrPrompt(c, '--schedule', schedule, '  Cron schedule (five fields, e.g. "0 * * * *"): ');
+  const resolvedSchedule = resolvedKind === 'memory.apply' && schedule === undefined ? ''
+    : await requireValueOrPrompt(c, '--schedule', schedule, '  Cron schedule (five fields, e.g. "0 * * * *"): ');
   if (typeof resolvedSchedule !== 'string') return resolvedSchedule.error;
 
   if (!MAINTENANCE_KINDS.includes(resolvedKind)) {
@@ -723,9 +730,9 @@ async function executeJobRegister(c: Ctx, rest: string[]): Promise<HandlerResult
       `Known kinds: ${MAINTENANCE_KINDS.join(', ')}.`,
     );
   }
-  let cron: string;
+  let cron: string | undefined;
   try {
-    cron = parseCronExpression(resolvedSchedule)!;
+    cron = resolvedSchedule ? parseCronExpression(resolvedSchedule)! : undefined;
   } catch (error) {
     return usageError(`aiwg housekeeper: ${(error as Error).message}.`, 'Example: --schedule "0 * * * *".');
   }
@@ -747,17 +754,35 @@ async function executeJobRegister(c: Ctx, rest: string[]): Promise<HandlerResult
   const loaded = loadDaemonConfig(c.cwd);
   const jobs = getScheduleJobs(loaded.config);
   const entry: DaemonJobConfig = { id: resolvedId, kind: resolvedKind, cron };
+  if (resolvedKind.startsWith('memory.')) {
+    const args: Record<string, string> = {};
+    try {
+      for (const [key, flag] of [['scope', '--scope'], ['provider', '--provider'], ['evidence', '--evidence'],
+        ['usage', '--usage'], ['plan', '--plan'], ['confirmedDigest', '--confirmed-digest']]) {
+        const value = flagValue(rest, flag);
+        if (value !== undefined) args[key] = value;
+      }
+      validateMemoryJobArgs(resolvedKind, args);
+    } catch (error) {
+      return usageError(`aiwg housekeeper: ${(error as Error).message}.`);
+    }
+    entry.args = args;
+  }
   if (timezone !== undefined) entry.timezone = timezone;
   if (timeoutMs !== undefined) entry.timeoutMs = timeoutMs;
   if (retries !== undefined) entry.retries = retries as 0 | 1 | 2;
   const existing = jobs.findIndex((job) => job.id === resolvedId);
-  if (existing >= 0) jobs[existing] = { ...jobs[existing], ...entry };
+  // Registration has no window-edit flag: retain an existing apply restriction.
+  if (resolvedKind === 'memory.apply' && existing >= 0 && jobs[existing].kind === 'memory.apply'
+    && jobs[existing].args?.windows !== undefined) entry.args!.windows = jobs[existing].args.windows;
+  if (existing >= 0) jobs[existing] = { ...jobs[existing], ...entry, ...(resolvedKind.startsWith('memory.') ? { schedule: undefined } : {}) };
   else jobs.push(entry);
   setScheduleJobs(loaded.config, jobs);
   saveDaemonConfig(loaded.path, loaded.config);
   return {
     exitCode: EXIT_CODES.OK,
-    message: `${existing >= 0 ? 'Updated' : 'Registered'} job '${resolvedId}' (kind ${resolvedKind}, schedule ${cron}) in ${loaded.path}`,
+    message: `${existing >= 0 ? 'Updated' : 'Registered'} job '${resolvedId}' (kind ${resolvedKind}, schedule ${cron ?? 'manual one-shot'}) in ${loaded.path}`
+      + (resolvedKind === 'memory.apply' ? `\nExecutes only the named reviewed plan '${entry.args!.plan}' with recorded digest ${entry.args!.confirmedDigest}; scheduling grants no additional mutation authority.` : ''),
   };
 }
 

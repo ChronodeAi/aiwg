@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const owners = vi.hoisted(() => ({
   probeIndexStatus: vi.fn(), runIndexRefresh: vi.fn(), cleanWebResourceCache: vi.fn(), checkUpdateStatus: vi.fn(),
+  reportScheduledMemory: vi.fn(), applyScheduledMemory: vi.fn(),
 }));
 vi.mock('../../../tools/_resolve-impl.mjs', () => ({
   importImpl: vi.fn(async (_caller, owner) => {
@@ -10,6 +11,8 @@ vi.mock('../../../tools/_resolve-impl.mjs', () => ({
       'artifacts/index-refresh.js': { runIndexRefresh: owners.runIndexRefresh },
       'resources/cache-cleanup.js': { cleanWebResourceCache: owners.cleanWebResourceCache },
       'update/checker.mjs': { checkUpdateStatus: owners.checkUpdateStatus },
+      'memory/scheduled.js': { reportScheduledMemory: owners.reportScheduledMemory, applyScheduledMemory: owners.applyScheduledMemory },
+      'housekeeper/daemon-config.js': await import('../../../src/housekeeper/daemon-config.js'),
     };
     if (!modules[owner]) throw new Error(`Unexpected owner: ${owner}`);
     return modules[owner];
@@ -22,9 +25,23 @@ beforeEach(() => {
   owners.runIndexRefresh.mockResolvedValue({ status: 'ok', totals: { errors: 0, deferred: 0 } });
   owners.cleanWebResourceCache.mockReturnValue({ removed: [], preserved: ['protected'] });
   owners.checkUpdateStatus.mockResolvedValue({ status: 'ok', available: false, checkOnly: true });
+  owners.reportScheduledMemory.mockResolvedValue({ exitStatus: 0, detail: { counts: { findings: 0 } } });
+  owners.applyScheduledMemory.mockResolvedValue({ exitStatus: 0 });
 });
 
 describe('deterministic owner routing', () => {
+  it.each(['memory.audit', 'memory.recommend'])('%s calls only the read-only memory owner view', async kind => {
+    const args = { scope: 'project', provider: 'claude' };
+    await invokeOwner({ kind, args }, { cwd: '/synthetic', now: () => 0 });
+    expect(owners.reportScheduledMemory).toHaveBeenCalledWith(kind, args, '/synthetic', '1970-01-01T00:00:00.000Z');
+    expect(owners.applyScheduledMemory).not.toHaveBeenCalled();
+  });
+  it('memory.apply forwards only the reviewed-plan arguments to its owner', async () => {
+    const args = { plan: 'reviewed.json', confirmedDigest: 'recorded' };
+    await invokeOwner({ kind: 'memory.apply', args }, { cwd: '/synthetic' });
+    expect(owners.applyScheduledMemory).toHaveBeenCalledWith(args, '/synthetic');
+    expect(owners.reportScheduledMemory).not.toHaveBeenCalled();
+  });
   it.each(['index.verify', 'index.freshness'])('%s calls the existing status owner', async kind => {
     expect((await invokeOwner({ kind })).exitStatus).toBe(0);
     expect(owners.probeIndexStatus).toHaveBeenCalledWith(process.cwd(), undefined);
