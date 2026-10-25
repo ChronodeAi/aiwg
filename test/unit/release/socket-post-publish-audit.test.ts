@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 
-import { componentsFromCargoLock, componentsFromLock, evaluateSocketArtifacts, fetchArtifacts } from '../../../tools/release/socket-post-publish-audit.mjs'
+import { componentsFromCargoLock, componentsFromLock, evaluateSocketArtifacts, fetchArtifacts, SOCKET_PURL_BATCH_SIZE } from '../../../tools/release/socket-post-publish-audit.mjs'
+
+const liveArtifacts = readFileSync(new URL('../../fixtures/release/socket-live-npm.ndjson', import.meta.url), 'utf8')
+  .trim().split('\n').map(line => JSON.parse(line))
+const liveBaseline = JSON.parse(readFileSync(new URL('../../../ci/socket-score-baseline.json', import.meta.url), 'utf8'))
+const liveComponents = liveArtifacts.map(artifact => ({ purl: artifact.inputPurl, depth: 'transitive' }))
+const capturedAt = new Date('2026-10-25T00:00:00Z')
 
 const baseline = {
   policy: { materialScoreDrop: 0.1, blockingSeverities: ['high', 'critical'] },
@@ -95,12 +102,14 @@ describe('Socket post-publish audit', () => {
     })])
   })
 
-  it('fails behavioral findings that lack actionable evidence', () => {
+  // Live behavioral alerts omit enrichments; absence alone is not a defect (#3578).
+  it('accepts absent optional behavioral evidence', () => {
     const result = evaluateSocketArtifacts({
       artifacts: rootsWith([{ type: 'obfuscatedCode', severity: 'high', key: 'obfuscation' }]), baseline, components: roots
     })
-    expect(result.status).toBe('fail')
-    expect(result.findings.blocking[0].evidenceErrors).toContain('missing-artifactHash')
+    expect(result.status).toBe('pass')
+    expect(result.findings.validationErrors).toEqual([])
+    expect(result.findings.direct[0].evidence.artifactHash).toBeNull()
   })
 
   it('downgrades code-shape-only obfuscation evidence and deduplicates affected paths', () => {
@@ -139,7 +148,8 @@ describe('Socket post-publish audit', () => {
     expect(result.findings.direct[0].review).toBeNull()
   })
 
-  it('rejects patched-version guidance from a different major line', () => {
+  // Socket's zod advisory supplies a cross-major fix; preserve upstream data (#3578).
+  it('preserves valid patched versions from a different major line', () => {
     const result = evaluateSocketArtifacts({
       artifacts: rootsWith([{
         id: 'nanoid-advisory', type: 'vulnerability', severity: 'high', advisoryId: 'GHSA-example',
@@ -147,7 +157,143 @@ describe('Socket post-publish audit', () => {
       }]).map(item => item.name === 'aiwg' ? { ...item, version: '3.3.17' } : item),
       baseline, components: roots
     })
-    expect(result.findings.validationErrors[0].errors).toContain('patched-version-major-mismatch')
+    expect(result.findings.validationErrors).toEqual([])
+    expect(result.findings.blocking[0].evidence.firstPatchedVersion).toBe('5.1.6')
+  })
+
+  it('excludes local Cargo 0.0.0 packages while retaining registry and git dependencies', async () => {
+    const content = [
+      '[[package]]', 'name = "aiwg-cockpit-desktop"', 'version = "0.0.0"',
+      '[[package]]', 'name = "workspace-helper"', 'version = "0.0.0"',
+      '[[package]]', 'name = "registry-dep"', 'version = "0.0.0"', 'source = "registry+https://example.test/index"',
+      '[[package]]', 'name = "git-dep"', 'version = "0.0.0"', 'source = "git+https://example.test/repo"'
+    ].join('\n')
+    const components = componentsFromCargoLock(content)
+    expect(components.map(component => component.purl)).toEqual(['pkg:cargo/registry-dep@0.0.0', 'pkg:cargo/git-dep@0.0.0'])
+    const artifacts = components.map(component => ({ inputPurl: component.purl, alerts: [] }))
+    const fetchImpl = async (_url: URL, options: RequestInit) => {
+      expect(JSON.parse(options.body as string).components).toEqual(components.map(({ purl }) => ({ purl })))
+      return { ok: true, text: async () => artifacts.map(artifact => JSON.stringify(artifact)).join('\n') } as Response
+    }
+    const returned = await fetchArtifacts({ components, token: 'fixture-token', orgSlug: 'fixture-org', fetchImpl })
+    expect(evaluateSocketArtifacts({ artifacts: returned, baseline, components }).status).toBe('pass')
+  })
+
+  it('excludes secondary npm workspace roots and links but keeps published release roots', () => {
+    const lock = { packages: {
+      '': { name: 'workspace-root', version: '0.0.0', private: true },
+      'node_modules/workspace-helper': { version: '0.0.0', link: true, resolved: 'packages/helper' },
+      'node_modules/private-helper': { version: '0.0.0', private: true },
+      'node_modules/chalk': { version: '4.1.2' }
+    } }
+    const secondary = componentsFromLock(lock, '2026.8.8', { releaseRoot: false })
+    expect(secondary.map(component => component.purl)).toEqual(['pkg:npm/chalk@4.1.2'])
+    expect(componentsFromLock(lock, '2026.8.8').filter(component => component.depth === 'direct')).toEqual(
+      roots.map(root => expect.objectContaining(root))
+    )
+  })
+
+  it.each([
+    ['file', 42], ['symbol', {}], ['ruleId', ''], ['artifactHash', []],
+    ['excerpt', false], ['behaviorTrace', 42], ['confidenceRationale', ' '],
+    ['props', []], ['advisoryId', {}], ['advisoryUrl', 'javascript:alert(1)'], ['firstPatchedVersion', 'later']
+  ])('rejects malformed supplied evidence: %s', (field, value) => {
+    const result = evaluateSocketArtifacts({
+      artifacts: rootsWith([{ type: 'shellAccess', severity: 'low', ...behavioralEvidence, [field]: value }]),
+      baseline, components: roots
+    })
+    expect(result.status).toBe('fail')
+    expect(result.findings.direct[0].evidenceErrors).toContain(`invalid-${field}`)
+  })
+
+  it.each([
+    ['cveId', 42], ['ghsaId', {}], ['url', 'not-a-url'], ['firstPatchedVersionIdentifier', 'unknown']
+  ])('rejects malformed CVE props even when a legacy field takes precedence: %s', (field, value) => {
+    const alert = liveArtifacts.flatMap(artifact => artifact.alerts).find(alert => alert.type === 'cve')
+    const result = evaluateSocketArtifacts({
+      artifacts: rootsWith([{
+        ...alert, advisoryId: 'CVE-2026-111181', advisoryUrl: 'https://example.test/advisory', firstPatchedVersion: '2.4.0',
+        props: { ...alert.props, [field]: value }
+      }]), baseline, components: roots
+    })
+    expect(result.status).toBe('fail')
+    expect(result.findings.direct[0].evidenceErrors).toContain(`invalid-props.${field}`)
+  })
+})
+
+describe('Socket captured live response', () => {
+  it('evaluates real alert shapes without errors from absent enrichments or advisory-free capability alerts', () => {
+    const result = evaluateSocketArtifacts({ artifacts: liveArtifacts, baseline: liveBaseline, components: liveComponents, now: capturedAt })
+    expect(result.summary.validationErrors).toBe(0)
+    expect(result.findings.validationErrors).toEqual([])
+    expect(result.findings.unavailable).toEqual([])
+    expect(result.summary.componentsReturned).toBe(liveComponents.length)
+    const install = result.findings.transitive.find(finding => finding.type === 'installScripts')!
+    expect(install.evidence).toMatchObject({
+      file: 'package/package.json', ruleId: 'QBIzHC_QUrkK6uxhD9pzoPz3zQVqLj2FWb1q1z4IGKbk',
+      props: { script: 'postinstall', source: 'node install.js' },
+      artifactHash: null, symbol: null, excerpt: null, behaviorTrace: null, confidenceRationale: null
+    })
+    expect(result.findings.transitive.find(finding => finding.type === 'potentialVulnerability')?.evidenceErrors).toEqual([])
+  })
+
+  it('populates CVE advisory fields and still blocks high body-parser and zod CVEs', () => {
+    const result = evaluateSocketArtifacts({ artifacts: liveArtifacts, baseline: liveBaseline, components: liveComponents, now: capturedAt })
+    expect(result.status).toBe('fail')
+    expect(result.findings.blocking.map(finding => [finding.package, finding.version, finding.type])).toEqual([
+      ['body-parser', '2.3.0', 'cve'], ['zod', '3.25.76', 'cve'], ['zod', '4.3.5', 'cve']
+    ])
+    for (const finding of result.findings.transitive.filter(finding => /cve/i.test(finding.type))) {
+      expect(finding.evidence.advisoryId).toBe(finding.evidence.props.cveId)
+      expect(finding.evidence.advisoryUrl).toBe(finding.evidence.props.url)
+      expect(finding.evidence.firstPatchedVersion).toBe(finding.evidence.props.firstPatchedVersionIdentifier)
+    }
+    expect(result.findings.blocking.find(finding => finding.package === 'body-parser')?.evidence).toMatchObject({
+      advisoryId: 'CVE-2026-111181', advisoryUrl: 'https://github.com/advisories/GHSA-27r3-jxmh-p828', firstPatchedVersion: '2.4.0'
+    })
+    expect(result.findings.blocking.find(finding => finding.package === 'zod')?.evidence.firstPatchedVersion).toBe('4.6.6')
+  })
+
+  it('uses GHSA props when a CVE identifier has not been assigned', () => {
+    const artifact = liveArtifacts.find(artifact => artifact.alerts.some(alert => alert.type === 'cve'))
+    const alert = artifact.alerts.find(alert => alert.type === 'cve')
+    const { cveId: _cveId, ...props } = alert.props
+    const result = evaluateSocketArtifacts({
+      artifacts: [{ ...artifact, alerts: [{ ...alert, props }] }], baseline: liveBaseline,
+      components: [{ purl: artifact.inputPurl, depth: 'transitive' }], now: capturedAt
+    })
+    expect(result.findings.validationErrors).toEqual([])
+    expect(result.findings.blocking[0].evidence.advisoryId).toBe('GHSA-27r3-jxmh-p828')
+  })
+
+  it('reports Socket replacement notices as informational without blocking', () => {
+    const artifacts = liveArtifacts.filter(artifact => artifact.alerts.some(alert => alert.type === 'socketUpgradeAvailable'))
+      .map(artifact => ({ ...artifact, alerts: artifact.alerts.filter(alert => alert.type === 'socketUpgradeAvailable') }))
+    const result = evaluateSocketArtifacts({
+      artifacts, baseline: liveBaseline, components: artifacts.map(artifact => ({ purl: artifact.inputPurl, depth: 'direct' })), now: capturedAt
+    })
+    expect(result.status).toBe('pass')
+    expect(result.findings.direct).toHaveLength(3)
+    for (const finding of result.findings.direct) {
+      expect(finding.severity).toBe('informational')
+      expect(finding.originalSeverity).toBe('high')
+      expect(finding.evidence.props.replacementPURL).toMatch(/^pkg:npm\//)
+    }
+    expect(result.findings.blocking).toEqual([])
+  })
+
+  it('keeps unreviewed direct capabilities blocking even with Socket ignore actions', () => {
+    const artifact = liveArtifacts.find(artifact => artifact.alerts.some(alert => alert.type === 'shellAccess'))
+    const alert = artifact.alerts.find(alert => alert.type === 'shellAccess')
+    expect(alert.action).toBe('ignore')
+    const result = evaluateSocketArtifacts({
+      artifacts: [{ ...artifact, alerts: [alert] }], baseline: liveBaseline,
+      components: [{ purl: artifact.inputPurl, depth: 'direct' }], now: capturedAt
+    })
+    expect(result.status).toBe('fail')
+    expect(result.findings.validationErrors).toEqual([])
+    expect(result.findings.blocking).toHaveLength(1)
+    expect(result.findings.blocking[0].type).toBe('shellAccess')
   })
 })
 
@@ -178,6 +324,23 @@ describe('Socket quota pacing', () => {
     const fetchImpl = async (url: URL | string) => (String(url).endsWith('/v0/quota') ? quota('2026-10-16T19:00:00Z') : limited) as never
     await expect(fetchArtifacts({ components, token: 't', orgSlug: 'org', fetchImpl, paceQuotaMs: 10 * 60_000, now, sleep, log: () => {} }))
       .rejects.toThrow('HTTP 429')
+  })
+
+  it('sends a release-sized component set in few large requests (Socket bills per request)', async () => {
+    const many = Array.from({ length: 794 }, (_, i) => ({ purl: `pkg:npm/p${i}@1.0.0` }))
+    const bodies: number[] = []
+    const fetchImpl = async (_url: URL | string, init?: { body?: string }) => {
+      bodies.push(JSON.parse(String(init?.body)).components.length)
+      return ndjson('') as never
+    }
+    await fetchArtifacts({ components: many as never, token: 't', orgSlug: 'org', fetchImpl, log: () => {} })
+    expect(SOCKET_PURL_BATCH_SIZE).toBe(500)
+    expect(bodies).toEqual([500, 294])
+    bodies.length = 0
+    await fetchArtifacts({ components: many as never, token: 't', orgSlug: 'org', fetchImpl, batchSize: 1000, log: () => {} })
+    expect(bodies).toEqual([794])
+    await expect(fetchArtifacts({ components: many as never, token: 't', orgSlug: 'org', fetchImpl, batchSize: 0, log: () => {} }))
+      .rejects.toThrow('batch size')
   })
 
   it('never queries the quota endpoint when pacing is off', async () => {
