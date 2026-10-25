@@ -7,6 +7,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.6] - 2026-10-25
+
 ### Added
 
 - Housekeeper slice B6 (part 1, #3353): opt-in `update.install` job kind
@@ -22,13 +24,55 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   watch-handle cap with polling fallback), a `tools/benchmarks/housekeeper.mjs`
   script, and `docs/housekeeper-operator-guide.md`.
 - Core rule class: `activation: core` rules ship a compact `<name>.core.md` body
-  (at most 1024 bytes each, 6144 bytes in total) that every provider loads at
-  startup in every deploy mode, ahead of kernel rules, and that budget pressure
+  (at most 1024 bytes each, 6144 bytes in total) loaded by supported provider
+  startup loaders in every deploy mode, ahead of kernel rules, and that budget pressure
   never demotes or spills. `anti-laziness` is the first core rule and moved to
   the always-installed `aiwg-utils` addon; `aiwg doctor` reports the core slice
   separately. The unused manifest `tiers` deploy block and the hand-condensed
   Hermes anti-laziness directive are removed, and the rule's enforcement is
   `high` everywhere (#3450).
+
+- Memory maintenance across provider-native instructions, line memory, canonical
+  context and artifact memory: read-only `aiwg memory audit`, `cost` and
+  `recommend`, followed by reviewed `plan`, `apply`, read-only `verify` and
+  reversible `restore`. Records separate scope, placement, lifecycle and authority;
+  retain identity, lineage and tombstones; and protect pins and rare obligations.
+  Recommendations expose evidence, uncertainty and retrieval impact rather than
+  treating low use as permission to retire (#3278, #3279–#3285; #3544–#3556).
+- Scheduled maintenance through the existing daemon: typed index verification and
+  reconciliation, cache retention, update checks, timezone-aware cron with DST
+  handling, durable receipts, coalesced missed runs and bounded retries. The
+  optional minimal `aiwg housekeeper` profile supports daemon-free `run-once`,
+  job/watch registration and explicit service installation; Linux systemd user
+  units are supported, launchd is best-effort and Windows is unsupported
+  (#3353 B1–B5; #3496, #3515, #3519, #3521, #3528).
+- Housekeeper memory audit/recommendation jobs and digest-bound reviewed apply
+  jobs. Scheduling grants no extra mutation authority; stale, interrupted, partial
+  or unverifiable applies block for inspection instead of replaying (#3353 B6,
+  #3557).
+- Guided setup discovers projects and tools within explicit bounds, saves redacted
+  versioned plans, interviews progressively, and supports review, dry-run, apply
+  and resume. Optional Jev and multi-harness branches default to explicit choices;
+  credentials remain references until apply, and successful actions are not
+  repeated (#3449 A1–A6; #3502, #3511, #3517, #3524–#3526, #3534).
+- Managed orchestration with shared admission dimensions, cumulative allowances,
+  attempt accounting, durable quota cooldowns, generation fencing and proof-based
+  settlement. Mission/Flow CLI and MCP dispatch share prepared worker bindings;
+  trusted cross-project host authority supports fenced migration and rollback.
+  This remains a pilot with a documented same-uid limitation and an isolation gate
+  before general availability (#2919–#2924, #3447).
+- Operator-qualified Muse direct Tier 0 dispatch through the existing installed
+  adapter contract; bundled adapters remain inactive until qualification (#3181,
+  #3498, #3499).
+- Sourced Jev input/output pricing in the existing cost config, explicit
+  `aiwg decision pricing --refresh`, offline benchmark analysis and an opt-in
+  paired Jev-versus-LLM collector with checkpoints and call/spend bounds. Unknown
+  costs remain unknown; ordinary `decision ask` never invokes the baseline
+  (#3291, #3481, #3483, #3570).
+- D05 staged load qualification harness with scoped rate/token/retained-work
+  bounds, budget reservations, resource and cancellation measurements, rollback
+  and exact-commit digest-bound evidence. Default execution is offline; live
+  preregistration remains a draft awaiting approval (#2682, #3571).
 
 ### Changed
 
@@ -48,6 +92,165 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   heading: the whole-file bootstrap wrapper and the managed block each emitted it,
   and the hook replaced only the block. The wrapper drops its copy, and existing
   duplicate headings or repeated hook blocks are repaired idempotently.
+
+- Discovery: `aiwg show` now returns a metadata card by default, including
+  governing rules, section sizes, resources and exact fetch commands. Use `--body`
+  for the previous full-content output or `--section` for selected content;
+  JSON and MCP follow the same contract. Cards require a content fetch before
+  workflow decisions. Section headings beginning with `--` and equals-form
+  section/resource arguments are accepted (#3306, #3416, #3435, #3436).
+- Rules: discovery must run before recommending or declining an unchecked
+  capability. Compound discovery tests pin governing-rule counts, required fetch
+  commands and compiled CLI/MCP parity (#3311, #3292, #3414, #3568).
+- Rule delivery uses the installed bundle set and dependency closure; rules without
+  activation fall back to on-demand with a migration warning. `use all` delivers
+  kernel and core rules, while Pi/OMP retain their bulk prompts. Bound-rule blocks
+  use compact index pointers. Eight additional provider loaders receive core
+  bodies; Grok Bot remains degraded with no core-delivery claim (#3460, #3463,
+  #3471, #3473, #3457; #3487, #3490, #3512, #3513).
+- Record the proposed kernel re-evaluation and its operator rejection; no rule
+  files move and the proposed reduced kernel figures are not adopted (#3573,
+  #3579).
+- Review records optionally capture evaluator model/vendor/family, acceptance
+  criteria, disagreements and re-review links. Guidance requires executable
+  checks or accountable human acceptance for consequential claims: model-family
+  diversity and reviewer agreement do not establish independent errors. A
+  calibration procedure is supplied without claiming measured effectiveness
+  (#3316, #3581).
+- Provider startup regeneration projects only canonical resident entries into
+  `WORKSPACE.md` as quoted data, within the existing inline budget. Memory
+  apply/restore/verify report stale provider copies and the regeneration command;
+  regeneration is explicit. Canonical context follows the configured artifact
+  root and refuses to hide legacy local history behind an empty external store
+  (#3553, #3560).
+- Performance: deploy-agents and Codex helper passes run in-process when compatible;
+  `AIWG_DEPLOY_SUBPROCESS=1` restores subprocess execution. One measured Codex
+  deployment reduced Node processes from 160 to 1 and elapsed time from 117.6 s
+  to 73.1 s under background load. Rule bindings avoid a full source index, rule
+  projection runs once per provider, and no-op index builds avoid staging and
+  duplicate scans (#3558, #3561, #3492, #3503, #3541, #3542).
+- Every addon README labels evidence as measured, paper-reported or design intent;
+  unsupported performance claims are qualified. RLM is labelled experimental,
+  evaluation examples illustrative and the skill-factory evaluation document a
+  plan rather than results (#3317, #3566).
+- Grok Build grammar replay now uses a scrubbed authenticated 1.0.38 capture,
+  covering pending/null tool statuses, usage events and terminal `end_turn`.
+  This does not qualify a live 1.0.50 invocation (#2994, #3567).
+- Parallelism context reports eligibility freshness, review family and local limits;
+  shell-only Tier 0 guidance documents conductor check-ins and valid worker-tree
+  brief/output placement (#2893, #2914, #3433, #3432, #3447).
+- Export-control documentation corrects the Syria embargo table while retaining
+  the EAR licensing caveat (GitHub #347, #3427).
+
+### Fixed
+
+- Worker resolution preserves canonical adapter registrations, ignores only
+  load-time `discovery.fetchedAt` in catalog digests, and scopes qualification
+  checks to considered groups. Re-resolve saved plans after upgrading. Diagnostics
+  name invalid arguments, workspace mismatches, missing role effort, profile pin
+  mismatches and invocation-stage recheck failures; doctor runs matching readiness
+  checks (#3442, #3408, #3409, #3475, #3516; #3421, #3422, #3444, #3445,
+  #3506, #3562; GitHub #363, #364).
+- Worker qualification retains bounded explicit approvals per workspace and
+  clarifies that approval binds the configured `accountScope` label, surviving
+  native CLI account switches. Requalify when changing accounts (#3179, #3475,
+  #3423, #3506).
+- Worker commands preserve PATH; Codex qualification probes a model-free sandbox
+  no-op under the actual allowed environment. Existing installation records need
+  requalification. Tier 0 readiness is separate from the systemd launcher probe;
+  guidance avoids nesting worker harnesses inside conductor sandboxes, with
+  explicitly selected external sandbox execution available for Codex/Muse
+  (#3474, #3466, #3518, #3497; #3477, #3520).
+- Launcher resource checks receive worker/run directories and report bounded,
+  sanitized refusal signals. Single-invocation health waits for stdout to drain; status
+  sampling uses one monotonic clock. Deadlines before identity capture stop the
+  attached transport and report the observed exit signal, retaining uncertainty
+  when descendant termination cannot be proved (#3489, #3527, #3532; #3446,
+  #3501, #3509, #3533, #3538, #3539; GitHub #365).
+- `aiwg use` validates unknown options before writes (exit 2), accepts
+  `sdlc-complete` as an alias, consolidates dry-run plans, propagates deployment
+  versions and reports actual agent files. Hermes project scope is refused;
+  `--no-context-files` is honored across startup writers, including Copilot
+  (#3459, #3461, #3464, #3465, #3467–#3470, #3476; #3500, #3510, #3512).
+- Provider preparation waits for both exit and IPC drain and never starts a new
+  worker after session closure (#3488, #3491).
+- Doctor distinguishes intentional kernel-only deployments from missing agents,
+  counts regular native agent files rather than index entries, and reports missing
+  project config with initialization guidance instead of crashing (#3462, #3465,
+  #3452; #3486, #3478).
+- Removal dry-runs list per-file remove/preserve decisions and reasons using the
+  real ownership checks; `remove --help` documents preservation guarantees
+  (#3472, #3479).
+- Watch reconciliation recovers overflow, absent filenames, downtime and returning
+  roots, with polling fallback and queued changes; unavailable roots never imply
+  deletion. Racy same-size rewrites are detected. Index builds publish under an
+  owner lock with rollback, per-index freshness targets and truthful stale status;
+  release index locks reclaim only proven-dead same-host owners (#3353, #3522,
+  #3484; #3519, #3521, #3523, #3493).
+- Index sync warns on empty or text-poor graphs and reports quality metrics without
+  changing exit status. Explicit Codex session roots add to authorized
+  provider-home defaults; refresh retains the exact saved roots (#2572, #3254,
+  #3425, #3424; GitHub #333).
+- Release comparisons retain hard assertion regressions but use an exact sign test
+  and dimension margin for judge outcomes, avoiding small-sample noise being
+  labelled a regression (#3438, #3480).
+- CI uses bounded native plugin shards and a dedicated forks lane for WebAssembly
+  suites, preserving coverage. Mirror authentication errors fail promptly with
+  redacted rotation guidance. Deterministic clock, process-drain, socket, port,
+  lock and cleanup fixtures replace load-sensitive checks; doctor qualification
+  fixtures reuse setup without losing public-CLI coverage (#3400, #3401, #3073,
+  #3529; #3411, #3495, #3426, #3549, #3543).
+- Public managed-dispatch links point to GitHub-hosted contracts so strict docsite
+  links resolve (#3453).
+
+### Security
+
+- Update transitive body-parser to 2.4.0 for compressed-request denial of service
+  GHSA-27r3-jxmh-p828, including the droid-bridge lockfile (#3577, #3580, #3051).
+- Migrate AIWG schemas to native zod 4.6.7 (range `^4.6.6`) for constrained-
+  collection memory exhaustion GHSA-mrhx-c7xc-m3w5. There is no zod 3 fix.
+  Persisted-document parsing and all 88 advertised MCP tool contracts are
+  preserved; downstream schema importers must migrate to the zod 4 API.
+  Fortemi's nested zod 3.25.76 remains upstream-pending, tracked in
+  the Fortemi upstream tracker (zod 4 release request filed),
+  with a version-specific accepted-risk review expiring 2026-12-15 (#3577, #3051).
+- MCP shared writers now refuse malformed, unreadable or wrongly shaped
+  registries instead of overwriting them. Provider writes, profile exports and
+  cleanup use checked atomic destinations, reject symlink escapes and create
+  private outputs/backups. Credential-bearing standalone registry updates tighten
+  existing files to 0600 with a warning; newly created private parents are 0700.
+  Codex permits a symlinked user root but refuses symlinked directories below it;
+  malformed existing TOML is refused (#3565, #3572, #3574).
+- Worker version probes retry ETXTBSY within the existing timeout while binaries
+  are being updated, preserving the error if the bound expires (#3575).
+- Socket release auditing is a working gate: 500-component batches, quota pacing,
+  live alert-shape validation and exclusion of unpublished workspace packages.
+  First-party capability reviews never cover third-party code; third-party
+  capability reviews bind artifact hashes and require re-review on version/hash
+  changes. Empty advisory identifiers are treated as absent, not malformed CVEs.
+  The reviewed release-state audit reported zero blocking and zero unavailable
+  components (#3051, #3564, #3576, #3578).
+- Executor re-registration requires its current bearer token; token comparisons
+  are constant-time and token stores/cache files private. Legacy executors must
+  supply `AIWG_EXECUTOR_TOKEN` once to establish the restart cache. Host-bound
+  identities authenticate only through live or protected host records (#3439,
+  #2923, #3482, #3447).
+- Systemd worker launches fail closed when their native sandbox cannot start.
+  Policy-selected `native-sandbox` mode is opt-in, Codex-only and records the
+  absence of cgroup memory/kill isolation; doctor/status warn for every selecting
+  group. Unverified/external renderers and unsupported MCP launches are refused
+  (GitHub #366, #367; #3448, #3494).
+- Resolve CodeQL findings in comment sanitization, shell-free config editor
+  execution and cockpit origin enforcement; patch Vite/Vitest and VS Code's
+  markdown-it lockfiles. The Tauri/Wry glib 0.18 dependency remains upstream-bound
+  (#3418, #3413; #3420, #3417, #3434).
+
+### Removed
+
+- Remove the unused manifest `tiers` deploy block and redundant Hermes
+  anti-laziness directive in favor of core-rule projection (#3450, #3458).
+- Remove the inert `use --dev` flag from guidance; source installs are detected
+  automatically (#3469, #3500).
 
 ## [2026.10.5] - 2026-10-21
 
