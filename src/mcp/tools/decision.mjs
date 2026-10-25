@@ -1,102 +1,103 @@
 import { z } from 'zod';
+import { integer, number } from '../../schema/zod-validation.mjs';
 import { mcpError, mcpJson } from '../helpers.mjs';
 
 const STATUS = z.enum(['success', 'abstained', 'denied', 'unavailable', 'error', 'cancelled']);
-const ENVELOPE = z.object({ schema: z.string() }).passthrough();
-const LIVE_PLAN = z.object({ mode: z.literal('live'), status: z.enum(['ready', 'skipped', 'denied']), reason: z.string(), executes: z.literal(false) }).passthrough();
-const PATTERN_SUMMARY = z.object({
+const ENVELOPE = z.looseObject({ schema: z.string() });
+const LIVE_PLAN = z.looseObject({ mode: z.literal('live'), status: z.enum(['ready', 'skipped', 'denied']), reason: z.string(), executes: z.literal(false) });
+const PATTERN_SUMMARY = z.looseObject({
   id: z.string(),
   version: z.string(),
   status: z.string(),
   primitive: z.string().optional(),
-}).passthrough();
-const PATTERN_LIST = z.object({
+});
+const PATTERN_LIST = z.looseObject({
   schema: z.literal('aiwg-decision-pattern-list/v1'),
   patterns: z.array(PATTERN_SUMMARY),
-}).passthrough();
-const PATTERN_SHOW = z.object({
+});
+const PATTERN_SHOW = z.looseObject({
   schema: z.literal('aiwg-decision-pattern-show/v1'),
   pack: PATTERN_SUMMARY,
-  inputSchema: z.unknown(),
-  outputSchema: z.unknown(),
+  inputSchema: z.unknown().optional(),
+  outputSchema: z.unknown().optional(),
   livePlan: LIVE_PLAN,
-}).passthrough();
-const COMPACT_EVALUATION = z.object({
+});
+const COMPACT_EVALUATION = z.looseObject({
   status: STATUS,
   reason: z.string(),
-  attempts: z.number(),
-  value: z.unknown().nullable(),
-}).passthrough();
-const COMPACT_RESULT = z.object({
+  attempts: number(),
+  value: z.unknown().nullable().optional(),
+});
+const COMPACT_RESULT = z.looseObject({
   status: STATUS,
   rulesetStatus: z.string(),
   reason: z.string(),
   matchedRules: z.array(z.string()),
   evaluations: z.record(z.string(), COMPACT_EVALUATION),
-  outcome: z.unknown().nullable(),
-}).passthrough();
-const EVALUATE = z.object({
+  outcome: z.unknown().nullable().optional(),
+});
+const EVALUATE = z.looseObject({
   schema: z.literal('aiwg-decision-evaluate/v1'),
   status: STATUS,
   reason: z.string(),
-  exitCode: z.number(),
+  exitCode: number(),
   compact: COMPACT_RESULT.nullable().optional(),
-  result: z.unknown().nullable(),
-}).passthrough();
-const VALIDATION = z.object({
+  result: z.unknown().nullable().optional(),
+});
+const VALIDATION = z.looseObject({
   schema: z.literal('aiwg-decision-validation/v1'),
   target: z.enum(['request', 'definition', 'ruleset', 'binding']),
   valid: z.boolean(),
-  summary: z.object({
+  summary: z.looseObject({
     kind: z.string().nullable().optional(),
     apiVersion: z.string().nullable().optional(),
     id: z.string().nullable().optional(),
     version: z.string().nullable().optional(),
-  }).passthrough(),
+  }),
   errors: z.array(z.string()),
-}).passthrough();
-const CAPABILITIES = z.object({
+});
+const CAPABILITIES = z.looseObject({
   schema: z.literal('aiwg-decision-driver-capabilities/v1'),
   enabled: z.boolean(),
   offlineReady: z.boolean(),
   primitives: z.array(z.string()),
-  backend: z.object({ configured: z.boolean(), probed: z.boolean(), status: z.literal('not-probed') }).passthrough(),
-}).passthrough();
-const OFFLINE_RUN = z.object({
+  backend: z.looseObject({ configured: z.boolean(), probed: z.boolean(), status: z.literal('not-probed') }),
+});
+const OFFLINE_RUN = z.looseObject({
   schema: z.literal('aiwg-decision-offline-run/v1'),
   status: STATUS,
   route: z.enum(['accept', 'review', 'deny']),
   reason: z.string(),
-  evaluations: z.array(z.object({
+  evaluations: z.array(z.looseObject({
     alias: z.string(),
     primitive: z.string(),
     status: z.string(),
     reason: z.string(),
-    attempts: z.number(),
-    value: z.unknown(),
-  }).passthrough()),
+    attempts: number(),
+    value: z.unknown().optional(),
+  })),
   checks: z.array(z.unknown()),
-}).passthrough();
-const SYNTHETIC_SETUP = z.object({
+});
+const SYNTHETIC_SETUP = z.looseObject({
   schema: z.literal('aiwg-decision-synthetic-setup/v1'),
-  pattern: z.object({ id: z.string(), version: z.string() }).passthrough(),
+  pattern: z.looseObject({ id: z.string(), version: z.string() }),
   files: z.record(z.string(), z.unknown()),
-}).passthrough();
-const ASK = z.object({
+});
+const ASK = z.looseObject({
   schema: z.literal('aiwg-decision-ask/v1'),
   status: z.enum(['answered', 'fallback']),
-  answer: z.union([z.string(), z.boolean(), z.number()]).nullable(),
+  answer: z.union([z.string(), z.boolean(), number()]).nullable(),
   confidence: z.number().min(0).max(1).nullable(),
   probability: z.number().min(0).max(1).optional(),
   fallback: z.enum(['llm']).nullable(),
   reason: z.string(),
   model: z.string().nullable(),
   usage: z.object({
-    inputTokens: z.number().int().nonnegative().nullable(),
-    outputTokens: z.number().int().nonnegative().nullable(),
+    inputTokens: integer().nonnegative().nullable(),
+    outputTokens: integer().nonnegative().nullable(),
   }).nullable(),
-  latencyMs: z.number().nonnegative(),
-}).passthrough();
+  latencyMs: number().check(z.gte(0)).meta({ type: 'number', minimum: 0 }),
+});
 
 let driverPromise;
 
@@ -176,7 +177,7 @@ export function registerDecisionToolset(server) {
     description: 'Validate a request, definition, ruleset or binding without importing modules or resolving secrets.',
     inputSchema: {
       target: z.enum(['request', 'definition', 'ruleset', 'binding']),
-      document: z.unknown().describe('Inline decision document or dispatcher request object'),
+      document: z.unknown().optional().describe('Inline decision document or dispatcher request object'),
     },
     annotations: { readOnlyHint: true },
   }, async ({ target, document }) => (await driver()).validateDecisionValue(target, document, 'mcp-inline'), VALIDATION);
@@ -198,12 +199,12 @@ export function registerDecisionToolset(server) {
       question: z.string().min(1),
       yes_no: z.boolean().default(false),
       choices: z.array(z.string()).min(2).max(255).optional().describe('Choice ids, each optionally written as id=description so Jev knows what the option means'),
-      scale: z.object({ low: z.number().int(), high: z.number().int() }).optional(),
+      scale: z.object({ low: integer(), high: integer() }).optional(),
       context: z.string().optional(),
       threshold: z.number().min(0).max(1).default(0.8),
-      timeout_ms: z.number().int().positive().default(15000),
-      passes: z.number().int().positive().optional(),
-      escalation_passes: z.number().int().positive().optional(),
+      timeout_ms: integer().positive().default(15000),
+      passes: integer().positive().optional(),
+      escalation_passes: integer().positive().optional(),
       caller: z.string().optional().describe('Optional decision-point attribution tag, recorded in the decision ledger (#2946)'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },

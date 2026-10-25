@@ -12,6 +12,7 @@
  *
  * @source @src/mcp/tools/decision.mjs
  */
+import { z } from 'zod';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { checkpointMock, result, attributionPattern } = vi.hoisted(() => {
@@ -53,6 +54,22 @@ beforeEach(() => {
 });
 
 describe('decision-ask MCP tool ledger parity (#2946)', () => {
+  it('rejects oversized choices before invoking the element validator', () => {
+    const tools = captureTools();
+    const choices = (tools.get('decision-ask')!.config as any).inputSchema.choices.unwrap();
+    const element = vi.spyOn(choices.element._zod, 'run');
+    try {
+      expect(choices.safeParse(['one', 'two']).success).toBe(true);
+      expect(element).toHaveBeenCalledTimes(2);
+      element.mockClear();
+      const schema = z.object((tools.get('decision-ask')!.config as any).inputSchema);
+      const result = schema.safeParse({ question: 'Synthetic question', choices: Array.from({ length: 256 }, () => 'choice') });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'too_big', path: ['choices'], maximum: 255 })]));
+      expect(element).not.toHaveBeenCalled();
+    } finally { element.mockRestore(); }
+  });
+
   it('runs the shared checkpoint tagged transport "mcp", and returns its result unchanged', async () => {
     const tools = captureTools();
     const response = await tools.get('decision-ask')!.handler({ question: 'Proceed?', yes_no: true, caller: 'worker-pick' }) as {

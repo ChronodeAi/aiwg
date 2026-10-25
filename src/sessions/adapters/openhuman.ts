@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { number } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -20,25 +21,25 @@ import {
 export const OPENHUMAN_ADAPTER_VERSION = '1.0.0';
 export const OPENHUMAN_SOURCE_SCHEMA_VERSION = '1.0.0';
 
-const MetadataSchema = z.object({
+const MetadataSchema = z.looseObject({
   provider: z.string().optional(),
   model: z.string().optional(),
   profile: z.string().optional(),
   nestedAgentId: z.string().optional(),
   parentAgentId: z.string().optional(),
-}).passthrough();
+});
 
-const AttachmentSchema = z.object({
+const AttachmentSchema = z.looseObject({
   id: z.string().min(1),
   name: z.string().optional(),
   mime: z.string().optional(),
   uri: z.string().optional(),
   state: z.enum(['present', 'expired']),
-  expiredAt: z.union([z.string(), z.number()]).optional(),
-}).passthrough();
+  expiredAt: z.union([z.string(), number()]).optional(),
+});
 
-const RawSchema = z.object({
-  schemaVersion: z.union([z.string(), z.number()]),
+const RawSchema = z.looseObject({
+  schemaVersion: z.union([z.string(), number()]),
   recordType: z.literal('session_raw'),
   session_id: z.string().min(1),
   event_id: z.string().min(1),
@@ -48,38 +49,38 @@ const RawSchema = z.object({
   type: z.string().min(1),
   role: z.string().optional(),
   content: z.unknown().optional(),
-  timestamp: z.union([z.string(), z.number()]).optional(),
+  timestamp: z.union([z.string(), number()]).optional(),
   metadata: MetadataSchema.optional(),
-  input_tokens: z.number().optional(),
-  cached_input_tokens: z.number().optional(),
-  output_tokens: z.number().optional(),
-  charged_amount_usd: z.number().optional(),
+  input_tokens: number().optional(),
+  cached_input_tokens: number().optional(),
+  output_tokens: number().optional(),
+  charged_amount_usd: number().optional(),
   compacted: z.boolean().optional(),
   interrupted: z.boolean().optional(),
-  tool: z.record(z.unknown()).optional(),
+  tool: z.record(z.string(), z.unknown()).optional(),
   attachment: AttachmentSchema.optional(),
   active: z.boolean().optional(),
-  raw_transcript_deleted_at: z.union([z.string(), z.number()]).nullable().optional(),
-}).passthrough();
+  raw_transcript_deleted_at: z.union([z.string(), number()]).nullable().optional(),
+});
 
-const ThreadStateSchema = z.object({
-  schemaVersion: z.union([z.string(), z.number()]),
+const ThreadStateSchema = z.looseObject({
+  schemaVersion: z.union([z.string(), number()]),
   recordType: z.literal('thread_state'),
   thread_id: z.string().min(1),
   title: z.string().optional(),
   state: z.string().optional(),
-  deleted_at: z.union([z.string(), z.number()]).nullable().optional(),
-}).passthrough();
+  deleted_at: z.union([z.string(), number()]).nullable().optional(),
+});
 
-const TurnStateSchema = z.object({
-  schemaVersion: z.union([z.string(), z.number()]),
+const TurnStateSchema = z.looseObject({
+  schemaVersion: z.union([z.string(), number()]),
   recordType: z.literal('turn_state'),
   thread_id: z.string().min(1),
   request_id: z.string().min(1),
   state: z.string().min(1),
   interrupted: z.boolean().optional(),
-  completed_at: z.union([z.string(), z.number()]).nullable().optional(),
-}).passthrough();
+  completed_at: z.union([z.string(), number()]).nullable().optional(),
+});
 
 const RecordSchema = z.discriminatedUnion('recordType', [
   RawSchema, ThreadStateSchema, TurnStateSchema,

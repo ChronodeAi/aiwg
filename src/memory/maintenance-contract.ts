@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { integer } from '../schema/zod-validation.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { indexMemoryAliases, MemoryDigestSchema, type MemoryRecord } from './maintenance-record.js';
 import { MemoryLifecycleSchema, MemoryPlacementSchema, MemoryScopeSchema } from './taxonomy.js';
@@ -6,17 +7,17 @@ import { MemoryLifecycleSchema, MemoryPlacementSchema, MemoryScopeSchema } from 
 export const MaintenanceOpSchema = z.enum([
   'promote', 'demote', 'recategorize', 'merge', 'split', 'supersede', 'retire', 'restore',
 ]);
-const VersionSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
-const TargetSchema = z.object({ id: z.string().min(1), digest: MemoryDigestSchema, version: VersionSchema }).strict();
-const StateSchema = z.object({ placement: MemoryPlacementSchema, lifecycle: MemoryLifecycleSchema }).strict();
-export const MaintenanceOperationSchema = z.object({
+const VersionSchema = integer().min(1).max(Number.MAX_SAFE_INTEGER);
+const TargetSchema = z.strictObject({ id: z.string().min(1), digest: MemoryDigestSchema, version: VersionSchema });
+const StateSchema = z.strictObject({ placement: MemoryPlacementSchema, lifecycle: MemoryLifecycleSchema });
+export const MaintenanceOperationSchema = z.strictObject({
   op: MaintenanceOpSchema,
   target: TargetSchema,
   related: z.array(TargetSchema).optional(),
-  owner: z.object({ name: z.string().min(1), handle: z.string().min(1), snapshot: MemoryDigestSchema }).strict().optional(),
-  review: z.object({ reviewer: z.string().min(1), retirementBasis: z.enum(['age', 'review']) }).strict().optional(),
+  owner: z.strictObject({ name: z.string().min(1), handle: z.string().min(1), snapshot: MemoryDigestSchema }).optional(),
+  review: z.strictObject({ reviewer: z.string().min(1), retirementBasis: z.enum(['age', 'review']) }).optional(),
   category: z.string().min(1).optional(),
-  replacements: z.array(z.object({ key: z.string().min(1), value: z.string().min(1), sourcePath: z.string().min(1).optional(), category: z.string().min(1).optional() }).strict()).optional(),
+  replacements: z.array(z.strictObject({ key: z.string().min(1), value: z.string().min(1), sourcePath: z.string().min(1).optional(), category: z.string().min(1).optional() })).optional(),
   from: StateSchema,
   to: StateSchema,
   scope: MemoryScopeSchema,
@@ -24,8 +25,8 @@ export const MaintenanceOperationSchema = z.object({
   uncertainty: z.string().min(1),
   impactedLinks: z.array(z.string().min(1)),
   sessionEffect: z.enum(['current', 'next-session']),
-  precondition: z.object({ digest: MemoryDigestSchema, version: VersionSchema }).strict(),
-}).strict().superRefine((operation, context) => {
+  precondition: z.strictObject({ digest: MemoryDigestSchema, version: VersionSchema }),
+}).superRefine((operation, context) => {
   if (operation.from.placement !== operation.to.placement && operation.from.lifecycle !== operation.to.lifecycle) {
     context.addIssue({ code: 'custom', message: 'An operation cannot implicitly change a second axis' });
   }
@@ -61,24 +62,24 @@ export const MaintenanceOperationSchema = z.object({
   }
 });
 
-export const MaintenancePlanSchema = z.object({
+export const MaintenancePlanSchema = z.strictObject({
   schemaVersion: z.literal('aiwg.maintenance-plan.v1'),
   operations: z.array(MaintenanceOperationSchema),
-}).strict();
-export const ProviderCopiesSchema = z.object({
+});
+export const ProviderCopiesSchema = z.strictObject({
   status: z.enum(['current', 'stale', 'not-applicable']),
   regenerate: z.literal('aiwg regenerate --workspace --provider generic'),
-}).strict();
+});
 export type ProviderCopies = z.infer<typeof ProviderCopiesSchema>;
 
-export const MaintenanceReceiptSchema = z.object({
+export const MaintenanceReceiptSchema = z.strictObject({
   schemaVersion: z.literal('aiwg.maintenance-receipt.v1'),
   planDigest: MemoryDigestSchema,
   ownerReceipts: z.array(z.unknown()),
-  partial: z.object({ completed: z.array(z.string().min(1)), pending: z.array(z.string().min(1)) }).strict().optional(),
+  partial: z.strictObject({ completed: z.array(z.string().min(1)), pending: z.array(z.string().min(1)) }).optional(),
   resumedFrom: z.string().min(1).optional(),
   providerCopies: ProviderCopiesSchema.optional(),
-}).strict();
+});
 
 export type MaintenanceOp = z.infer<typeof MaintenanceOpSchema>;
 export type MaintenanceOperation = z.infer<typeof MaintenanceOperationSchema>;

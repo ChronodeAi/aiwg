@@ -1,6 +1,7 @@
 import { opendir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import { integer as integerSchema } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -13,16 +14,16 @@ import { streamBoundedJsonLines, type ReaderLimits } from '../readers.js';
 export const DEEPSEEK_HARNESS_ADAPTER_VERSION = '1.0.0';
 export const DEEPSEEK_HARNESS_SOURCE_SCHEMA_VERSION = '2.0.0';
 
-const Header = z.object({
-  type: z.literal('session'), version: z.number().int(), id: z.string().min(1),
+const Header = z.looseObject({
+  type: z.literal('session'), version: integerSchema(), id: z.string().min(1),
   createdAt: z.number().finite(), cwd: z.string().optional(), parentSession: z.string().optional(),
   isSeeded: z.boolean(), origin: z.literal('subagent').optional(),
-  delegationDepth: z.number().int().nonnegative(), agentPreset: z.string().optional(),
-}).passthrough();
-const Event = z.object({
-  type: z.string().min(1), seq: z.number().int().nonnegative(), time: z.number().finite(),
-  data: z.unknown(),
-}).passthrough();
+  delegationDepth: integerSchema().nonnegative(), agentPreset: z.string().optional(),
+});
+const Event = z.looseObject({
+  type: z.string().min(1), seq: integerSchema().nonnegative(), time: z.number().finite(),
+  data: z.unknown().optional(),
+});
 
 const KNOWN = new Set([
   'turn/start', 'user/message', 'step/start', 'assistant/message', 'tool/call',

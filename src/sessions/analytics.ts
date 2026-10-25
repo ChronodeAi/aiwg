@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { integer, dateTime } from '../schema/zod-validation.mjs';
 import type { Session, SessionEvent } from './contracts.js';
 import { sha256 } from './contracts.js';
 
@@ -26,7 +27,7 @@ export const SessionAnalyticsStatusSchema = z.enum([
   'observed',
 ]);
 
-export const SessionAnalyticsFactSchema = z.object({
+export const SessionAnalyticsFactSchema = z.strictObject({
   analyticsVersion: z.literal(SESSION_ANALYTICS_VERSION),
   factId: z.string().min(1),
   category: SessionAnalyticsCategorySchema,
@@ -37,33 +38,33 @@ export const SessionAnalyticsFactSchema = z.object({
   eventId: z.string().min(1),
   sourceId: z.string().min(1),
   importRunId: z.string().min(1),
-  occurredAt: z.string().datetime({ offset: true }).nullable(),
-  sequence: z.number().int().nonnegative(),
+  occurredAt: dateTime({ offset: true }).nullable(),
+  sequence: integer().nonnegative(),
   actor: z.string().min(1).nullable(),
   participant: z.string().min(1).nullable(),
   toolName: z.string().min(1).nullable(),
   toolCallId: z.string().min(1).nullable(),
   retryGroupId: z.string().min(1).nullable(),
-  retryOrdinal: z.number().int().positive().nullable(),
+  retryOrdinal: integer().positive().nullable(),
   errorClass: z.string().min(1).nullable(),
   capability: z.string().min(1).nullable(),
   decision: z.string().min(1).nullable(),
   promptType: z.string().min(1).nullable(),
-  latencyMs: z.number().int().nonnegative().nullable(),
+  latencyMs: integer().nonnegative().nullable(),
   transition: z.string().min(1).nullable(),
   indicator: z.string().min(1).nullable(),
   sensitivity: z.enum(['none', 'sensitive']),
   extractionState: z.string().min(1).nullable(),
-  sourceCitation: z.object({
+  sourceCitation: z.strictObject({
     provider: z.string().min(1),
     sessionId: z.string().min(1),
     eventId: z.string().min(1),
     importRunId: z.string().min(1),
     sourceId: z.string().min(1),
     locatorClass: z.string().min(1),
-    sequence: z.number().int().nonnegative(),
-  }).strict(),
-}).strict();
+    sequence: integer().nonnegative(),
+  }),
+});
 
 export type SessionAnalyticsCategory = z.infer<typeof SessionAnalyticsCategorySchema>;
 export type SessionAnalyticsStatus = z.infer<typeof SessionAnalyticsStatusSchema>;

@@ -1,37 +1,38 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { integer } from '../schema/zod-validation.mjs';
 
 const id = z.string().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const text = z.string().min(1);
-const span = { start: z.number().int().nonnegative(), end: z.number().int().nonnegative() };
-const evidence = z.object({ inputId: id, ...span }).strict();
-const input = z.object({
+const span = { start: integer().nonnegative(), end: integer().nonnegative() };
+const evidence = z.strictObject({ inputId: id, ...span });
+const input = z.strictObject({
   id, kind: z.enum(['source', 'author-notes', 'existing-draft']), text,
-  sha256: digest, provenance: z.object({ source: text, version: text }).strict(),
+  sha256: digest, provenance: z.strictObject({ source: text, version: text }),
   authorApproved: z.boolean(),
-}).strict();
-const proposition = z.object({
+});
+const proposition = z.strictObject({
   id, text, evidenceStrength: z.enum(['verified', 'reported', 'preliminary', 'experimental', 'unverified']),
   evidence: z.array(evidence).min(1), qualifiers: z.array(text),
-}).strict();
-const authorClaim = z.object({
+});
+const authorClaim = z.strictObject({
   id, kind: z.enum(['experience', 'opinion', 'intent', 'rationale']), text,
   evidence: z.array(evidence).min(1),
-}).strict();
-const correction = z.object({
+});
+const correction = z.strictObject({
   id, ...span, expected: z.string(), replacement: z.string(), reason: text,
   authorAuthorized: z.literal(true),
-}).strict();
-export const writingBriefSchema = z.object({
+});
+export const writingBriefSchema = z.strictObject({
   schemaVersion: z.literal(1), id,
   operation: z.enum(['draft-from-notes', 'edit-existing', 'proofread-only', 'continue-author-text']),
-  reader: z.object({ task: z.string(), audience: text, requirements: z.array(text) }).strict(),
+  reader: z.strictObject({ task: z.string(), audience: text, requirements: z.array(text) }),
   intendedAction: z.string(), exclusions: z.array(text), inputs: z.array(input),
   propositions: z.array(proposition), limitations: z.array(proposition), authorClaims: z.array(authorClaim),
   sourceInputId: id.optional(),
-  permissions: z.object({ rephrase: z.boolean(), reorder: z.boolean(), addContent: z.boolean(), corrections: z.array(correction) }).strict(),
-}).strict();
+  permissions: z.strictObject({ rephrase: z.boolean(), reorder: z.boolean(), addContent: z.boolean(), corrections: z.array(correction) }),
+});
 export type WritingBrief = z.infer<typeof writingBriefSchema>;
 export type WritingBriefOperation = WritingBrief['operation'];
 export interface BriefDiagnostic {
@@ -104,7 +105,7 @@ export interface PreparedWritingBrief {
 /** Parameterization changes presentation targets only, never the brief or confidence. */
 export function prepareWritingBrief(value: unknown, target: WritingBriefTarget): PreparedWritingBrief {
   const b = parseWritingBrief(value);
-  const selection = z.object({ profileId: id, channel: z.enum(['article', 'social', 'email', 'engineering', 'conversation']) }).strict().safeParse(target);
+  const selection = z.strictObject({ profileId: id, channel: z.enum(['article', 'social', 'email', 'engineering', 'conversation']) }).safeParse(target);
   if (!selection.success) throw new Error('Invalid writing brief target; input text is omitted.');
   return { brief: structuredClone(b), target: selection.data, briefDigest: writingBriefHash(JSON.stringify(b)),
     lineage: b.inputs.map(i => ({ inputId: i.id, sha256: i.sha256, role: i.kind })),
@@ -117,7 +118,7 @@ export function validateBriefClaims(value: unknown, proposed: ProposedBriefClaim
   const check = validateWritingBrief(value);
   if (!check.valid) return check;
   const b = parseWritingBrief(value);
-  const proposal = z.array(z.object({ kind: z.enum(['proposition', 'experience', 'opinion', 'intent', 'rationale']), text, groundedIn: z.array(id) }).strict()).safeParse(proposed);
+  const proposal = z.array(z.strictObject({ kind: z.enum(['proposition', 'experience', 'opinion', 'intent', 'rationale']), text, groundedIn: z.array(id) })).safeParse(proposed);
   if (!proposal.success) return { valid: false, diagnostics: [{ code: 'schema', message: 'Invalid proposed claim shape; input text is omitted.' }] };
   const claims = [...b.propositions.map(p => ({ ...p, kind: 'proposition' as const })), ...b.limitations.map(p => ({ ...p, kind: 'proposition' as const })), ...b.authorClaims];
   const diagnostics: BriefDiagnostic[] = [];

@@ -14,6 +14,7 @@ import { dirname, relative, resolve, sep } from 'node:path';
 import { hostname } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
+import { dateTime } from '../schema/zod-validation.mjs';
 import { validateMaintenancePlan, type MaintenanceOperation } from './maintenance-contract.js';
 import { loadMemoryRecord, memoryRecordId, type MemoryRecord } from './maintenance-record.js';
 import { projectAiwgPath, resolveProjectAiwgDir, resolveProjectAiwgDirForWrite, isProjectArtifactRootExternal } from '../config/project-artifacts.js';
@@ -33,7 +34,7 @@ export const CanonicalContextTargetSchema = z.enum([
 ]);
 export const CanonicalContextClassificationSchema = z.enum(['public', 'internal']);
 
-export const CanonicalContextProposalSchema = z.object({
+export const CanonicalContextProposalSchema = z.strictObject({
   target: CanonicalContextTargetSchema,
   key: z.string().min(1).max(128).regex(/^[a-z0-9][a-z0-9._-]*$/),
   value: z.string().min(1).max(8192),
@@ -43,9 +44,9 @@ export const CanonicalContextProposalSchema = z.object({
   reason: z.string().min(1).max(1024),
   scope: z.string().min(1).max(128),
   classification: CanonicalContextClassificationSchema,
-  reviewAt: z.string().datetime().nullable().default(null),
-  expiresAt: z.string().datetime().nullable().default(null),
-}).strict();
+  reviewAt: dateTime().nullable().default(null),
+  expiresAt: dateTime().nullable().default(null),
+});
 
 export type CanonicalContextProposal = z.infer<typeof CanonicalContextProposalSchema>;
 

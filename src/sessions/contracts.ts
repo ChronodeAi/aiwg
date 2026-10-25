@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { integer, dateTime, number } from '../schema/zod-validation.mjs';
 import { redactSessionText, redactSessionValue } from './policy.js';
 export const SESSION_CONTRACT_VERSION = '1.0.0' as const;
 export const SESSION_PROVIDER_IDS = [
@@ -53,7 +54,7 @@ export const SessionCoveragePreflightSchema = z.object({
     adapterVersion: z.string().nullable(),
     supportedOperations: z.array(z.string()),
     acquisitionModes: z.array(z.string()),
-    sourceCount: z.number().int().nonnegative(),
+    sourceCount: integer().nonnegative(),
     boundaries: z.array(z.string()),
     remediation: z.string().nullable(),
   })),
@@ -93,7 +94,7 @@ export const SessionErrorCodeSchema = z.enum([
 
 const VersionSchema = z.string().regex(/^\d+\.\d+\.\d+(?:[-+].+)?$/);
 const DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-const NativeExtensionsSchema = z.record(z.unknown()).superRefine((value, context) => {
+const NativeExtensionsSchema = z.record(z.string(), z.unknown()).superRefine((value, context) => {
   for (const key of Object.keys(value)) {
     if (!key.startsWith('native.')) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: `native extension must use native.<provider>: ${key}` });
@@ -113,8 +114,8 @@ export const SessionSourceSchema = z.object({
   disposition: CapabilityDispositionSchema,
   operationalState: OperationalStateSchema,
   consistency: ConsistencyStateSchema,
-  authorizedAt: z.string().datetime({ offset: true }),
-  extensions: NativeExtensionsSchema.default({}),
+  authorizedAt: dateTime({ offset: true }),
+  extensions: NativeExtensionsSchema.prefault({}),
 });
 
 export const SessionEventSchema = z.object({
@@ -124,7 +125,7 @@ export const SessionEventSchema = z.object({
   sourceId: z.string().min(1),
   importRunId: z.string().min(1),
   nativeId: z.string().min(1).nullable(),
-  sequence: z.number().int().nonnegative(),
+  sequence: integer().nonnegative(),
   kind: z.string().min(1),
   role: z.string().min(1).nullable(),
   participant: z.string().min(1).nullable().default(null),
@@ -133,7 +134,7 @@ export const SessionEventSchema = z.object({
   model: z.string().min(1).nullable().default(null),
   entities: z.array(z.string().min(1)).default([]),
   extractionState: z.string().min(1).nullable().default(null),
-  occurredAt: z.string().datetime({ offset: true }).nullable(),
+  occurredAt: dateTime({ offset: true }).nullable(),
   activityBoundary: z.enum(['pause', 'resume', 'continuation', 'end']).nullable().default(null),
   activityBoundaryBasis: z.string().min(1).nullable().default(null),
   activityBoundaryConfidence: z.enum(['low', 'medium', 'high']).nullable().default(null),
@@ -147,8 +148,8 @@ export const SessionEventSchema = z.object({
   digest: DigestSchema,
   rawReference: z.object({
     locatorClass: z.string().min(1),
-    offset: z.number().int().nonnegative().optional(),
-    sequence: z.number().int().nonnegative().optional(),
+    offset: integer().nonnegative().optional(),
+    sequence: integer().nonnegative().optional(),
   }),
   adapterVersion: VersionSchema,
   consistency: ConsistencyStateSchema,
@@ -157,7 +158,7 @@ export const SessionEventSchema = z.object({
     classes: z.array(z.string().min(1)),
   }),
   opaque: z.boolean().default(false),
-  extensions: NativeExtensionsSchema.default({}),
+  extensions: NativeExtensionsSchema.prefault({}),
 });
 
 export const SessionSchema = z.object({
@@ -167,8 +168,8 @@ export const SessionSchema = z.object({
   provider: CompatibleSessionProviderIdSchema,
   nativeSessionId: z.string().min(1),
   workspaceId: z.string().min(1),
-  startedAt: z.string().datetime({ offset: true }).nullable(),
-  updatedAt: z.string().datetime({ offset: true }).nullable(),
+  startedAt: dateTime({ offset: true }).nullable(),
+  updatedAt: dateTime({ offset: true }).nullable(),
   consistency: ConsistencyStateSchema,
   lifecycle: z.enum([
     'active', 'inactive', 'paused', 'complete', 'interrupted', 'archived',
@@ -177,10 +178,10 @@ export const SessionSchema = z.object({
   intent: z.object({
     status: z.enum(['selected', 'absent', 'unknown']),
     eventId: z.string().min(1).nullable(),
-    sequence: z.number().int().nonnegative().nullable(),
+    sequence: integer().nonnegative().nullable(),
     title: z.string().nullable(),
     summary: z.string().nullable(),
-  }).default({
+  }).prefault({
     status: 'unknown',
     eventId: null,
     sequence: null,
@@ -188,13 +189,13 @@ export const SessionSchema = z.object({
     summary: null,
   }),
   sourceDigest: DigestSchema,
-  extensions: NativeExtensionsSchema.default({}),
+  extensions: NativeExtensionsSchema.prefault({}),
 });
 
 export const ImportCheckpointSchema = z.object({
   cursor: z.string(),
-  recordsRead: z.number().int().nonnegative(),
-  bytesRead: z.number().int().nonnegative(),
+  recordsRead: integer().nonnegative(),
+  bytesRead: integer().nonnegative(),
   checkpointVersion: z.literal('2').optional(),
   positionKind: z.enum(['record-index', 'byte-offset', 'provider-native']).optional(),
   sourceGeneration: z.string().min(1).optional(),
@@ -208,8 +209,8 @@ export const ImportCheckpointSchema = z.object({
     'unchanged-replay',
     'unverified',
   ]).optional(),
-  sourceSize: z.number().int().nonnegative().optional(),
-  sourceMtimeMs: z.number().nonnegative().optional(),
+  sourceSize: integer().nonnegative().optional(),
+  sourceMtimeMs: number().check(z.gte(0)).meta({ type: 'number', minimum: 0 }).optional(),
   sourceFileIdentity: z.string().min(1).optional(),
   prefixDigest: DigestSchema.optional(),
 });
@@ -224,8 +225,8 @@ export const ImportRunSchema = z.object({
   consistency: ConsistencyStateSchema,
   status: z.enum(['running', 'committed', 'rolled-back', 'failed']),
   checkpoint: ImportCheckpointSchema,
-  startedAt: z.string().datetime({ offset: true }),
-  completedAt: z.string().datetime({ offset: true }).nullable(),
+  startedAt: dateTime({ offset: true }),
+  completedAt: dateTime({ offset: true }).nullable(),
   errorCode: SessionErrorCodeSchema.nullable(),
 });
 
@@ -239,7 +240,7 @@ export const ProvenanceEdgeSchema = z.object({
   fromId: z.string().min(1),
   toId: z.string().min(1),
   importRunId: z.string().min(1),
-  createdAt: z.string().datetime({ offset: true }),
+  createdAt: dateTime({ offset: true }),
 });
 
 export const IntelligenceCandidateTypeSchema = z.enum([
@@ -253,30 +254,30 @@ export const CandidateSecurityWarningSchema = z.enum([
   'unicode-confusable', 'active-content', 'secret-bearing',
 ]);
 
-export const CandidateSecuritySchema = z.object({
+export const CandidateSecuritySchema = z.strictObject({
   disposition: z.enum(['clear', 'suspicious']),
   warnings: z.array(CandidateSecurityWarningSchema),
   requiresAcknowledgement: z.boolean(),
   acknowledged: z.boolean(),
   policyVersion: VersionSchema,
-}).strict();
+});
 
-export const IntelligenceCandidateSchema = z.object({
+export const IntelligenceCandidateSchema = z.strictObject({
   contractVersion: z.literal(SESSION_CONTRACT_VERSION),
   candidateId: z.string().min(1),
-  version: z.number().int().positive(),
+  version: integer().positive(),
   type: IntelligenceCandidateTypeSchema,
   assertion: z.string().min(1),
   subject: z.string().min(1).nullable(),
   predicate: z.string().min(1).nullable(),
   object: z.string().min(1).nullable(),
-  evidence: z.array(z.object({
+  evidence: z.array(z.strictObject({
     eventId: z.string().min(1),
-    start: z.number().int().nonnegative(),
-    end: z.number().int().positive(),
+    start: integer().nonnegative(),
+    end: integer().positive(),
     quoteDigest: DigestSchema,
     quote: z.string().min(1).optional(),
-  }).strict()).min(1),
+  })).min(1),
   confidence: z.number().min(0).max(1),
   temporalScope: z.string().min(1),
   projectScope: z.string().min(1),
@@ -285,7 +286,7 @@ export const IntelligenceCandidateSchema = z.object({
   extractionPolicyVersion: VersionSchema,
   model: z.string().min(1).nullable(),
   sensitivity: z.enum(['none', 'sensitive']),
-  security: CandidateSecuritySchema.default({
+  security: CandidateSecuritySchema.prefault({
     disposition: 'clear',
     warnings: [],
     requiresAcknowledgement: false,
@@ -297,8 +298,8 @@ export const IntelligenceCandidateSchema = z.object({
   ]),
   conflictsWith: z.array(z.string().min(1)).default([]),
   supersedes: z.array(z.string().min(1)).default([]),
-  createdAt: z.string().datetime({ offset: true }),
-}).strict().superRefine((candidate, context) => {
+  createdAt: dateTime({ offset: true }),
+}).superRefine((candidate, context) => {
   if (candidate.type === 'relationship'
     && (!candidate.subject || !candidate.predicate || !candidate.object)) {
     context.addIssue({
@@ -308,11 +309,11 @@ export const IntelligenceCandidateSchema = z.object({
   }
 });
 
-export const CandidateReviewReceiptSchema = z.object({
+export const CandidateReviewReceiptSchema = z.strictObject({
   contractVersion: z.literal(SESSION_CONTRACT_VERSION),
   receiptId: z.string().min(1),
   candidateId: z.string().min(1),
-  candidateVersion: z.number().int().positive(),
+  candidateVersion: integer().positive(),
   fromState: z.enum([
     'pending', 'accepted', 'rejected', 'deferred', 'promoted', 'superseded',
   ]),
@@ -323,19 +324,19 @@ export const CandidateReviewReceiptSchema = z.object({
   reason: z.string().min(1),
   securityWarnings: z.array(CandidateSecurityWarningSchema).default([]),
   securityAcknowledged: z.boolean().default(false),
-  occurredAt: z.string().datetime({ offset: true }),
-}).strict();
+  occurredAt: dateTime({ offset: true }),
+});
 
-export const PromotionReceiptSchema = z.object({
+export const PromotionReceiptSchema = z.strictObject({
   contractVersion: z.literal(SESSION_CONTRACT_VERSION),
   receiptId: z.string().min(1),
   operationId: z.string().min(1),
   candidateId: z.string().min(1),
-  candidateVersion: z.number().int().positive(),
+  candidateVersion: integer().positive(),
   consumer: z.string().min(1),
   destinationRef: z.string().min(1),
   reviewer: z.string().min(1),
-  approvedAt: z.string().datetime({ offset: true }),
+  approvedAt: dateTime({ offset: true }),
   evidenceEventIds: z.array(z.string().min(1)).min(1),
   conflictsWith: z.array(z.string().min(1)),
   supersedes: z.array(z.string().min(1)),
@@ -343,29 +344,29 @@ export const PromotionReceiptSchema = z.object({
   afterHash: DigestSchema,
   dryRun: z.boolean(),
   duplicate: z.boolean(),
-}).strict();
+});
 
-export const DeletionReceiptSchema = z.object({
+export const DeletionReceiptSchema = z.strictObject({
   contractVersion: z.literal(SESSION_CONTRACT_VERSION),
   receiptId: z.string().min(1),
   operationId: z.string().min(1),
   scopeClass: z.string().min(1),
-  counts: z.record(z.number().int().nonnegative()),
+  counts: z.record(z.string(), integer().nonnegative()),
   survivingDependentIds: z.array(z.string().min(1)),
   actorClass: z.string().min(1),
   reasonCode: z.string().min(1),
-  orphanCounts: z.record(z.number().int().nonnegative()),
+  orphanCounts: z.record(z.string(), integer().nonnegative()),
   outcome: z.enum(['preview', 'committed', 'failed']),
-  occurredAt: z.string().datetime({ offset: true }),
-}).strict();
+  occurredAt: dateTime({ offset: true }),
+});
 
-export const PromotionDependencyDecisionSchema = z.object({
+export const PromotionDependencyDecisionSchema = z.strictObject({
   dependentId: z.string().min(1),
   action: z.enum([
     'revoke', 'supersede', 'retain', 'origin_unavailable', 'delete', 'abort',
   ]),
   basis: z.string().min(1),
-}).strict();
+});
 
 export type SessionSource = z.infer<typeof SessionSourceSchema>;
 export type Session = z.infer<typeof SessionSchema>;
@@ -509,7 +510,7 @@ function stableId(prefix: string, ...parts: Array<string | number>): string {
 }
 
 export const SessionRejectionDetailSchema = z.union([
-  z.object({ limit: z.string(), configured: z.number(), observed: z.number(),
+  z.object({ limit: z.string(), configured: number(), observed: number(),
     setting: z.string().optional(), origin: z.enum(['flag', 'env', 'config', 'default']).optional() }),
   z.object({ issues: z.array(z.object({ path: z.string(), code: z.string() })) }),
 ]);
@@ -530,13 +531,21 @@ export function assertSessionResourceLimit(limit: string, configured: number, ob
 /** Extract schema locations and validator codes without messages or input values. */
 export function schemaRejectionDetail(error: z.ZodError): SessionRejectionDetail {
   const issues: Array<{ path: string; code: string }> = [];
-  const visit = (entries: z.ZodIssue[]): void => {
+  const visit = (entries: z.ZodIssue[], prefix: PropertyKey[] = []): void => {
     for (const issue of entries) {
       if (issues.length >= 20) return;
-      if (issue.code === 'invalid_union') {
-        for (const branch of issue.unionErrors) visit(branch.issues);
+      const path = [...prefix, ...issue.path];
+      if (issue.code === 'invalid_union' && issue.errors.length === 0) {
+        issues.push({ path: path.join('.') || '<root>', code: 'invalid_union_discriminator' });
+      } else if (issue.code === 'invalid_union') {
+        // Native union branches carry paths relative to their parent union.
+        for (const branch of issue.errors) visit(branch, path);
       } else {
-        issues.push({ path: issue.path.join('.') || '<root>', code: issue.code });
+        // Keep the published diagnostic codes stable across validator versions.
+        const code = issue.code === 'invalid_value'
+          ? (issue.values.length === 1 ? 'invalid_literal' : 'invalid_enum_value')
+          : issue.code === 'invalid_format' ? 'invalid_string' : issue.code;
+        issues.push({ path: path.join('.') || '<root>', code });
       }
     }
   };

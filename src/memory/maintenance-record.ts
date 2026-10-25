@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { integer, dateTime } from '../schema/zod-validation.mjs';
 import { load } from 'js-yaml';
 import type { MemoryIntakeReceipt } from './intake.js';
 import { sha256 } from './context-pack.js';
@@ -8,29 +9,30 @@ export const MemoryDigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 const HandleSchema = z.string().min(1);
 const HandlesSchema = z.array(HandleSchema).refine(values => new Set(values).size === values.length, 'Duplicate handles');
 
-export const MemoryTombstoneSchema = z.object({
+export const MemoryTombstoneSchema = z.strictObject({
   id: HandleSchema,
   digest: MemoryDigestSchema,
   disposition: MemoryLifecycleSchema.exclude(['active']),
   reason: z.string().min(1),
   reviewer: z.string().min(1),
-  at: z.string().datetime(),
+  at: dateTime(),
   successor: HandleSchema.optional(),
-}).strict();
+});
 
-export const MemoryRecordSchema = MemoryTaxonomySchema.omit({ schemaVersion: true }).extend({
+export const MemoryRecordSchema = z.strictObject({
+  ...MemoryTaxonomySchema.omit({ schemaVersion: true }).shape,
   schemaVersion: z.literal('aiwg.memory-record.v1'),
   id: MemoryDigestSchema,
   sourcePath: z.string().min(1).refine(value => !/[\r\n\0]/.test(value)),
   digest: MemoryDigestSchema,
-  version: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  version: integer().min(1).max(Number.MAX_SAFE_INTEGER),
   aliases: HandlesSchema,
   supersedes: HandlesSchema,
   mergedFrom: HandlesSchema,
   splitFrom: HandlesSchema,
   sourceWorkspaceId: HandleSchema.optional(),
   tombstone: MemoryTombstoneSchema.optional(),
-}).strict().superRefine((record, context) => {
+}).superRefine((record, context) => {
   if (record.lifecycle === 'retired' && !record.tombstone) {
     context.addIssue({ code: 'custom', message: 'Retired memory requires an owner tombstone', path: ['tombstone'] });
   }

@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { PROJECT_AIWG_LOCATION_FILE, projectAiwgPath } from '../../../src/config/project-artifacts.js';
 import {
+  ProjectQuickrefSchema,
+  ProjectQuickrefConfigSchema,
   deployProjectQuickref,
   generateProjectQuickref,
   projectQuickrefSkillName,
@@ -391,5 +393,35 @@ describe('project quickref generation and deployment (#1788)', () => {
     expect(existsSync(stale)).toBe(false);
     expect(existsSync(operator)).toBe(true);
     expect(existsSync(current.targetPath)).toBe(true);
+  });
+});
+
+describe('bounded quickref collection validation', () => {
+  it('parses independent nested configuration defaults', () => {
+    const first = ProjectQuickrefConfigSchema.parse({ version: '1' });
+    first.discovery.excludeBundles.push('synthetic');
+    expect(ProjectQuickrefConfigSchema.parse({ version: '1' }).discovery.excludeBundles).toEqual([]);
+  });
+
+  it.each([
+    ['quickref', ProjectQuickrefSchema, ProjectQuickrefSchema.shape.entries],
+    ['configuration', ProjectQuickrefConfigSchema, ProjectQuickrefConfigSchema.shape.entries.unwrap()],
+  ] as const)('rejects oversized %s entries before element traversal', (_name, schema, entries) => {
+    const validator = vi.spyOn(entries.element._zod, 'run');
+    const entry = { title: 'Synthetic', summary: 'Synthetic test entry', discover: ['synthetic'] };
+    const base = { version: '1', project: { id: 'synthetic', name: 'Synthetic', description: 'Synthetic' }, precedence: 'Project first' };
+    try {
+      expect(schema.safeParse({ ...base, entries: [entry] }).success).toBe(true);
+      expect(validator).toHaveBeenCalledTimes(1);
+      validator.mockClear();
+      const result = schema.safeParse({ ...base, entries: Array(51).fill(entry) });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'too_big', path: ['entries'] }),
+      ]));
+      expect(validator).not.toHaveBeenCalled();
+    } finally {
+      validator.mockRestore();
+    }
   });
 });

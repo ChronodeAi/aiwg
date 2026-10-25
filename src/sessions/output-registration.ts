@@ -11,6 +11,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
+import { integer } from '../schema/zod-validation.mjs';
 import { SessionContractError, sha256 } from './contracts.js';
 
 const DigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
@@ -19,32 +20,32 @@ const ReferenceSchema = z.string().min(1).max(512).refine(
   'references must be single-line inert locators',
 );
 
-export const OutputSourceReferenceSchema = z.object({
+export const OutputSourceReferenceSchema = z.strictObject({
   kind: z.enum(['file', 'url', 'note', 'session', 'artifact', 'context-pack']),
   ref: ReferenceSchema,
   digest: DigestSchema.nullable().default(null),
-  span: z.object({
-    start: z.number().int().nonnegative(),
-    end: z.number().int().positive(),
+  span: z.strictObject({
+    start: integer().nonnegative(),
+    end: integer().positive(),
     quoteDigest: DigestSchema,
-  }).strict().nullable().default(null),
-}).strict().superRefine((value, context) => {
+  }).nullable().default(null),
+}).superRefine((value, context) => {
   if (value.span && value.span.end <= value.span.start) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'source span end must exceed start' });
   }
 });
 
-export const OutputRegistrationRequestSchema = z.object({
+export const OutputRegistrationRequestSchema = z.strictObject({
   outputPath: z.string().min(1),
   mediaType: z.string().min(1).max(128),
-  contextPack: z.object({
+  contextPack: z.strictObject({
     id: ReferenceSchema,
     digest: DigestSchema,
     sources: z.array(OutputSourceReferenceSchema).min(1).max(256),
-  }).strict(),
+  }),
   supersedes: z.array(ReferenceSchema).max(128).default([]),
   conflictsWith: z.array(ReferenceSchema).max(128).default([]),
-}).strict();
+});
 
 export type OutputRegistrationRequest = z.infer<typeof OutputRegistrationRequestSchema>;
 

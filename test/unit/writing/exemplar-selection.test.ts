@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import { createExemplarStore, selectExemplars, runExemplarAblation, EXEMPLAR_STRATEGIES, type ExemplarPartition, type ExemplarDescriptor } from '../../../src/writing/exemplar-selection.js';
+import { describe, expect, it, vi } from 'vitest';
+import { createExemplarStore, exemplarDescriptorSchema, selectExemplars, runExemplarAblation, EXEMPLAR_STRATEGIES, type ExemplarPartition, type ExemplarDescriptor } from '../../../src/writing/exemplar-selection.js';
 import { parseWriterProfile, revokeWriterSample } from '../../../src/writing/writer-profile.js';
 
 const sha = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -17,6 +17,19 @@ function setup() {
 const options = { strategy: 'random' as const, seed: 'fixed', maxSamples: 2, budget: 750 };
 
 describe('profile-scoped budgeted exemplars', () => {
+  it('rejects oversized tags before invoking the writer element validator', () => {
+    const { profile, descriptors, partition } = setup();
+    const element = vi.spyOn(exemplarDescriptorSchema.shape.topicTags.element._zod, 'run');
+    try {
+      expect(exemplarDescriptorSchema.shape.topicTags.safeParse(['synthetic']).success).toBe(true);
+      expect(element).toHaveBeenCalledTimes(1);
+      element.mockClear();
+      const oversized = { ...descriptors[0], topicTags: Array.from({ length: 101 }, () => 'synthetic'), styleTags: [] };
+      expect(() => createExemplarStore(profile, [oversized], partition)).toThrow('Invalid or duplicate exemplar descriptors');
+      expect(element).not.toHaveBeenCalled();
+    } finally { element.mockRestore(); }
+  });
+
   it('repeats seeded choices regardless of input descriptor order and keeps receipts text-free', () => {
     const { profile, descriptors, partition } = setup();
     const a = selectExemplars(profile, createExemplarStore(profile, descriptors, partition), options);

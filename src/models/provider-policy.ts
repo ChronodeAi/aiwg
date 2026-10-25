@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { integer, dateTime, url, number } from '../schema/zod-validation.mjs';
 import { createRequire } from 'node:module';
 import { compileWorkerVersionPattern, workerVersionRangeMismatch } from './worker-installation.mjs';
 import type { WorkerExecution } from '../config/aiwg-config.js';
@@ -129,7 +130,7 @@ export const WorkerAdapterSchema = z.custom<WorkerAdapterMetadata>().superRefine
       message: `Invalid worker adapter: ${error instanceof Error ? error.message : String(error)}` });
   }
 });
-const CapabilityEntrySchema = z.object({
+const CapabilityEntrySchema = z.strictObject({
   sessionEnvAllowlist: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).optional(),
   agent: OutcomeSchema,
   skill: OutcomeSchema,
@@ -141,31 +142,31 @@ const CapabilityEntrySchema = z.object({
   configTarget: z.string().min(1),
   artifactFormat: z.string().min(1),
   verification: z.string().min(1),
-  sourceUrl: z.string().url(),
+  sourceUrl: url(),
   verifiedAt: z.string().date(),
   workerAdapter: WorkerAdapterSchema.optional(),
   // Descriptive health coverage is not an installed executable registration.
   workerHealthAdapter: WorkerAdapterSchema.optional(),
-  workerHealthCoverage: z.object({
+  workerHealthCoverage: z.strictObject({
     scope: z.literal('out'), coverage: z.literal('unobserved'), handshake: z.literal('unobserved'),
     evidenceGrades: z.array(z.enum(['H', 'R', 'D'])).max(3),
     qualificationOwner: z.string().regex(/^B-OG-[0-9]{2}$/),
     provenance: z.array(z.string().min(1).max(4096)).min(1).max(16), reason: z.string().min(1).max(4096),
-  }).strict().optional(),
-}).strict();
-const CapabilityRegistrySchema = z.object({
+  }).optional(),
+});
+const CapabilityRegistrySchema = z.strictObject({
   $schema: z.enum([
     '../../../schemas/models/provider-model-capabilities.v1.schema.json',
     'https://aiwg.io/schemas/models/provider-model-capabilities.v1.schema.json',
   ]).optional(),
   version: z.literal('1.0.0'),
   verifiedAt: z.string().date(),
-  providers: z.record(ProviderSchema, CapabilityEntrySchema),
+  providers: z.partialRecord(ProviderSchema, CapabilityEntrySchema),
   workerAdapters: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), WorkerAdapterSchema)
     .refine(value => Object.keys(value).length <= 128, 'At most 128 worker adapters').optional(),
   workerHealthAdapters: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), WorkerAdapterSchema)
     .refine(value => Object.keys(value).length <= 128, 'At most 128 worker health descriptors').optional(),
-}).strict();
+});
 const CatalogModelSchema = z.object({
   id: z.string().min(1),
   status: z.enum(['active', 'deprecated', 'unverified']),
@@ -178,7 +179,7 @@ const CatalogProviderSchema = z.object({
     coding: CatalogModelSchema,
     efficiency: CatalogModelSchema,
   }),
-  sourceUrl: z.string().url(),
+  sourceUrl: url(),
   verifiedAt: z.string().date(),
 });
 let catalogValidators: { catalog: ValidateFunction; observation: ValidateFunction; discovery: ValidateFunction } | undefined;
@@ -199,27 +200,27 @@ export function validateWorkerModelObservation(input: unknown): string[] {
   return validate(input) ? [] : (validate.errors ?? []).map(error => `${error.instancePath}: ${error.message}`);
 }
 const WorkerObservationSchema = z.custom<WorkerModelObservation>(input => validateWorkerModelObservation(input).length === 0);
-const DiscoveredWorkerModelSchema = z.object({
+const DiscoveredWorkerModelSchema = z.looseObject({
   id: z.string().min(1), apiModelId: z.string().optional(), llmProvider: z.string().optional(),
   hidden: z.boolean().optional(), reasoningEfforts: z.array(z.string()).optional(), worker: WorkerObservationSchema.optional(),
-}).passthrough().superRefine((model, context) => {
+}).superRefine((model, context) => {
   if (!model.worker) return;
   if (model.hidden !== undefined && model.worker.visibility !== (model.hidden ? 'hidden' : 'listed')) context.addIssue({ code: 'custom', path: ['worker', 'visibility'], message: 'Conflicting visibility evidence' });
   const efforts = model.reasoningEfforts ?? [];
   const observed = model.worker.efforts.map(e => e.id);
   if (efforts.length !== observed.length || new Set(observed).size !== observed.length || efforts.some(e => !observed.includes(e))) context.addIssue({ code: 'custom', path: ['worker', 'efforts'], message: 'Conflicting effort evidence' });
 });
-const ProviderDiscoverySchema = z.object({
-  provider: z.string(), source: z.enum(['native', 'cache', 'remote', 'static']), observedAt: z.string().datetime({ offset: true }),
+const ProviderDiscoverySchema = z.looseObject({
+  provider: z.string(), source: z.enum(['native', 'cache', 'remote', 'static']), observedAt: dateTime({ offset: true }),
   runtimeVersion: z.string().optional(), accountScope: z.enum(['local-account', 'local-runtime', 'public-feed', 'static']),
   accountBinding: z.string().min(1).optional(), models: z.array(DiscoveredWorkerModelSchema),
-}).passthrough();
-const DiscoverySchema = z.object({
+});
+const DiscoverySchema = z.strictObject({
   source: z.enum(['native', 'cache', 'remote', 'static']), upstreamSource: z.enum(['native', 'remote', 'static']).optional(),
-  fetchedAt: z.string().datetime({ offset: true }), remoteUrl: z.string().url().optional(), remoteError: z.string().optional(),
+  fetchedAt: dateTime({ offset: true }), remoteUrl: url().optional(), remoteError: z.string().optional(),
   inventorySignature: z.string().optional(), providers: z.record(z.string(), ProviderDiscoverySchema),
   instances: z.record(z.string(), ProviderDiscoverySchema).optional(),
-}).strict();
+});
 
 /** Optional enrichment is checked without tightening legacy catalog rows. */
 export function validateWorkerCatalogDiscovery(input: unknown): string[] {
@@ -230,40 +231,40 @@ export function validateWorkerCatalogDiscovery(input: unknown): string[] {
   return parsed.success ? [] : parsed.error.issues.map(issue => `${issue.path.join('/')}: ${issue.message}`);
 }
 
-const CatalogSchema = z.object({
+const CatalogSchema = z.strictObject({
   version: z.literal('1.0.0'),
   $schema: z.literal('../../../schemas/models/model-catalog.v1.schema.json').optional(),
   discovery: DiscoverySchema.optional(),
   refreshedAt: z.string().date(),
-  staleAfterDays: z.number().int().positive(),
-  providers: z.record(ProviderSchema, CatalogProviderSchema),
-}).strict();
-const PolicySchema = z.object({
+  staleAfterDays: integer().positive(),
+  providers: z.partialRecord(ProviderSchema, CatalogProviderSchema),
+});
+const PolicySchema = z.strictObject({
   role: z.enum(['reasoning', 'coding', 'efficiency']),
   tier: z.enum(['economy', 'standard', 'premium']),
   effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
   override: z.string().min(1).optional(),
-}).strict();
+});
 const uniqueStrings = z.array(z.string().min(1)).refine(values => new Set(values).size === values.length, 'Duplicate entries');
-const WorkerDataPolicySchema = z.object({
+const WorkerDataPolicySchema = z.strictObject({
   allowedProcessing: z.array(z.enum(['local', 'remote'])).refine(values => new Set(values).size === values.length).optional(),
   allowProductImprovement: z.boolean().optional(),
   allowUnknown: z.boolean().optional(),
-  maxRetentionDays: z.number().int().nonnegative().optional(),
-}).strict();
-const WorkerRoleSchema = z.object({
+  maxRetentionDays: integer().nonnegative().optional(),
+});
+const WorkerRoleSchema = z.strictObject({
   groups: uniqueStrings.refine(values => values.length > 0),
   tier: z.enum(['economy', 'standard', 'premium', 'max-quality']),
   initialEffort: z.string().min(1).nullable(),
   effortLadder: uniqueStrings,
-  escalateAfter: z.number().int().positive().optional(),
-  maxEscalations: z.number().int().nonnegative().optional(),
-  deescalateAfter: z.number().int().positive().optional(),
+  escalateAfter: integer().positive().optional(),
+  maxEscalations: integer().nonnegative().optional(),
+  deescalateAfter: integer().positive().optional(),
   allowNotApplicableEffort: z.boolean().optional(),
-}).strict();
-export const WorkerSelectionPolicySchema = z.object({
+});
+export const WorkerSelectionPolicySchema = z.strictObject({
   roleGuidance: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), WorkerRoleSchema).optional(),
-  guards: z.object({
+  guards: z.strictObject({
     deniedEfforts: uniqueStrings.optional(),
     deniedModels: uniqueStrings.optional(),
     denySelfDelegation: z.boolean().optional(),
@@ -271,16 +272,16 @@ export const WorkerSelectionPolicySchema = z.object({
     allowedVisibility: z.array(z.enum(['listed', 'hidden'])).refine(v => new Set(v).size === v.length).optional(),
     allowedLifecycle: z.array(z.enum(['active', 'deprecated'])).refine(v => new Set(v).size === v.length).optional(),
     minimumIdentityEvidence: z.enum(['runtime-configured', 'backend-attested']).optional(),
-  }).strict().optional(),
+  }).optional(),
   dataPolicy: WorkerDataPolicySchema.optional(),
   dataClasses: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), WorkerDataPolicySchema).optional(),
-  freshness: z.object({
-    warnHours: z.number().int().positive().optional(),
-    blockHours: z.number().int().positive().optional(),
-    policyDays: z.number().int().positive().optional(),
-  }).strict().optional(),
+  freshness: z.strictObject({
+    warnHours: integer().positive().optional(),
+    blockHours: integer().positive().optional(),
+    policyDays: integer().positive().optional(),
+  }).optional(),
   taskClasses: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), z.string().min(1)).optional(),
-}).strict().superRefine((policy, context) => {
+}).superRefine((policy, context) => {
   for (const [role, guidance] of Object.entries(policy.roleGuidance ?? {})) {
     if (!['efficiency', 'coding', 'reasoning'].includes(role)) context.addIssue({ code: 'custom', path: ['roleGuidance', role], message: 'Unknown worker role' });
     if (guidance.effortLadder.includes('none') || (guidance.initialEffort === 'none' ? guidance.effortLadder.length !== 0 : guidance.initialEffort !== null && !guidance.effortLadder.includes(guidance.initialEffort))) {
@@ -384,28 +385,28 @@ export function mergeWorkerSelection(layers: WorkerPolicyLayer[]): {
   return { policy, origins, diagnostics };
 }
 
-const UserProjectModelConfigSchema = z.object({
-  defaults: z.object({
+const UserProjectModelConfigSchema = z.looseObject({
+  defaults: z.strictObject({
     tier: z.enum(['economy', 'standard', 'premium', 'max-quality']).optional(),
     provider: ProviderSchema.optional(),
     workerSelection: WorkerSelectionPolicySchema.optional(),
-  }).strict().optional(),
-  agentOverrides: z.record(z.string(), z.object({
+  }).optional(),
+  agentOverrides: z.record(z.string(), z.strictObject({
     'model-tier': z.enum(['economy', 'standard', 'premium', 'max-quality']).optional(),
     'model-override': z.string().min(1).optional(),
     rationale: z.string().min(1).optional(),
-  }).strict()).optional(),
-  customTiers: z.record(z.string(), z.object({
+  })).optional(),
+  customTiers: z.record(z.string(), z.strictObject({
     description: z.string().min(1),
-    costMultiplier: z.number().nonnegative(),
-    roleMapping: z.object({
+    costMultiplier: number().check(z.gte(0)).meta({ type: 'number', minimum: 0 }),
+    roleMapping: z.strictObject({
       reasoning: z.enum(['reasoning', 'coding', 'efficiency']),
       coding: z.enum(['reasoning', 'coding', 'efficiency']),
       efficiency: z.enum(['reasoning', 'coding', 'efficiency']),
-    }).strict(),
-  }).strict()).optional(),
+    }),
+  })).optional(),
   rationale: z.string().optional(),
-}).passthrough();
+});
 
 export type ProviderModelCapability = z.infer<typeof CapabilityEntrySchema>;
 export type ProviderModelCapabilityRegistry = z.infer<typeof CapabilityRegistrySchema>;

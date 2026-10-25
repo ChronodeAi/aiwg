@@ -119,7 +119,7 @@ function scoreSchema(
   }
   const result = validateSkillFrontmatter(frontmatter);
   if (result.success) return scoreDimension(true);
-  const notes = result.errors.errors.map(
+  const notes = result.errors.issues.map(
     (e) => `${e.path.join('.') || '<root>'}: ${e.message}`
   );
   return scoreDimension(false, notes);

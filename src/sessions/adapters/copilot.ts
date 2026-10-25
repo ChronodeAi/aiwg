@@ -1,5 +1,6 @@
 import { basename, extname } from 'node:path';
 import { z } from 'zod';
+import { integer, number } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -18,42 +19,42 @@ import { readBoundedJson, type ReaderLimits } from '../readers.js';
 export const COPILOT_ADAPTER_VERSION = '1.0.0';
 export const COPILOT_EXPORT_SCHEMA_VERSION = '1.0.0';
 
-const ResponsePartSchema = z.object({
+const ResponsePartSchema = z.looseObject({
   value: z.string().optional(),
   kind: z.string().optional(),
-}).passthrough();
+});
 
-const RequestSchema = z.object({
+const RequestSchema = z.looseObject({
   requestId: z.string().min(1).optional(),
   message: z.union([
     z.string(),
-    z.object({ text: z.string() }).passthrough(),
+    z.looseObject({ text: z.string() }),
   ]),
   response: z.union([
     z.string(),
     z.array(ResponsePartSchema),
   ]).optional(),
-  timestamp: z.union([z.string(), z.number()]).optional(),
+  timestamp: z.union([z.string(), number()]).optional(),
   modelId: z.string().optional(),
-}).passthrough();
+});
 
-const ExportSchema = z.object({
-  version: z.union([z.number().int().positive(), z.string()]),
+const ExportSchema = z.looseObject({
+  version: z.union([integer().positive(), z.string()]),
   schemaVersion: z.string().optional(),
   sessionId: z.string().min(1).optional(),
-  creationDate: z.union([z.string(), z.number()]).optional(),
-  lastMessageDate: z.union([z.string(), z.number()]).optional(),
+  creationDate: z.union([z.string(), number()]).optional(),
+  lastMessageDate: z.union([z.string(), number()]).optional(),
   requests: z.array(RequestSchema),
   requesterUsername: z.string().optional(),
   responderUsername: z.string().optional(),
   state: z.string().optional(),
   isArchived: z.boolean().optional(),
   syncStatus: z.string().optional(),
-  workspace: z.object({
+  workspace: z.looseObject({
     id: z.string().optional(),
     repository: z.string().optional(),
-  }).passthrough().optional(),
-}).passthrough();
+  }).optional(),
+});
 
 type CopilotExport = z.infer<typeof ExportSchema>;
 type CopilotRequest = z.infer<typeof RequestSchema>;

@@ -159,6 +159,13 @@
 
 import { signalChild } from '../../process/signal-child.mjs';
 import { z } from 'zod';
+
+// Keep accepting existing UUID-shaped identifiers regardless of version bits.
+const invocationUuid = () => z.string().check(ctx => {
+  if (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(ctx.value)) {
+    ctx.issues.push({ code: 'invalid_format', format: 'uuid', input: ctx.value, message: 'Invalid uuid' });
+  }
+}).meta({ format: 'uuid' });
 import { createHash, randomUUID } from 'node:crypto';
 import {
   realpath, readlink as fsReadlink, open as fsOpen, lstat, unlink,
@@ -1532,12 +1539,12 @@ function publicStatus(entry, healthHook) {
 // Tool registration.
 // ===========================================================================
 
-const inputSchema = z.object({
+const inputSchema = z.strictObject({
   // #2915 round 8 (D4): `reconcile_stopped` is an explicit operator-
   // authorized reconciliation operation on this SAME handler (never a
   // mailbox file, never a new breaker) — see `reconcileStopped` below.
   operation: z.enum(['run', 'status', 'cancel', 'reconcile_stopped', 'reset_recovery_scope']),
-  invocation_id: z.string().uuid().optional(),
+  invocation_id: invocationUuid().optional(),
   scope_id: z.string().min(1).max(512).optional(),
   request_id: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_.:-]+$/).optional(),
   role: z.enum(['efficiency', 'coding', 'reasoning']).optional(),
@@ -1553,8 +1560,8 @@ const inputSchema = z.object({
   // configuration exists yet for the MCP shell-launch path — see
   // session-launcher.mjs `verifyRetryPredecessor`, which the CLI entry
   // point already uses). Omission is unrelated work, as always.
-  retry_of: z.string().uuid().optional(),
-}).strict();
+  retry_of: invocationUuid().optional(),
+});
 
 /**
  * #2892 B1: `options.projectRoot` is REQUIRED — the caller (`server.mjs`,

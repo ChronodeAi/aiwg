@@ -1,6 +1,7 @@
 import { opendir } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
 import { z } from 'zod';
+import { number } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -27,7 +28,7 @@ export interface FactoryRemoteTransport {
   snapshot(source: SelectedSource): Promise<unknown[]>;
 }
 
-const FactoryRecordSchema = z.object({
+const FactoryRecordSchema = z.looseObject({
   schemaVersion: z.string().optional(),
   type: z.string().min(1),
   subtype: z.string().optional(),
@@ -36,21 +37,21 @@ const FactoryRecordSchema = z.object({
   parentUuid: z.string().nullable().optional(),
   sessionId: z.string().min(1).optional(),
   session_id: z.string().min(1).optional(),
-  timestamp: z.union([z.string(), z.number()]).optional(),
-  createdAt: z.number().optional(),
-  updatedAt: z.number().optional(),
+  timestamp: z.union([z.string(), number()]).optional(),
+  createdAt: number().optional(),
+  updatedAt: number().optional(),
   cwd: z.string().optional(),
-  version: z.union([z.string(), z.number()]).optional(),
-  message: z.object({
+  version: z.union([z.string(), number()]).optional(),
+  message: z.looseObject({
     id: z.string().optional(),
     role: z.string().optional(),
     content: z.union([z.string(), z.array(z.unknown())]).optional(),
-  }).passthrough().optional(),
+  }).optional(),
   content: z.union([z.string(), z.array(z.unknown())]).optional(),
-  sessionSettings: z.record(z.unknown()).optional(),
-  settings: z.record(z.unknown()).optional(),
+  sessionSettings: z.record(z.string(), z.unknown()).optional(),
+  settings: z.record(z.string(), z.unknown()).optional(),
   status: z.string().optional(),
-}).passthrough();
+});
 
 type FactoryRecord = z.infer<typeof FactoryRecordSchema>;
 
