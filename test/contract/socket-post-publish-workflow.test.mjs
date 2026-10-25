@@ -99,3 +99,15 @@ test('Socket audit paces across quota windows with a job timeout that covers the
   assert.ok(timeout >= 120 + 15, `job timeout ${timeout} must exceed the 120-minute pace window plus scan time`);
   assert.match(socketRunbook, /SOCKET_PACE_QUOTA_MINUTES/);
 });
+
+test('Socket audit installs the release source runtime dependencies before running the audit script', () => {
+  const install = socketWorkflow.indexOf('name: Install audit script runtime dependencies');
+  const query = socketWorkflow.indexOf('name: Query Socket and evaluate baseline');
+  assert.ok(install > 0 && install < query, 'dependency install must precede the Socket query step');
+  assert.match(socketWorkflow, /run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund/);
+  // Every bare package the audit script imports must be a production dependency.
+  const script = readFileSync(path.join(ROOT, 'tools/release/socket-post-publish-audit.mjs'), 'utf8');
+  const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const bare = [...script.matchAll(/^import .* from '([^'.][^']*)'/gm)].map(m => m[1]).filter(name => !name.startsWith('node:'));
+  for (const name of bare) assert.ok(pkg.dependencies?.[name.split('/')[0]], `${name} must be a production dependency`);
+});
