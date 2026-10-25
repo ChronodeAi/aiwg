@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, readdirSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { collectBenchmark, analyzeBenchmark, splitBenchmarkHoldout, validateBenchmarkCapture,
-  type BenchmarkCase, type BenchmarkObservation, type BenchmarkPrice, type CollectBenchmarkOptions } from '../../../src/decision/benchmark.js';
+  type BenchmarkCase, type BenchmarkCapture, type BenchmarkObservation, type BenchmarkPrice, type CollectBenchmarkOptions } from '../../../src/decision/benchmark.js';
 import * as askModule from '../../../src/decision/ask.js';
 import { tokenCost } from '../../../src/decision/pricing.js';
 
@@ -109,6 +109,78 @@ describe('paired benchmark collector', () => {
     await expect(collectBenchmark(changed, { ...h.options, extendCapture: prior })).rejects.toThrow();
     expect(h.jev).toHaveBeenCalledTimes(12);
   });
+  it('reuses saved Jev responses and prices unchanged while budgeting only a new baseline, then round-trips through analysis', async () => {
+    const h = harness();
+    const prior = await collectBenchmark(cases, { ...h.options, maxUsd: 100_000, jevPrices: [{ ...price,
+      model: 'jev-1.13.0', inputPerMillionUsd: 1_000_000, outputPerMillionUsd: 0 }] });
+    const before = JSON.stringify(prior);
+    h.baseline.mockClear(); h.jev.mockClear();
+    const nextPrice = { ...price, model: 'fixture-llm-v2' };
+    const baseline = vi.fn(async input => ({ ...await h.baseline(input), model: nextPrice.model }));
+    const saved = await collectBenchmark(cases, { ...h.options, baseline, baselinePrices: [nextPrice],
+      baselineLabel: 'new baseline', jevCapture: prior, maxCalls: cases.length, maxUsd: 0.01, jevPrices: [] });
+    expect(saved.collection).toMatchObject({ calls: 6, stopReason: 'complete' });
+    expect(saved.collection!.knownUsd).toBeCloseTo(6 * 0.00108);
+    expect(baseline).toHaveBeenCalledTimes(6); expect(h.jev).not.toHaveBeenCalled();
+    expect(saved.baselineLabel).toBe('new baseline');
+    expect(saved.rows.map(r => r.baseline.model)).toEqual(cases.map(() => nextPrice.model));
+    expect(saved.rows.map(r => r.jev)).toEqual(prior.rows.map(r => r.jev));
+    const roundTrip = JSON.parse(JSON.stringify(saved));
+    validateBenchmarkCapture(split, roundTrip);
+    const report = analyzeBenchmark(split, roundTrip, policy).measurements[0];
+    expect(report.tuning.routedAccuracy).toBe(1); expect(report.holdout.routedAccuracy).toBe(1);
+    expect(report.tuning.estimatedJevUsd).toBe(4 * 500);
+    saved.rows[0].jev[0].confidence = 0;
+    expect(JSON.stringify(prior)).toBe(before);
+  });
+  it.each([
+    ['schema', (c: BenchmarkCapture) => { (c as any).schema = 'unsupported'; }],
+    ['digest', (c: BenchmarkCapture) => { c.datasetDigest = 'changed'; }],
+    ['fewer passes', (c: BenchmarkCapture) => { c.rows[0].jev.pop(); }],
+    ['more passes', (c: BenchmarkCapture) => { c.rows[0].jev.push(c.rows[0].jev[0]); }],
+    ['missing case', (c: BenchmarkCapture) => { c.rows.pop(); c.collection!.stopReason = 'incomplete'; }],
+    ['invalid observation', (c: BenchmarkCapture) => { c.rows[0].jev[0].confidence = 2; }],
+    ['tampered price', (c: BenchmarkCapture) => { c.rows[0].jev[0].cost!.usd = 1; }],
+  ] as const)('refuses reused %s before any provider call', async (_name, mutate) => {
+    const h = harness();
+    const prior = await collectBenchmark(cases, h.options);
+    mutate(prior); h.baseline.mockClear(); h.jev.mockClear();
+    await expect(collectBenchmark(cases, { ...h.options, jevCapture: prior })).rejects.toThrow();
+    expect(h.baseline).not.toHaveBeenCalled(); expect(h.jev).not.toHaveBeenCalled();
+  });
+  it('refuses conflicting reuse, changed split and insufficient baseline call budgets before dispatch', async () => {
+    const h = harness();
+    const prior = await collectBenchmark(cases, h.options);
+    h.baseline.mockClear(); h.jev.mockClear();
+    for (const change of [{ extendCapture: prior }, { seed: 'changed' }, { maxCalls: cases.length - 1 }]) {
+      await expect(collectBenchmark(cases, { ...h.options, jevCapture: prior, ...change })).rejects.toThrow();
+    }
+    expect(h.baseline).not.toHaveBeenCalled(); expect(h.jev).not.toHaveBeenCalled();
+  });
+  it.each(['usd-limit', 'unknown-cost'] as const)('checkpoints reused Jev rows when new baseline collection hits %s', async reason => {
+    const h = harness();
+    const prior = await collectBenchmark(cases, h.options);
+    h.baseline.mockClear(); h.jev.mockClear();
+    const onCheckpoint = vi.fn(async capture => { validateBenchmarkCapture(split, capture); });
+    const saved = await collectBenchmark(cases, { ...h.options, jevCapture: prior, maxCalls: cases.length,
+      maxUsd: reason === 'usd-limit' ? 0.001 : 1, baselinePrices: reason === 'unknown-cost' ? [] : [price], onCheckpoint });
+    expect(saved.collection).toMatchObject({ stopReason: reason, calls: 1 });
+    expect(saved.rows).toHaveLength(1); expect(saved.rows[0].jev).toEqual(prior.rows[0].jev);
+    expect(h.baseline).toHaveBeenCalledTimes(1); expect(h.jev).not.toHaveBeenCalled();
+    expect(onCheckpoint).toHaveBeenLastCalledWith(saved);
+  });
+  it('reuses unpriced legacy Jev observations without requiring Jev credentials or changing their costs', async () => {
+    const h = harness();
+    const prior = await collectBenchmark(cases, h.options);
+    for (const row of prior.rows) for (const sample of [row.baseline, ...row.jev]) delete sample.cost;
+    h.baseline.mockClear(); h.jev.mockClear();
+    const ask = vi.spyOn(askModule, 'askDecision').mockRejectedValue(new Error('Unexpected Jev call'));
+    const saved = await collectBenchmark(cases, { ...h.options, jevCapture: prior, maxCalls: cases.length, jev: undefined });
+    expect(saved.collection).toMatchObject({ stopReason: 'complete', calls: 6 });
+    expect(saved.rows.map(r => r.jev)).toEqual(prior.rows.map(r => r.jev));
+    expect(h.baseline).toHaveBeenCalledTimes(6); expect(ask).not.toHaveBeenCalled();
+    expect(analyzeBenchmark(split, saved, policy).measurements[0].tuning.estimatedJevUsd).toBeNull();
+  });
   it('extends legacy observations using supplied sourced rates and stops immediately after a Jev call crosses the cap', async () => {
     const h = harness();
     const prior = await collectBenchmark(cases, { ...h.options, passes: 1 });
@@ -207,10 +279,52 @@ describe('benchmark CLI with injected clients', () => {
     ['--live'], ['--live', '--max-calls', '12'], ['--live', '--max-usd', '1'],
     ['--live', '--max-calls', '12', '--max-usd', '0'],
     ['--live', '--max-calls', '12', '--max-usd', '1', '--replay', 'x'], ['--extend', 'x'],
+    ['--jev-capture', 'x'], ['--replay', 'x', '--jev-capture', 'y'],
+    ['--live', '--max-calls', '6', '--max-usd', '1', '--extend', 'x', '--jev-capture', 'y'],
   ].map(args => [args]))('refuses missing safety flags and conflicting modes before reading files: %j', async args => {
     const { runBenchmark } = await cli(), h = harness();
     await expect(runBenchmark(args, { baseline: h.baseline, jev: h.jev, env: {}, print: vi.fn() })).rejects.toThrow();
     expect(h.baseline).not.toHaveBeenCalled(); expect(h.jev).not.toHaveBeenCalled();
+  });
+  it.each(['envelope', 'standalone'] as const)('reuses a %s Jev capture for a new baseline and replays the result offline', async format => {
+    const { runBenchmark } = await cli(), h = harness(), cwd = directory();
+    const prior = await collectBenchmark(cases, h.options);
+    const source = format === 'envelope' ? { cases: split, capture: prior } : prior;
+    const sourceBody = JSON.stringify(source);
+    writeFileSync(join(cwd, 'prior.json'), sourceBody);
+    writeFileSync(join(cwd, 'cases.json'), JSON.stringify(cases));
+    writeFileSync(join(cwd, 'price.json'), JSON.stringify(price));
+    h.baseline.mockClear(); h.jev.mockClear();
+    const ask = vi.spyOn(askModule, 'askDecision').mockRejectedValue(new Error('Unexpected Jev call'));
+    const args = ['--live', '--max-calls', '6', '--max-usd', '0.01', '--jev-capture', 'prior.json', '--passes', '3',
+      '--capture', 'new.json', '--baseline-model', 'new-model', '--baseline-price', 'price.json', '--json',
+      ...(format === 'standalone' ? ['--dataset', 'cases.json'] : [])];
+    const deps = { cwd, baseline: h.baseline, now: h.options.now, env: {}, print: vi.fn() };
+    const result = await runBenchmark(args, deps);
+    expect(result.collection).toMatchObject({ stopReason: 'complete', calls: 6 });
+    expect(h.baseline).toHaveBeenCalledTimes(6); expect(ask).not.toHaveBeenCalled();
+    const saved = JSON.parse(readFileSync(join(cwd, 'new.json'), 'utf8'));
+    expect(saved.capture.baselineLabel).toBe('new-model/low');
+    expect(saved.capture.rows.map(r => r.jev)).toEqual(prior.rows.map(r => r.jev));
+    const replay = await runBenchmark(['--replay', 'new.json', '--json'], { cwd, env: {}, print: vi.fn() });
+    expect(replay.measurements).toEqual(result.measurements);
+    expect(readFileSync(join(cwd, 'prior.json'), 'utf8')).toBe(sourceBody);
+    expect(readdirSync(cwd).some(f => f.endsWith('.tmp'))).toBe(false);
+  });
+  it('refuses reused schema, digest and pass mismatches before dispatch or writing output', async () => {
+    const { runBenchmark } = await cli(), h = harness(), cwd = directory();
+    const prior = await collectBenchmark(cases, h.options);
+    h.baseline.mockClear(); h.jev.mockClear();
+    const fetch = vi.fn().mockRejectedValue(new Error('Unexpected network call'));
+    for (const change of [{ schema: 'unsupported' }, { datasetDigest: 'changed' },
+      { rows: prior.rows.map(r => ({ ...r, jev: r.jev.slice(0, 1) })) }]) {
+      writeFileSync(join(cwd, 'prior.json'), JSON.stringify({ cases: split, capture: { ...prior, ...change } }));
+      await expect(runBenchmark(['--live', '--max-calls', '6', '--max-usd', '1', '--jev-capture', 'prior.json',
+        '--capture', 'new.json', '--passes', '3', '--baseline-model', 'fixture'],
+        { cwd, env: { OPENAI_API_KEY: 'synthetic-token' }, fetch, print: vi.fn() }))
+        .rejects.toThrow(/schema|pass count/);
+    }
+    expect(fetch).not.toHaveBeenCalled(); expect(readdirSync(cwd)).toEqual(['prior.json']);
   });
   it('validates sweep, output and call cap before dispatch; saves a resumable USD-stop envelope', async () => {
     const { runBenchmark } = await cli(), h = harness(), cwd = directory();

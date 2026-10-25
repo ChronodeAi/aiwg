@@ -115,6 +115,27 @@ prefixes, calls only missing observations, and refuses a smaller pass count or
 changed dataset, split or baseline label. It never triggers a baseline when all
 baseline observations are already present.
 
+To compare a new baseline using saved Jev responses, use `--jev-capture` with a
+new output path and baseline settings:
+
+```bash
+node tools/decision/benchmark.mjs --live --max-calls 6 --max-usd 1 \
+  --jev-capture captures/paired.json --capture captures/new-baseline.json \
+  --passes 3 --baseline-model <new-model-version> --baseline-price captures/new-baseline-rate.json --json
+```
+
+The source accepts the same envelope or standalone capture with `--dataset` as
+replay. Its schema and dataset digest (including the deterministic split) must
+validate, and every case must have exactly the requested pass count. Mismatches
+are refused before any provider call. Retain the same `--holdout` and `--seed`
+for a custom split. Reuse requires `--live` and cannot combine with `--extend`
+or replay. The source remains unchanged; the new capture preserves its Jev
+answers, usage, latency and recorded costs alongside the new baseline. No Jev
+credential or Jev call is needed. Only new baseline calls and their spend count
+against `--max-calls` and `--max-usd`; historical costs remain available to the
+offline analyzer. For the six-case example, the call cap is six. The resulting
+capture replays with the same offline commands as any paired capture.
+
 Collection stops before another call once recorded spend reaches 80% of the USD
 cap. A request already in flight can cross that threshold, so this is a stop based
 on reported usage, not an invoice ceiling. Extension includes all prior recorded
