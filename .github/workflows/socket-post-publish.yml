@@ -159,6 +159,11 @@ jobs:
           Ref: ${RELEASE_REF}
           EOF
 
+      - name: Install audit script runtime dependencies
+        # The audit script imports production dependencies (for example semver)
+        # from the checked-out release source; install them without lifecycle scripts.
+        run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
       - name: Query Socket and evaluate baseline
         id: socket
         continue-on-error: true
