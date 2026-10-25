@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
-import type { DecisionAskInput, DecisionAskResult } from './ask.js';
+import { askDecision, type DecisionAskInput, type DecisionAskResult } from './ask.js';
+import { BUNDLED_JEV_PRICING, tokenCost, validTokenPrice, type TokenPrice } from './pricing.js';
 import type { DecisionConfig } from '../config/decision-config.js';
 import { decisionSavingsWeights, estimateDecisionSavings } from './savings.js';
 
 export type BenchmarkRates = NonNullable<NonNullable<DecisionConfig['ask']>['cost']>;
 /** Require explicit rates and complete usage; defaults are not benchmark evidence. */
 function observationCost(sample: BenchmarkObservation, rates: BenchmarkRates | undefined, baseline = false): number | null {
+  if (sample.cost !== undefined) return sample.cost.usd;
   const usage = sample.usage;
   if (!rates || !usage || usage.inputTokens === null || usage.cachedInputTokens) return null;
   if (usage.outputTokens === null && (baseline || rates.jev_output_per_mtok !== 0 || rates.jev_input_per_mtok === undefined)) return null;
@@ -29,6 +31,7 @@ export interface BenchmarkCase {
   input: DecisionAskInput;
   expected: string | boolean | number;
 }
+export interface BenchmarkPrice extends TokenPrice { model: string; source: string; checkedAt: string }
 export interface BenchmarkObservation {
   answer: string | boolean | number | null;
   confidence: number | null;
@@ -37,6 +40,8 @@ export interface BenchmarkObservation {
   model: string | null;
   usage: (NonNullable<DecisionAskResult['usage']> & { cachedInputTokens?: number | null }) | null;
   latencyMs: number;
+  /** Captured sourced rate, bound to the served model; null is never a free call. */
+  cost?: { usd: number | null; price: BenchmarkPrice | null };
 }
 export interface BenchmarkRow {
   id: string;
@@ -50,6 +55,8 @@ export interface BenchmarkCapture {
   capturedAt: string;
   baselineLabel: string;
   rows: BenchmarkRow[];
+  /** Interrupted captures retain real observations only and can be extended. */
+  collection?: { stopReason: 'complete' | 'incomplete' | 'usd-limit' | 'unknown-cost'; calls: number; knownUsd: number };
 }
 export const BENCHMARK_PASS_COUNTS = [1, 3, 5, 10, 15, 20] as const;
 export const MAX_BENCHMARK_PASSES = 20;
@@ -80,9 +87,9 @@ export function benchmarkComparison(capture: BenchmarkCapture, pricing?: Benchma
       return `| Jev, ${passes} pass${passes === 1 ? '' : 'es'} | ${display(t.input)} | n/a | ${display(t.output)} | ${display(t.input === null || t.output === null ? null : t.input + t.output)} | ${t.latency.toFixed(1)} | ${money(t.cost)} |`;
     }),
     `| ${capture.baselineLabel.replace(/[|\r\n]/g, ' ')} | ${display(baseline.input)} | ${display(baseline.cached)} | ${display(baseline.output)} | ${display(baseline.input === null || baseline.output === null ? null : baseline.input + baseline.output)} | ${baseline.latency.toFixed(1)} | ${money(baseline.cost)} |`, '',
-    pricing ? `Rates: decision.ask.cost.* (${pricing.source ?? 'manual'}, checked ${pricing.checked_at ?? 'unknown'}).` : 'Costs unknown: no explicit decision.ask.cost.* rates.',
+    capture.rows.some(r => r.baseline.cost || r.jev.some(s => s.cost)) ? 'Captured costs use sourced rates recorded per observation; unknown costs remain unknown.' : pricing ? `Rates: decision.ask.cost.* (${pricing.source ?? 'manual'}, checked ${pricing.checked_at ?? 'unknown'}).` : 'Costs unknown: no explicit decision.ask.cost.* rates.',
     'Costs use reported usage and explicit pricing assumptions, not subscription invoices.',
-    'Codex includes fresh-session overhead; these totals do not measure the marginal cost of an inline LLM decision.',
+    'Standalone baseline requests do not measure the marginal cost of an inline LLM decision.',
   ];
   return lines.join('\n');
 }
@@ -123,6 +130,133 @@ function modeAnswer(c: BenchmarkCase, r: BenchmarkObservation): boolean {
   return m.kind === 'yes-no' ? typeof r.answer === 'boolean' : m.kind === 'choices' ? m.choices.includes(r.answer as string)
     : typeof r.answer === 'number' && Number.isInteger(r.answer) && r.answer >= m.low && r.answer <= m.high;
 }
+export interface CollectBenchmarkOptions {
+  live: boolean;
+  maxCalls: number;
+  maxUsd: number;
+  passes: number;
+  baselineLabel: string;
+  baseline: (input: DecisionAskInput) => Promise<BenchmarkObservation>;
+  jev?: (input: DecisionAskInput) => Promise<BenchmarkObservation>;
+  baselinePrices?: BenchmarkPrice[];
+  jevPrices?: BenchmarkPrice[];
+  extendCapture?: BenchmarkCapture;
+  holdout?: number;
+  seed?: string;
+  env?: NodeJS.ProcessEnv;
+  now?: () => number;
+  onCheckpoint?: (capture: BenchmarkCapture) => Promise<void>;
+}
+function validPrice(price: BenchmarkPrice): boolean {
+  return fields(price, ['model', 'source', 'checkedAt', 'inputPerMillionUsd', 'outputPerMillionUsd', 'cachedInputPerMillionUsd'])
+    && validTokenPrice(price) && typeof price.model === 'string' && !!price.model.trim()
+    && typeof price.source === 'string' && /^https:\/\//.test(price.source)
+    && typeof price.checkedAt === 'string' && Number.isFinite(Date.parse(price.checkedAt));
+}
+function validCost(sample: BenchmarkObservation): boolean {
+  if (sample.cost === undefined) return true;
+  const cost = sample.cost;
+  return fields(cost, ['usd', 'price']) && (cost.price === null ? cost.usd === null
+    : validPrice(cost.price) && cost.price.model === sample.model && cost.usd === tokenCost(sample.usage, cost.price));
+}
+
+/** Opt-in only. One invocation is one provider call; production ask never calls this collector. */
+export async function collectBenchmark(dataset: BenchmarkCase[], options: CollectBenchmarkOptions): Promise<BenchmarkCapture> {
+  validateBenchmarkCases(dataset);
+  if (options.live !== true || !Number.isSafeInteger(options.maxCalls) || options.maxCalls < 0)
+    throw new Error('Explicit live opt-in and nonnegative maxCalls required.');
+  if (!Number.isFinite(options.maxUsd) || options.maxUsd <= 0) throw new Error('Positive maxUsd required for live collection.');
+  if (!Number.isInteger(options.passes) || options.passes < 1 || options.passes > MAX_BENCHMARK_PASSES)
+    throw new Error('passes must be 1..20.');
+  const cases = splitBenchmarkHoldout(dataset, options.holdout ?? 0.3, options.seed ?? '3291');
+  const prior = options.extendCapture;
+  if (prior) validateBenchmarkCapture(cases, prior);
+  if (typeof options.baselineLabel !== 'string' || !options.baselineLabel.trim() || options.baselineLabel.length > 200
+    || prior && prior.baselineLabel !== options.baselineLabel) throw new Error('Invalid or changed baseline label.');
+  const jevPrices = options.jevPrices ?? Object.entries(BUNDLED_JEV_PRICING.models).map(([model, price]) => ({
+    ...price, model, source: BUNDLED_JEV_PRICING.source, checkedAt: BUNDLED_JEV_PRICING.checkedAt,
+  }));
+  for (const prices of [jevPrices, options.baselinePrices ?? []]) {
+    if (prices.some(p => !validPrice(p)) || new Set(prices.map(p => p.model)).size !== prices.length)
+      throw new Error('Invalid or duplicate sourced model rates.');
+  }
+  const rows = structuredClone(prior?.rows ?? []);
+  if (rows.some(row => row.jev.length > options.passes)) throw new Error('Extension cannot remove existing passes.');
+  const planned = cases.reduce((sum, c) => {
+    const row = rows.find(r => r.id === c.id);
+    return sum + (row ? 0 : 1) + Math.max(0, options.passes - (row?.jev.length ?? 0));
+  }, 0);
+  if (planned > options.maxCalls) throw new Error(`Insufficient maxCalls: need ${planned}; no providers invoked.`);
+  const now = options.now ?? Date.now;
+  let calls = 0, knownUsd = 0;
+  for (const row of rows) for (const [index, sample] of [row.baseline, ...row.jev].entries()) {
+    // Legacy captures can acquire a sourced cost without changing their recorded response.
+    if (!sample.cost) {
+      const price = (index === 0 ? options.baselinePrices ?? [] : jevPrices).find(p => p.model === sample.model) ?? null;
+      sample.cost = { usd: price ? tokenCost(sample.usage, price) : null, price: structuredClone(price) };
+    }
+    if (sample.cost.usd === null) throw new Error('Cannot safely extend an unpriced capture.');
+    knownUsd += sample.cost.usd;
+  }
+  let stopReason: NonNullable<BenchmarkCapture['collection']>['stopReason'] = 'incomplete';
+  const snapshot = (): BenchmarkCapture => ({ schema: 'aiwg-decision-benchmark-capture/v1',
+    datasetDigest: benchmarkDigest(cases), capturedAt: new Date(now()).toISOString(),
+    baselineLabel: options.baselineLabel, rows: structuredClone(rows), collection: { stopReason, calls, knownUsd } });
+  if (planned === 0 || knownUsd >= options.maxUsd * 0.8) {
+    stopReason = planned === 0 ? 'complete' : 'usd-limit';
+    const capture = snapshot();
+    validateBenchmarkCapture(cases, capture);
+    if (options.onCheckpoint) await options.onCheckpoint(capture);
+    return capture;
+  }
+  const environment = options.env ?? process.env;
+  if (!options.jev && planned > 0 && cases.some(c => (rows.find(r => r.id === c.id)?.jev.length ?? 0) < options.passes)
+    && !(environment.JEV_API_KEY?.trim() || environment.AIWG_DECISION_JEV_API_KEY?.trim()))
+    throw new Error('Live benchmark requires JEV_API_KEY or AIWG_DECISION_JEV_API_KEY in the caller environment.');
+  const jev = options.jev ?? (async (input: DecisionAskInput) => {
+    // Force environment-only lookup; lookupJevCredential skips credential files with this explicit flag.
+    return askDecision(input, { env: { ...environment, AIWG_DECISION_ENABLED: '1' }, now });
+  });
+  const invoke = async (c: BenchmarkCase, baseline: boolean): Promise<BenchmarkObservation> => {
+    const started = now();
+    calls++;
+    let result: BenchmarkObservation;
+    try {
+      result = await (baseline ? options.baseline : jev)({ ...structuredClone(c.input), threshold: 0, passes: 1, escalationPasses: 1 });
+    } catch {
+      // No retry: a failed request can still be billable. Stop when its usage is unknown.
+      result = { status: 'fallback', answer: null, confidence: null, model: null, usage: null, latencyMs: 0 };
+    }
+    const sample: BenchmarkObservation = { answer: result.answer, confidence: result.confidence, status: result.status,
+      model: result.model, usage: structuredClone(result.usage), latencyMs: Math.max(0, now() - started),
+      ...(result.probability === undefined ? {} : { probability: result.probability }) };
+    if (!validObservation(sample) || !modeAnswer(c, sample)) throw new Error(`Invalid provider observation: ${c.id}`);
+    const price = (baseline ? options.baselinePrices ?? [] : jevPrices).find(p => p.model === sample.model) ?? null;
+    const usd = price ? tokenCost(sample.usage, price) : null;
+    sample.cost = { usd, price: structuredClone(price) };
+    if (usd === null) stopReason = 'unknown-cost';
+    else { knownUsd += usd; if (knownUsd >= options.maxUsd * 0.8) stopReason = 'usd-limit'; }
+    return sample;
+  };
+  for (const c of cases) {
+    let row = rows.find(r => r.id === c.id);
+    if (!row) { row = { id: c.id, baseline: await invoke(c, true), jev: [] }; rows.push(row); }
+    if (options.onCheckpoint) await options.onCheckpoint(snapshot());
+    if (stopReason !== 'incomplete') break;
+    while (row.jev.length < options.passes) {
+      row.jev.push(await invoke(c, false));
+      if (options.onCheckpoint) await options.onCheckpoint(snapshot());
+      if (stopReason !== 'incomplete') break;
+    }
+    if (stopReason !== 'incomplete') break;
+  }
+  if (cases.every(c => rows.some(r => r.id === c.id && r.jev.length === options.passes))) stopReason = 'complete';
+  const capture = snapshot();
+  validateBenchmarkCapture(cases, capture);
+  if (options.onCheckpoint) await options.onCheckpoint(capture);
+  return capture;
+}
+
 function mean(values: number[]): number | null {
   return values.length ? values.reduce((sum, n) => sum + n, 0) / values.length : null;
 }
@@ -190,6 +324,7 @@ export function analyzeBenchmark(cases: BenchmarkCase[], capture: BenchmarkCaptu
   validateBenchmarkCases(cases);
   validateBenchmarkCapture(cases, capture);
   validateRates(pricing);
+  if (capture.rows.length !== cases.length) throw new Error('Incomplete capture: extend before analysis.');
   if (!policies.length || policies.length > 100 || policies.some(p => !Number.isInteger(p.passes) || p.passes < 1 || p.passes > MAX_BENCHMARK_PASSES
     || !Number.isFinite(p.threshold) || p.threshold < 0 || p.threshold > 1 || !Number.isFinite(p.agreement) || p.agreement <= 0 || p.agreement > 1)) throw new Error('Invalid benchmark policy grid.');
   const minimumAccuracy = options.minimumAccuracy ?? 1;
@@ -261,7 +396,7 @@ export function analyzeBenchmark(cases: BenchmarkCase[], capture: BenchmarkCaptu
       'Recommendations use tuning cases only; evaluate holdout before adoption. No configuration is changed.',
       'Serial pass latency; modeled routing cost includes LLM cost on fallbacks. Benchmark collection itself pays both arms.',
       'Repeated Jev passes may be correlated; identical answers are not independent confidence evidence.',
-      'Codex CLI baseline includes a fresh session system prompt; it does not estimate marginal reasoning inside an existing conversation.',
+      'Standalone baseline requests do not estimate marginal reasoning inside an existing conversation.',
       'Legacy captures may lack cached-input counts; cache-aware prices then leave costs unknown. No subscription invoice is inferred.',
       'Prices are API-equivalent estimates, not subscription invoices. Missing usage or rates makes savings unknown.'] };
 }
@@ -288,17 +423,23 @@ function fields(value: unknown, allowed: string[]): boolean {
 export function validateBenchmarkCapture(cases: BenchmarkCase[], value: unknown): asserts value is BenchmarkCapture {
   validateBenchmarkCases(cases);
   const c = value as BenchmarkCapture;
-  if (!fields(c, ['schema', 'datasetDigest', 'capturedAt', 'baselineLabel', 'rows'])
+  if (!fields(c, ['schema', 'datasetDigest', 'capturedAt', 'baselineLabel', 'rows', 'collection'])
     || c.schema !== 'aiwg-decision-benchmark-capture/v1' || c.datasetDigest !== benchmarkDigest(cases)
     || typeof c.capturedAt !== 'string' || !/^\d{4}-\d\d-\d\dT/.test(c.capturedAt) || !Number.isFinite(Date.parse(c.capturedAt))
     || typeof c.baselineLabel !== 'string' || !c.baselineLabel.trim() || c.baselineLabel.length > 200
-    || !Array.isArray(c.rows) || c.rows.length !== cases.length || new Set(c.rows.map(r => r?.id)).size !== cases.length) throw new Error('Capture does not match this dataset or schema.');
-  const observation = (r: BenchmarkObservation) => fields(r, ['answer', 'confidence', 'probability', 'status', 'model', 'usage', 'latencyMs'])
-    && (r.usage === null || fields(r.usage, ['inputTokens', 'outputTokens', 'cachedInputTokens'])) && validObservation(r);
+    || !Array.isArray(c.rows) || c.rows.length > cases.length
+    || ((!c.collection || c.collection.stopReason === 'complete') && c.rows.length !== cases.length)
+    || new Set(c.rows.map(r => r?.id)).size !== c.rows.length) throw new Error('Capture does not match this dataset or schema.');
+  if (c.collection !== undefined && (!fields(c.collection, ['stopReason', 'calls', 'knownUsd'])
+    || !['complete', 'incomplete', 'usd-limit', 'unknown-cost'].includes(c.collection.stopReason)
+    || !Number.isSafeInteger(c.collection.calls) || c.collection.calls < 0
+    || !Number.isFinite(c.collection.knownUsd) || c.collection.knownUsd < 0)) throw new Error('Invalid collection totals.');
+  const observation = (r: BenchmarkObservation) => fields(r, ['answer', 'confidence', 'probability', 'status', 'model', 'usage', 'latencyMs', 'cost'])
+    && (r.usage === null || fields(r.usage, ['inputTokens', 'outputTokens', 'cachedInputTokens'])) && validObservation(r) && validCost(r);
   for (const row of c.rows) {
     const item = cases.find(item => item.id === row?.id);
     if (!fields(row, ['id', 'baseline', 'jev']) || !item || !observation(row.baseline) || !modeAnswer(item, row.baseline)
-      || !Array.isArray(row.jev) || row.jev.length < 1 || row.jev.length > MAX_BENCHMARK_PASSES
+      || !Array.isArray(row.jev) || row.jev.length < (c.collection && c.collection.stopReason !== 'complete' ? 0 : 1) || row.jev.length > MAX_BENCHMARK_PASSES
       || row.jev.some(r => !observation(r) || !modeAnswer(item, r))) throw new Error('Invalid captured observations.');
   }
   if (Buffer.byteLength(JSON.stringify(c)) > MAX_BENCHMARK_BYTES) throw new Error('Capture exceeds size limit.');
