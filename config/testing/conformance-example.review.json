@@ -5,7 +5,7 @@
   "bindings": {
     "agentic/code/addons/testing-quality/lib/assessment.mjs": "655c480860c69b26123f1dc8d23457f1622b8edca9677a0540a10b510fdb7558",
     "agentic/code/addons/testing-quality/lib/collector.mjs": "20f52ad3b05d3b2da92adf6c9f612fbb819103a42218ce0c82dedb42edd325e8",
-    "agentic/code/addons/testing-quality/lib/contracts.mjs": "ec96e012638281b90b7d8cd384b8abb85c9a0c58d876f31519c357a88a40ac4e",
+    "agentic/code/addons/testing-quality/lib/contracts.mjs": "61f1026f3e4ba9448c60eccc856fb49a6ec26ccad28398c6addc45f49c04f2b1",
     "agentic/code/addons/testing-quality/lib/controls.mjs": "fc65218f7c3e61728fd8b62d22fe98fd9506307d9f328f9005d21eec5fad47e6",
     "agentic/code/addons/testing-quality/lib/coverage.mjs": "5108aff3506c79172169dd868dbcb705380fc40fd36b6146fa353e0f789832ba",
     "agentic/code/addons/testing-quality/lib/inventory.mjs": "82396f0a3ddee23c61559b3410a040a431e4279b125b5bd4d19b4da64c3687bc",
@@ -21,7 +21,7 @@
     "agentic/code/addons/testing-quality/schemas/custom-template.v1.schema.json": "8c8378ef024d1f4db480efd50b97da6992ec6e9082b495552be68ef2f1a686c2",
     "agentic/code/addons/testing-quality/schemas/normalization-plan.v1.schema.json": "f20b7ef9ed089229d785827f09419438a441eb071bc397c6ed4e4a04e9a3ff05",
     "agentic/code/addons/testing-quality/schemas/test-conformance-research.v1.schema.json": "4ae64407e22f43a45eec29226068ab9a747f65ccf0852130d4346c8af64037c1",
-    "agentic/code/addons/testing-quality/schemas/test-review.v1.schema.json": "c730e091ebbc39a275b4156ac1aeb710419b626b53fc058d861ef8524c1bca7a",
+    "agentic/code/addons/testing-quality/schemas/test-review.v1.schema.json": "2439f24fcd137b4877bb241588b845302c9e759d560f77f9cf71c50450a286dc",
     "agentic/code/addons/testing-quality/schemas/test-inventory.v1.schema.json": "e195a04ff9b4fcdac7a023568906c4834c7ce0de67417d45b995a865b0ee11af",
     "agentic/code/addons/testing-quality/schemas/normalization-receipt.v1.schema.json": "b6061f794e7579e31c73cc814e92beabc29e90a65cbfd318bd9c2e7ac2d7ae67",
     "agentic/code/addons/testing-quality/schemas/conformance-protocol.v1.schema.json": "4b3c24462f97da5faf46216f0a905538e3fbfc8468aeb3da4e3b713c90ff9593",
