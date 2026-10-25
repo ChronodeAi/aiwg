@@ -8,6 +8,7 @@ import { MemoryPlacementSchema } from './taxonomy.js';
 import { indexMemoryAliases } from './maintenance-record.js';
 import type { MaintenanceOwner } from './maintenance-owner.js';
 import { applyMaintenancePlan, maintenancePath, maintenancePlanDigest, previewMaintenancePlan, verifyMaintenancePlan } from './maintenance.js';
+import { providerCopiesStatus } from '../smiths/context-pipeline/workspace-context.js';
 
 export const MEMORY_MAINTENANCE_USAGE = `Usage:
   aiwg memory plan --owner <owner> --target <handle> --op <operation> --rationale <text> --reviewer <name> --out <file>
@@ -169,8 +170,9 @@ export async function runMemoryMaintenanceCli(command: string, args: string[], d
   plan = memoryUsage(() => MaintenancePlanSchema.parse(plan));
   if (command === 'verify') {
     const report = await verifyMaintenancePlan(plan, owners);
+    const providerCopies = await providerCopiesStatus(root);
     const review = maintenanceReview(plan, root);
-    console.log(opts.json ? JSON.stringify({ ...report, review }, null, 2) : `${report.planDigest}: ${report.findings.length ? report.findings.join('; ') : 'verified recorded owner end states, history and required retrieval'}\n${formatMaintenanceReview(review)}`);
+    console.log(opts.json ? JSON.stringify({ ...report, providerCopies, review }, null, 2) : `${report.planDigest}: ${report.findings.length ? report.findings.join('; ') : 'verified recorded owner end states, history and required retrieval'}\nProvider copies: ${providerCopies.status}; regenerate: ${providerCopies.regenerate}\n${formatMaintenanceReview(review)}`);
     return report.findings.length ? 1 : 0;
   }
   if (command === 'restore' && plan.operations?.some(op => op.op !== 'restore')) throw new Error('memory restore requires a plan containing only restore operations');
@@ -203,7 +205,8 @@ export async function runMemoryMaintenanceCli(command: string, args: string[], d
     }
   }
   const receipt = await applyMaintenancePlan(plan, { root, owners, confirmedDigest: confirmed! });
-  console.log(opts.json ? JSON.stringify(receipt, null, 2) : `${receipt.planDigest}: ${receipt.ownerReceipts.length} owner operation(s) completed; next-session effect`);
+  const providerCopies = await providerCopiesStatus(root);
+  console.log(opts.json ? JSON.stringify({ ...receipt, providerCopies }, null, 2) : `${receipt.planDigest}: ${receipt.ownerReceipts.length} owner operation(s) completed; next-session effect\nProvider copies: ${providerCopies.status}; regenerate: ${providerCopies.regenerate}`);
 }
 
 

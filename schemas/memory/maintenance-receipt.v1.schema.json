@@ -48,6 +48,15 @@
     "resumedFrom": {
       "type": "string",
       "minLength": 1
+    },
+    "providerCopies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "regenerate"],
+      "properties": {
+        "status": { "enum": ["current", "stale", "not-applicable"] },
+        "regenerate": { "const": "aiwg regenerate --workspace --provider generic" }
+      }
     }
   }
 }

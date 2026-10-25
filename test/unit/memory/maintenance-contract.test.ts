@@ -243,7 +243,8 @@ describe('strict versioned JSON and runtime schemas', () => {
     { name: names[0], schema: schemas[0], runtime: MemoryTaxonomySchema, value: taxonomy },
     { name: names[1], schema: schemas[1], runtime: MemoryRecordSchema, value: item },
     { name: names[2], schema: schemas[2], runtime: MaintenancePlanSchema, value: plan() },
-    { name: names[3], schema: schemas[3], runtime: MaintenanceReceiptSchema, value: { schemaVersion: 'aiwg.maintenance-receipt.v1', planDigest: sha256(JSON.stringify(plan())), ownerReceipts: [{ schemaVersion: 'owner-receipt.v1' }], partial: { completed: ['one'], pending: ['two'] }, resumedFrom: 'prior-journal' } },
+    { name: names[3], schema: schemas[3], runtime: MaintenanceReceiptSchema, value: { schemaVersion: 'aiwg.maintenance-receipt.v1', planDigest: sha256(JSON.stringify(plan())), ownerReceipts: [{ schemaVersion: 'owner-receipt.v1' }], partial: { completed: ['one'], pending: ['two'] }, resumedFrom: 'prior-journal',
+      providerCopies: { status: 'stale', regenerate: 'aiwg regenerate --workspace --provider generic' } } },
   ];
   it.each(cases)('strictly validates $name and refuses unknown versions and extra fields', ({ schema, runtime, value }) => {
     const validate = ajv.getSchema(schema.$id)!;
