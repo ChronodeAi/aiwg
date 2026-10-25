@@ -8,7 +8,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAdapter } from '../../../tools/ralph-external/lib/provider-adapter.mjs';
-import { workerModelKey, loadProviderModelCapabilities } from '../../../src/models/provider-policy.js';
+import { workerModelKey, loadProviderModelCapabilities, WorkerPolicyError } from '../../../src/models/provider-policy.js';
+import { workerInvocationDiagnostic, WorkerInvocationCheckError } from '../../../src/serve/worker-invocation.js';
 import { workerInputSchema } from '../../fixtures/ralph-worker-protocol.mjs';
 import { fixtureJson } from '../../conformance/mission-v1/worker-contract-fixtures.js';
 
@@ -63,6 +64,21 @@ afterEach(async () => {
 });
 
 describe('S1 pure installed-path invocation preparation (T-OG-03/14/15/17)', () => {
+  it.each(['invocation_build_failed', 'invocation_prepare_failed', 'installation_recheck_unavailable', 'qualified_workspace_mismatch'] as const)(
+    'publishes only the fixed %s check summary (#3516)', reason => {
+      const error = new WorkerInvocationCheckError('OG_ADAPTER_UNQUALIFIED', reason);
+      const sensitive = 'Bearer synthetic-token ENV_VALUE=synthetic-secret /home/private-user/driver';
+      error.message = sensitive;
+      error.cause = new Error(sensitive);
+      const diagnostic = workerInvocationDiagnostic(error, '/parallelism/clis/codex/invocationProfile');
+      expect(diagnostic).toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', reason,
+        pointer: reason === 'qualified_workspace_mismatch' ? '/request/workdir'
+          : reason === 'invocation_build_failed' ? '/invocation/buildInvocation' : '/invocation/prepareWorkerInvocation' });
+      expect(JSON.stringify(diagnostic)).not.toMatch(/synthetic-token|synthetic-secret|private-user/);
+      expect(JSON.stringify(workerInvocationDiagnostic(new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', sensitive), '/invocation')))
+        .not.toMatch(/synthetic-token|synthetic-secret|private-user/);
+    });
+
   describe.each(['shell', 'mcp'] as const)('T-OG-15 %s policy guards', transport => {
     it.each<Array<[string, (f: any) => void, RegExp]>[number]>([
       ['ultra', f => { f.invocation.selected.effort = { support: 'explicit', value: 'ultra' }; }, /denied effort/i],

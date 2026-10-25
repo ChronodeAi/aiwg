@@ -191,6 +191,23 @@ describe('Consolidated review regressions for #2883', () => {
 });
 
 describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => {
+  it.each(['unknown', 'changed'])('distinguishes %s explicit profile references from invocation failures (#3516)', kind => {
+    const f = workerResolutionFixture();
+    const adapter = f.snapshot.registry.providers.codex.workerAdapter!;
+    if (kind === 'changed') adapter.invocationProfiles!['other-shell'] = structuredClone(adapter.invocationProfiles!['fixture-shell']);
+    f.snapshot.config.parallelism!.clis = { codex: {
+      adapter: 'providers:codex', accountScope: 'synthetic', quotaScope: 'fixture', invocationProfile: 'other-shell',
+    } };
+    const plan = resolve(f);
+    expect(plan.status).toBe('blocked');
+    expect(plan.selected).toBeNull();
+    expect(plan.eligible).toEqual([]);
+    expect(plan.exclusions.flatMap(row => row.diagnostics)).toContainEqual(expect.objectContaining({
+      code: kind === 'unknown' ? 'OG_CONFIG_REFERENCE' : 'OG_PIN_MISMATCH',
+      pointer: '/parallelism/clis/codex/invocationProfile',
+    }));
+  });
+
   it.each([false, undefined])('explains dispatch off (%s) with shared enable and readiness commands (#3070)', workerDispatch => {
     const f = workerResolutionFixture();
     f.snapshot.config.parallelism!.worker_dispatch = workerDispatch;

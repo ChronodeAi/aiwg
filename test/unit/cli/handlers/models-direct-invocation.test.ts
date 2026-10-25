@@ -23,7 +23,7 @@ const digest = (v: unknown) => `sha256:${createHash('sha256').update(JSON.string
 const execute = promisify(execFile);
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
-async function fixture(provider = 'codex', transport: 'shell' | 'mcp' = 'shell') {
+async function fixture(provider = 'codex', transport: 'shell' | 'mcp' = 'shell', explicitProfile = false) {
   const f = workerResolutionFixture();
   const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-direct-')); roots.push(root);
   const payload = `--leading 'double" 雪\n$(touch ${root}/injected); \`echo danger\` = value`;
@@ -51,6 +51,14 @@ async function fixture(provider = 'codex', transport: 'shell' | 'mcp' = 'shell')
   discovery.models.forEach(row => { row.worker!.cliId = provider; });
   f.snapshot.catalog.discovery!.instances = { [provider]: discovery };
   const profile = adapter.invocationProfiles![binding.profile];
+  if (explicitProfile) {
+    adapter.invocationProfiles = { 'direct-shell': profile };
+    binding.profile = 'direct-shell';
+    f.snapshot.config.parallelism!.clis = { [provider]: {
+      adapter: `providers:${provider}`, accountScope: binding.accountScope, quotaScope: 'fixture',
+      invocationProfile: 'direct-shell',
+    } };
+  }
   profile.transport = transport;
   profile.envAllowlist = ['AIWG_FAKE_WORKER_CONFIG'];
   const inputSchema = structuredClone(workerInputSchema);
@@ -86,6 +94,7 @@ async function fixture(provider = 'codex', transport: 'shell' | 'mcp' = 'shell')
     const output = stdout || stderr; log.mockRestore(); err.mockRestore();
     return { result, output, stdout, stderr, plan: format === 'shell' && result.exitCode === 0 && transport === 'shell' ? null : JSON.parse(output) };
   };
+  await writeFile(path.join(root, '.aiwg/aiwg.config'), JSON.stringify(f.snapshot.config));
   return { ...f, now: f.request.now, root, payload, request, drivers, adapter, binding, profile, call, buildInvocation };
 }
 
@@ -137,8 +146,8 @@ describe('T-OG-12 managed operator rollback to direct', () => {
 });
 
 /** Exercise the real #2885 inspector/recheck with frozen synthetic host evidence. */
-async function installedFixture(transport: 'shell' | 'mcp' = 'shell', provider = 'codex') {
-  const f = await fixture('codex', transport);
+async function installedFixture(transport: 'shell' | 'mcp' = 'shell', provider = 'codex', explicitProfile = false) {
+  const f = await fixture('codex', transport, explicitProfile);
   const initial = (await f.call()).plan;
   if (provider !== 'codex') {
     f.adapter.id = provider;
@@ -238,17 +247,53 @@ describe('S1 installation owner handoff (T-OG-15/17)', () => {
     expect(changed.plan.status).toBe('blocked');
   });
 
-  it('names the qualified workspace check when resolving another worktree', async () => {
-    const f = await installedFixture();
+  it.each([false, true])('names the qualified workspace check with explicit profile=%s (#3516)', async explicitProfile => {
+    const f = await installedFixture('shell', 'codex', explicitProfile);
     const otherWorkdir = path.join(f.request.workdir, 'other-worktree');
     await mkdir(otherWorkdir);
     f.request.workdir = otherWorkdir;
     const result = await f.call();
     expect(result.result.exitCode).toBe(2);
+    expect(result.plan.status).toBe('blocked');
+    expect(result.plan.selected).toBeNull();
+    expect(result.plan.eligible).toContainEqual(expect.objectContaining({
+      profile: explicitProfile ? 'direct-shell' : 'fixture-shell', effort: 'medium',
+    }));
     expect(result.plan.diagnostics.at(-1)).toEqual({ code: 'OG_CONFIG_REFERENCE',
       pointer: '/request/workdir', reason: 'qualified_workspace_mismatch',
       message: 'Worker workdir differs from the qualified workspace. Use the qualified workspace or run aiwg doctor --probe-workers --qualify from the requested workdir.' });
     expect(result.plan.invocation).toBeUndefined();
+    await expect(stat(f.request.final_output)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(`${f.request.final_output}.stdout`)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('names the missing installation recheck for an accepted explicit profile (#3516)', async () => {
+    const f = await installedFixture('shell', 'codex', true);
+    // Both bindings accept direct-shell; tuple eligibility never authorizes a launch.
+    const parallelism = f.snapshot.config.parallelism!;
+    parallelism.clis!.muse = { ...parallelism.clis!.codex, adapter: 'providers:muse' };
+    const museAdapter = structuredClone(f.adapter);
+    museAdapter.id = museAdapter.provider = 'muse';
+    f.snapshot.registry.providers.muse.workerAdapter = museAdapter;
+    f.snapshot.installations.muse = structuredClone(f.binding);
+    const museDiscovery = structuredClone(f.snapshot.catalog.discovery!.instances!.codex);
+    museDiscovery.provider = 'muse';
+    museDiscovery.models.forEach(row => { row.worker!.cliId = 'muse'; });
+    f.snapshot.catalog.discovery!.instances!.muse = museDiscovery;
+    parallelism.groups!.workers.members.push({ ...parallelism.groups!.workers.members[0], id: 'muse-worker', cli: 'muse' });
+    await writeFile(path.join(f.root, '.aiwg/aiwg.config'), JSON.stringify(f.snapshot.config));
+    delete f.drivers.codex.prepareWorkerInvocation;
+    const result = await f.call();
+    expect(result.result.exitCode).toBe(2);
+    expect(result.plan.status).toBe('blocked');
+    expect(result.plan.selected).toBeNull();
+    for (const cli of ['codex', 'muse']) for (const effort of ['medium', 'high']) {
+      expect(result.plan.eligible).toContainEqual(expect.objectContaining({ cli, profile: 'direct-shell', effort }));
+    }
+    expect(result.plan.invocation).toBeUndefined();
+    expect(result.plan.diagnostics.at(-1)).toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED',
+      pointer: '/invocation/prepareWorkerInvocation', reason: 'installation_recheck_unavailable' });
+    await expect(stat(f.request.final_output)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('requires the installation owner and rejects changed argv', async () => {
