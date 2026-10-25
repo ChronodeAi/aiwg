@@ -328,6 +328,63 @@ do not rewrite a running session or automatically regenerate provider files;
 all effects are reported as next-session changes.
 
 
+## Qualification
+
+Run the offline provider qualification in the existing default test lane:
+
+```bash
+AIWG_MEMORY_QUALIFICATION_STDOUT=1 npx vitest run --config config/vitest.config.js test/conformance/memory-maintenance/qualification.test.ts > memory-qualification.log
+```
+
+The roster comes from `PROVIDER_IDS` plus validated synthetic local provider
+manifests. Derived selectors exercise their base adapter through the common
+CLI/index fallback; they do not gain native capabilities. Missing dispositions
+fail. Each provider report separates fixture results, common fallback success,
+native live `not-run`, and opaque/manual limitations. Reports are written to
+temporary files and removed after each test; the command above retains the full
+JSON evidence on stdout. The suite uses synthetic data without network or model
+calls and runs in the default lane.
+
+The unchanged/no-memory/indexed/selected-context/resident comparison uses held-out
+queries over the existing local artifact index. Recall, stale hits, rule
+activation/adherence and completion are **fixture metrics** from a deterministic
+policy interpreter, not live model outcomes. Cost sums startup, tool/query,
+selected context, request and response estimates using `cost.ts`; latency uses
+the fixture's fixed simulation rates, not wall-clock/model measurements.
+Provider/model/embedder migration checks rebuild the portable lexical fallback;
+they do not qualify native embeddings. Quality and source-survival gates must
+pass independently of successful edits or reduced cost. Thresholds and latency
+rates in `test/fixtures/memory-maintenance/qualification.json` are configurable
+local defaults, not universal release targets. Expected no-memory and unchanged
+failures are negative controls. Common index regeneration is covered; native
+startup copies still require manual review under the limitation described above.
+
+Live qualification is explicit operator opt-in through the existing
+[rule-binding probes](../test/uat/rule-binding/README.md). Plan without calls:
+
+```bash
+node tools/rules/run-rule-probes.mjs --dry-run --provider codex --model "$MEMORY_PROBE_MODEL" --effort low --n 1 --rule tool-quota
+```
+
+For the following live commands, set `MEMORY_PROBE_MODEL`, an expendable deployed
+`MEMORY_PROBE_PROJECT`, the locked installation's `MEMORY_PROBE_PACKAGE`
+(`installation/node_modules/aiwg`), and absolute paths for
+`MEMORY_PROBE_IDENTITY`, `MEMORY_PROBE_ACCOUNT`, `MEMORY_PROBE_CODEX` and
+`MEMORY_PROBE_OUTPUT`. Output and identity files must be outside the fixture.
+Print and review identity first, then explicitly run the probes:
+
+```bash
+node tools/rules/run-rule-probes.mjs --provider codex --model "$MEMORY_PROBE_MODEL" --effort low --n 1 --rule tool-quota --project "$MEMORY_PROBE_PROJECT" --aiwg-root "$MEMORY_PROBE_PACKAGE" --print-identity > "$MEMORY_PROBE_IDENTITY"
+node tools/rules/run-rule-probes.mjs --provider codex --model "$MEMORY_PROBE_MODEL" --effort low --n 1 --rule tool-quota --project "$MEMORY_PROBE_PROJECT" --aiwg-root "$MEMORY_PROBE_PACKAGE" --identity-file "$MEMORY_PROBE_IDENTITY" --account-home "$MEMORY_PROBE_ACCOUNT" --codex-executable "$MEMORY_PROBE_CODEX" --output "$MEMORY_PROBE_OUTPUT"
+```
+
+See that harness's instructions for private-account symlinks/intrinsic skills
+and matched baseline comparisons. Its current live transport supports Codex;
+other providers require manual native qualification. These probes qualify
+rule-binding behavior, not memory task success or a running session's reload.
+Keep their reports separate from fixture results; offline success leaves live
+status `not-run`.
+
 ## Discover and verify maintenance
 
 The `harness-memory-maintenance` skill is the natural-language entry point on
