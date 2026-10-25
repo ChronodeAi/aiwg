@@ -89,6 +89,8 @@ export class CronScheduler extends EventEmitter {
   scheduleJob(job) {
     if (this.intervals.has(job.id)) return;
     const expression = job.cron || job.schedule;
+    // Reviewed one-shot memory plans are run manually, never given a timer.
+    if (!expression && job.kind === 'memory.apply') return;
     parseCron(expression);
     if (job.kind && job.kind !== 'agent.prompt') {
       if (!this.taskStore) throw new Error('Typed schedules require a TaskStore');

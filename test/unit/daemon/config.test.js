@@ -5,6 +5,11 @@ import path from 'path';
 
 vi.mock('fs');
 vi.mock('path');
+// Filesystem behavior is mocked in this suite; resolution of the compiled
+// validator belongs to the real-filesystem parity and worker tests.
+vi.mock('../../../tools/_resolve-impl.mjs', () => ({
+  importImpl: async () => ({ validateMemoryJobArgs: vi.fn() }),
+}));
 
 describe('Config', () => {
   let config;

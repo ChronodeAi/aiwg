@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
+import { parseMemoryAuditOptions } from '../memory/cli.js';
 
 export const HOUSEKEEPER_PROFILE = 'housekeeper';
 
@@ -28,7 +29,29 @@ export const MAINTENANCE_KINDS: readonly string[] = Object.freeze([
   'index.freshness',
   'index.refresh',
   'cache.prune',
+  'memory.audit',
+  'memory.recommend',
+  'memory.apply',
 ]);
+
+/** Same argument contract for registration, daemon configuration and dispatch. */
+export function validateMemoryJobArgs(kind: string, args: unknown = {}): void {
+  if (!kind.startsWith('memory.')) return;
+  if (!['memory.audit', 'memory.recommend', 'memory.apply'].includes(kind)) throw new Error(`Unsupported memory kind: ${kind}`);
+  if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Memory job args must be an object');
+  const values = args as Record<string, unknown>;
+  const allowed = kind === 'memory.apply' ? ['plan', 'confirmedDigest', 'windows']
+    : ['scope', 'provider', ...(kind === 'memory.recommend' ? ['evidence', 'usage'] : [])];
+  for (const [key, value] of Object.entries(values)) {
+    if (!allowed.includes(key)) throw new Error(`Unsupported ${kind} argument: ${key}`);
+    if (key !== 'windows' && (typeof value !== 'string' || !value.trim())) throw new Error(`${key} must be a non-empty string`);
+  }
+  if (kind === 'memory.apply') {
+    if (!values.plan || !values.confirmedDigest) throw new Error('memory.apply requires args.plan and args.confirmedDigest for the named reviewed plan');
+  } else {
+    parseMemoryAuditOptions(['scope', 'provider'].flatMap(key => values[key] === undefined ? [] : [`--${key}`, String(values[key])]));
+  }
+}
 
 export interface DaemonJobConfig {
   id: string;

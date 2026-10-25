@@ -1,12 +1,26 @@
 /** Isolated deterministic owners: no supervisors, prompts, or shell. The only
  * install route is the opt-in `update.install` policy (never redeploys). */
-import { runUpdateInstall } from './update-policy.mjs';
+import { runUpdateInstall, inMaintenanceWindow, validateUpdatePolicy } from './update-policy.mjs';
 import { importImpl } from '../_resolve-impl.mjs';
 
-export async function invokeOwner(job) {
+export async function invokeOwner(job, { cwd = process.cwd(), now = Date.now } = {}) {
   const args = job.args || {};
-  const cwd = process.cwd();
   switch (job.kind) {
+    case 'memory.audit':
+    case 'memory.recommend':
+    case 'memory.apply': {
+      const { validateMemoryJobArgs } = await importImpl(import.meta.url, 'housekeeper/daemon-config.js');
+      validateMemoryJobArgs(job.kind, args);
+      if (job.kind === 'memory.apply') {
+        const errors = validateUpdatePolicy({ windows: args.windows });
+        if (errors.length) return { exitStatus: 2, uncertain: true, summary: errors.join('; ') };
+        const window = inMaintenanceWindow(now(), args.windows, job.timezone || 'UTC');
+        if (!window.inside) return { exitStatus: 2, state: 'deferred', reason: 'outside-maintenance-window', summary: window.reason };
+      }
+      const owner = await importImpl(import.meta.url, 'memory/scheduled.js');
+      return job.kind === 'memory.apply' ? owner.applyScheduledMemory(args, cwd)
+        : owner.reportScheduledMemory(job.kind, args, cwd, new Date(now()).toISOString());
+    }
     case 'index.verify':
     case 'index.freshness': {
       const { probeIndexStatus } = await importImpl(import.meta.url, 'artifacts/index-status.js');

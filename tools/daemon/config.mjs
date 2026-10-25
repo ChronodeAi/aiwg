@@ -3,6 +3,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import YAML from 'yaml';
 import { normalizeResources } from './resource-bounds.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+import { validateUpdatePolicy } from './update-policy.mjs';
+
+const { validateMemoryJobArgs } = await importImpl(import.meta.url, 'housekeeper/daemon-config.js');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -185,6 +189,12 @@ export class Config {
 
     if (this.config.schedule?.enabled && !Array.isArray(this.config.schedule.jobs)) {
       errors.push('schedule.jobs must be an array');
+    }
+    for (const job of Array.isArray(this.config.schedule?.jobs) ? this.config.schedule.jobs : []) {
+      if (!job?.kind?.startsWith('memory.')) continue;
+      try { validateMemoryJobArgs(job.kind, job.args); }
+      catch (error) { errors.push(`schedule job "${job.id}": ${error.message}`); }
+      if (job.kind === 'memory.apply') errors.push(...validateUpdatePolicy({ windows: job.args?.windows }));
     }
 
     // B6 resource bounds: validated envelope with safe defaults; the runner

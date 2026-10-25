@@ -94,8 +94,8 @@ The cron payload `{ job_id, action }`
 interface HousekeeperJob {
   id: string;                    // == cron job_id; stable across restarts
   kind: JobKind;                 // closed union — no free-form prompts
-  schedule: string;              // cron expression, existing matcher
-  args?: Record<string, string>; // e.g. { index: "sessions", channel: "stable" }
+  schedule?: string;             // cron expression (alias: cron); absent for manual memory.apply
+  args?: Record<string, unknown>; // owner args, including reviewed plan/digest and optional windows
   idempotencyKey?: string;       // default: `${id}:${scheduledFireMinute}`
   timeoutMs: number;             // per-kind default, overridable
   retries: 0 | 1 | 2;            // re-entrant kinds only (see §5)
@@ -105,6 +105,11 @@ type JobKind =
   | 'index.refresh'    // B4: run one index adapter refresh
   | 'index.freshness'  // B4: probe only, emit freshness state
   | 'update.check'     // B6: check-only version probe (D3)
+  | 'index.verify' | 'index.reconcile' | 'cache.retention' // existing aliases
+  | 'update.install'   // B6 part 1: explicitly opted-in package install
+  | 'memory.audit'     // B6 part 2: read-only versioned inventory
+  | 'memory.recommend' // B6 part 2: advisory report; never creates plans
+  | 'memory.apply'     // B6 part 2: exact reviewed plan + recorded digest only
   | 'cache.prune';     // B6: bounded cache cleanup (src/resources/cache-cleanup.ts)
 
 /** Typed receipt written for every settled job (B2 persists). */
@@ -382,7 +387,14 @@ reports the index/owner as `unsupported` — never a prompt fallback.
 - **B6 — owner integration (memory, updates, locks).** Implements §2.3 owner
   table against delivered #3282–85 contracts, D3 check-only/install opt-in
   via `src/update/checker.mjs`, per-root lock composition, maintenance
-  windows in §2.4 `GatePolicy`. References: §2.3 invariants, §2.4, §7.
+  windows in §2.4 `GatePolicy`. Memory audit/recommend write versioned reports
+  through the configured artifact root. Memory apply requires `args.plan` and
+  `args.confirmedDigest` at registration, recomputes the digest, and preserves
+  owner preview/version, protection, review, provenance and restore contracts.
+  It verifies after apply; refusals, partial results and verification findings
+  block for explicit recovery without retries. Fully applied owner receipts
+  yield a read-only verified no-op. An apply job without a cron is manual
+  one-shot only. Resource bounds and maintenance windows still apply. References: §2.3 invariants, §2.4, §7.
 
 ## Testable invariants (for B2–B6 acceptance)
 
@@ -396,5 +408,9 @@ reports the index/owner as `unsupported` — never a prompt fallback.
    dirs are empty afterwards (§4).
 6. Freshness states and convergence numbers are measured from refresh
    reports, never asserted from config (D4, §2.2).
-7. Scheduled update runs never install (D3, §2.3).
-8. Windows reports unsupported; it never half-runs (§3).
+7. Scheduled update checks never install; `update.install` requires explicit
+   per-job opt-in (D3, §2.3).
+8. Memory scheduling grants no mutation authority: only the named reviewed
+   plan can apply, with its recorded digest and unchanged owner preconditions.
+   Stale/protected refusals and verification findings require recovery.
+9. Windows reports unsupported; it never half-runs (§3).

@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MAINTENANCE_KINDS as CLI_KINDS, resolveDaemonConfigPath } from '../../../src/housekeeper/daemon-config.js';
+import { MAINTENANCE_KINDS as CLI_KINDS, resolveDaemonConfigPath, validateMemoryJobArgs } from '../../../src/housekeeper/daemon-config.js';
 import { MAINTENANCE_KINDS as RUNNER_KINDS } from '../../../tools/daemon/scheduled-task-runner.mjs';
 import { Config } from '../../../tools/daemon/config.mjs';
 
@@ -14,6 +14,25 @@ describe('housekeeper CLI and daemon stay in parity', () => {
 
   it('accepts exactly the maintenance kinds the scheduled runner executes', () => {
     expect([...CLI_KINDS].sort()).toEqual([...RUNNER_KINDS].sort());
+  });
+
+  it.each([
+    ['memory.audit', { scope: 'project', provider: 'claude' }, true],
+    ['memory.recommend', { evidence: 'input.json', usage: 'usage.json' }, true],
+    ['memory.apply', { plan: 'reviewed.json', confirmedDigest: 'recorded' }, true],
+    ['memory.apply', { plan: 'reviewed.json' }, false],
+    ['memory.apply', { confirmedDigest: 'recorded' }, false],
+    ['memory.apply', { plan: 'reviewed.json', confirmedDigest: 'recorded', force: true }, false],
+    ['memory.audit', { scope: 'provider' }, false],
+    ['memory.recommend', { provider: 'unknown' }, false],
+    ['memory.recommend', { plan: 'unexpected.json' }, false],
+  ])('validates %s arguments the same in registration and daemon config', (kind, args, valid) => {
+    const validate = () => validateMemoryJobArgs(kind as string, args);
+    if (valid) expect(validate).not.toThrow();
+    else expect(validate).toThrow();
+    const daemon = new Config('.aiwg/daemon.json');
+    daemon.config = { daemon: { profile: 'housekeeper' }, schedule: { enabled: true, jobs: [{ id: 'memory', kind, args }] } };
+    expect(daemon.validate().length === 0).toBe(valid);
   });
 
   it.each([
