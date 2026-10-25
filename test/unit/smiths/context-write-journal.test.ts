@@ -113,7 +113,10 @@ describe.each(['descriptor', 'fallback'])('deploy-owned context write journal (%
     writeFileSync(file, 'before');
     writeContextFileSync(file, 'deployment');
     if (change === 'mode') chmodSync(file, 0o600);
-    if (change === 'identity') { unlinkSync(file); writeFileSync(file, 'deployment'); }
+    // Hold the old inode with a second link so the replacement cannot recycle
+    // its number (overlay/ext4 reuse freed inodes, and coarse timestamps can
+    // then make the replacement indistinguishable by metadata).
+    if (change === 'identity') { linkSync(file, join(root, 'held-inode')); unlinkSync(file); writeFileSync(file, 'deployment'); }
     if (change === 'symlink') { unlinkSync(file); writeFileSync(join(root, 'outside'), 'operator'); symlinkSync(join(root, 'outside'), file); }
     if (change === 'ancestor') { renameSync(parent, join(root, 'original-parent')); mkdirSync(parent); writeFileSync(file, 'operator'); }
     const result = journal.rollback();

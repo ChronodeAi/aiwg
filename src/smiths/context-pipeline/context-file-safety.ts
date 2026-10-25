@@ -31,6 +31,10 @@ function flags(...names: Array<keyof typeof fs.constants>): number {
     return typeof flag === 'number' ? value | flag : value;
   }, 0);
 }
+// Identity is dev/ino/size/mtime. A replacement that recycles the freed inode
+// number with the same size inside one coarse timestamp tick is
+// indistinguishable by metadata; the content hash still has to match deploy
+// output, so restoring over such a file loses nothing the deploy wrote.
 const version = (stat: fs.BigIntStats): FileVersion => ({ ...identity(stat), size: String(stat.size), mtime: String(stat.mtimeNs) });
 const sameVersion = (a: FileVersion, b: FileVersion) => sameIdentity(a, b) && a.size === b.size && a.mtime === b.mtime;
 
