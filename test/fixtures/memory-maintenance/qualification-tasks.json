@@ -1,0 +1,9 @@
+{
+  "note": "Held-out queries and expected outcomes; never written into the retrieval corpus or used for ranking/context selection.",
+  "tasks": [
+    { "id": "temporal-correction", "query": "tungsten", "key": "port", "expectedValue": "4200", "requiredFacts": ["current-port"], "rule": "release-rule", "expectedAction": "review-before-release" },
+    { "id": "retry-obligation", "query": "amber", "key": "backoff", "expectedValue": "bounded-exponential", "requiredFacts": ["retry"], "rule": "retry-rule", "expectedAction": "bound-retries" },
+    { "id": "rare-obligation", "query": "violet", "key": "recovery", "expectedValue": "annual-offline-drill", "requiredFacts": ["recovery"], "rule": "recovery-rule", "expectedAction": "retain-rare-obligation" },
+    { "id": "unknown-use", "query": "cobalt", "key": "retention", "expectedValue": "keep-original-source", "requiredFacts": ["unknown-use"], "rule": "retention-rule", "expectedAction": "retain-unknown-use" }
+  ]
+}
