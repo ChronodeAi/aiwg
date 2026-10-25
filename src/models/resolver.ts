@@ -615,7 +615,12 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
           try {
             const { adapter } = resolveWorkerGroupInstallation(parallelism, member.cli, snapshot.registry);
             const configuredProfile = parallelism.clis?.[member.cli]?.invocationProfile;
-            if (configuredProfile && configuredProfile !== binding.profile) throw new Error('Configured invocation profile changed');
+            const profilePointer = `/parallelism/clis/${member.cli}/invocationProfile`;
+            if (configuredProfile && !Object.hasOwn(adapter.invocationProfiles ?? {}, configuredProfile)) {
+              deny('OG_CONFIG_REFERENCE', profilePointer, 'Configured invocation profile is not registered for this adapter; select a registered profile.');
+            } else if (configuredProfile && configuredProfile !== binding.profile) {
+              deny('OG_PIN_MISMATCH', profilePointer, 'Configured invocation profile differs from installation qualification; qualify the selected profile again.');
+            }
             const configuredServer = parallelism.clis?.[member.cli]?.mcpServerRef;
             if (transport === 'mcp' && configuredServer && configuredServer !== binding.mcp?.serverRef) throw new Error('Configured MCP server changed');
             if (!hasOperatorWorkerNativeRenderer(adapter) && (adapter.capabilities.modelPin === 'unsupported' || !adapter.capabilities.nativeFallbackControllable)) throw new Error('Exact model or fallback control is unqualified; qualify an adapter with these controls');

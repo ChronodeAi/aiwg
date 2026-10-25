@@ -285,6 +285,8 @@ const invocationChecks = {
     message: 'Worker adapter arguments do not preserve the requested native controls; review the installed driver and qualify again.' },
   invocation_prepare_failed: { pointer: '/invocation/prepareWorkerInvocation',
     message: 'Worker invocation preparation failed; check installation evidence, policy, paths and environment, then qualify again.' },
+  installation_recheck_unavailable: { pointer: '/invocation/prepareWorkerInvocation',
+    message: 'The selected profile requires an installation recheck, but the installed driver has no preparation method. Restore the qualified driver and qualify again.' },
   qualified_workspace_mismatch: { pointer: '/request/workdir',
     message: 'Worker workdir differs from the qualified workspace. Use the qualified workspace or run aiwg doctor --probe-workers --qualify from the requested workdir.' },
 } satisfies Record<NonNullable<WorkerPolicyDiagnostic['reason']>, { pointer: string; message: string }>;
@@ -562,7 +564,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
         + (plan.policy?.freshness?.policyDays ?? DEFAULT_WORKER_SELECTION.freshness!.policyDays!) * 86400000)).toISOString();
     const healthConfig = snapshot.config.parallelism?.health;
     if (profile.installationQualification && !driver.prepareWorkerInvocation) {
-      throw new Error('Installation-scoped profile requires the #2885 adapter preparation/recheck method');
+      throw new WorkerInvocationCheckError('OG_ADAPTER_UNQUALIFIED', 'installation_recheck_unavailable');
     }
     if (tuple.transport === 'mcp') {
       const serverRef = profile.mcp!.serverRef;
