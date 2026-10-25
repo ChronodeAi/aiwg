@@ -8,9 +8,9 @@ Issue references (#3279–#3285) are the work-package issues. This note is the c
 for #3280 and later slices. It composes existing owners; it creates no new
 memory database (NFR-01).
 
-Proposed command family `aiwg harness memory audit|plan|apply|verify|restore`
-(architecture.md:3) does not exist yet. Names here are proposals pending the
-collision review required by architecture.md:3 and #3284.
+CLI decision (2026-10-24, #3280): audit extends the existing `aiwg memory`
+command as `aiwg memory audit`. Lifecycle command names remain proposals for
+#3284; the proposed `aiwg harness memory` family is not introduced.
 
 ## 1. Existing-surface map
 

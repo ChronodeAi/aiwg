@@ -6,6 +6,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { assessThreat } from './threat-assessment.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+const { classifyContextMemory } = await importImpl(import.meta.url, 'memory/firewall-classification.mjs');
 
 export const CONTEXT_FIREWALL_SCHEMA = 'aiwg.context-memory-firewall/v1';
 export const CONTEXT_FIREWALL_BASELINE_SCHEMA = 'aiwg.context-memory-firewall-baseline/v1';
@@ -420,39 +422,13 @@ async function inspectCandidate(candidate, context) {
   const managed = await isManaged(candidate, buffer, manifest);
   const packaged = choosePackagedSource(candidate, packageInventory);
   const packagedDigestMatch = Boolean(packaged?.digest && packaged.digest === digest);
-  const manifestDrift = Boolean(manifest?.hash && manifest.hash !== digest);
-  const baselineChanged = Boolean(baselineEntry?.digest && baselineEntry.digest !== digest);
   const threat = contentScan
     ? poisoningSummary(content, candidate, managed)
     : { poisoning: false, signals: [], severity: 'informational', action: 'proceed' };
 
-  let trust;
-  let reviewStatus;
-  const findings = [];
-  if (baselineEntry?.trust === 'superseded') {
-    trust = 'superseded';
-    reviewStatus = 'superseded';
-  } else if (threat.poisoning && !managed) {
-    trust = 'quarantined';
-    reviewStatus = 'quarantine-review-required';
-    findings.push('poisoning-signal');
-  } else if (manifestDrift) {
-    trust = 'stale';
-    reviewStatus = 'deployed-drift';
-    findings.push('stale-deployed-bytes');
-  } else if (baselineChanged) {
-    trust = 'quarantined';
-    reviewStatus = 'changed-review-required';
-    findings.push('changed-since-review');
-  } else if (baselineEntry?.trust && TRUST_LABELS.includes(baselineEntry.trust)) {
-    trust = baselineEntry.trust;
-    reviewStatus = 'reviewed';
-  } else {
-    trust = managed ? 'generated' : 'user-authored';
-    reviewStatus = 'unreviewed';
-  }
-
-  if (threat.signals.length > 0 && (!threat.poisoning || managed)) findings.push('content-review-signal');
+  const { trust, reviewStatus, findings, manifestDrift } = classifyContextMemory({
+    digest, managed, manifest, baselineEntry, threat,
+  });
 
   return {
     path: candidate.path,

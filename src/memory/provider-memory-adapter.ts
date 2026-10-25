@@ -1,3 +1,7 @@
+import path from 'node:path';
+import { homedir } from 'node:os';
+import { resolveHermesHomePath } from '../providers/hermes-home.js';
+import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 import type { Platform } from '../agents/types.js';
 import {
   PROVIDER_IDS,
@@ -121,6 +125,24 @@ function memoryRoots(definition: ProviderDefinition): string[] {
   if (definition.id === 'grok-build') {
     const home = resolveGrokHome();
     if (home) values.push(...Object.values(grokBuildUserPaths(home)));
+  }
+  // Native user stores absent from deployment paths. Keep these with the
+  // adapter owner so audit never invents another provider path registry.
+  if (definition.id === 'claude' || definition.id === 'codex') {
+    const home = definition.id === 'claude'
+      ? process.env.CLAUDE_CONFIG_DIR || path.join(homedir(), '.claude')
+      : process.env.CODEX_HOME || path.join(homedir(), '.codex');
+    for (const value of Object.values(paths.artifacts)) {
+      if (value?.startsWith(`.${definition.id}/`)) values.push(path.resolve(home, value.slice(definition.id.length + 2)));
+    }
+    values.push(path.resolve(home, definition.id === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'));
+    if (definition.id === 'codex') values.push(path.resolve(home, 'AGENTS.override.md'));
+    if (definition.id === 'claude') values.push(path.resolve(home, 'projects/*/memory'));
+  }
+  if (definition.id === 'hermes') values.push(resolveHermesHomePath('memories/MEMORY.md'), resolveHermesHomePath('memories/USER.md'));
+  if (definition.id === 'omp') {
+    const resolved = resolveOmpPaths();
+    values.push(path.join(resolved.agentDir, 'AGENTS.md'), ...Object.values(resolved.resourceDirs));
   }
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }

@@ -89,6 +89,19 @@ describe('version launcher entrypoint', () => {
     expect(trace).toHaveBeenCalledExactlyOnceWith(phase);
   });
 
+  it.each([
+    { args: ['memory', 'audit'], expected: true },
+    { args: ['memory', 'audit', '--json', '--write'], expected: true },
+    { args: ['memory', '--help'], expected: true },
+    { args: ['help', 'memory'], expected: true },
+    { args: ['memory', 'put', 'page.md'], expected: false },
+    { args: ['memory', 'project', 'reindex'], expected: false },
+  ])('preserves launcher no-write handling for $args', ({ args, expected }) => {
+    const start = source.indexOf('function isReadOnlyReport(');
+    const end = source.indexOf('const readOnlyReport =', start);
+    expect(runInNewContext(`${source.slice(start, end)}; isReadOnlyReport(args)`, { args }, { timeout: 1000 })).toBe(expected);
+  });
+
   it('keeps stable output compact when a stale edge path is configured', () => {
     write(path.join(config, 'channel.json'), { channel: 'stable', devMode: false, edgePath: runtime });
     const result = fastVersion(['--version']);

@@ -22,6 +22,18 @@ interface ProjectMemoryCliOptions {
 }
 
 export async function main(args: string[]): Promise<void> {
+  if (args[0] === 'audit') {
+    const { auditMemory, formatMemoryAudit } = await import('./audit.js');
+    const opts = parseMemoryAuditOptions(args.slice(1));
+    if (opts.help) { console.log(MEMORY_AUDIT_USAGE); return; }
+    const report = await auditMemory(opts);
+    console.log(opts.json ? JSON.stringify(report, null, 2) : formatMemoryAudit(report));
+    return;
+  }
+  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+    console.log(MEMORY_AUDIT_USAGE);
+    if (args.length) return;
+  }
   if (args[0] === 'project') {
     await runProjectMemoryCli(args.slice(1));
     return;
@@ -154,4 +166,40 @@ Subcommands:
 
 The manifest lives at ~/.aiwg/projects/manifest.json and each registered
 project memory root uses a private .aiwg layout under ~/.aiwg/projects/<id>/.aiwg.`);
+}
+
+
+export const MEMORY_AUDIT_USAGE = `Usage: aiwg memory audit [--scope global|project|provider] [--provider <id>] [--json]
+
+Read-only static memory and instruction inventory. Defaults to this workspace;
+global roots require --scope global. --scope provider requires --provider <id>.
+Reports include exposure chains, unavailable/opaque surfaces and scan bounds.
+Static eligibility does not establish live context loading. JSON: aiwg.memory-audit.v1.
+Other memory subcommands: path, list, get, put, delete, append-log, project.`;
+
+export function parseMemoryAuditOptions(args: string[]): {
+  scope?: 'global' | 'project' | 'provider'; provider?: string; json?: boolean; help?: boolean;
+} {
+  const opts: ReturnType<typeof parseMemoryAuditOptions> = {};
+  const seen = new Set<string>();
+  for (let index = 0; index < args.length; index++) {
+    const [flag, inline, ...extra] = args[index].split('=');
+    if (!['--scope', '--provider', '--json', '--help', '-h'].includes(flag) || extra.length) throw new Error(`Unknown memory audit argument: ${args[index]}`);
+    if (seen.has(flag)) throw new Error(`Duplicate memory audit option: ${flag}`);
+    seen.add(flag);
+    if (flag === '--json' || flag === '--help' || flag === '-h') {
+      if (inline !== undefined) throw new Error(`${flag} takes no value`);
+      if (flag === '--json') opts.json = true;
+      else opts.help = true;
+      continue;
+    }
+    const value = inline ?? args[++index];
+    if (!value || value.startsWith('-')) throw new Error(`${flag} requires a value`);
+    if (flag === '--scope') {
+      if (!['global', 'project', 'provider'].includes(value)) throw new Error('--scope must be global, project or provider');
+      opts.scope = value as typeof opts.scope;
+    } else opts.provider = value;
+  }
+  if (opts.scope === 'provider' && !opts.provider && !opts.help) throw new Error('--scope provider requires --provider <id>');
+  return opts;
 }

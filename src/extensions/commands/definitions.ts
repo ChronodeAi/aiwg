@@ -3537,7 +3537,7 @@ export const memoryCommand: Extension = {
   id: 'memory',
   type: 'skill',
   name: 'Memory',
-  description: 'Storage operations on the AIWG memory subsystem, plus user-level project memory registry commands under ~/.aiwg/projects',
+  description: 'Read-only memory audit, AIWG memory storage operations, and user-level project memory registry commands',
   version: '1.0.0',
   capabilities: ['cli', 'memory', 'semantic-memory', 'storage', 'pkm', 'project-memory', 'user-registry'],
   keywords: ['memory', 'semantic-memory', 'project-memory', 'registry', 'reflections', 'pages'],
@@ -3555,11 +3555,12 @@ export const memoryCommand: Extension = {
     triggerPhrases: ['where is memory', 'memory path', 'list memory', 'project memory', 'aiwg memory'],
     commandHint: {
       template: 'utility',
-      argumentHint: '<path|list|get|put|delete|append-log|project> [options]',
+      argumentHint: '<audit|path|list|get|put|delete|append-log|project> [options]',
       allowedTools: ['Bash', 'Read'],
       executionSteps: [
         'Parse subcommand and arguments',
-        'Resolve storage adapter for memory subsystem',
+        'For audit, parse --scope global|project|provider, --provider <id>, --json strictly; default to workspace and perform a bounded read-only inventory',
+        'Resolve storage adapter for storage operations only',
         'Read/write/list/delete/append-log via the adapter or manage project-memory mappings',
         'Print result',
       ],
