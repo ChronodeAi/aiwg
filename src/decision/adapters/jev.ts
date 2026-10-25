@@ -84,15 +84,12 @@ export class JevDecisionAdapter implements DecisionAdapter {
     this.observeResponseBody = options.observeResponseBody;
   }
 
-  /** Used only for non-2xx error bodies, where there is no separate successful parse to stay consistent with. */
-  private observeResponse(body: string): void {
-    if (!this.observeResponseBody) return;
-    let parsed: Record<string, unknown> = {};
-    try { parsed = asRecord(parseBoundedJson(body)); } catch { /* Invalid answers still have bounded body evidence. */ }
-    let usage = emptyUsage();
-    try { usage = normalizeUsage(parsed.usage); } catch { /* Missing usage is unknown, including on auth errors. */ }
-    this.observeResponseBody(body, { actualModel: typeof parsed.model === 'string' && parsed.model ? parsed.model : null,
-      usage });
+  /** An error response may still report billed usage and correlation metadata. */
+  private parseErrorResponse(body: string): unknown {
+    let parsed: unknown;
+    try { parsed = parseBoundedJson(body); } catch { /* Error classification does not require valid JSON. */ }
+    this.observeParsed(body, parsed);
+    return parsed;
   }
 
   /**
@@ -108,6 +105,13 @@ export class JevDecisionAdapter implements DecisionAdapter {
     let usage = emptyUsage();
     try { usage = normalizeUsage(record.usage); } catch { /* Missing usage is unknown, including on auth errors. */ }
     return { actualModel: typeof record.model === 'string' && record.model ? record.model : null, usage };
+  }
+
+  private responseMetadata(parsed: unknown, metadata: Partial<AdapterObservation>): Partial<AdapterObservation> {
+    let body: Record<string, unknown> = {};
+    try { body = asRecord(parsed); } catch { /* No body correlation metadata. */ }
+    const id = metadata.requestId ? null : safeRequestId(body.request_id ?? body.requestId);
+    return { ...metadata, ...this.observationMetadataOf(parsed), ...(id ? { requestId: id, requestIdSource: 'body' as const } : {}) };
   }
 
   /** Observes exactly once, from the single parse attempt `parsed` already represents (successful or not). */
@@ -213,17 +217,7 @@ export class JevDecisionAdapter implements DecisionAdapter {
     if (!response.ok) {
       try {
         const errorBody = await readBoundedBody(response, signal);
-        this.observeResponse(errorBody);
-        if (!metadata.requestId && response.headers.get('content-type')?.includes('json')) {
-          let parsedError: unknown;
-          try { parsedError = parseBoundedJson(errorBody); }
-          catch { parsedError = null; }
-          if (parsedError && typeof parsedError === 'object' && !Array.isArray(parsedError)) {
-            const field = (parsedError as Record<string, unknown>).request_id ?? (parsedError as Record<string, unknown>).requestId;
-            const safe = safeRequestId(field);
-            if (safe) metadata = { ...metadata, requestId: safe, requestIdSource: 'body' as const };
-          }
-        }
+        metadata = this.responseMetadata(this.parseErrorResponse(errorBody), metadata);
       } catch {
         if (request.signal.aborted) return externalInterruption(request, 'terminal-response', metadata);
         if (deadline.aborted) return failure('timeout', { ...metadata, termination: 'target-timeout', remoteExecution: 'unknown' });
@@ -240,6 +234,7 @@ export class JevDecisionAdapter implements DecisionAdapter {
       // so an invalid answer still gets model/usage checked, and a parse failure is reported as unknown
       // to both the observer and the main path -- never divergently.
       try { parsed = parseBoundedJson(encoded); } finally { this.observeParsed(encoded, parsed); }
+      metadata = this.responseMetadata(parsed, metadata);
       if (request.signal.aborted) return externalInterruption(request, 'terminal-response', metadata);
       if (deadline.aborted) return failure('timeout', { ...metadata, termination: 'target-timeout', remoteExecution: 'unknown' });
       const normalized = normalizeResponse(request, parsed);
@@ -320,7 +315,8 @@ export class JevDecisionAdapter implements DecisionAdapter {
       return batchFailure(requests, failure('data-boundary-denied', metadata));
     }
     if (!response.ok) {
-      try { this.observeResponse(await readBoundedBody(response, signal)); } catch { return batchFailure(requests, failure('invalid-output', metadata)); }
+      try { metadata = this.responseMetadata(this.parseErrorResponse(await readBoundedBody(response, signal)), metadata); }
+      catch { return batchFailure(requests, failure('invalid-output', metadata)); }
       const retryAfterMs = parseRetryAfter(response.headers, this.now());
       return batchFailure(requests, failure(mapStatus(response.status), { ...metadata, ...(retryAfterMs === null ? {} : { retryAfterMs }) }));
     }
@@ -329,6 +325,7 @@ export class JevDecisionAdapter implements DecisionAdapter {
       // One parse attempt; see the single-request `evaluate()` for why observation never re-parses.
       let parsed: unknown;
       try { parsed = parseBoundedJson(encoded); } finally { this.observeParsed(encoded, parsed); }
+      metadata = this.responseMetadata(parsed, metadata);
       const normalized = normalizeBatchResponse(requests, parsed).map(answer => ({
         questionId: answer.questionId,
         observation: { ...answer.observation, ...metadata },

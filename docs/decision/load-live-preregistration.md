@@ -145,12 +145,19 @@ and canary rollback under the designated second-owner arrangement.
 
 ## Evidence review and completion
 
-The output is a digest-bound `decision-load-result/v1` artifact of kind
+The output is a digest-bound `decision-load-result/v2` artifact of kind
 `load-manifest-qualified`, containing exact manifest bytes and digest, source
 commit, execution mode, measurements, per-bound comparisons, and stop state.
 The name alone does not establish qualification. G5 verifies the live artifact
 and its exact commit, digests, complete rollout, clean source, and measured
 bounds; offline or stopped evidence cannot satisfy it.
+
+Review both `reservedUsage` (conservative budget accounting) and `reportedUsage`
+(provider token totals and cost at retained sourced pricing). Unknown reported
+usage stays `null`; `knownSubtotal` preserves the sum of usable reports and
+`incompleteCalls` shows missing coverage. Per-call receipts retain returned `servedModel` and
+`requestId`. Budget bounds continue to use reservations. Historical v1 staged
+records remain readable and verifiable with their original `usage` field.
 
 The existing D11 qualification runner accepts this file through its
 `gateArtifacts['load-manifest-qualified']` input. Its default artifact limit

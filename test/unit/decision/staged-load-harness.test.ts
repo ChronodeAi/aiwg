@@ -8,6 +8,8 @@ import {
   type DecisionLoadManifestV3, type DecisionLoadStopReason,
 } from '../../../src/decision/qualification/load.js';
 import { syntheticStagedLoadResult } from './qualification-gate-fixtures.js';
+import { JevDecisionAdapter } from '../../../src/decision/adapters/jev.js';
+import { canonicalJson } from '../../../src/security/artifact-trust.js';
 import { loadQualificationMain } from '../../../tools/decision/load-qualification.mjs';
 
 const { sourceGit } = vi.hoisted(() => ({ sourceGit: vi.fn() }));
@@ -114,6 +116,90 @@ describe('D05 staged load harness (offline only)', () => {
     expect(verifyDecisionStagedLoadRecord(result, commit)).toBe(false);
     expect(network).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('reports sourced provider usage separately from reservations through a fake live adapter', async () => {
+    vi.useFakeTimers();
+    const network = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network forbidden'));
+    const backend = vi.spyOn(JevDecisionAdapter.prototype, 'evaluate').mockImplementation(async request => ({
+      ...success, requestId: request.invocationId, usage: { inputTokens: 17, outputTokens: 3, costUsd: null },
+    }));
+    const manifest = shortManifest(); manifest.arrivalModel.cancellationRate = 0;
+    const sourcedPricing = { ...pricing, jev_output_per_mtok: .084 };
+    const result = await runDecisionStagedLoad({ ...runOptions(manifest), live: true,
+      env: { AIWG_JEV_LOAD_API_KEY: 'synthetic-test-credential' }, pricing: sourcedPricing });
+    const calls = backend.mock.calls.length;
+    expect(result.stop).toBeNull();
+    expect(result.schemaVersion).toBe('decision-load-result/v2');
+    expect(calls).toBeGreaterThan(20);
+    expect(result.reservedUsage).toEqual({ calls, tokens: result.receipts.reduce((sum, r) => sum + r.tokens, 0),
+      usd: result.receipts.reduce((sum, r) => sum + r.costUsd, 0) });
+    expect(result.reportedUsage).toMatchObject({ calls, inputTokens: calls * 17, outputTokens: calls * 3, tokens: calls * 20 });
+    expect(result.reportedUsage.usd).toBeCloseTo(calls * (17 * .042 + 3 * .084) / 1e6, 12);
+    expect(result.reportedUsage.incompleteCalls).toBe(0);
+    expect(result.reservedUsage.tokens).toBeGreaterThan(result.reportedUsage.tokens!);
+    expect(result.reservedUsage.usd).toBeGreaterThan(result.reportedUsage.usd!);
+    expect(result.receipts.every(r => r.servedModel === original.model && r.requestId?.startsWith('d05-'))).toBe(true);
+    expect(result.comparisons.find(c => c.bound === 'budget.maxTokens')?.observed).toBe(result.reservedUsage.tokens);
+    expect(result.comparisons.find(c => c.bound === 'budget.maxUsd.stopAtFraction')?.observed).toBe(result.reservedUsage.usd);
+    expect(network).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps incomplete reported totals unknown and never substitutes a reservation or unsourced price', () => {
+    const record = syntheticStagedLoadResult(commit);
+    const partial = decisionStagedLoadResultRecord({ ...record, receipts: record.receipts.map((receipt, index) => ({ ...receipt,
+      usage: { inputTokens: 17, outputTokens: index === 0 ? null : 3, costUsd: 0 },
+    })) });
+    expect(partial.reportedUsage).toEqual({ calls: record.receipts.length, inputTokens: 17 * record.receipts.length,
+      outputTokens: null, tokens: null, usd: null, incompleteCalls: 1, knownSubtotal: {
+        inputTokens: 17 * record.receipts.length, outputTokens: 3 * (record.receipts.length - 1),
+        tokens: 20 * (record.receipts.length - 1), usd: expect.any(Number),
+      } });
+    expect(partial.reportedUsage.knownSubtotal.usd).toBeCloseTo((record.receipts.length - 1) * 17 * .042 / 1e6, 12);
+    expect(verifyDecisionStagedLoadRecord(partial, commit)).toBe(true);
+    const absent = decisionStagedLoadResultRecord({ ...record, receipts: record.receipts.map(receipt => ({ ...receipt,
+      usage: { inputTokens: null, outputTokens: null, costUsd: null },
+    })) });
+    expect(absent.reportedUsage).toEqual({ calls: record.receipts.length, inputTokens: null, outputTokens: null, tokens: null, usd: null,
+      incompleteCalls: record.receipts.length, knownSubtotal: { inputTokens: null, outputTokens: null, tokens: null, usd: null } });
+    const differentModel = decisionStagedLoadResultRecord({ ...record, receipts: record.receipts.map(receipt => ({ ...receipt, servedModel: 'jev-9.9.9' })) });
+    expect(differentModel.reportedUsage.tokens).toBe(record.reservedUsage.tokens);
+    expect(differentModel.reportedUsage.usd).toBeNull();
+    const zero = decisionStagedLoadResultRecord({ ...record, receipts: record.receipts.map(receipt => ({ ...receipt,
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: null },
+    })) });
+    expect(zero.reportedUsage).toMatchObject({ inputTokens: 0, outputTokens: 0, tokens: 0, usd: 0 });
+  });
+
+  it('verifies original v1 records without changing their schema or digest, and rejects forged v2 totals', () => {
+    const record = syntheticStagedLoadResult(commit);
+    const { reservedUsage, reportedUsage: _, digest: __, ...fields } = record;
+    const body = { ...fields, schemaVersion: 'decision-load-result/v1' as const, usage: reservedUsage };
+    const legacy = { ...body, digest: decisionLoadManifestDigest(canonicalJson(body)) };
+    const retained = JSON.stringify(legacy);
+    expect(verifyDecisionStagedLoadRecord(legacy, commit)).toBe(true);
+    expect(decisionLoadEvidenceFlags([legacy], legacy.manifestDigest, commit)['load-manifest-qualified']).toBe(true);
+    expect(JSON.stringify(legacy)).toBe(retained);
+    for (const change of [
+      { reservedUsage: { ...record.reservedUsage, tokens: 1 } },
+      { reportedUsage: { ...record.reportedUsage, tokens: 1 } },
+      { reportedUsage: { ...record.reportedUsage, usd: null } },
+    ]) {
+      const { digest, ...tampered } = { ...record, ...change };
+      expect(verifyDecisionStagedLoadRecord({ ...tampered, digest: decisionLoadManifestDigest(canonicalJson(tampered)) }, commit)).toBe(false);
+    }
+    const overBudget = decisionStagedLoadResultRecord({ ...record, manifestBytes: JSON.stringify({ ...record.manifest,
+      budget: { ...record.manifest.budget, maxTokens: 1 } }),
+      receipts: record.receipts.map(receipt => ({ ...receipt, usage: { inputTokens: 1, outputTokens: 0, costUsd: null } })),
+    });
+    expect(overBudget.reportedUsage.tokens).toBeLessThan(overBudget.reservedUsage.tokens);
+    expect(overBudget.comparisons.find(c => c.bound === 'budget.maxTokens')?.pass).toBe(false);
+    expect(verifyDecisionStagedLoadRecord(overBudget, commit)).toBe(false);
+    const underReserved = decisionStagedLoadResultRecord({ ...record, receipts: record.receipts.map(receipt => ({ ...receipt,
+      usage: { inputTokens: receipt.tokens + 1, outputTokens: 0, costUsd: null },
+    })) });
+    expect(verifyDecisionStagedLoadRecord(underReserved, commit)).toBe(false);
   });
 
   it.each(['budget-usd-80-percent', '429-storm', 'breaker-open', 'retry-amplification', 'usage-exceeds-reservation'] as DecisionLoadStopReason[])(

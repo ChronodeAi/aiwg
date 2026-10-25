@@ -5,6 +5,7 @@ import { JevDecisionAdapter, compileJevQuestion } from '../adapters/jev.js';
 import { DecisionAdmissionRegistry, type AdmissionBreakerTransitionRecord, type AdmissionProfileChangeRecord } from '../admission.js';
 import { CanonicalJsonByteEstimator } from '../context-plan.js';
 import { assertContextLiveSource } from '../context-live-qualification.js';
+import { tokenCost } from '../pricing.js';
 import type { AdapterObservation, DecisionAdmissionEvidence, DecisionAdmissionLimits, DecisionDefinition, DecisionUsage } from '../types.js';
 import {
   admissionControllerLoadDriver, decisionLoadArrivals, compareDecisionLoadBounds, decisionLoadManifestDigest, decisionLoadPolicy,
@@ -37,6 +38,7 @@ export interface DecisionLoadAttemptReceipt {
   admittedAtMs: number; settledAtMs: number; tokens: number; costUsd: number;
   admission: DecisionAdmissionEvidence; status: AdapterObservation['status']; reason: AdapterObservation['reason'];
   usage: DecisionUsage; httpStatus?: number;
+  servedModel?: string; requestId?: string;
 }
 export interface DecisionStagedLoadStage {
   phase: DecisionLoadPhase; profileVersion: string; windowSeconds: number;
@@ -44,17 +46,36 @@ export interface DecisionStagedLoadStage {
   scopes: Record<string, { active: number; queued: number }>;
 }
 export interface DecisionStagedLoadComparison { bound: string; limit: number; observed: number; pass: boolean }
+export interface DecisionLoadReservedUsage { calls: number; tokens: number; usd: number }
+export interface DecisionLoadReportedTotals {
+  inputTokens: number | null; outputTokens: number | null; tokens: number | null; usd: number | null;
+}
+export interface DecisionLoadReportedUsage extends DecisionLoadReportedTotals {
+  /** calls counts dispatched attempts, including those with unknown token usage. */
+  calls: number;
+  /** Calls missing either token dimension or applicable sourced pricing. */
+  incompleteCalls: number;
+  /** Sum of known reports only; never represents an unknown call as zero. */
+  knownSubtotal: DecisionLoadReportedTotals;
+}
 export interface DecisionStagedLoadRecord {
-  schemaVersion: 'decision-load-result/v1'; kind: 'load-manifest-qualified';
+  schemaVersion: 'decision-load-result/v2'; kind: 'load-manifest-qualified';
   manifest: DecisionLoadManifestV3; manifestBytes: string; manifestDigest: string;
   mode: 'staged-provider'; execution: 'live' | 'offline-fake-provider'; sourceCommit: string; dirty: boolean;
   host: { hostname: string; cpuClass: string; memoryGiB: number; networkPath: string; node: string; platform: string; arch: string };
   pricing: DecisionLoadPricing; stages: DecisionStagedLoadStage[]; receipts: DecisionLoadAttemptReceipt[];
   samples: DecisionLoadResourceSample[]; profileHistory: AdmissionProfileChangeRecord[]; breakerTransitions: AdmissionBreakerTransitionRecord[];
-  usage: { calls: number; tokens: number; usd: number };
+  reservedUsage: DecisionLoadReservedUsage;
+  /** Each total is null if any attempt lacks the corresponding provider usage or applicable pricing. */
+  reportedUsage: DecisionLoadReportedUsage;
   stop: { reason: DecisionLoadStopReason; atMs: number } | null;
   startedAtMs: number; elapsedMs: number; retries: number; queueWaitDistribution: { count: number; p50: number; p95: number; p99: number; maximum: number }; comparisons: DecisionStagedLoadComparison[]; passed: boolean; digest: string;
 }
+/** Original staged evidence is verified in its original shape and digest domain. */
+export interface DecisionStagedLoadRecordV1 extends Omit<DecisionStagedLoadRecord, 'schemaVersion' | 'reservedUsage' | 'reportedUsage'> {
+  schemaVersion: 'decision-load-result/v1'; usage: DecisionLoadReservedUsage;
+}
+export const DECISION_STAGED_LOAD_RESULT_VERSIONS = ['decision-load-result/v1', 'decision-load-result/v2'] as const;
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const positive = (value: unknown): value is number => finite(value) && value > 0;
 const exactCommit = (value: string): boolean => /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
@@ -295,7 +316,9 @@ export async function runDecisionStagedLoad(options: {
         onObservation: (arrival, attempt, admission, observation) => {
           const receipt = inFlight.get(`${arrival.ordinal}:${attempt}`)!;
           Object.assign(receipt, { settledAtMs: clock.now(), admission: structuredClone(admission), status: observation.status, reason: observation.reason,
-            usage: observation.usage, ...(observation.httpStatus === undefined ? {} : { httpStatus: observation.httpStatus }) });
+            usage: observation.usage, ...(observation.httpStatus === undefined ? {} : { httpStatus: observation.httpStatus }),
+            ...(observation.actualModel ? { servedModel: observation.actualModel } : {}),
+            ...(observation.requestId ? { requestId: observation.requestId } : {}) });
           inFlight.delete(`${arrival.ordinal}:${attempt}`);
           guard.observe(arrival.providerId, observation, receipt.tokens, receipt.costUsd);
         },
@@ -322,7 +345,7 @@ export async function runDecisionStagedLoad(options: {
     host: { hostname: hostname(), cpuClass: `${cpus().length} cores; ${cpus()[0]?.model ?? 'unknown'}`, memoryGiB: totalmem() / 2 ** 30,
       networkPath: options.networkPath, node: process.version, platform: process.platform, arch: process.arch },
     pricing: options.pricing, stages, receipts, samples, profileHistory: registry.profileHistory('load-harness'), breakerTransitions: transitions,
-    usage: guard.usage, stop: guard.stop, startedAtMs: start, elapsedMs: samples.at(-1)?.atMs ?? clock.now() - start });
+    reservedUsage: guard.usage, stop: guard.stop, startedAtMs: start, elapsedMs: samples.at(-1)?.atMs ?? clock.now() - start });
 }
 
 /** Token-bucket debit (burst plus refill), matching the admission controller's rate semantics. */
@@ -342,7 +365,7 @@ function concurrency(receipts: DecisionLoadAttemptReceipt[]): number {
 const maximum = (values: number[]): number => Math.max(0, ...values);
 
 /** Every measurement/stop/budget bound is recomputed from retained evidence, never the record's passed field. */
-export function compareDecisionStagedLoad(record: Pick<DecisionStagedLoadRecord, 'manifest' | 'stages' | 'samples' | 'usage' | 'elapsedMs' | 'receipts' | 'breakerTransitions' | 'startedAtMs'>): DecisionStagedLoadComparison[] {
+export function compareDecisionStagedLoad(record: Pick<DecisionStagedLoadRecord, 'manifest' | 'stages' | 'samples' | 'reservedUsage' | 'elapsedMs' | 'receipts' | 'breakerTransitions' | 'startedAtMs'>): DecisionStagedLoadComparison[] {
   const m = record.manifest; const out: DecisionStagedLoadComparison[] = [];
   const atMost = (bound: string, limit: number, observed: number): void => { out.push({ bound, limit, observed,
     pass: finite(observed) && observed <= limit + 1e-9 }); };
@@ -382,9 +405,9 @@ export function compareDecisionStagedLoad(record: Pick<DecisionStagedLoadRecord,
       }
     }
   }
-  atMost('budget.maxUsd.stopAtFraction', m.budget.maxUsd * m.budget.stopAtFraction, record.usage.usd);
-  atMost('budget.maxCalls', m.budget.maxCalls, record.usage.calls);
-  atMost('budget.maxTokens', m.budget.maxTokens, record.usage.tokens);
+  atMost('budget.maxUsd.stopAtFraction', m.budget.maxUsd * m.budget.stopAtFraction, record.reservedUsage.usd);
+  atMost('budget.maxCalls', m.budget.maxCalls, record.reservedUsage.calls);
+  atMost('budget.maxTokens', m.budget.maxTokens, record.reservedUsage.tokens);
   atMost('budget.maxWallClockSeconds', m.budget.maxWallClockSeconds, record.elapsedMs / 1000);
   atMost('maximumSampleGapMs', m.bounds.maximumSampleGapMs, maximum(record.samples.slice(1).map((s, i) => s.atMs - record.samples[i]!.atMs)));
   const endingAt = record.startedAtMs + record.elapsedMs;
@@ -412,11 +435,32 @@ export function compareDecisionStagedLoad(record: Pick<DecisionStagedLoadRecord,
   return out;
 }
 
+function reportedUsage(receipts: DecisionLoadAttemptReceipt[], pricing: DecisionLoadPricing): DecisionLoadReportedUsage {
+  const sum = (values: Array<number | null>): number | null => values.reduce<number | null>((total, value) =>
+    total === null || value === null ? null : total + value, 0);
+  const inputs = receipts.map(r => r.usage.inputTokens);
+  const outputs = receipts.map(r => r.usage.outputTokens);
+  const totals = receipts.map(r => r.usage.inputTokens === null || r.usage.outputTokens === null ? null : r.usage.inputTokens + r.usage.outputTokens);
+  const inputTokens = sum(inputs);
+  const outputTokens = sum(outputs);
+  // The request is pinned to the priced model; an explicitly different served model has no applicable rate.
+  const costs = receipts.map(r => r.usage.inputTokens === null || r.usage.outputTokens === null
+    || (r.servedModel !== undefined && r.servedModel !== pricing.jev_model) ? null
+    : tokenCost(r.usage, { inputPerMillionUsd: pricing.jev_input_per_mtok!, outputPerMillionUsd: pricing.jev_output_per_mtok! }));
+  const knownSum = (values: Array<number | null>): number | null => values.length > 0 && values.every(v => v === null)
+    ? null : sum(values.filter(v => v !== null));
+  return { calls: receipts.length, inputTokens, outputTokens, tokens: inputTokens === null || outputTokens === null ? null : inputTokens + outputTokens,
+    usd: sum(costs), incompleteCalls: costs.filter(cost => cost === null).length,
+    knownSubtotal: { inputTokens: knownSum(inputs), outputTokens: knownSum(outputs), tokens: knownSum(totals), usd: knownSum(costs) } };
+}
+
 export function decisionStagedLoadResultRecord(input: Omit<DecisionStagedLoadRecord,
-  'schemaVersion' | 'kind' | 'manifestDigest' | 'manifest' | 'digest' | 'comparisons' | 'passed' | 'queueWaitDistribution' | 'retries'> & { manifestBytes: string }): DecisionStagedLoadRecord {
+  'schemaVersion' | 'kind' | 'manifestDigest' | 'manifest' | 'digest' | 'comparisons' | 'passed' | 'queueWaitDistribution' | 'retries' | 'reportedUsage'> & { manifestBytes: string }): DecisionStagedLoadRecord {
   const manifest = readDecisionLoadManifest(input.manifestBytes);
   validateDecisionLoadManifestV3(manifest);
-  const payload = { ...input, schemaVersion: 'decision-load-result/v1' as const, kind: 'load-manifest-qualified' as const,
+  validateDecisionLoadPricing(input.pricing, manifest.model);
+  const payload = { ...input, schemaVersion: 'decision-load-result/v2' as const, kind: 'load-manifest-qualified' as const,
+    reportedUsage: reportedUsage(input.receipts, input.pricing),
     manifest, manifestDigest: decisionLoadManifestDigest(input.manifestBytes) };
   for (const key of ['digest', 'comparisons', 'passed', 'queueWaitDistribution', 'retries']) delete (payload as unknown as Record<string, unknown>)[key];
   const comparisons = compareDecisionStagedLoad(payload);
@@ -433,8 +477,8 @@ export function decisionStagedLoadResultRecord(input: Omit<DecisionStagedLoadRec
 /** Self digest + exact manifest bytes + recomputed measurements + complete rollout + clean exact commit. */
 export function verifyDecisionStagedLoadRecord(value: unknown, sourceCommit?: string): boolean {
   try {
-    const r = value as DecisionStagedLoadRecord;
-    if (!r || r.schemaVersion !== 'decision-load-result/v1' || r.kind !== 'load-manifest-qualified' || r.mode !== 'staged-provider'
+    const r = value as DecisionStagedLoadRecord | DecisionStagedLoadRecordV1;
+    if (!r || !(DECISION_STAGED_LOAD_RESULT_VERSIONS as readonly string[]).includes(r.schemaVersion) || r.kind !== 'load-manifest-qualified' || r.mode !== 'staged-provider'
       || r.execution !== 'live' || r.dirty !== false || !exactCommit(r.sourceCommit) || (sourceCommit !== undefined && sourceCommit !== r.sourceCommit)
       || r.stop !== null || !r.passed || !finite(r.startedAtMs) || !r.host.networkPath || !r.host.cpuClass || !positive(r.host.memoryGiB)) return false;
     const manifest = readDecisionLoadManifest(r.manifestBytes);
@@ -475,8 +519,16 @@ export function verifyDecisionStagedLoadRecord(value: unknown, sourceCommit?: st
     if (r.receipts.some(receipt => !manifest.principals.some(p => p.id === receipt.principalId) || !(receipt.providerId in manifest.providers)
       || !positive(receipt.tokens) || !finite(receipt.costUsd) || !finite(receipt.admittedAtMs) || receipt.settledAtMs < receipt.admittedAtMs
       || receipt.admission.decision !== 'admit' || receipt.costUsd !== price(receipt.tokens, r.pricing))) return false;
-    if (r.usage.calls !== r.receipts.length || r.usage.tokens !== r.receipts.reduce((sum, receipt) => sum + receipt.tokens, 0)
-      || Math.abs(r.usage.usd - r.receipts.reduce((sum, receipt) => sum + receipt.costUsd, 0)) > 1e-9) return false;
+    const reservedUsage = r.schemaVersion === 'decision-load-result/v1' ? r.usage : r.reservedUsage;
+    if (!reservedUsage || ![reservedUsage.calls, reservedUsage.tokens, reservedUsage.usd].every(finite)
+      || reservedUsage.calls !== r.receipts.length || reservedUsage.tokens !== r.receipts.reduce((sum, receipt) => sum + receipt.tokens, 0)
+      || Math.abs(reservedUsage.usd - r.receipts.reduce((sum, receipt) => sum + receipt.costUsd, 0)) > 1e-9) return false;
+    if (r.schemaVersion === 'decision-load-result/v2' && r.receipts.some(receipt => !receipt.usage
+      || ![receipt.usage.inputTokens, receipt.usage.outputTokens].every(v => v === null || (Number.isSafeInteger(v) && v >= 0))
+      || (receipt.usage.inputTokens ?? 0) + (receipt.usage.outputTokens ?? 0) > receipt.tokens
+      || (receipt.usage.costUsd !== null && (!finite(receipt.usage.costUsd) || receipt.usage.costUsd > receipt.costUsd + 1e-12))
+      || (receipt.servedModel !== undefined && (typeof receipt.servedModel !== 'string' || !receipt.servedModel))
+      || (receipt.requestId !== undefined && (typeof receipt.requestId !== 'string' || !receipt.requestId)))) return false;
     if (!r.samples.every((sample, index) => finite(sample.atMs) && finite(sample.residentMemoryMiB) && finite(sample.heapUsedMiB)
       && finite(sample.cpuPercentOneCore) && finite(sample.active) && finite(sample.queued) && (index === 0 ? sample.atMs === 0 : sample.atMs >= r.samples[index - 1]!.atMs
         && sample.atMs - r.samples[index - 1]!.atMs <= manifest.bounds.maximumSampleGapMs))) return false;
@@ -489,7 +541,12 @@ export function verifyDecisionStagedLoadRecord(value: unknown, sourceCommit?: st
       || initial.digest !== profileDigest(manifest.rollout.workspace, manifest.rollout.providers)
       || change?.kind !== 'change' || change.profileVersion !== manifest.profileVersion || change.digest !== profileDigest(manifest.workspace, manifest.providers)
       || rollback?.kind !== 'rollback' || rollback.profileVersion !== initial.profileVersion || rollback.digest !== initial.digest) return false;
-    const rebuilt = decisionStagedLoadResultRecord(r);
+    const rebuilt = decisionStagedLoadResultRecord({ ...r, reservedUsage });
+    if (r.schemaVersion === 'decision-load-result/v1') {
+      const { reservedUsage: _, reportedUsage: __, digest: ___, ...legacy } = rebuilt;
+      const legacyBody = { ...legacy, schemaVersion: r.schemaVersion };
+      return rebuilt.passed && canonicalJson({ ...legacyBody, digest: decisionLoadManifestDigest(canonicalJson(legacyBody)) }) === canonicalJson(r);
+    }
     return rebuilt.passed && canonicalJson(rebuilt) === canonicalJson(r);
   } catch { return false; }
 }

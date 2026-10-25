@@ -528,13 +528,14 @@ describe('#2680 synthetic end-to-end collection through the real evaluator and D
         artifactRoot: output, host: fakeHost(), offlineTransport: transport as unknown as typeof fetch });
       expect(summary).toMatchObject({ stopped: null, dispatched: 29, recordedRows: 28, retries: 1, measurementFailures: [] });
       expect(summary.reserved.requests).toBe(29);
-      // The adapter exposes no usage on a failed answer, so the failed attempt is charged its whole reservation.
-      expect(summary.observed).toMatchObject({ inputTokens: 28 * 300, ceilingUsd: 28 * 304 * 0.1 / 1e6 + 0.0004 });
+      // The adapter now surfaces provider-reported usage on an invalid (HTTP 200) answer (#3582), so the
+      // failed attempt is charged on its reported tokens rather than its whole reservation.
+      expect(summary.observed).toMatchObject({ inputTokens: 29 * 300, ceilingUsd: 28 * 304 * 0.1 / 1e6 + 0.00003 });
       const collection = JSON.parse(await readFile(join(output, 'offline-egress', 'collection.json'), 'utf8'));
       expect(collection.failedAttempts).toHaveLength(1);
       const failed = JSON.parse(await readFile(join(output, 'offline-egress', collection.failedAttempts[0].path), 'utf8'));
-      expect(failed).toMatchObject({ itemId: 'exfil-01', arm: 'attacked', attempt: 0, reason: 'invalid-output', httpStatus: 200, inputTokens: null, outputTokens: null,
-        charged: { attestedUsd: 0.0004, ceilingUsd: 0.0004 } });
+      expect(failed).toMatchObject({ itemId: 'exfil-01', arm: 'attacked', attempt: 0, reason: 'invalid-output', httpStatus: 200, inputTokens: 300, outputTokens: 0,
+        charged: { attestedUsd: 300 * 0.042 / 1e6, ceilingUsd: 0.00003 } });
     });
   }, 60_000);
 

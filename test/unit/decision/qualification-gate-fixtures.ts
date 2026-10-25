@@ -132,7 +132,7 @@ export function syntheticStagedLoadResult(sourceCommit: string, execution: 'live
         previousProfileVersion: manifest.rollout.previousProfileVersion, profileVersion: manifest.profileVersion, digest: activeDigest, atEpochMs: 0 },
       { schema: 'decision-admission-profile-change/v1', workspaceId: 'synthetic', kind: 'rollback',
         previousProfileVersion: manifest.profileVersion, profileVersion: manifest.rollout.previousProfileVersion, digest: previousDigest, atEpochMs: phaseStartMs.rollback },
-    ], breakerTransitions: [], usage: { calls: receipts.length, tokens: receipts.reduce((sum, receipt) => sum + receipt.tokens, 0),
+    ], breakerTransitions: [], reservedUsage: { calls: receipts.length, tokens: receipts.reduce((sum, receipt) => sum + receipt.tokens, 0),
       usd: receipts.reduce((sum, receipt) => sum + receipt.costUsd, 0) },
     stop: null, startedAtMs: 0, elapsedMs,
   });

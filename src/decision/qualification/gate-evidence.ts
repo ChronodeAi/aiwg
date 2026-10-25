@@ -5,7 +5,7 @@ import { CalibrationRegistry, calibrationArtifactDigest } from '../calibration/r
 import type { CalibrationArtifact } from '../calibration/types.js';
 import { validateCaseInventory } from './manifest.js';
 import { verifyQualificationSplits, type FrozenBinaryBenchmarkPlan } from './quality.js';
-import { verifyDecisionStagedLoadRecord } from './load.js';
+import { DECISION_STAGED_LOAD_RESULT_VERSIONS, verifyDecisionStagedLoadRecord } from './load.js';
 import type { QualificationGateArtifactRef, QualificationRunManifest } from './types.js';
 import type { ReviewEvaluation } from '../review/types.js';
 import { validateReviewEvaluation } from '../review/validate.js';
@@ -58,7 +58,7 @@ export const DECISION_GATE_SUITES: Readonly<Record<string, QualificationSuiteDef
 export const GATE_ARTIFACT_SCHEMAS = {
   'immutable-splits': 'decision-binary-benchmark-plan/v2',
   'calibration-qualified': 'decision-calibration-artifact/v1',
-  'load-manifest-qualified': 'decision-load-result/v1',
+  'load-manifest-qualified': 'decision-load-result/v2',
   'review-decision-recorded': 'decision-qualification-review/v1',
 } as const;
 export type QualificationGateArtifactFlag = keyof typeof GATE_ARTIFACT_SCHEMAS;
@@ -176,7 +176,7 @@ function validCalibration(value: unknown, context: GateArtifactContext): boolean
 }
 
 function validLoadResult(value: unknown, context: GateArtifactContext): boolean {
-  if (!record(value) || value.schemaVersion !== GATE_ARTIFACT_SCHEMAS['load-manifest-qualified']) return false;
+  if (!record(value) || !(DECISION_STAGED_LOAD_RESULT_VERSIONS as readonly string[]).includes(String(value.schemaVersion))) return false;
   // Legacy records remain readable, but only completed live v3 evidence bound to
   // this exact clean source revision can qualify the performance gate.
   if (context.manifest.dirty !== false || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(context.manifest.sourceCommit)) return false;
@@ -222,7 +222,9 @@ export function deriveGateEvidence(manifest: QualificationRunManifest, proof: Qu
     const ref: QualificationGateArtifactRef | undefined = manifest.gateArtifacts?.[flag];
     const versionOk = flag === 'immutable-splits'
       ? ref !== undefined && (IMMUTABLE_SPLIT_VERSIONS as readonly string[]).includes(ref.schemaVersion)
-      : ref !== undefined && ref.schemaVersion === GATE_ARTIFACT_SCHEMAS[flag];
+      : flag === 'load-manifest-qualified'
+        ? ref !== undefined && (DECISION_STAGED_LOAD_RESULT_VERSIONS as readonly string[]).includes(ref.schemaVersion)
+        : ref !== undefined && ref.schemaVersion === GATE_ARTIFACT_SCHEMAS[flag];
     flags[flag] = versionOk && ref !== undefined
       && typeof ref.artifact === 'string' && ref.artifact.length > 0 && sha256Pattern.test(ref.digest);
     if (flag === 'load-manifest-qualified') {

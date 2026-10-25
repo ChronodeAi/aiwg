@@ -147,6 +147,44 @@ describe('Jev transport contract', () => {
     expect(await fromHeader.evaluate(request())).toMatchObject({ requestId: 'header-id', requestIdSource: 'typesafe' });
   });
 
+  it.each(['request_id', 'requestId'])('retains served model, usage and %s from successful response bodies', async field => {
+    const body = JSON.stringify({ ...answer, [field]: 'success-body-id' });
+    const adapter = new JevDecisionAdapter({ fetch: async () => new Response(body) });
+    expect(await adapter.evaluate(request())).toMatchObject({ status: 'success', actualModel: answer.model,
+      requestId: 'success-body-id', requestIdSource: 'body', usage: { inputTokens: 1, outputTokens: 2, costUsd: null } });
+    const header = new JevDecisionAdapter({ fetch: async () => new Response(body, { headers: { 'x-typesafe-request-id': 'header-wins' } }) });
+    expect(await header.evaluate(request())).toMatchObject({ requestId: 'header-wins', requestIdSource: 'typesafe' });
+  });
+
+  it.each(['bad\nidentifier', 'ambiguous,identifier', '', 'x'.repeat(129)])('rejects unsafe successful body request IDs: %j', async request_id => {
+    const adapter = new JevDecisionAdapter({ fetch: async () => new Response(JSON.stringify({ ...answer, request_id })) });
+    expect(await adapter.evaluate(request())).toMatchObject({ status: 'success', requestId: null });
+  });
+
+  it.each([200, 429])('retains reported metadata when the response has no valid answer (HTTP %i)', async status => {
+    const body = JSON.stringify({ model: answer.model, request_id: 'billed-failure', usage: { input_tokens: 17, output_tokens: 3 } });
+    const observer = vi.fn();
+    const adapter = new JevDecisionAdapter({ observeResponseBody: observer, fetch: async () => new Response(body, { status }) });
+    expect(await adapter.evaluate(request())).toMatchObject({ reason: status === 200 ? 'invalid-output' : 'rate-limited',
+      actualModel: answer.model, requestId: 'billed-failure', usage: { inputTokens: 17, outputTokens: 3, costUsd: null } });
+    expect(observer).toHaveBeenCalledExactlyOnceWith(body, { actualModel: answer.model, usage: { inputTokens: 17, outputTokens: 3, costUsd: null } });
+  });
+
+  it.each([200, 429])('retains response correlation and shared usage for batches (HTTP %i)', async status => {
+    const base = request();
+    const body = JSON.stringify({ ...answer, request_id: 'batch-body-id',
+      answers: { first: answer.answers.category, second: answer.answers.category } });
+    const adapter = new JevDecisionAdapter({ fetch: async () => new Response(body, { status }) });
+    const result = await adapter.evaluateMany({ decisionSubject: 'synthetic',
+      requests: [{ ...base, questionId: 'first' }, { ...base, questionId: 'second' }] });
+    expect(result.sharedUsage).toEqual({ inputTokens: 1, outputTokens: 2, costUsd: null });
+    expect(result.answers).toHaveLength(2);
+    for (const { observation } of result.answers) expect(observation).toMatchObject({
+      actualModel: answer.model, requestId: 'batch-body-id', requestIdSource: 'body',
+      reason: status === 200 ? 'none' : 'rate-limited',
+    });
+  });
+
   it.each([
     [{ 'retry-after-ms': '125', 'retry-after': '20' }, 125],
     [{ 'retry-after': '1.5' }, 1500],

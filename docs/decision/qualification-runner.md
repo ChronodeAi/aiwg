@@ -42,7 +42,7 @@ only make a gate fail.
 | G3 | `calibration-qualified` | an approved `decision-calibration-artifact/v1` whose digest recomputes, whose `splitProvenance.hash` is the accepted split-plan digest, that is in effect at `generatedAt`, and whose metrics meet its own profile | calibration artifact |
 | G4 | `fault-suite-complete` | every retry, fallback, cancellation and receipt case (C13–C18, C24, C27, C28, C33, C37, C38, C42) passed | case artifacts |
 | G4 | `drift-suite-complete` | TV10 passed and its artifact names every `DRF-*` ID in the drift suite | case artifacts |
-| G5 | `load-manifest-qualified` | a `decision-load-result/v1` that embeds its load manifest, whose `manifestDigest` is the canonical digest of that manifest, and whose observations are within every bound | load result record |
+| G5 | `load-manifest-qualified` | a live `decision-load-result/v2` (historical staged v1 also accepted) bound to a clean exact commit, with manifest bytes, verified digest and complete rollout within every bound; budget bounds use `reservedUsage`, while `reportedUsage` shows provider tokens and sourced cost | load result record |
 | G6 | `evidence-hashes-verified` | set only by `evaluateExecutedQualification` after every case and gate artifact re-verifies on disk | verification pass |
 | G6 | `review-decision-recorded` | a `decision-qualification-review/v1` with `decision: approve` for the same run ID and source commit and the run's `qualificationOutcomesDigest` | reviewer decision record |
 

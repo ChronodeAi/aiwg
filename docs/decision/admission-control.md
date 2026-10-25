@@ -151,7 +151,7 @@ stop. The v3 manifest samples every 1,000 ms and caps provider concurrency at
 compared with the 2,000 ms maximum-gap bound, allowing ordinary timer jitter
 without accepting missing measurement coverage.
 
-Each v3 run produces a digest-bound `decision-load-result/v1` artifact of kind
+Each v3 run produces a digest-bound `decision-load-result/v2` artifact of kind
 `load-manifest-qualified`, including manifest bytes, source commit, host class,
 network path, pricing snapshot, stop reason, and recomputable comparisons
 against the manifest bounds. G5 consumes and verifies the artifact rather
@@ -159,6 +159,18 @@ than trusting a boolean flag. It requires live execution, a complete passing
 rollout, matching manifest/result digests and exact commit, and a clean source
 tree. Source checks run before and after execution. Fake-provider and stopped
 records cannot qualify G5.
+
+`reservedUsage` records conservative calls, tokens, and USD used by admission
+and budget comparisons. `reportedUsage` records calls, provider-reported input,
+output and total tokens, and USD computed from the retained sourced split
+pricing. A missing token count makes that aggregate and total cost `null`;
+unknown usage is never replaced with a reservation. A different served model
+without matching sourced pricing also leaves reported USD unknown. Receipts
+with usable reports still contribute to the explicitly labeled `knownSubtotal`;
+`incompleteCalls` counts calls missing tokens or applicable pricing. Receipts
+retain `servedModel` and `requestId` when returned. The CLI summary shows both
+usage totals. Historical v1 staged records retain their original `usage`
+reservation field, schema and digest and remain verifiable.
 
 The live run remains **DRAFT, awaiting operator approval**. The
 [preregistration](./load-live-preregistration.md) records the proposed command,
