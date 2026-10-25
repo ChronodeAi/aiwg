@@ -86,6 +86,8 @@ export interface DiscoveryInventory {
 
 export interface UseDeploymentResult {
   schema: 'aiwg.use.result.v1';
+  contextFiles?: import('../../smiths/context-pipeline/types.js').ContextPipelineResult[];
+  contextRollback?: import('../../smiths/context-pipeline/context-file-safety.js').ContextRollbackResult;
   generatedAt: string;
   projectRoot: string;
   frameworkRoot: string;

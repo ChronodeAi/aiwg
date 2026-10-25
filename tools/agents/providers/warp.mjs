@@ -1,3 +1,4 @@
+import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * Warp Terminal Provider
  *
@@ -47,6 +48,8 @@ import {
   normalizeDeploymentMode,
   collectFrameworkArtifacts
 } from './base.mjs';
+
+const { writeContextFileSync } = await importImpl(import.meta.url, 'smiths/context-pipeline/context-file-safety.js');
 
 // ============================================================================
 // Provider Configuration
@@ -206,7 +209,7 @@ export async function deployWarp(targetDir, srcRoot, opts) {
   // Preserve operator sections even for a forced artifact refresh.
   const output = mergeWarpMd(existing, content, false);
   ensureDir(targetDir, opts.dryRun);
-  if (!opts.dryRun) fs.writeFileSync(dest, output);
+  if (!opts.dryRun) writeContextFileSync(dest, output);
 
 }
 

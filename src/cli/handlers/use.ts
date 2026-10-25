@@ -1,3 +1,5 @@
+import { ContextWriteJournal } from '../../smiths/context-pipeline/context-file-safety.js';
+import type { ContextPipelineOptions, ContextPipelineResult } from '../../smiths/context-pipeline/types.js';
 import { trackTemporaryDirectory } from '../../utils/temporary-directory.js';
 /**
  * Use Command Handler
@@ -1926,7 +1928,13 @@ export async function countPiAgentFiles(target: string, agentsPath: string | nul
 // and additive passes can describe the same destination more than once.
 let usePreviewActions: Set<string> | undefined;
 // Recursive framework/addon/provider passes share the boundary's resolved policy.
-let useDeployment: { version: string; skipContextFiles: boolean } | undefined;
+async function generateDeploymentContextFiles(options: ContextPipelineOptions): Promise<ContextPipelineResult> {
+  const result = await generateContextFiles(options);
+  useDeployment?.contextFiles.push(result);
+  return result;
+}
+
+let useDeployment: { version: string; skipContextFiles: boolean; contextFiles: ContextPipelineResult[] } | undefined;
 function useDeploymentArgs(args: string[]): string[] {
   const forwarded = [...args];
   if (useDeployment && !forwarded.includes('--deploy-version')) forwarded.push('--deploy-version', useDeployment.version);
@@ -2421,7 +2429,7 @@ async function generateGlobalProjectContext(opts: {
     skills: userPaths.skills,
     behaviors: userPaths.behaviors,
   });
-  await generateContextFiles({
+  await generateDeploymentContextFiles({
     provider: opts.provider as Platform,
     projectPath: opts.projectPath,
     sections,
@@ -2492,7 +2500,7 @@ async function ensurePostDeployPhases(opts: {
     behaviors: paths.behaviors,
   });
   try {
-    await generateContextFiles({
+    await generateDeploymentContextFiles({
       provider: opts.provider as Platform,
       projectPath: opts.projectPath,
       sections,
@@ -2504,8 +2512,8 @@ async function ensurePostDeployPhases(opts: {
         agentsMd: opts.args.includes('--no-agents-md'),
       },
     });
-  } catch {
-    // The shared verifier reports context or provider-wiring failures.
+  } catch (error) {
+    throw new Error(`Context generation failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 }
 
@@ -2860,10 +2868,31 @@ export class UseHandler implements CommandHandler {
     useDeployment = {
       version: previousDeployment?.version ?? resolveDeployVersion(ctx.frameworkRoot || await getFrameworkRoot()),
       skipContextFiles: previousDeployment?.skipContextFiles || ctx.args.includes('--no-context-files'),
+      contextFiles: previousDeployment?.contextFiles ?? [],
     };
+    const journal = previousDeployment ? undefined : new ContextWriteJournal();
     try {
-      return await this.executeDeployment(ctx);
+      let result: HandlerResult;
+      try { result = await this.executeDeployment(ctx); }
+      catch (error) {
+        result = { exitCode: 1, message: error instanceof Error ? error.message : String(error) };
+      }
+      if (journal) {
+        const rollback = result.exitCode !== 0 ? journal.rollback() : undefined;
+        if (ctx.args.includes('--json')) {
+          let structured;
+          try { structured = JSON.parse(result.message || '{}'); }
+          catch { structured = { exitCode: result.exitCode, message: result.message }; }
+          structured.contextFiles = useDeployment.contextFiles;
+          if (rollback) structured.contextRollback = rollback;
+          result = { ...result, message: JSON.stringify(structured, null, 2), rawOutput: true };
+        } else if (rollback?.conflicts.length) {
+          result.message = [result.message, ...rollback.conflicts.map(conflict => `Context rollback conflict: ${conflict.path}: ${conflict.reason}`)].filter(Boolean).join('\n');
+        }
+      }
+      return result;
     } finally {
+      journal?.dispose();
       useDeployment = previousDeployment;
     }
   }
@@ -2954,6 +2983,8 @@ export class UseHandler implements CommandHandler {
     let coreResult: HandlerResult;
     try {
       coreResult = await this.executeCore({ ...ctx, args: coreArgs });
+    } catch (error) {
+      coreResult = { exitCode: 1, message: error instanceof Error ? error.message : String(error) };
     } finally {
       usePreviewActions = previousPreview;
       if (json || dryRun) {
@@ -2978,12 +3009,17 @@ export class UseHandler implements CommandHandler {
     } else {
       if (coreResult.exitCode === 0 && !dryRun && !VALID_FRAMEWORKS.includes(requestedBundle as Framework)) {
         for (const provider of providers) {
-          await ensurePostDeployPhases({
-            frameworkRoot,
-            projectPath: projectDir,
-            provider,
-            args: remainingArgs,
-          });
+          try {
+            await ensurePostDeployPhases({
+              frameworkRoot,
+              projectPath: projectDir,
+              provider,
+              args: remainingArgs,
+            });
+          } catch (error) {
+            coreResult = { exitCode: 1, message: error instanceof Error ? error.message : String(error) };
+            break;
+          }
         }
       }
       const providerResults = [];
@@ -4703,7 +4739,7 @@ export class UseHandler implements CommandHandler {
           behaviors: paths.behaviors,
         });
 
-        const ctxResult = await generateContextFiles({
+        const ctxResult = await generateDeploymentContextFiles({
           provider: provider as Platform,
           projectPath: target,
           sections,
@@ -4758,10 +4794,8 @@ export class UseHandler implements CommandHandler {
           }
         }
       } catch (err) {
-        // Non-fatal: context-pipeline emission must not block deployment.
-        // Operator can re-run aiwg use to retry.
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`Warning: context-pipeline emission failed: ${msg}`);
+        return { exitCode: 1, message: `Context generation failed: ${msg}` };
       }
     }
 

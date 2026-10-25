@@ -1,3 +1,4 @@
+import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * GitHub Copilot Provider
  *
@@ -54,6 +55,8 @@ import {
   deploySoulCompanions,
   loadRuntimeModelCatalog
 } from './base.mjs';
+
+const { writeContextFileSync } = await importImpl(import.meta.url, 'smiths/context-pipeline/context-file-safety.js');
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
 
 // ============================================================================
@@ -477,14 +480,14 @@ export function createCopilotInstructions(target, srcRoot, dryRun) {
     if (dryRun) {
       console.log(`[dry-run] Would update existing copilot-instructions.md with AIWG section`);
     } else {
-      fs.writeFileSync(destPath, combined, 'utf8');
+      writeContextFileSync(destPath, combined, 'utf8');
       console.log('Updated copilot-instructions.md with AIWG SDLC framework section');
     }
   } else {
     if (dryRun) {
       console.log(`[dry-run] Would create copilot-instructions.md from template`);
     } else {
-      fs.writeFileSync(destPath, template, 'utf8');
+      writeContextFileSync(destPath, template, 'utf8');
       console.log('Created copilot-instructions.md from template');
     }
   }

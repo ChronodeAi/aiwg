@@ -1,3 +1,4 @@
+import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * Hermes Agent Provider
  *
@@ -40,6 +41,8 @@ import {
   renderOnDemandRuleSection,
   stripPlatformsFromContent,
 } from './base.mjs';
+
+const { writeContextFileSync } = await importImpl(import.meta.url, 'smiths/context-pipeline/context-file-safety.js');
 
 // ============================================================================
 // Hermes home resolution (HERMES_HOME) — #2119
@@ -355,7 +358,7 @@ MCP is optional; \`mcp_aiwg_rule_show\` exposes the same rule catalog.
   if (dryRun) {
     console.log(`[dry-run] Would write AGENTS.md (${output.length} chars, ${Math.round(output.length / 4)} tokens estimated)`);
   } else {
-    fs.writeFileSync(destPath, output, 'utf8');
+    writeContextFileSync(destPath, output, 'utf8');
     const charCount = output.length;
     const tokenEstimate = Math.round(charCount / 4);
     let budgetNote;
@@ -397,7 +400,7 @@ when the full AIWG project context is needed.
   if (dryRun) {
     console.log(`[dry-run] Would write .hermes.md (${body.length} chars)`);
   } else {
-    fs.writeFileSync(destPath, mergeHermesContext(destPath, body, 'routing'), 'utf8');
+    writeContextFileSync(destPath, mergeHermesContext(destPath, body, 'routing'), 'utf8');
     console.log(`  Created .hermes.md (${body.length} chars)`);
   }
   return 1;

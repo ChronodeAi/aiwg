@@ -1,3 +1,4 @@
+import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * Claude Code Provider
  *
@@ -60,6 +61,8 @@ import {
   buildRemotesTopologyBlock,
   interpolateContextTokens
 } from './base.mjs';
+
+const { writeContextFileSync } = await importImpl(import.meta.url, 'smiths/context-pipeline/context-file-safety.js');
 
 // ============================================================================
 // Provider Configuration
@@ -472,7 +475,7 @@ function deployHookFile(targetDir, opts) {
   } else {
     let content = fs.readFileSync(templatePath, 'utf8');
     content = interpolateHookTokens(content, effectiveCounts, targetDir);
-    fs.writeFileSync(hookDest, content, 'utf8');
+    writeContextFileSync(hookDest, content, 'utf8');
     console.log('Created AIWG.md (hook file)');
   }
 
@@ -496,7 +499,7 @@ function deployHookFile(targetDir, opts) {
           }
         }
         lines.splice(insertAt, 0, '', directive, '');
-        fs.writeFileSync(claudeDest, lines.join('\n'), 'utf8');
+        writeContextFileSync(claudeDest, lines.join('\n'), 'utf8');
         console.log('Added @AIWG.md directive to CLAUDE.md');
       }
     }

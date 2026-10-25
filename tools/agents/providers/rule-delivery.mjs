@@ -19,6 +19,7 @@ const { loadRulePinConfigs, installedRuleCapabilities, resolveRulePins } = await
 const { guardRulesInlineBudget } = await importImpl(import.meta.url, 'rules/inline-budget.mjs');
 const { userConfigFile } = await importImpl(import.meta.url, 'config/user-config-dir.mjs');
 const { resolveProjectAiwgDir } = await importImpl(import.meta.url, 'config/project-artifacts-runtime.mjs');
+const { writeContextFileSync, CONTEXT_STAGE_ENV } = await importImpl(import.meta.url, 'smiths/context-pipeline/context-file-safety.js');
 const PREPARATION_HOOK = Symbol.for('aiwg.provider-preparation-hook.v1');
 
 export function installRuleDeploymentPreparationHook(hook) {
@@ -324,7 +325,7 @@ function block(content, body) {
 
 function putStartup(file, body) {
   const content = fs.existsSync(file) ? read(file) : '<!-- aiwg-managed -->\n';
-  put(file, block(content, body));
+  writeContextFileSync(file, block(content, body));
 }
 
 /** Tagged rules bypass legacy aggregate writers. Untagged projections retain their tier policy. */
@@ -337,7 +338,7 @@ function projectRules(opts, provider) {
     const content = read(file);
     const clean = content.replace(/(<!-- AIWG:hermes-context:start -->)([\s\S]*?)(<!-- AIWG:hermes-context:end -->)/g,
       (_, start, body, end) => start + body.replace(/^### Rule: [\s\S]*?(?=^#{1,3} |(?![\s\S]))/gm, '') + end);
-    if (clean !== content) put(file, clean);
+    if (clean !== content) writeContextFileSync(file, clean);
   }
   const nativePaths = ['claude', 'cursor'].includes(provider.name);
   const rulesDir = path.isAbsolute(provider.paths.rules || '') ? provider.paths.rules : path.join(opts.target, provider.paths.rules || `.${provider.name}/rules`);
@@ -487,14 +488,14 @@ function projectRules(opts, provider) {
         if (!fs.existsSync(file)) continue;
         const content = read(file);
         const clean = block(content, '');
-        if (clean !== content) put(file, clean);
+        if (clean !== content) writeContextFileSync(file, clean);
       }
       return;
     }
     if (inlineStartup[provider.name]) {
       // Retire the B1 indirect startup block when migrating to the actual loader.
       const former = path.join(opts.target, 'AIWG.md');
-      if (fs.existsSync(former)) put(former, block(read(former), ''));
+      if (fs.existsSync(former)) writeContextFileSync(former, block(read(former), ''));
       putStartup(path.join(opts.target, inlineStartup[provider.name]), body);
     } else if (provider.name === 'hermes') {
       const dest = path.join(opts.target, 'AGENTS.md');
@@ -916,12 +917,12 @@ function expectedAnchorPaths(paths) {
 /** Adopt a detached worker plan into the coordinator's process-local lease. */
 export function adoptRuleDeploymentPlan(detached, { scratch, target, inputPool, cleanup }) {
   const invalid = () => { throw new Error('Invalid transferred rule deployment plan'); };
-  if (!exactObjectKeys(detached, ['version', 'lease', 'temp', 'target', 'stage', 'rootNames', 'workspaceDirs', 'preimages', 'poolSeal', 'anchors', 'snapshotRoot', 'corpusRoot', 'sourceMappings', 'staged', 'report', 'mappings']) ||
+  if (!exactObjectKeys(detached, ['version', 'lease', 'temp', 'target', 'stage', 'rootNames', 'workspaceDirs', 'preimages', 'poolSeal', 'anchors', 'snapshotRoot', 'corpusRoot', 'sourceMappings', 'staged', 'report', 'mappings', 'contextWrites']) ||
       detached.version !== 1 || typeof detached.lease !== 'string' || !(detached.poolSeal === null || typeof detached.poolSeal === 'string') ||
       !detached.report || typeof detached.report !== 'object' || Array.isArray(detached.report) || typeof scratch !== 'string' || typeof target !== 'string' || typeof cleanup !== 'function') invalid();
   const root = path.resolve(scratch), expectedTarget = path.resolve(target);
   if (path.resolve(detached.temp || '') !== root || path.resolve(detached.stage || '') !== path.join(root, 'project') || path.resolve(detached.target || '') !== expectedTarget) invalid();
-  if (!Array.isArray(detached.staged) || !Array.isArray(detached.mappings) || !Array.isArray(detached.rootNames) || !Array.isArray(detached.preimages) ||
+  if (!Array.isArray(detached.contextWrites) || detached.contextWrites.some(file => typeof file !== 'string' || !within(root, file)) || !Array.isArray(detached.staged) || !Array.isArray(detached.mappings) || !Array.isArray(detached.rootNames) || !Array.isArray(detached.preimages) ||
       !Array.isArray(detached.workspaceDirs) || !Array.isArray(detached.anchors) || !Array.isArray(detached.sourceMappings) ||
       typeof detached.snapshotRoot !== 'string' || !path.isAbsolute(detached.snapshotRoot) || typeof detached.corpusRoot !== 'string' || !path.isAbsolute(detached.corpusRoot)) invalid();
   if (detached.rootNames.some(name => !safeRelative(expectedTarget, name))) invalid();
@@ -1011,6 +1012,10 @@ export async function prepareRuleDeployment(original, provider, deploy) {
   const removeTemp = () => { removeStage(); if (pool) releaseInputPool(pool); };
   const lease = randomUUID();
   stagedCleanups.set(lease, { temp, cleanup: removeTemp, detach: () => { if (pool) releaseInputPool(pool); }, pool, seal: null, transferable });
+  const priorContextStage = process.env[CONTEXT_STAGE_ENV];
+  const contextStageLog = path.join(temp, 'context-writes.jsonl');
+  fs.writeFileSync(contextStageLog, '');
+  process.env[CONTEXT_STAGE_ENV] = contextStageLog;
   const mappings = [];
   const preimages = [...initialPreimages];
   let retained = false;
@@ -1338,7 +1343,8 @@ export async function prepareRuleDeployment(original, provider, deploy) {
       }
     };
     collectDirs(path.join(stage, '.aiwg'), '.aiwg');
-    const plan = { version: 1, lease, temp, target, stage, rootNames, workspaceDirs, preimages, poolSeal: pool?.inventorySeal || null,
+    const contextWrites = [...new Set(fs.readFileSync(contextStageLog, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)))];
+    const plan = { version: 1, lease, temp, target, stage, contextWrites, rootNames, workspaceDirs, preimages, poolSeal: pool?.inventorySeal || null,
       anchors: captureAnchors([target, ...mappings.map(mapping => mapping.from), ...workspaceDirs.map(dir => path.join(target, dir))]),
       snapshotRoot, corpusRoot, sourceMappings, staged: snapshotPreimages([stage, ...mappings.map(mapping => mapping.to)]), report: guarded.report,
       mappings: mappings.map(({ from, to, before }) => ({ from, to, before: [...before] })) };
@@ -1346,6 +1352,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
     retained = true;
     return plan;
   } finally {
+    if (priorContextStage === undefined) delete process.env[CONTEXT_STAGE_ENV]; else process.env[CONTEXT_STAGE_ENV] = priorContextStage;
     Object.assign(provider.paths, originals);
     if (priorAiwgRoot === undefined) delete process.env.AIWG_ROOT; else process.env.AIWG_ROOT = priorAiwgRoot;
     if (priorRegistry === undefined) delete process.env.AIWG_USER_REGISTRY_PATH; else process.env.AIWG_USER_REGISTRY_PATH = priorRegistry;
@@ -1418,10 +1425,16 @@ export function commitRuleDeploymentPlan(plan) {
           output = Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`);
         }
         fs.mkdirSync(path.dirname(path.join(from, rel)), { recursive: true });
-        fs.writeFileSync(path.join(from, rel), output);
+        if (plan.contextWrites.includes(file)) writeContextFileSync(path.join(from, rel), output);
+        else fs.writeFileSync(path.join(from, rel), output);
       }
     }
-    for (const name of rootNames) if (fs.existsSync(path.join(stage, name))) put(path.join(target, name), normalize(read(path.join(stage, name))));
+    for (const name of rootNames) if (fs.existsSync(path.join(stage, name))) {
+      const output = normalize(read(path.join(stage, name)));
+      if (output === read(path.join(target, name))) continue;
+      const write = plan.contextWrites.includes(path.join(stage, name)) ? writeContextFileSync : put;
+      write(path.join(target, name), output);
+    }
     return plan.report;
   } finally {
     disposeRuleDeploymentPlan(plan);

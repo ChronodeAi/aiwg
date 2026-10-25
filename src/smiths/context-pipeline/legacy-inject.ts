@@ -1,3 +1,4 @@
+import { writeContextFileSync } from './context-file-safety.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { getProviderDefinition } from '../../providers/provider-definitions.js';
@@ -68,10 +69,7 @@ async function readOptional(file: string): Promise<string | null> {
 
 async function atomicWrite(file: string, content: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.tmp.${process.pid}`);
-  await fs.writeFile(temporary, content, 'utf8');
-  try { await fs.rename(temporary, file); }
-  catch (error) { await fs.rm(temporary, { force: true }); throw error; }
+  writeContextFileSync(file, content);
 }
 
 export async function injectLegacyContext(
@@ -100,7 +98,7 @@ export async function injectLegacyContext(
     if (existing !== null) {
       const backup = `${target}.bak.${new Date().toISOString().replace(/[:.]/g, '-')}`;
       await fs.mkdir(path.dirname(backup), { recursive: true });
-      await fs.writeFile(backup, existing, 'utf8');
+      writeContextFileSync(backup, existing, 'utf8');
       backups.push(backup);
     }
     await atomicWrite(target, output);

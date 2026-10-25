@@ -17,6 +17,8 @@ import { createHash } from 'crypto';
 import { createRequire } from 'module';
 import { importImpl } from '../../_resolve-impl.mjs';
 
+const { writeContextFileSync } = await importImpl(import.meta.url, 'smiths/context-pipeline/context-file-safety.js');
+
 const { parseRuleFrontmatter, inferRuleActivation } = await importImpl(import.meta.url, 'rules/activation.mjs');
 const { resolveRulesInlineBudget, DEFAULT_RULES_INLINE_BUDGET_TOKENS } = await importImpl(import.meta.url, 'rules/inline-budget.mjs');
 export { DEFAULT_RULES_INLINE_BUDGET_TOKENS, parseRuleFrontmatter as parseRuleActivation };
@@ -1951,7 +1953,7 @@ export function createManagedMdFromTemplate(target, destFilename, srcRoot, templ
     if (dryRun) {
       console.log(`[dry-run] Would ${verb} ${destFilename} AIWG-managed section`);
     } else {
-      fs.writeFileSync(destPath, content, 'utf8');
+      writeContextFileSync(destPath, content, 'utf8');
       console.log(`${verb[0].toUpperCase()}${verb.slice(1)} ${destFilename} AIWG-managed section`);
     }
   };

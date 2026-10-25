@@ -1,3 +1,4 @@
+import { writeContextFileSync } from './context-file-safety.js';
 /**
  * Context-finalization pass for generated provider context files.
  *
@@ -157,14 +158,14 @@ export async function writeNormalizedAiwgMd(projectPath: string): Promise<string
   const content = await buildNormalizedAiwgMd(projectPath, existing);
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   const normalizedContent = content.endsWith('\n') ? content : `${content}\n`;
-  await fs.writeFile(targetPath, normalizedContent, 'utf8');
+  writeContextFileSync(targetPath, normalizedContent, 'utf8');
 
   const artifactRoot = resolveProjectAiwgDir(projectPath);
   const artifactPath = projectAiwgPath(projectPath, 'AIWG.md');
   if (artifactPath !== targetPath) {
     try {
       await fs.access(artifactRoot);
-      await fs.writeFile(artifactPath, normalizedContent, 'utf8');
+      writeContextFileSync(artifactPath, normalizedContent, 'utf8');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
