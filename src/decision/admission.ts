@@ -92,9 +92,12 @@ export class DecisionAdmissionController {
     private readonly options: AdmissionControllerOptions = {},
   ) {}
 
-  /** Aggregate counts only; suitable for load harness sampling. */
-  snapshot(): { active: number; queued: number } {
-    return { active: this.active, queued: this.queuedCount() };
+  /** Host-only counts for load sampling; omitting a scope returns aggregate counts. */
+  snapshot(scope?: { principalId?: string; providerId?: string }): { active: number; queued: number } {
+    const principal = scope?.principalId; const provider = scope?.providerId;
+    const active = principal && provider ? this.activePrincipalProvider.get(`${provider}\u0000${principal}`) ?? 0
+      : principal ? this.activePrincipal.get(principal) ?? 0 : provider ? this.activeProvider.get(provider) ?? 0 : this.active;
+    return { active, queued: this.queuedCount(request => (!principal || request.principalId === principal) && (!provider || request.providerId === provider)) };
   }
 
   /** Bounded, metadata-only breaker transition history, oldest first. */

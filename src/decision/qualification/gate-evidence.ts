@@ -5,6 +5,7 @@ import { CalibrationRegistry, calibrationArtifactDigest } from '../calibration/r
 import type { CalibrationArtifact } from '../calibration/types.js';
 import { validateCaseInventory } from './manifest.js';
 import { verifyQualificationSplits, type FrozenBinaryBenchmarkPlan } from './quality.js';
+import { verifyDecisionStagedLoadRecord } from './load.js';
 import type { QualificationGateArtifactRef, QualificationRunManifest } from './types.js';
 
 /**
@@ -67,6 +68,7 @@ export const DERIVED_GATE_EVIDENCE: readonly string[] = [
   'privacy-scan-clean', ...GATE_ARTIFACT_FLAGS,
 ];
 
+/** Legacy load record shape, retained for consumers reading historical evidence. It cannot qualify G5. */
 export interface QualificationLoadResult {
   schemaVersion: 'decision-load-result/v1';
   /** SHA-256 of the canonical JSON of `manifest`, recorded before observations are collected. */
@@ -127,7 +129,7 @@ export function suiteSatisfied(manifest: Pick<QualificationRunManifest, 'evidenc
 }
 
 export interface GateArtifactContext {
-  manifest: Pick<QualificationRunManifest, 'runId' | 'sourceCommit' | 'generatedAt' | 'evidence'>;
+  manifest: Pick<QualificationRunManifest, 'runId' | 'sourceCommit' | 'dirty' | 'generatedAt' | 'evidence'>;
   /** Parsed, already-accepted artifacts; calibration binds to the accepted split plan. */
   accepted: Partial<Record<QualificationGateArtifactFlag, unknown>>;
 }
@@ -170,21 +172,12 @@ function validCalibration(value: unknown, context: GateArtifactContext): boolean
     && artifact.metrics.selectiveRisk <= artifact.profile.maximumSelectiveRisk;
 }
 
-function validLoadResult(value: unknown): boolean {
+function validLoadResult(value: unknown, context: GateArtifactContext): boolean {
   if (!record(value) || value.schemaVersion !== GATE_ARTIFACT_SCHEMAS['load-manifest-qualified']) return false;
-  const result = value as unknown as QualificationLoadResult;
-  if (!record(result.manifest) || result.manifest.schema !== 'decision-load-manifest/v1' || !record(result.manifest.bounds)
-    || !record(result.observations) || !validDate(result.recordedAt) || result.mode !== result.manifest.mode) return false;
-  let digest: string;
-  try { digest = loadManifestDigest(result.manifest); } catch { return false; }
-  const bounds = Object.entries(result.manifest.bounds);
-  return digest === result.manifestDigest && bounds.length > 0
-    && Object.keys(result.observations).length === bounds.length
-    && bounds.every(([name, limit]) => {
-      const observed = result.observations[name];
-      return Number.isFinite(limit) && limit >= 0 && typeof observed === 'number' && Number.isFinite(observed)
-        && observed >= 0 && observed <= limit;
-    });
+  // Legacy records remain readable, but only completed live v3 evidence bound to
+  // this exact clean source revision can qualify the performance gate.
+  if (context.manifest.dirty !== false || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(context.manifest.sourceCommit)) return false;
+  try { return verifyDecisionStagedLoadRecord(value, context.manifest.sourceCommit); } catch { return false; }
 }
 
 function validReview(value: unknown, context: GateArtifactContext): boolean {
@@ -200,7 +193,7 @@ export function validateGateArtifact(flag: QualificationGateArtifactFlag, value:
   switch (flag) {
     case 'immutable-splits': return validSplitPlan(value);
     case 'calibration-qualified': return validCalibration(value, context);
-    case 'load-manifest-qualified': return validLoadResult(value);
+    case 'load-manifest-qualified': return validLoadResult(value, context);
     case 'review-decision-recorded': return validReview(value, context);
     default: return false;
   }
@@ -209,6 +202,8 @@ export function validateGateArtifact(flag: QualificationGateArtifactFlag, value:
 export interface QualificationEvidenceProof {
   /** Set only by the executable pipeline after every case and gate artifact re-verified on disk. */
   artifactsVerified?: boolean;
+  /** Set only after the v3 load artifact was re-read and validated against this run. */
+  loadArtifactVerified?: boolean;
 }
 
 /** Computes every derived gate flag from the manifest; caller-supplied values for these names are ignored. */
@@ -226,6 +221,10 @@ export function deriveGateEvidence(manifest: QualificationRunManifest, proof: Qu
       : ref !== undefined && ref.schemaVersion === GATE_ARTIFACT_SCHEMAS[flag];
     flags[flag] = versionOk && ref !== undefined
       && typeof ref.artifact === 'string' && ref.artifact.length > 0 && sha256Pattern.test(ref.digest);
+    if (flag === 'load-manifest-qualified') {
+      flags[flag] = flags[flag] === true && proof.loadArtifactVerified === true && manifest.dirty === false
+        && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(manifest.sourceCommit);
+    }
   }
   return flags;
 }
