@@ -14,7 +14,7 @@ import { tmpdir, homedir } from "os";
 import { join, dirname, resolve } from "path";
 import { createHash } from "node:crypto";
 
-const filesystemBoundary = vi.hoisted(() => ({ root: "", failReadPath: "", failRenamePath: "", mutations: [] as string[] }));
+const filesystemBoundary = vi.hoisted(() => ({ root: "", nestedCodex: false, failReadPath: "", failRenamePath: "", mutations: [] as string[] }));
 vi.mock("path", async importOriginal => {
   const actual = await importOriginal<typeof import("path")>();
   return {
@@ -23,7 +23,10 @@ vi.mock("path", async importOriginal => {
       // Redirect only the home-scoped adapters exercised by this owner.
       // Do not change HOME or production provider metadata.
       if (filesystemBoundary.root && parts.length === 2 &&
-          [".claude.json", ".claude/settings.json", ".factory/mcp.json", ".codex/config.toml", ".codeium/windsurf/mcp_config.json", ".warp/mcp.json"].includes(parts[1])) {
+          [".claude.json", ".claude/settings.json", ".factory/mcp.json", ".codex", ".codex/config.toml", ".codeium/windsurf/mcp_config.json", ".warp/mcp.json"].includes(parts[1])) {
+        if (filesystemBoundary.nestedCodex && parts[1] === ".codex/config.toml") {
+          return actual.resolve(filesystemBoundary.root, "provider-home", ".codex/nested/config.toml");
+        }
         return actual.resolve(filesystemBoundary.root, "provider-home", parts[1]);
       }
       return actual.resolve(...parts);
@@ -94,6 +97,27 @@ describe.each(registryImplementations)("$implementation McpServerRegistry", ({ c
     it("should resolve the registry file path", () => {
       expect(registry.getPath()).toBe(join(tempDir, "mcp-servers.json"));
     });
+  });
+
+  it("keeps bytes, mode, cache and warnings unchanged when credential replacement fails", async () => {
+    await registry.add({ name: "existing", type: "http", url: "https://example.test/mcp" });
+    const file = registry.getPath();
+    await chmod(file, 0o644);
+    const before = await readFile(file, "utf-8");
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    filesystemBoundary.failRenamePath = file;
+    try {
+      await expect(registry.add({ name: "private", type: "stdio", command: "synthetic",
+        env: { API_KEY: "synthetic-secret" } })).rejects.toThrow("synthetic replacement refusal");
+      expect(await readFile(file, "utf-8")).toBe(before);
+      expect((await stat(file)).mode & 0o777).toBe(0o644);
+      expect(await registry.get("private")).toBeUndefined();
+      expect(warning).not.toHaveBeenCalled();
+      expect((await readdir(tempDir)).filter(name => name.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      filesystemBoundary.failRenamePath = "";
+      warning.mockRestore();
+    }
   });
 
   it.each(["read", "write", "mkdir", "open", "unlink", "rename-source", "rename-destination"])("blocks out-of-fixture %s before filesystem access", operation => {
@@ -507,8 +531,8 @@ describe("injectServers", () => {
     },
   );
 
-  it.each(["claude", "antigravity", "omp", "grok-build", "factory", "codex", "windsurf", "warp"] as const)(
-    "allows user parent symlinks for %s", async provider => {
+  it.each(["claude", "antigravity", "omp", "grok-build", "factory", "codex", "openai", "windsurf", "warp"] as const)(
+    "allows user root aliases for %s", async provider => {
       vi.stubEnv("HOME", join(tempDir, "provider-home"));
       vi.stubEnv("PI_CODING_AGENT_DIR", join(tempDir, "provider-home", ".omp", "agent"));
       vi.stubEnv("GROK_HOME", join(tempDir, "provider-home", ".grok"));
@@ -524,6 +548,30 @@ describe("injectServers", () => {
       } finally { vi.unstubAllEnvs(); }
     },
   );
+
+  it.each(["codex", "openai"] as const)("refuses descendant directory links below the %s user root without writes", async provider => {
+    vi.stubEnv("HOME", join(tempDir, "provider-home"));
+    const userRoot = join(tempDir, "provider-home", ".codex");
+    const outside = join(tempDir, "outside");
+    await mkdir(userRoot, { recursive: true });
+    await mkdir(outside);
+    const original = 'preference = "keep"\n';
+    await writeFile(join(outside, "config.toml"), original);
+    await symlink(outside, join(userRoot, "nested"));
+    // Persistent configs currently sit directly in the root; exercise the same
+    // boundary with a nested destination, as the runtime's profile configs do.
+    filesystemBoundary.nestedCodex = true;
+    const before = await readFile(registry.getPath(), "utf-8");
+    filesystemBoundary.mutations = [];
+    try {
+      await expect(inject(registry, provider, { projectDir, scope: "user", servers: ["fortemi"] }))
+        .rejects.toThrow(/parent directory is a symlink/);
+      expect(filesystemBoundary.mutations).toEqual([]);
+      expect(await readFile(join(outside, "config.toml"), "utf-8")).toBe(original);
+      expect(await readdir(outside)).toEqual(["config.toml"]);
+      expect(await readFile(registry.getPath(), "utf-8")).toBe(before);
+    } finally { filesystemBoundary.nestedCodex = false; }
+  });
 
   it.each(["cursor", "omp", "grok-build"] as const)("accepts a symlinked project root for %s", async provider => {
     const alias = join(tempDir, "project-alias");

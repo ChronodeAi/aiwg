@@ -142,6 +142,58 @@ describe.each([
     await servers.add({ name: "new-server", type: "stdio", command: "synthetic-command" });
     expect(statSync(join(org, "mcp-servers.json")).mode & 0o777).toBe(0o640);
   });
+
+  it.each(["add", "update"] as const)("makes a shared registry private on literal credential %s and warns once", async operation => {
+    const file = join(org, "mcp-servers.json");
+    chmodSync(file, 0o644);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const servers = new Servers(org);
+      const credentials = { headers: { Authorization: "Bearer synthetic-secret" } };
+      if (operation === "add") {
+        await servers.add({ name: "private", type: "http", url: "https://example.test/mcp", ...credentials });
+      } else {
+        await servers.update("tracker", credentials);
+      }
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(warning).toHaveBeenCalledTimes(1);
+      expect(warning.mock.calls[0][0]).toContain(file);
+      expect(warning.mock.calls[0][0]).toMatch(/0644.*0600/);
+      expect(warning.mock.calls[0][0]).not.toContain("synthetic-secret");
+      await servers.save();
+      expect(warning).toHaveBeenCalledTimes(1);
+    } finally { warning.mockRestore(); }
+  });
+
+  it.each([0o644, 0o640, 0o755])("keeps mode %s for reference-only additions without warning", async mode => {
+    const file = join(org, "mcp-servers.json");
+    chmodSync(file, mode);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await new Servers(org).add({ name: "references", type: "stdio", command: "synthetic-command",
+        headerEnv: { Authorization: "SYNTHETIC_TOKEN" }, envFrom: { API_KEY: "SYNTHETIC_KEY" } });
+      expect(statSync(file).mode & 0o777).toBe(mode);
+      expect(warning).not.toHaveBeenCalled();
+    } finally { warning.mockRestore(); }
+  });
+
+  it.each([
+    { env: { API_KEY: "synthetic-secret" } },
+    { args: ["--token", "synthetic-secret"] },
+    { url: "https://example.test/mcp?token=synthetic-secret" },
+    { url: "https://example.test/mcp#token=synthetic-secret" },
+    { auth: { type: "oauth" as const, clientSecret: "synthetic-secret" } },
+  ])("tightens a shared registry for existing credential detector findings: %j", async credentials => {
+    const file = join(org, "mcp-servers.json");
+    chmodSync(file, 0o640);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await new Servers(org).update("tracker", credentials);
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(warning).toHaveBeenCalledTimes(1);
+      expect(warning.mock.calls[0][0]).toMatch(/0640.*0600/);
+    } finally { warning.mockRestore(); }
+  });
 });
 
 describe("filesystem case overlap", () => {

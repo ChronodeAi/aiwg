@@ -464,6 +464,9 @@ async function injectJson(registry, servers, configPath, provider, dryRun, resul
 }
 
 async function injectToml(registry, servers, configPath, provider, dryRun, result, userScope, projectRoot, toolPlan = null) {
+  // A deliberately aliased Codex home is trusted; descendants below it are not.
+  const destinationRoot = projectRoot ?? (process.env.CODEX_HOME || resolve(process.env.HOME || process.env.USERPROFILE || homedir(), '.codex'));
+  await assertConfigDestination(configPath, destinationRoot);
   let existing = '';
   try {
     existing = await readFile(configPath, 'utf-8');
@@ -480,7 +483,7 @@ async function injectToml(registry, servers, configPath, provider, dryRun, resul
   }
 
   if (!dryRun) {
-    await writeConfigAtomic(configPath, existing, { userScope, projectRoot });
+    await writeConfigAtomic(configPath, existing, { userScope, projectRoot: destinationRoot });
 
     for (const server of servers) {
       await registry.recordInjection(server.name, provider);

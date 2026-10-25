@@ -1869,7 +1869,7 @@ aiwg mcp install <client>
 
 **Arguments:**
 
-- `<client>` - Client name: `claude`, `cursor`, `factory`
+- `<client>` - Client name: `claude-code`, `claude-desktop`, `cursor`, `factory`
 
 **Options:**
 
@@ -1886,11 +1886,31 @@ aiwg mcp install <client>
 
 ```bash
 # Install for Claude Code (CLI and Claude Desktop's Code tab)
-aiwg mcp install claude
+aiwg mcp install claude-code
 
 # Preview config
-aiwg mcp install claude --dry-run
+aiwg mcp install claude-code --dry-run
 ```
+
+The project `.mcp.json` entry is:
+
+```json
+{
+  "mcpServers": {
+    "aiwg": {
+      "command": "aiwg",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+**Retained legacy entries:** Installation migrates only the recognizable built-in
+AIWG stanza from `.claude/settings.local.json`. Custom legacy entries, including
+any plaintext credentials, are kept. Inspect the `mcpServers` map in that file
+in each older project; remove obsolete entries and move needed servers into the
+supported provider config using environment references, then remove retained
+plaintext credentials.
 
 #### mcp info
 

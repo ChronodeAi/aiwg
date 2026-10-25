@@ -132,8 +132,10 @@ Config writes reject symlink destinations; writes whose destination is inside
 the project directory also reject symlink parents below the project directory.
 JSON installation refuses malformed JSON,
 non-object roots, and non-object server maps without changing the file.
-Writes use atomic replacement; existing files keep their mode while newly
-created registry files start at `0600`. Parent-directory checks are repeated
+Writes use atomic replacement; existing standalone registry files keep their mode
+unless they contain literal credentials and grant group or other access. Such
+writes tighten the mode to `0600` and warn with the file and old and new modes.
+New registry files start at `0600`. Parent-directory checks are repeated
 before the final rename, but when a parent directory is attacker-writable a
 swap between that last check and the rename can still redirect the write.
 ### Claude Desktop and legacy migration
