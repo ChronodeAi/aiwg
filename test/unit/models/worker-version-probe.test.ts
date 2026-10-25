@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -119,6 +119,43 @@ describe('shared bounded version probe (#2894)', () => {
     await expect(boundedVersionProbe(
       executable, ['--version'], workerVersionProbeEnvironment(), cwd, 5000, 1024, undefined,
     )).rejects.toThrow('Bounded version probe failed');
+  });
+
+  // Main run 90904: a freshly written fake CLI failed with ETXTBSY because a
+  // sibling test forked while the file still had a writer. A writer we hold
+  // reproduces it deterministically.
+  it('retries ETXTBSY while the executable still has a writer, then probes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'aiwg-probe-txtbsy-'));
+    roots.push(dir);
+    const executable = join(dir, 'busy-cli');
+    await writeFile(executable, '#!/bin/sh\necho "codex-cli 0.163.0"\n', { mode: 0o755 });
+    await chmod(executable, 0o755);
+    const writer = await open(executable, 'r+');
+    const released = new Promise<void>(resolveRelease => setTimeout(() => { void writer.close().then(resolveRelease); }, 150));
+    const cwd = await probeCwd();
+    const { rawBanner } = await boundedVersionProbe(
+      executable, ['--version'], workerVersionProbeEnvironment(), cwd, 5000, 64 * 1024, undefined,
+    );
+    await released;
+    expect(rawBanner.trim()).toBe('codex-cli 0.163.0');
+  });
+
+  it('still fails with the ETXTBSY cause when the writer outlasts the probe bound', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'aiwg-probe-txtbsy-held-'));
+    roots.push(dir);
+    const executable = join(dir, 'busy-cli');
+    await writeFile(executable, '#!/bin/sh\necho "codex-cli 0.163.0"\n', { mode: 0o755 });
+    await chmod(executable, 0o755);
+    const writer = await open(executable, 'r+');
+    try {
+      const cwd = await probeCwd();
+      const error = await boundedVersionProbe(
+        executable, ['--version'], workerVersionProbeEnvironment(), cwd, 200, 64 * 1024, undefined,
+      ).then(() => null, (cause: unknown) => cause as NodeJS.ErrnoException);
+      expect(error?.code).toBe('ETXTBSY');
+    } finally {
+      await writer.close();
+    }
   });
 
   it('reports a missing CLI as unavailable with the ENOENT cause preserved', async () => {
