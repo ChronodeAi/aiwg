@@ -12,12 +12,20 @@
 import { signalChild } from '../../process/signal-child.mjs';
 import { spawn, type StdioOptions } from 'child_process';
 import path from 'path';
+import { pathToFileURL } from 'node:url';
+import { Console } from 'node:console';
+import { Writable } from 'node:stream';
+import { writeSync } from 'node:fs';
 import { HandlerResult, ScriptRunner, ScriptRunnerOptions } from './types.js';
+
+// Embedded deployers use process-wide console/environment APIs. Serialize the
+// complete invocation (including import), and restore them even after failure.
+let deploymentQueue: Promise<unknown> = Promise.resolve();
 
 /**
  * Default script runner implementation
  *
- * Delegates command execution to existing Node.js scripts.
+ * Embeds repeatable agent deployment passes; runs other scripts in a child.
  */
 export class DefaultScriptRunner implements ScriptRunner {
   constructor(private frameworkRoot: string) {}
@@ -35,6 +43,19 @@ export class DefaultScriptRunner implements ScriptRunner {
     options: ScriptRunnerOptions = {}
   ): Promise<HandlerResult> {
     const fullPath = path.join(this.frameworkRoot, scriptPath);
+
+    if (scriptPath === 'tools/agents/deploy-agents.mjs'
+      && process.env.AIWG_DEPLOY_SUBPROCESS !== '1'
+      && options.env?.AIWG_DEPLOY_SUBPROCESS !== '1'
+      && !options.timeout
+      && (!options.cwd || path.resolve(options.cwd) === process.cwd())
+      // Other environment overrides can affect module initialization. Keep
+      // those callers isolated; AIWG_ROOT is resolved afresh by each pass.
+      && Object.keys(options.env ?? {}).every(key => key === 'AIWG_ROOT')) {
+      const invocation = deploymentQueue.then(() => this.runDeployment(fullPath, args, options));
+      deploymentQueue = invocation.catch(() => {});
+      return invocation;
+    }
 
     return new Promise((resolve) => {
       // When capture mode is enabled, stdout/stderr are piped so that
@@ -123,6 +144,49 @@ export class DefaultScriptRunner implements ScriptRunner {
         });
       });
     });
+  }
+
+  private async runDeployment(
+    fullPath: string, args: string[], options: ScriptRunnerOptions,
+  ): Promise<HandlerResult> {
+    const previousConsole = globalThis.console;
+    const previousRoot = process.env.AIWG_ROOT;
+    const stderrLimit = 1024 * 1024;
+    const diagnostics: Buffer[] = [];
+    let diagnosticBytes = 0;
+    try {
+      if (options.env?.AIWG_ROOT !== undefined) process.env.AIWG_ROOT = options.env.AIWG_ROOT;
+      if (options.capture) {
+        const stdout = new Writable({ write(chunk, _encoding, done) {
+          try {
+            if (options.stdoutFd !== undefined) writeSync(options.stdoutFd, chunk);
+            done();
+          } catch (error) { done(error as Error); }
+        } });
+        const stderr = new Writable({ write(chunk, _encoding, done) {
+          const retained = (chunk as Buffer).subarray(0, stderrLimit - diagnosticBytes);
+          if (retained.length) { diagnostics.push(Buffer.from(retained)); diagnosticBytes += retained.length; }
+          done();
+        } });
+        globalThis.console = new Console({ stdout, stderr });
+      }
+      // Runtime loading follows the provider preparation coordinator precedent;
+      // the runner still supports arbitrary scripts via its subprocess path.
+      const deployer = await import(pathToFileURL(fullPath).href) as {
+        main(args: string[], internal: { capture: boolean }): Promise<number | void>;
+      };
+      const exitCode = (await deployer.main(args, { capture: options.capture === true })) ?? 0;
+      const message = Buffer.concat(diagnostics).toString().trim();
+      return exitCode && message ? { exitCode, message } : { exitCode };
+    } catch (error) {
+      const message = Buffer.concat(diagnostics).toString().trim()
+        || (error instanceof Error ? error.message : String(error));
+      return { exitCode: 1, message };
+    } finally {
+      globalThis.console = previousConsole;
+      if (previousRoot === undefined) delete process.env.AIWG_ROOT;
+      else process.env.AIWG_ROOT = previousRoot;
+    }
   }
 }
 

@@ -36,10 +36,10 @@ const _require = createRequire(import.meta.url);
 let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import os from 'os';
 import { contentHash, writeSidecarManifest, getFrameworksForMode, normalizeDeploymentMode, skillMatchesProvider, isKernelSkill } from '../agents/providers/base.mjs';
 
-const CODEX_SKILLS_DIR = path.join(os.homedir(), '.codex', 'skills');
 const MAX_NAME_LENGTH = 100;
 const MAX_DESCRIPTION_LENGTH = 500;
 const LEGACY_RENAMED_SKILLS = new Set(['aiwg-mcp']);
@@ -104,11 +104,10 @@ export function planCodexListingBudget(planned, kernelDir, cap) {
   return { demoted, before, after: projected, cap };
 }
 
-function parseArgs() {
-  const args = process.argv.slice(2);
+function parseArgs(args, homeDir) {
   const cfg = {
     source: null,
-    target: CODEX_SKILLS_DIR,
+    target: path.join(homeDir, '.codex', 'skills'),
     mode: 'all',
     dryRun: false,
     force: false,
@@ -483,8 +482,8 @@ function isFullAiwgSourceRoot(srcRoot) {
     fs.existsSync(path.join(srcRoot, 'agentic', 'code', 'extensions'));
 }
 
-(async function main() {
-  const cfg = parseArgs();
+export async function main(args = process.argv.slice(2), internal = {}) {
+  const cfg = parseArgs(args, internal.homeDir || os.homedir());
   const { source, target, mode, dryRun, force } = cfg;
 
   // Resolve source directory
@@ -699,4 +698,9 @@ function isFullAiwgSourceRoot(srcRoot) {
   if (!dryRun && totalDeployed > 0) {
     console.log(`\nRestart Codex to load new skills.`);
   }
-})();
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { await main(); }
+  catch (error) { console.error(error.message); process.exitCode = 1; }
+}

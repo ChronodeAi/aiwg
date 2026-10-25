@@ -35,6 +35,7 @@ const staticModelCatalog = _require('../../../agentic/code/providers/model-catal
 import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
+import { pathToFileURL } from 'node:url';
 import { load as loadYaml } from 'js-yaml';
 import { classifyModelRole, modelForRole } from './model-role.mjs';
 import {
@@ -66,7 +67,6 @@ import {
   parseFrontmatter,
   resolveAiwgRoot
 } from './base.mjs';
-const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
 
 function resolveCodexHelperRoot(srcRoot) {
   const resolved = resolveAiwgRoot(srcRoot);
@@ -101,7 +101,6 @@ export const kernelSkillsPath = '.agents/skills/';
 // Legacy home-dir skills location written by AIWG versions prior to the #766
 // regression fix. Pruned on every codex skill deploy so codex-rs stops listing
 // each AIWG skill twice. Never touches non-AIWG (unmarked) skills.
-const legacyHomeSkillsDir = path.join(os.homedir(), '.codex', 'skills');
 
 export const support = {
   agents: 'native',
@@ -125,6 +124,7 @@ export const capabilities = {
  * Map model shorthand to OpenAI/GPT format
  */
 export function mapModel(originalModel, modelCfg, modelsConfig) {
+  const modelCatalog = modelCfg.modelCatalog || loadRuntimeModelCatalog(staticModelCatalog);
   const gptModels = {
     'opus': modelCatalog.providers.codex.roles.reasoning.id,
     'sonnet': modelCatalog.providers.codex.roles.coding.id,
@@ -204,7 +204,7 @@ export function renderAgentToml(srcPath, content, models) {
  */
 export function transformAgent(srcPath, content, opts) {
   const { reasoningModel, codingModel, efficiencyModel } = opts;
-  const catalogModels = modelCatalog.providers.codex.roles;
+  const catalogModels = (opts.modelCatalog || loadRuntimeModelCatalog(staticModelCatalog)).providers.codex.roles;
 
   const models = {
     reasoning: reasoningModel || catalogModels.reasoning.id,
@@ -239,6 +239,27 @@ export function deployAgents(agentFiles, targetDir, opts) {
   }, transformAgent);
 }
 
+/** Run the helper in this pass; retain process isolation for troubleshooting. */
+async function runCodexDeployer(scriptPath, args, helperRoot, opts) {
+  if (process.env.AIWG_DEPLOY_SUBPROCESS !== '1') {
+    const deployer = await import(pathToFileURL(scriptPath).href);
+    await deployer.main(args, { homeDir: opts.deploymentHome || os.homedir() });
+    return;
+  }
+  await new Promise((resolve, reject) => {
+    const child = spawn('node', [scriptPath, ...args], {
+      stdio: 'inherit',
+      cwd: helperRoot,
+      env: opts.deploymentHome ? { ...process.env, HOME: opts.deploymentHome } : process.env,
+    });
+    child.on('close', code => {
+      if (code === 0) resolve();
+      else reject(new Error(`${path.basename(scriptPath)} exited with code ${code}`));
+    });
+    child.on('error', reject);
+  });
+}
+
 /**
  * Deploy commands via external script
  *
@@ -257,30 +278,16 @@ export async function deployCommands(targetDir, srcRoot, opts) {
 
   console.log('Delegating command deployment to deploy-prompts-codex.mjs (~/.codex/prompts/)...');
 
-  return new Promise((resolve, reject) => {
-    // NOTE: Do NOT pass --target - Codex prompts belong in ~/.codex/prompts/ (home)
-    const args = ['--source', srcRoot];
-    if (opts.dryRun) args.push('--dry-run');
-    if (opts.force) args.push('--force');
-    if (opts.mode) args.push('--mode', opts.mode);
-    if (opts.copyStandardSkills === true) args.push('--copy-all');
-    // A copy-all the deployer forced on the caller's behalf (project-local
-    // bundles) still honors the startup listing cap (#2561).
-    if (opts.listingBudget === true) args.push('--listing-budget');
-
-    const child = spawn('node', [scriptPath, ...args], {
-      stdio: 'inherit',
-      cwd: helperRoot,
-      env: opts.deploymentHome ? { ...process.env, HOME: opts.deploymentHome } : process.env
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`deploy-prompts-codex.mjs exited with code ${code}`));
-    });
-
-    child.on('error', reject);
-  });
+  // NOTE: Do NOT pass --target - Codex prompts belong in ~/.codex/prompts/ (home)
+  const args = ['--source', srcRoot];
+  if (opts.dryRun) args.push('--dry-run');
+  if (opts.force) args.push('--force');
+  if (opts.mode) args.push('--mode', opts.mode);
+  if (opts.copyStandardSkills === true) args.push('--copy-all');
+  // A copy-all the deployer forced on the caller's behalf (project-local
+  // bundles) still honors the startup listing cap (#2561).
+  if (opts.listingBudget === true) args.push('--listing-budget');
+  await runCodexDeployer(scriptPath, args, helperRoot, opts);
 }
 
 /**
@@ -305,37 +312,23 @@ export async function deploySkills(targetDir, srcRoot, opts) {
   const crossAgentSkillsDir = path.join(targetDir, '.agents', 'skills');
   console.log(`Deploying skills to ${crossAgentSkillsDir} (.agents/skills — codex-scanned path)...`);
 
-  await new Promise((resolve, reject) => {
-    const args = ['--source', srcRoot, '--target', crossAgentSkillsDir];
-    // Overflow past Codex's startup listing cap lands here instead of being
-    // deployed over the cap (#2561); the index still reaches these skills.
-    args.push('--standard-target', path.join(targetDir, ...paths.skills.split('/').filter(Boolean)));
-    if (opts.dryRun) args.push('--dry-run');
-    if (opts.force) args.push('--force');
-    if (opts.mode) args.push('--mode', opts.mode);
-    if (opts.copyStandardSkills === true) args.push('--copy-all');
-    // A copy-all the deployer forced on the caller's behalf (project-local
-    // bundles) still honors the startup listing cap (#2561).
-    if (opts.listingBudget === true) args.push('--listing-budget');
-
-    const child = spawn('node', [scriptPath, ...args], {
-      stdio: 'inherit',
-      cwd: helperRoot,
-      env: opts.deploymentHome ? { ...process.env, HOME: opts.deploymentHome } : process.env
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`deploy-skills-codex.mjs exited with code ${code}`));
-    });
-
-    child.on('error', reject);
-  });
+  const args = ['--source', srcRoot, '--target', crossAgentSkillsDir];
+  // Overflow past Codex's startup listing cap lands here instead of being
+  // deployed over the cap (#2561); the index still reaches these skills.
+  args.push('--standard-target', path.join(targetDir, ...paths.skills.split('/').filter(Boolean)));
+  if (opts.dryRun) args.push('--dry-run');
+  if (opts.force) args.push('--force');
+  if (opts.mode) args.push('--mode', opts.mode);
+  if (opts.copyStandardSkills === true) args.push('--copy-all');
+  // A copy-all the deployer forced on the caller's behalf (project-local
+  // bundles) still honors the startup listing cap (#2561).
+  if (opts.listingBudget === true) args.push('--listing-budget');
+  await runCodexDeployer(scriptPath, args, helperRoot, opts);
 
   // Self-heal: prune AIWG-managed skill dirs left behind in the legacy
   // ~/.codex/skills/ home location by pre-fix versions, so codex-rs stops
   // listing each skill twice.
-  pruneLegacyCodexSkills(opts, opts.legacyCodexSkills || legacyHomeSkillsDir);
+  pruneLegacyCodexSkills(opts, opts.legacyCodexSkills || path.join(os.homedir(), '.codex', 'skills'));
 }
 
 /**
@@ -346,7 +339,7 @@ export async function deploySkills(targetDir, srcRoot, opts) {
  * the `.aiwg-managed` marker are removed — user-authored skills are never
  * touched. The now-empty legacy dir is removed if AIWG owned everything in it.
  */
-export function pruneLegacyCodexSkills(opts = {}, legacyDir = legacyHomeSkillsDir) {
+export function pruneLegacyCodexSkills(opts = {}, legacyDir = path.join(os.homedir(), '.codex', 'skills')) {
   let entries;
   try {
     entries = fs.readdirSync(legacyDir, { withFileTypes: true });

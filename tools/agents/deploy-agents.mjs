@@ -99,7 +99,6 @@ import {
   resolveAiwgRoot,
   updateSidecarManifest,
 } from './providers/base.mjs';
-const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
 
 // ============================================================================
 // Provider Registry
@@ -584,8 +583,7 @@ export function parseArgs(args = process.argv.slice(2)) {
     else if (a === '--listing-budget') cfg.listingBudget = true;
     else if (a === '--deploy-version' && args[i + 1]) cfg.deployVersion = String(args[++i]);
     else if (a === '--help' || a === '-h') {
-      printHelp();
-      process.exit(0);
+      cfg.help = true;
     }
   }
   return cfg;
@@ -745,7 +743,7 @@ function resolveProvider(name) {
       console.error('');
       for (const line of UNSUPPORTED_PROVIDER_HINTS[candidate]) console.error(line);
     }
-    process.exit(1);
+    throw new Error(`Unknown provider: ${name}`);
   }
   return resolved;
 }
@@ -755,14 +753,17 @@ function resolveProvider(name) {
  */
 async function loadProvider(providerName) {
   const resolved = resolveProvider(providerName);
-  const providerPath = `./providers/${resolved}.mjs`;
+  // Resolve against this module, not the caller's cwd: in-process callers
+  // (including module runners such as Vitest) cannot resolve a bare relative
+  // specifier held in a variable.
+  const providerUrl = new URL(`./providers/${resolved}.mjs`, import.meta.url).href;
 
   try {
-    const provider = await import(providerPath);
+    const provider = await import(providerUrl);
     return provider.default || provider;
   } catch (err) {
     console.error(`Failed to load provider '${resolved}':`, err.message);
-    process.exit(1);
+    throw err;
   }
 }
 
@@ -898,7 +899,7 @@ function deepMerge(target, source) {
  * @param {string} targetDir - Resolved target directory
  * @returns {Promise<boolean>} true = proceed with migration, false = skip
  */
-async function promptCommandsMigration(cfg, provider, targetDir) {
+async function promptCommandsMigration(cfg, provider, targetDir, interactive = process.stdout.isTTY) {
   // Home-directory providers share commands across projects — do not delete.
   if (provider.capabilities?.homeDirectoryDeploy) return false;
   // Some providers intentionally expose both surfaces with different runtime
@@ -916,7 +917,7 @@ async function promptCommandsMigration(cfg, provider, targetDir) {
   if (entries.length === 0) return false;
 
   // Non-interactive context: migrate silently.
-  if (cfg.quiet || !process.stdout.isTTY) return true;
+  if (cfg.quiet || !interactive) return true;
 
   const rel = path.relative(process.cwd(), commandsDir);
   console.log(`\n⚠  Commands → Skills Migration`);
@@ -950,6 +951,8 @@ async function promptCommandsMigration(cfg, provider, targetDir) {
 
 export async function main(args = process.argv.slice(2), internal = {}) {
   const cfg = parseArgs(args);
+  if (cfg.help) { printHelp(); return 0; }
+  const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
 
   // Resolve source directory (default to repo root relative to this script)
   const __filename = fileURLToPath(import.meta.url);
@@ -958,8 +961,7 @@ export async function main(args = process.argv.slice(2), internal = {}) {
 
   // Validate source directory
   if (!fs.existsSync(srcRoot)) {
-    console.error(`Source directory not found: ${srcRoot}`);
-    process.exit(1);
+    throw new Error(`Source directory not found: ${srcRoot}`);
   }
 
   // Validate target directory
@@ -1044,6 +1046,9 @@ export async function main(args = process.argv.slice(2), internal = {}) {
     codingModel: cfg.codingModel,
     efficiencyModel: cfg.efficiencyModel,
     modelsConfig,
+    modelCatalog,
+    // Warnings belong to this pass, just as they do in an isolated CLI run.
+    warnedCommandsDirs: new Set(),
     asAgentsMd: cfg.asAgentsMd,
     createAgentsMd: cfg.contextFiles && cfg.createAgentsMd,
     contextFiles: cfg.contextFiles,
@@ -1095,7 +1100,7 @@ export async function main(args = process.argv.slice(2), internal = {}) {
   // so stale command files don't create duplicates in the provider TUI.
   if (!preparationActive && !internal.finalizeOnly) {
     if (!cfg.dryRun && !cfg.skipCommandsMigration) {
-      const doMigrate = await promptCommandsMigration(cfg, provider, cfg.target);
+      const doMigrate = await promptCommandsMigration(cfg, provider, cfg.target, internal.capture ? false : process.stdout.isTTY);
       if (doMigrate) {
         const commandsRelPath = provider.paths?.commands;
         if (commandsRelPath) {
@@ -1159,11 +1164,13 @@ export async function main(args = process.argv.slice(2), internal = {}) {
     if (cfg.dryRun) {
       console.error('(dry-run mode - no files were modified)');
     }
-    process.exit(1);
+    return 1;
   }
+  return 0;
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  await main();
+  try { process.exitCode = (await main()) ?? 0; }
+  catch (error) { console.error(error.message); process.exitCode = 1; }
 }
