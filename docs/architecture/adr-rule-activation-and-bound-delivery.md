@@ -383,6 +383,15 @@ for all CRITICAL rules. For example, CRITICAL `versioning` is release-scoped.
 
 #### Amendment 2026-10-25 (proposed): root kernel re-evaluated for compound discovery (#3292 item 3)
 
+> **Operator decision 2026-10-25: rejected as proposed.** `no-attribution` and
+> `anti-laziness` are two of the behaviours AIWG fights hardest, so both stay
+> always loaded: `no-attribution` stays `kernel` and `anti-laziness` stays
+> `core`. Delivery at the point of action does not replace them. The other
+> dispositions in the table below are proposals only. Each needs a separate
+> operator decision per rule before any rule file changes. The re-derived U1
+> figures assume every proposed move and are therefore not adopted.
+
+
 Compound discovery is implemented: every action result carries its governing
 rules (`bound_rules[]`), per-result and whole-response `rule_stats`, and
 machine-checkable `required_rule_checks[]` with a fetch-and-follow obligation
@@ -423,7 +432,7 @@ Disposition of the 18 distinct kernel rules under the revised criteria:
 | `instruction-comprehension` | Move to `summary` | Universal but not safety; a startup one-liner plus discovery-delivered detail suffices. |
 | `research-before-decision` | Move to `summary` | Governed decisions always follow task framing that discovery can see. |
 | `artifact-output-policy` | Move to `bound` | Artifact production always follows scoped workflow selection; bind to artifact-producing workflows. |
-| `no-attribution` | Move to `bound` | Attribution obligations attach to delivery output; bind to delivery/release artifacts. |
+| `no-attribution` | **Stay kernel (operator decision 2026-10-25)** | Proposed move to `bound` rejected: attribution leaks happen in any output, not only delivery artifacts. |
 | `citation-policy` | Move to `bound` | Claims travel with research outputs; deliver with the research artifacts that produce them. |
 | `dev-pipeline-safety` | Kernel when extension installed | Suppressing a CI signal happens in the first pipeline command, before discovery. |
 | `it-change-control` | Kernel when extension installed | Network/identity changes are destructive before any scoped artifact loads. |
