@@ -241,8 +241,11 @@ describe('Socket captured live response', () => {
     const result = evaluateSocketArtifacts({ artifacts: liveArtifacts, baseline: liveBaseline, components: liveComponents, now: capturedAt })
     expect(result.status).toBe('fail')
     expect(result.findings.blocking.map(finding => [finding.package, finding.version, finding.type])).toEqual([
-      ['body-parser', '2.3.0', 'cve'], ['zod', '3.25.76', 'cve'], ['zod', '4.3.5', 'cve']
+      ['body-parser', '2.3.0', 'cve'], ['zod', '4.3.5', 'cve']
     ])
+    // The zod 3.25.76 copy nested under @fortemi/core carries a dated accepted-risk review (#3577).
+    expect(result.findings.transitive.find(finding => finding.package === 'zod' && finding.version === '3.25.76')?.review)
+      .toMatchObject({ classification: 'accepted-risk', expired: false })
     for (const finding of result.findings.transitive.filter(finding => /cve/i.test(finding.type))) {
       expect(finding.evidence.advisoryId).toBe(finding.evidence.props.cveId)
       expect(finding.evidence.advisoryUrl).toBe(finding.evidence.props.url)
@@ -324,6 +327,59 @@ describe('Socket quota pacing', () => {
     const fetchImpl = async (url: URL | string) => (String(url).endsWith('/v0/quota') ? quota('2026-10-16T19:00:00Z') : limited) as never
     await expect(fetchArtifacts({ components, token: 't', orgSlug: 'org', fetchImpl, paceQuotaMs: 10 * 60_000, now, sleep, log: () => {} }))
       .rejects.toThrow('HTTP 429')
+  })
+
+  it('first-party reviews match AIWG packages without a hash pin but never cover third-party code', () => {
+    const firstParty = {
+      ...baseline,
+      firstPartyPackages: ['pkg:npm/aiwg', 'pkg:npm/%40aiwg/cli'],
+      reviewedCapabilityAlerts: [{
+        package: '*', depth: 'direct', type: 'shellAccess', scope: 'first-party', classification: 'required-capability',
+        rationale: 'AIWG invokes local tools after approval', owner: 'maintainers', reviewedOn: '2026-10-25', expiresOn: '2027-01-25'
+      }]
+    }
+    const shell = { key: 'Qshell-rule', type: 'shellAccess', severity: 'middle', file: 'dist/src/skills/cli.js' }
+    const third = { purl: 'pkg:npm/commander@12.1.0', depth: 'direct' }
+    const artifacts = [
+      ...rootsWith([shell]),
+      { inputPurl: third.purl, name: 'commander', version: '12.1.0', score: scores, alerts: [{ ...shell, artifactHash: 'sha512-x' }] }
+    ]
+    const result = evaluateSocketArtifacts({ artifacts, baseline: firstParty, components: [...roots, third], now: new Date('2026-10-25T00:00:00Z') })
+    const blocking = result.findings.blocking.map((finding: { package: string }) => finding.package)
+    expect(blocking).not.toContain('aiwg')
+    expect(blocking).toContain('commander')
+    const pinned = { ...firstParty, reviewedCapabilityAlerts: [...firstParty.reviewedCapabilityAlerts, {
+      package: 'commander', depth: 'direct', type: 'shellAccess', classification: 'required-capability',
+      rationale: 'no executable subcommands registered', artifactHash: 'sha512-x', owner: 'maintainers', reviewedOn: '2026-10-25', expiresOn: '2027-01-25'
+    }] }
+    const pinnedResult = evaluateSocketArtifacts({ artifacts, baseline: pinned, components: [...roots, third], now: new Date('2026-10-25T00:00:00Z') })
+    expect(pinnedResult.findings.blocking.map((finding: { package: string }) => finding.package)).not.toContain('commander')
+    const stale = { ...pinned, reviewedCapabilityAlerts: pinned.reviewedCapabilityAlerts.map(review => review.package === 'commander' ? { ...review, artifactHash: 'sha512-old' } : review) }
+    const staleResult = evaluateSocketArtifacts({ artifacts, baseline: stale, components: [...roots, third], now: new Date('2026-10-25T00:00:00Z') })
+    expect(staleResult.findings.blocking.map((finding: { package: string }) => finding.package)).toContain('commander')
+  })
+
+  it('treats an empty cveId as absent and scopes version-pinned reviews to that version', () => {
+    const cargo = { purl: 'pkg:cargo/glib@0.18.5', depth: 'transitive' }
+    const medium = { key: 'Qglib', type: 'mediumCVE', severity: 'middle', props: { cveId: '', ghsaId: 'GHSA-wrw7-89jp-8q8g', url: 'https://github.com/advisories/GHSA-wrw7-89jp-8q8g' } }
+    const zodOld = { purl: 'pkg:npm/zod@3.25.76', depth: 'transitive' }
+    const zodNew = { purl: 'pkg:npm/zod@4.3.5', depth: 'transitive' }
+    const cve = { key: 'Qzod', type: 'cve', severity: 'high', props: { cveId: 'CVE-2023-54404', ghsaId: 'GHSA-mrhx-c7xc-m3w5', url: 'https://github.com/advisories/GHSA-mrhx-c7xc-m3w5' } }
+    const accepted = { ...baseline, reviewedCapabilityAlerts: [{
+      package: 'zod', depth: 'transitive', type: 'cve', classification: 'accepted-risk', reviewedVersion: '3.25.76',
+      rationale: 'nested under an upstream pin', owner: 'maintainers', reviewedOn: '2026-10-25', expiresOn: '2026-12-15'
+    }] }
+    const artifacts = [
+      { inputPurl: cargo.purl, name: 'glib', version: '0.18.5', score: scores, alerts: [medium] },
+      { inputPurl: zodOld.purl, name: 'zod', version: '3.25.76', score: scores, alerts: [cve] },
+      { inputPurl: zodNew.purl, name: 'zod', version: '4.3.5', score: scores, alerts: [cve] }
+    ]
+    const result = evaluateSocketArtifacts({ artifacts, baseline: accepted, components: [cargo, zodOld, zodNew], now: new Date('2026-10-25T00:00:00Z') })
+    const glib = result.findings.transitive.find((finding: { package: string }) => finding.package === 'glib')
+    expect(glib.evidenceErrors).toEqual([])
+    expect(glib.evidence.advisoryId).toBe('GHSA-wrw7-89jp-8q8g')
+    const blocking = result.findings.blocking.map((finding: { package: string, version: string }) => `${finding.package}@${finding.version}`)
+    expect(blocking).toEqual(['zod@4.3.5'])
   })
 
   it('sends a release-sized component set in few large requests (Socket bills per request)', async () => {

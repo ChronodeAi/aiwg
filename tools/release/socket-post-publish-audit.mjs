@@ -105,6 +105,12 @@ function packageName(artifact) {
   return artifact.name ?? artifactPurl(artifact).replace(/^pkg:npm\//, '').replace(/@[^@/]+$/, '')
 }
 
+// Socket sends empty strings for absent identifiers (for example cveId: "" on a
+// GHSA-only advisory); treat them as absent rather than as invalid values.
+function present(value) {
+  return value !== undefined && value !== null && value !== ''
+}
+
 function firstValue(...values) {
   return values.find(value => value !== undefined && value !== null) ?? null
 }
@@ -125,7 +131,7 @@ function normalizeEvidence(artifact, alert, component) {
     excerpt: firstValue(alert.excerpt, value.excerpt),
     behaviorTrace: firstValue(alert.behaviorTrace, value.behaviorTrace),
     confidenceRationale: firstValue(alert.confidenceRationale, value.confidenceRationale),
-    advisoryId: firstValue(alert.advisoryId, value.advisoryId, alert.cve, value.cve, alert.ghsa, value.ghsa, alert.rustsec, value.rustsec, props?.cveId, props?.ghsaId),
+    advisoryId: firstValue(alert.advisoryId, value.advisoryId, alert.cve, value.cve, alert.ghsa, value.ghsa, alert.rustsec, value.rustsec, present(props?.cveId) ? props.cveId : null, present(props?.ghsaId) ? props.ghsaId : null),
     advisoryUrl: firstValue(alert.url, value.url, alert.advisoryUrl, value.advisoryUrl, props?.url),
     firstPatchedVersion: firstValue(alert.firstPatchedVersion, value.firstPatchedVersion, alert.fixedVersion, value.fixedVersion, props?.firstPatchedVersionIdentifier)
   }
@@ -150,7 +156,7 @@ function evidenceErrors(type, evidence) {
   // Validate recognized props even if a legacy top-level field takes precedence.
   for (const [key, validate] of Object.entries({ cveId: isText, ghsaId: isText, url: isUrl, firstPatchedVersionIdentifier: isVersion })) {
     const value = evidence.props?.[key]
-    if (value !== undefined && value !== null && !validate(value)) errors.push(`invalid-props.${key}`)
+    if (present(value) && !validate(value)) errors.push(`invalid-props.${key}`)
   }
   if (isBehavioral(type) && evidence.ruleId === null) errors.push('missing-ruleId')
   if (/cve/i.test(type) && evidence.advisoryId === null) errors.push('missing-advisory-identifier')
@@ -160,14 +166,29 @@ function evidenceErrors(type, evidence) {
   return errors
 }
 
-function reviewMatches(review, finding) {
+function purlBase(purl) {
+  return String(purl ?? '').replace(/@[^@/]+$/, '')
+}
+
+// First-party packages (AIWG's own published packages) are reviewed in this
+// repository, and Socket returns no artifact hash for them, so a first-party
+// review matches by package without a hash pin. It never covers third-party code.
+function isFirstParty(finding, baseline) {
+  return (baseline?.firstPartyPackages ?? []).includes(purlBase(finding.purl))
+}
+
+function reviewMatches(review, finding, baseline) {
+  const firstPartyReview = review.scope === 'first-party'
+  if (firstPartyReview && !isFirstParty(finding, baseline)) return false
   return review.type === finding.type &&
     (review.package === '*' || review.package === finding.package) &&
+    (!review.reviewedVersion || review.reviewedVersion === finding.version) &&
     review.depth === finding.depth &&
     (!isBehavioral(finding.type) || (
-      Boolean(review.rationale) &&
-      Boolean(review.artifactHash) &&
-      review.artifactHash === finding.evidence.artifactHash
+      Boolean(review.rationale) && (
+        firstPartyReview ||
+        (Boolean(review.artifactHash) && review.artifactHash === finding.evidence.artifactHash)
+      )
     ))
 }
 
@@ -245,7 +266,7 @@ export function evaluateSocketArtifacts({ artifacts, baseline, components, now =
       if (errors.length) validationErrors.push({ purl, type, errors })
       if (finding.id && findingKeys.has(finding.id)) validationErrors.push({ id: finding.id, error: 'duplicate-finding-id' })
       if (finding.id) findingKeys.set(finding.id, true)
-      const review = baseline.reviewedCapabilityAlerts.find(candidate => reviewMatches(candidate, finding))
+      const review = baseline.reviewedCapabilityAlerts.find(candidate => reviewMatches(candidate, finding, baseline))
       finding.review = review ? {
         classification: review.classification,
         rationale: review.rationale,
