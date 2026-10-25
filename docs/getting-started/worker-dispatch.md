@@ -503,6 +503,74 @@ cadence. Heartbeats and log bytes are not progress. On correlated failure across
 workers sharing one account, quota, or host, pause further launches there and report
 cause and scope.
 
+## Direct-path recovery evidence and status
+
+Direct recovery reuses the scoped breaker in the launcher and MCP worker owner.
+For both shell and MCP transports, stdout, stderr, structured worker errors, and
+worker-writable files are untrusted outage claims. They can request a diagnostic,
+but never establish a provider, quota, or host outage by themselves.
+
+The trusted upstream observation is one conductor-owned HEAD request per failed
+attempt to the first endpoint already authorized by installation qualification.
+It sends no task, credentials, or inference body and refuses redirects. A trusted
+HTTP 5xx implicates only the resolved inference provider; HTTP 429 implicates only
+the qualified account's quota scope. Missing identities stay invocation-local.
+Connection errors and HTTP 401/403/404 do not establish an upstream outage.
+Launcher-observed native resource errors (`ENOMEM`, `ENOSPC`, `EAGAIN`, `EMFILE`,
+`ENFILE`) and unit results (`oom-kill`, `resources`) require at least two distinct
+resolved backends before implicating `host:local`.
+
+A shared scope opens after three distinct failed invocations within 120 seconds,
+or when every member of a frozen cohort of at least two outstanding invocations
+fails with trusted evidence. Replays do not count as distinct invocations. The
+initial cooldown is 120 seconds. Each failed probe/canary doubles it, capped at
+900 seconds, with at most 1000ms jitter. Trusted retry/reset headers can extend
+eligibility by at most 24 hours. The diagnostic and subsequent recovery probes
+each consume an existing task attempt and have a 10-second/64-KiB limit; an
+unexpected response body is cancelled without being read. An expired or cancelled
+task cannot send another request. A successful probe admits one task canary,
+bounded by the remaining task deadline and 300 seconds. Only its verified success
+closes the scope. Unknown termination blocks overlapping retries; unavailable
+qualified probes require operator intervention. No recovery path grants more
+attempts, budget, or permissions.
+
+Read status with the existing command:
+
+```bash
+aiwg ralph-external --status --workers --runs-root <dir> --json
+```
+
+Text and JSON show scopes, fixed reason codes, next eligibility, canary activity,
+and recent transitions, including successful canary closure. Each snapshot holds
+at most 32 scopes and 32 transitions and reports omitted scopes. MCP worker
+`status` exposes the same projection from its live owner. CLI status reads the
+latest recorded launcher snapshot with its observation time; it cannot query a
+separate conductor's live memory. Status reads never launch probes, expire
+reservations, reset scopes, kill workers, or retry work. These records are
+diagnostic snapshots, not persisted breaker authority: a conductor restart still
+starts with closed scopes and retains the separate stop-before-retry checks.
+
+Automatic correction supports one narrow mechanical action: refresh the executable
+binding after launcher-observed `ENOENT`, with no process started and a confirmed
+predecessor stop. The owner reloads trusted installation inputs and re-resolves
+the same task. It retries only when the qualified absolute executable changes
+while the effective selection, policy, controls, limits, health windows, stdin,
+environment, workspace and brief stay identical. Fresh installation proof digests
+may change. The retry uses fresh plan, run and output paths and preserves the
+failed attempt's evidence.
+
+The existing atomic ledger permits one correction per task chain, consuming one
+remaining attempt under the original deadline and cancellation guard. The owner
+verifies the predecessor's launcher-written exit evidence again before retrying.
+Unchanged executables, qualification or control drift, failed correction,
+cancellation, deadline expiry, unconfirmed stop and exhausted allowances stop
+automation. Output paths must occur as exact argv tokens; changed artifact
+contents require operator resolution. The owner does not install executables,
+refresh logins, change permissions, create working directories, switch models,
+or act on worker-authored remediation text. Fixed `startupCorrection` action,
+state and stop codes appear in the existing process record, result and worker
+status.
+
 ## How to turn it off
 
 ```bash

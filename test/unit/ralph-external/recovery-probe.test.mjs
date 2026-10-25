@@ -5,7 +5,7 @@ import { admitDirectWorker, debitDirectWorkerAllowance, reserveDirectWorkerAllow
   resetInProcessAllowanceLedger, ALLOWANCE_EXHAUSTED_CODE } from '../../../tools/ralph-external/session-launcher.mjs';
 
 const endpoint = 'https://provider.invalid/account-health';
-afterEach(() => { vi.restoreAllMocks(); resetInProcessAllowanceLedger(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); resetInProcessAllowanceLedger(); });
 function fixture() {
   return { driver: { qualification: { installation: { endpoints: [endpoint] } },
     buildInvocation: vi.fn(() => { throw new Error('Never execute a CLI as an uncontained probe'); }) },
@@ -49,13 +49,49 @@ describe('bounded qualified recovery probes', () => {
   });
 
   it('T-OG-22 aborts an unresponsive endpoint at the probe deadline', async () => {
-    const started = performance.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
     let signal;
-    const result = await runRecoveryProbe({ ...fixture(), timeoutMs: 20,
+    const pending = runRecoveryProbe({ ...fixture(), timeoutMs: 20, nowMs: Date.now,
       fetchImpl: async (_url, options) => { signal = options.signal; return new Promise(() => {}); } });
+    await vi.advanceTimersByTimeAsync(19);
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await pending;
     expect(result).toMatchObject({ success: false, reason: 'probe-timeout', termination: 'confirmed' });
     expect(signal.aborted).toBe(true);
-    expect(performance.now() - started).toBeLessThan(1500);
+  });
+
+  it('uses the injected absolute deadline after dispatch preparation and response delivery', async () => {
+    let now = 0;
+    const fetchImpl = vi.fn(async () => { now = 10; return new Response(null); });
+    expect(await runRecoveryProbe({ ...fixture(), timeoutMs: 10, nowMs: () => now,
+      onDispatch: () => { now = 10; }, fetchImpl })).toMatchObject({ reason: 'probe-timeout' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    now = 0;
+    expect(await runRecoveryProbe({ ...fixture(), timeoutMs: 10, nowMs: () => now, fetchImpl }))
+      .toMatchObject({ reason: 'probe-timeout', success: false });
+  });
+
+  it.each(['file:///tmp/untrusted', 'https://user:pass@provider.invalid', 'https://provider.invalid/#untrusted'])
+  ('rejects unsafe qualified endpoint %s before charging', async endpoint => {
+    const dispatch = vi.fn();
+    const fetchImpl = vi.fn();
+    expect(await runRecoveryProbe({ ...fixture(), driver: { qualification: { installation: { endpoints: [endpoint] } } },
+      onDispatch: dispatch, fetchImpl })).toMatchObject({ reason: 'probe-endpoint-unavailable' });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('caps all trusted retry/reset headers to one day and ignores malformed or past values', async () => {
+    for (const headers of [{ 'retry-after': '999999' }, { 'x-ratelimit-reset': '999999' }, { 'ratelimit-reset': '999999' }]) {
+      expect(await runRecoveryProbe({ ...fixture(), wallNowMs: () => 0,
+        fetchImpl: async () => new Response(null, { status: 429, headers }) }))
+        .toMatchObject({ retryAfterSeconds: 86400 });
+    }
+    expect(await runRecoveryProbe({ ...fixture(), wallNowMs: () => 1_000_000,
+      fetchImpl: async () => new Response(null, { status: 429, headers: { 'retry-after': '-1', 'x-ratelimit-reset': '1', 'ratelimit-reset': 'garbage' } }) }))
+      .toMatchObject({ retryAfterSeconds: null });
   });
 
   it('T-OG-22 bounds actual endpoint headers to 64KiB', async () => {

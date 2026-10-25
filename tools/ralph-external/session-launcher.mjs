@@ -487,6 +487,10 @@ function workerLaunchRefusal(outcome) {
     : 'Worker launch did not return an attached child');
 }
 
+// Only the admitted direct owner can supply inputs for an automatic correction.
+// Neither worker output nor a caller-supplied result can populate this context.
+const directStartupCorrectionContext = new WeakMap();
+
 async function launchOneWorker(owner, options) {
   const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validate } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
   const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
@@ -664,6 +668,7 @@ async function launchOneWorker(owner, options) {
   // worker-writable captureRoot fell back to the in-process ledger) is
   // folded in up front so every exit path reports it.
   const ledgerDiagnostics = admission.ledgerDiagnostic ? [admission.ledgerDiagnostic] : [];
+  const startupQualification = structuredClone(inputs.drivers[invocation.selected.cli].qualification);
   const settleLedger = async (outcome) => {
     const diagnostic = await settleDirectWorker(admission, outcome);
     if (diagnostic) ledgerDiagnostics.push(diagnostic);
@@ -747,11 +752,22 @@ async function launchOneWorker(owner, options) {
   // writes; `.catch(() => {})` keeps a prior failure from poisoning it, and
   // the per-call promise returned to the caller still reflects this write's
   // own outcome.
+  let latestProcessRecord = null;
   const publish = (name, value) => {
+    if (name === 'process.json') {
+      value = { ...value, recovery: { ...admission.breaker.recoveryStatus(), observedAt: new Date().toISOString() } };
+      if (options.startupCorrectionRecord) value.startupCorrection = options.startupCorrectionRecord;
+      latestProcessRecord = value;
+    }
     const write = publishing.catch(() => {}).then(() => writeRecord(runDir, name, value, inspect));
     publishing = write.catch(error => { publishFailures.push({ name, error: error?.message ?? String(error) }); });
     return write;
   };
+  const publishRecovery = () => {
+    if (latestProcessRecord) return publish('process.json', latestProcessRecord);
+  };
+  const onScopeTransition = () => { publishRecovery()?.catch(() => {}); };
+  admission.breaker.on('transition', onScopeTransition);
   const handles = [];
   let outcome;
   let artifacts;
@@ -914,6 +930,8 @@ async function launchOneWorker(owner, options) {
     // accumulated across this attempt's lifecycle on the returned result,
     // mirroring `publishFailures` — never silently discarded.
     if (ledgerDiagnostics.length && result) result.ledgerDiagnostics = ledgerDiagnostics.slice();
+    directStartupCorrectionContext.set(owner, { saved, invocation, loadInputs, clock, dispatchGuard,
+      ledger: admission.ledger, inspect, qualification: startupQualification });
     return result;
   } catch (error) {
     if (!outcome?.child) {
@@ -985,6 +1003,8 @@ async function launchOneWorker(owner, options) {
     if (ledgerDiagnostics.length) error.ledgerDiagnostics = ledgerDiagnostics;
     throw error;
   } finally {
+    admission.breaker.removeListener('transition', onScopeTransition);
+    await publishing;
     try { await artifacts?.cleanup(); } finally {
       // Never chmod a worker-replaced pathname; only the inodes we opened.
       for (const handle of handles) { await handle.chmod(0o600).catch(() => {}); await handle.close().catch(() => {}); }
@@ -3916,6 +3936,102 @@ export function classifyAttemptForSettlement(invocation, result, { quotaAccount 
     inferenceProvider: selected.inferenceProvider ?? null, quotaAccount, installationQualifier };
 }
 
+/** Refresh only a demonstrated stale executable binding. Installation, login,
+ * permissions, models, working directories and policy are never repaired here.
+ * One retry shares the original task clock and the existing atomic ledgers. */
+async function correctDirectWorkerStartup(owner, options, previous) {
+  const context = directStartupCorrectionContext.get(owner);
+  if (!context || options.correctStartup !== undefined || previous?.errorCode !== 'ENOENT'
+    || previous.termination !== 'confirmed' || previous.exitCode != null || previous.signal != null
+    || previous.cancelled || previous.timedOut || previous.publishFailures?.length
+    || classifyLaunchOutcomeForRecovery(previous).reasonCode !== 'NOT_FOUND') return previous;
+  const { saved, invocation, loadInputs, clock, dispatchGuard, ledger, inspect, qualification } = context;
+  const record = { action: 'refresh-executable-binding', reasonCode: 'NOT_FOUND', state: 'stopped',
+    previousInvocationId: previous.invocationId };
+  const recordAt = async (runDir, invocationId) => {
+    const processRecord = JSON.parse((await boundedPrivateRead(join(runDir, 'process.json'), 65536, inspect)).toString('utf8'));
+    if (processRecord.origin !== 'launcher' || processRecord.invocationId !== invocationId) throw new Error('Correction record identity changed');
+    await (options.publishRecord ?? publishWorkerRecord)(runDir, 'process.json', { ...processRecord, startupCorrection: { ...record } }, inspect);
+  };
+  const stop = async code => {
+    record.stopCode = code;
+    previous.startupCorrection = { ...record };
+    await recordAt(options.runDir, previous.invocationId);
+    return previous;
+  };
+  const guardStop = () => dispatchGuard?.isCancelled?.() === true ? 'CANCELLED'
+    : dispatchGuard?.deadlineAtMs != null && (dispatchGuard.nowMs?.() ?? Date.now()) >= dispatchGuard.deadlineAtMs ? 'DEADLINE' : null;
+  if (ledger?.n >= ledger?.maxAttempts) return stop('ATTEMPT_LIMIT');
+  if (guardStop()) return stop(guardStop());
+  let inputs;
+  let plan;
+  const retryId = randomUUID();
+  const finalPath = `${invocation.finalPath}.recovery-${retryId}`;
+  try {
+    inputs = await loadInputs();
+    const { resolveWorkerInvocation } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+    plan = await resolveWorkerInvocation(inputs.snapshot, { ...saved.request, final_output: finalPath }, inputs.drivers, clock());
+  } catch { return stop('QUALIFICATION_REFUSED'); }
+  if (guardStop()) return stop(guardStop());
+  if (plan?.status !== 'eligible' || plan.mode !== 'direct' || plan.invocation?.readiness !== 'launchable') return stop('QUALIFICATION_REFUSED');
+  if (plan.invocation.argv[0] === invocation.argv[0]) return stop('UNCHANGED_EXECUTABLE');
+  // A freshly requalified installation may have new binary/proof digests.
+  // Preserve every effective adapter declaration and installation boundary.
+  const effectiveQualification = value => {
+    const copy = structuredClone(value);
+    const stripEvidence = evidence => {
+      if (evidence) for (const key of ['scopeDigest', 'fixtureDigest', 'verifiedAt', 'evidenceRef']) delete evidence[key];
+    };
+    stripEvidence(copy.adapter?.qualification);
+    for (const profile of Object.values(copy.adapter?.invocationProfiles ?? {})) stripEvidence(profile.installationQualification);
+    if (copy.installation) {
+      delete copy.installation.executable;
+      delete copy.installation.evidence;
+    }
+    if (copy.stdinFramerBinding) delete copy.stdinFramerBinding.storeDigest;
+    return JSON.stringify(copy);
+  };
+  if (effectiveQualification(qualification) !== effectiveQualification(inputs.drivers[invocation.selected.cli]?.qualification)) return stop('BINDING_CHANGED');
+  // The resolver is authoritative for the replacement executable. Everything
+  // else must remain identical, including qualified selection, policy, limits,
+  // framing, environment, controls, prompt digest and workspace. Only fresh
+  // output names and expiration are expected to differ between attempts.
+  const binding = value => {
+    const copy = structuredClone(value);
+    const replacements = ['stderrPath', 'stdoutPath', 'finalPath'].map(key => [copy[key], `<${key}>`]);
+    const normalize = value => replacements.find(([path]) => path === value)?.[1] ?? value;
+    copy.argv = copy.argv.map((value, index) => index === 0 ? '<executable>' : normalize(value));
+    delete copy.selected.qualificationDigest;
+    for (const key of ['stdoutPath', 'stderrPath', 'finalPath', 'expiresAt', 'shellCommand', 'profileDigest']) delete copy[key];
+    return JSON.stringify(copy);
+  };
+  if (binding(plan.invocation) !== binding(invocation)) return stop('BINDING_CHANGED');
+  const invocationPath = join(options.runDir, `recovery-plan-${retryId}.json`);
+  const runDir = `${options.runDir}.recovery-${retryId}`;
+  if (guardStop()) return stop(guardStop());
+  let retry;
+  try {
+    const planHandle = await withWorkerPath(invocationPath, target => open(target,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+    try { await planHandle.writeFile(JSON.stringify(plan)); await planHandle.sync(); } finally { await planHandle.close(); }
+    // Publication happens before any retry launch. A record failure stops work.
+    record.state = 'applied';
+    await recordAt(options.runDir, previous.invocationId);
+    retry = await launchOneWorker(owner, { ...options, invocationPath, runDir, dispatchGuard,
+      inputs: undefined, loadInputs, retryOf: { invocationId: previous.invocationId, runDir: options.runDir },
+      correctStartup: { reasonCode: 'NOT_FOUND' }, startupCorrectionRecord: { ...record } });
+  } catch {
+    record.state = 'stopped';
+    return stop(guardStop() ?? 'RETRY_REFUSED');
+  }
+  record.retryInvocationId = retry.invocationId;
+  if (retry.attemptOutcome !== 'succeeded') { record.state = 'stopped'; record.stopCode = 'RETRY_FAILED'; }
+  retry.startupCorrection = { ...record };
+  await recordAt(options.runDir, previous.invocationId);
+  await recordAt(runDir, retry.invocationId);
+  return retry;
+}
+
 // #2915 round 8 (D6, "lazy public fields still differ after mixed use"):
 // `lastAttemptResult`/`lastAttemptInvocationId` are informational
 // bookkeeping only (#2915 step 4 — the retry gate no longer reads them;
@@ -3987,8 +4103,9 @@ export class SessionLauncher extends EventEmitter {
    * `options.correctStartup: { reasonCode, correctionsUsed }` enforces the
    * one-qualified-startup-correction budget on a conductor-declared
    * correction retry (startupCorrectionGate): unqualified causes and second
-   * corrections are refused, within the task's existing allowance. There is
-   * no automatic correction loop.
+   * corrections are refused, within the task's existing allowance. The only
+   * automatic correction refreshes a changed qualified executable binding
+   * after a launcher-observed ENOENT with confirmed stop, once per task chain.
    *
    * Both checks are gated recovery behavior, not a general launch
    * precondition: enforcement happens entirely INSIDE `launchOneWorker`,
@@ -4015,8 +4132,13 @@ export class SessionLauncher extends EventEmitter {
     // `options.retryOf`-driven and disk-verified every time) is set inside
     // `launchOneWorker` itself, gated on whether recovery actually admitted
     // this attempt (#2915 review 6, finding 6) — never here unconditionally.
-    try { return await launchOneWorker(this, options); }
+    directStartupCorrectionContext.delete(this);
+    try {
+      const result = await launchOneWorker(this, options);
+      return await correctDirectWorkerStartup(this, options, result);
+    }
     finally {
+      directStartupCorrectionContext.delete(this);
       _workerRecoverySubscriptions.get(this)?.();
       _workerRecoverySubscriptions.delete(this);
       this.workerLaunchPending = false;

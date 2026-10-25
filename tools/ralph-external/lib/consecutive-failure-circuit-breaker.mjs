@@ -308,6 +308,9 @@ const HOST_CODES = new Set(['RESOURCE', 'NOT_FOUND', 'SANDBOX']);
 const PROVIDER_CODES = new Set(['NETWORK']);
 const INSTALLATION_CODES = new Set(['AUTH']);
 const MODEL_CODES = new Set(['MODEL']);
+const STATUS_REASON_CODES = new Set(['NOT_FOUND', 'SPAWN_REFUSED', 'RATE_LIMIT', 'RESOURCE', 'SANDBOX',
+  'NETWORK', 'AUTH', 'MODEL', 'UNKNOWN']);
+export const RECOVERY_STATUS_LIMIT = 32;
 
 export const scopeKeyFor = Object.freeze({
   invocation: (id) => `invocation:${id ?? 'unknown'}`,
@@ -511,6 +514,7 @@ export class ScopedFailureBreaker extends EventEmitter {
     this._scopes = new Map();
     this._outstanding = new Map();
     this._hostFailureFacts = [];
+    this._transitions = [];
     this._canarySeq = 0;
     this._observedInvocations = new Set();
     this.canariesObserved = 0;
@@ -1022,6 +1026,10 @@ export class ScopedFailureBreaker extends EventEmitter {
     const from = rec.status;
     if (from === to) return;
     rec.status = to;
+    if (rec.scopeKey.length <= 256) this._transitions.push({ scopeKey: rec.scopeKey, scope: rec.scope, from, to,
+      reasons: [...rec.evidence.keys()].filter(code => STATUS_REASON_CODES.has(code)).slice(0, 8),
+      atMs: this.nowMs(), nextEligibleAtMs: to === 'closed' ? null : rec.nextProbeAtMs });
+    if (this._transitions.length > RECOVERY_STATUS_LIMIT) this._transitions.shift();
     this.emit('transition', { scopeKey: rec.scopeKey, from, to, action,
       distinctFailures: new Set(rec.failures.map(failure => failure.invocationId)).size, reasons: [...rec.evidence.keys()],
       nextEligibleAtMs: rec.nextProbeAtMs, resetAtMs: rec.resetAtMs,
@@ -1454,6 +1462,23 @@ export class ScopedFailureBreaker extends EventEmitter {
     };
   }
 
+  /** Pure status projection: never sweep reservations, probe, or advance state. */
+  recoveryStatus() {
+    const recentKeys = [...new Set(this._transitions.map(event => event.scopeKey).reverse())];
+    const active = [...this._scopes.values()].filter(rec => rec.status !== 'closed');
+    const keys = [...new Set([...active.map(rec => rec.scopeKey), ...recentKeys])];
+    const scopes = keys.filter(key => key.length <= 256).slice(0, RECOVERY_STATUS_LIMIT).map(scopeKey => {
+      const rec = this._scopes.get(scopeKey);
+      const last = this._transitions.findLast(event => event.scopeKey === scopeKey);
+      return { scopeKey, scope: rec?.scope ?? last.scope, state: rec?.status ?? last.to,
+        reasons: rec ? [...rec.evidence.keys()].filter(code => STATUS_REASON_CODES.has(code)).slice(0, 8) : [...last.reasons],
+        nextEligibleAtMs: !rec || rec.status === 'closed' ? null : rec.nextProbeAtMs,
+        canaryInFlight: rec?.activeCanary != null };
+    });
+    return { observedAtMs: this.nowMs(), scopes, omittedScopeCount: Math.max(0, keys.length - scopes.length),
+      transitions: this._transitions.map(event => ({ ...event, reasons: [...event.reasons] })) };
+  }
+
   /** Correlate launcher-observed host faults across resolved inference backends.
    * Replay the first fault once corroborated, preserving the three-distinct
    * threshold even when the first backend alone could not establish scope.
@@ -1550,6 +1575,7 @@ export class ScopedFailureBreaker extends EventEmitter {
 
   destroy() {
     this._hostFailureFacts = [];
+    this._transitions = [];
     for (const rec of this._scopes.values()) rec.breaker.destroy();
     this._scopes.clear();
     this._outstanding.clear();
