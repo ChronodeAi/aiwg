@@ -14,8 +14,8 @@ import { spawnSync, spawn as nodeSpawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { existsSync, readFileSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { chmod, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +25,7 @@ import { resolveWorkerInvocation, type WorkerInvocationDriver } from '../../../s
 import { assertValidWorkerPayload } from '../../../src/mission-protocol/index.js';
 import { buildShellStopControl, waitForUnitTermination } from '../../../src/mcp/tools/worker-shell-control.mjs';
 import { loadRecoveryModuleGraph } from '../../helpers/recovery-module-graph.mjs';
+import { workerSigningFixture } from '../../helpers/worker-qualification-signing.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { systemdClientFixture } from '../../fixtures/systemd-client.js';
 import { workerInputSchema, workerOutputSchema } from '../../fixtures/ralph-worker-protocol.mjs';
@@ -118,7 +119,7 @@ const supportsCapturedWorkerStdio = spawnSync(process.execPath, ['-e', 'process.
 afterEach(async () => { vi.unstubAllEnvs(); resetInProcessAllowanceLedger(); for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true }); });
 
 async function tempRoot() {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-worker-invoke-'));
+  const root = mkdtempSync(path.join(os.tmpdir(), 'aiwg-worker-invoke-'));
   roots.push(root);
   return root;
 }
@@ -5542,8 +5543,10 @@ describe('review 11 populated default driver equivalence', () => {
           verifiedAt: new Date().toISOString(), evidenceRef: 'fixture:synthetic-host-only' };
         installation.evidence = { ...profile.installationQualification,
           cases: Object.fromEntries(Object.keys(owner.workerNegativeFixtureSuite.cases).map(name => [name, 'passed'])) };
+        const signing = await workerSigningFixture(configDir, cwd);
+        f.snapshot.config.effects = JSON.parse(await readFile(path.join(cwd, '.aiwg/aiwg.config'), 'utf8')).effects;
         await writeFile(path.join(configDir, 'worker-installations.json'), JSON.stringify({ version: 1,
-          registrations: [{ cli: 'codex', binding, adapter, installation }] }), { mode: 0o600 });
+          registrations: [signing.sign({ cli: 'codex', binding, adapter, installation })] }), { mode: 0o600 });
         const config = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/config/aiwg-config.js') : current.config;
         const { ConfigLoader } = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/models/config-loader.js') : current.configLoader;
         const inventory = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/providers/provider-inventory.js') : current.inventory;

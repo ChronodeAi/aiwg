@@ -139,6 +139,21 @@ without evicting existing ones. A crashed writer can leave a
 process is running, remove that lock and retry. Changes to the host store invalidate
 previously saved invocation bindings; resolve again before launching them.
 
+Qualification records are signed with the existing Ed25519 effect-ledger key
+configured by `effects.keyProvider` in `aiwg.config`, using the default `delivery`
+ledger's public keyring. Initialize that keyring with `aiwg effect keys init`
+before qualifying; no separate worker key is created. Keep the key and keyring
+outside worker-writable paths. Loading checks the signature against that keyring,
+including key IDs and validity windows, before importing a worker adapter.
+Missing keys prevent new qualifications; invalid or missing signatures disable
+the affected installation and produce a scoped doctor diagnostic.
+
+Existing unsigned approvals deliberately require **one-time requalification**:
+re-run `aiwg doctor --probe-workers --qualify` in each approved workspace. They
+are treated as unqualified until the negative suite runs again and the result
+is signed; existing unsigned evidence is never silently signed or upgraded.
+Projects without `parallelism.worker_dispatch` keep their existing behavior.
+
 Run commands from the project root. For a new project, the following is a complete
 minimal `.aiwg/aiwg.config`. For an existing project, merge its `parallelism` keys
 into your existing configuration, preserving providers, scripts and other settings.

@@ -824,6 +824,40 @@ export async function prepareWorkerInstallationStore({ workerWritableRoots, appl
   return assertTrustedStore(installationStorePath(), workerWritableRoots, true, apply);
 }
 
+// Use the existing delivery ledger's host-selected keyring, never public keys
+// supplied by a registration. PAE separates this authority from effect records.
+const qualificationPayloadType = 'application/vnd.aiwg.worker-installation-qualification+json';
+const requalifyMessage = 'Re-run aiwg doctor --probe-workers --qualify. Existing unsigned approvals require deliberate one-time requalification.';
+const keyRecoveryMessage = 'Worker qualification signing trust is unavailable. Check effects.keyProvider in aiwg.config, unlock or restore the existing effect-ledger key, and run aiwg effect keys init if its keyring is not initialized; then re-run aiwg doctor --probe-workers --qualify.';
+
+async function qualificationTrust(cwd, scope) {
+  const { effectSession, openLedger } = await import('../effects/host.js');
+  const { openEffectLedger, readLedgerKeyring } = await import('../effects/ledger.js');
+  const ledger = scope ? openEffectLedger({ projectDir: cwd, scope, writer: 'cli' }) : openLedger(await effectSession(cwd));
+  const keyring = await readLedgerKeyring(ledger);
+  if (!keyring) throw new Error(keyRecoveryMessage);
+  return { ledger, keyring };
+}
+
+async function qualificationPayload(record, signedAt, projectDir, scope) {
+  const { canonicalJson } = await import('../security/artifact-trust.js');
+  const { signature: _signature, ...body } = record;
+  return Buffer.from(canonicalJson({ record: JSON.parse(JSON.stringify(body)), signedAt, projectDir, scope }), 'utf8');
+}
+
+async function qualificationSignatureFailure(record, trust) {
+  if (!record.signature) return 'signature-missing';
+  const { keyid, sig, signedAt, projectDir, scope } = record.signature;
+  if (typeof keyid !== 'string' || typeof sig !== 'string' || typeof signedAt !== 'string'
+    || typeof projectDir !== 'string' || !path.isAbsolute(projectDir) || !scope) return 'signature-invalid';
+  let keyring;
+  try { ({ keyring } = await trust(projectDir, scope)); } catch { return 'signature-trust-unavailable'; }
+  const { checkSignature } = await import('../effects/keyring.js');
+  const result = checkSignature(keyring, keyid, sig, qualificationPayloadType,
+    await qualificationPayload(record, signedAt, projectDir, scope), signedAt);
+  return result === 'ok' ? null : result === 'signature-invalid' ? result : `signature-${result}`;
+}
+
 async function readInstallationStore(filename, expectedDigest) {
   try {
     const bytes = await readInstalledFile(filename);
@@ -864,6 +898,7 @@ export async function inspectRecordedWorkerQualifications({ cwd, policy, paralle
         || (configured.executable && await realpath(configured.executable) !== await realpath(installation.executable))) continue;
       const proof = adapter.invocationProfiles?.[binding.profile]?.installationQualification;
       if (!proof || ['scopeDigest', 'fixtureDigest', 'verifiedAt', 'evidenceRef'].some(key => proof[key] !== installation.evidence?.[key])) continue;
+      if (await qualificationSignatureFailure(record, () => qualificationTrust(cwd))) continue;
       await assertWorkerInstallationEvidence({ ...installation, adapter, now: Date.now(), policy }, proof.scopeDigest);
       results.push({ cli, provider: adapter.provider });
     } catch { /* Malformed, expired or unbound evidence is not qualification. */ }
@@ -879,6 +914,15 @@ export async function recordWorkerInstallation(instance, options) {
   const installation = structuredClone(options.installation);
   const result = await qualifyWorkerInstallation(instance, { ...installation, now: Date.now() });
   if (result.status !== 'ENABLED') return result;
+  let signingKey, keyring, signingProjectDir;
+  try {
+    signingProjectDir = await realpath(options.projectDir ?? installation.cwd);
+    const trust = await qualificationTrust(signingProjectDir);
+    keyring = trust.keyring;
+    signingKey = await trust.ledger.signingKey();
+    const { activeKey } = await import('../effects/keyring.js');
+    if (activeKey(keyring).keyid !== signingKey.keyid) throw new Error('inactive key');
+  } catch { return { status: 'DISABLED', reason: keyRecoveryMessage }; }
   const adapter = structuredClone(installation.adapter);
   adapter.invocationProfiles[installation.profile].installationQualification = {
     scopeDigest: result.scopeDigest, fixtureDigest: result.fixtureDigest,
@@ -913,6 +957,14 @@ export async function recordWorkerInstallation(instance, options) {
       installation: { ...installation, environmentNames, versionProbe: { rawBanner: result.rawVersionBanner, version: result.cliVersion } },
       ...(options.mcpSchemas ? { mcpSchemas: structuredClone(options.mcpSchemas) } : {}),
       ...(options.mcpProfile ? { mcpProfile: structuredClone(options.mcpProfile) } : {}) };
+    const signedAt = new Date().toISOString();
+    try {
+      const payload = await qualificationPayload(record, signedAt, signingProjectDir, keyring.scope);
+      const sig = signingKey.signPae(qualificationPayloadType, payload);
+      const { checkSignature } = await import('../effects/keyring.js');
+      if (checkSignature(keyring, signingKey.keyid, sig, qualificationPayloadType, payload, signedAt) !== 'ok') throw new Error('invalid signature');
+      record.signature = { keyid: signingKey.keyid, sig, signedAt, projectDir: signingProjectDir, scope: keyring.scope };
+    } catch { return { status: 'DISABLED', reason: keyRecoveryMessage }; }
     const retained = [];
     for (const entry of stored.registrations) {
       const workspace = typeof entry.installation?.cwd === 'string'
@@ -944,7 +996,8 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, p
   // Underlying errors can contain probe output, environment values or paths.
   const rejections = [];
   const fail = () => new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED',
-    `Trusted installation qualification is required (${[...new Set(rejections.map(row => row.reason))].join(', ')})`,
+    `Trusted installation qualification is required (${[...new Set(rejections.map(row => row.reason))].join(', ')})${rejections.some(row => row.reason.startsWith('signature-'))
+      ? `. ${rejections.some(row => row.reason === 'signature-trust-unavailable') ? keyRecoveryMessage : requalifyMessage}` : ''}`,
     { rejections });
   let reason = 'store-binding';
   let filename;
@@ -968,6 +1021,7 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, p
   const installations = {};
   const drivers = {};
   const observations = {};
+  const qualificationFailures = Object.create(null);
   const resolvedRegistry = structuredClone(registry);
   const requestedWorkspace = await realpath(cwd);
   const workspaces = await Promise.all(stored.registrations.map(async record => {
@@ -990,6 +1044,11 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, p
       if (!/^[a-z][a-z0-9-]{0,62}$/.test(cli)) throw fail();
       if (counts.get(JSON.stringify([cli, workspaces[registration]])) !== 1) throw fail();
       if (selected.get(cli) !== registration) continue;
+      // A conductor-pinned store digest also binds the original config source.
+      // Framing from a worker cwd must never read that cwd's configuration.
+      reason = await qualificationSignatureFailure(record, (projectDir, scope) => storePath === undefined
+        ? qualificationTrust(cwd) : qualificationTrust(projectDir, scope));
+      if (reason) throw fail();
       const installation = { ...record.installation, adapter, now: Date.now(), environment: {} };
       reason = 'environment-name';
       if (record.installation.environment && Object.keys(record.installation.environment).length) throw fail();
@@ -1106,13 +1165,15 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, p
       Object.assign(resolvedRegistry, candidateRegistry);
     } catch (error) {
       // One rejected installation cannot grant authority or hide qualified peers.
-      rejections.push({ registration, reason: reason === 'module-registration' && error?.code === 'WORKER_ADAPTER_CONFLICT'
-        ? 'adapter-conflict' : reason });
+      const failureReason = reason === 'module-registration' && error?.code === 'WORKER_ADAPTER_CONFLICT'
+        ? 'adapter-conflict' : reason;
+      rejections.push({ registration, reason: failureReason });
+      if (typeof record?.cli === 'string' && /^[a-z][a-z0-9-]{0,62}$/.test(record.cli)) qualificationFailures[record.cli] = failureReason;
     }
   }
   if (!Object.keys(installations).length) {
     if (!rejections.length) rejections.push({ registration: null, reason: 'no-records' });
     throw fail();
   }
-  return { registry: resolvedRegistry, installations, drivers, observations };
+  return { registry: resolvedRegistry, installations, drivers, observations, qualificationFailures };
 }

@@ -671,6 +671,16 @@ export function workerInvocationDiagnostic(error: unknown, pointer: string,
   }
   if (error instanceof WorkerInvocationCheckError) return { code: error.code, reason: error.reason, ...invocationChecks[error.reason] };
   const code = error instanceof WorkerPolicyError ? error.code : fallback;
+  const signatureReason = error instanceof WorkerPolicyError
+    ? error.details?.rejections.find(row => row.reason.startsWith('signature-'))?.reason : undefined;
+  if (code === 'OG_ADAPTER_UNQUALIFIED' && signatureReason) {
+    const messages: Record<string, string> = {
+      'signature-missing': 'Unsigned worker installation approval is unqualified. This requires deliberate one-time requalification: re-run aiwg doctor --probe-workers --qualify.',
+      'signature-trust-unavailable': 'Worker qualification signing trust is unavailable. Check effects.keyProvider in aiwg.config and the existing delivery effect-ledger keyring (aiwg effect keys list); restore trust, then re-run aiwg doctor --probe-workers --qualify.',
+    };
+    return { code, pointer, message: messages[signatureReason]
+      ?? 'Worker installation signature is invalid or its keyid is untrusted. Re-run aiwg doctor --probe-workers --qualify.' };
+  }
   const messages: Record<WorkerPolicyDiagnostic['code'], string> = {
     OG_SANDBOX_EXTERNAL: "The CLI's own sandbox is disabled by explicit external policy; isolation relies on the per-task worktree and launcher resource scope.",
     OG_NATIVE_SANDBOX_UNAVAILABLE: 'Native sandbox unavailable inside systemd user units; select policy launchMode native-sandbox or allow unprivileged user namespaces through host AppArmor policy.',

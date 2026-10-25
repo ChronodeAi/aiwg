@@ -11,7 +11,7 @@ export function loadRecordedWorkerInstallations(input: {
   storeDigest?: string;
   /** Request validation after store presence, before recorded policy/adapter checks. */
   precheckPolicy?: () => void;
-}): Promise<{ registry: ProviderModelCapabilityRegistry; installations: Record<string, WorkerResolutionBinding>; drivers: Record<string, WorkerInvocationDriver>; observations: Record<string, import('./model-discovery.js').ProviderModelDiscovery> }>;
+}): Promise<{ registry: ProviderModelCapabilityRegistry; installations: Record<string, WorkerResolutionBinding>; drivers: Record<string, WorkerInvocationDriver>; observations: Record<string, import('./model-discovery.js').ProviderModelDiscovery>; qualificationFailures?: Record<string, string> }>;
 
 export function hasProvider(name: string): boolean;
 

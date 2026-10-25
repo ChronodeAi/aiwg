@@ -1,3 +1,4 @@
+import { workerSigningFixture } from '../../helpers/worker-qualification-signing.js';
 import { mkdtempSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -116,6 +117,7 @@ else process.exit(90);
       accountScope: 'synthetic-account', quotaScope: 'synthetic-quota' } }, groups: { workers: { maxParallel: 1,
       execution: { sandbox: 'workspace-write', approval: 'never', transport: 'shell' },
       members: [{ id: 'primary', cli, model, roles: [role] }] } } } }));
+  const signing = await workerSigningFixture(root, project);
   // These are explicit test policy choices, never inferred account/data facts.
   await writeFile(path.join(project, 'models.json'), JSON.stringify({ defaults: { workerSelection: {
     roleGuidance: { [role]: { groups: ['workers'], tier: 'standard', initialEffort: 'medium', effortLadder: ['medium'] } },
@@ -186,10 +188,50 @@ process.exitCode = result.exitCode;
     });
     return value;
   };
-  return { root, project, config, binary, installed, writeCli, run, runNode, resolve, resolveInProcess, modelsInProcess, qualifyInProcess };
+  return { root, project, config, binary, installed, writeCli, run, runNode, resolve, resolveInProcess, modelsInProcess, qualifyInProcess, signing };
 }
 
 describe('doctor worker qualification through the public CLI (fake CLIs only)', () => {
+  it('diagnoses unsigned and forged approvals at the affected CLI without trusting valid digests', async () => {
+    const f = await fixture();
+    const qualified = await f.qualifyInProcess();
+    expect(qualified.status, JSON.stringify(qualified)).toBe('recorded');
+    const filename = path.join(f.config, 'worker-installations.json');
+    const stored = JSON.parse(await readFile(filename, 'utf8'));
+    expect(stored.registrations[0].signature.keyid).toBe(f.signing.keyring.keys[0].keyid);
+    for (const kind of ['unsigned', 'forged', 'wrong-keyid']) {
+      const changed = structuredClone(stored);
+      if (kind === 'unsigned') delete changed.registrations[0].signature;
+      if (kind === 'forged') changed.registrations[0].binding.endpointFingerprint = 'forged-endpoint';
+      if (kind === 'wrong-keyid') changed.registrations[0].signature.keyid = `sha256:${'0'.repeat(64)}`;
+      await writeFile(filename, JSON.stringify(changed));
+      const probed = await f.run(['doctor', '--probe-workers', '--json']);
+      const report = JSON.parse(probed.stdout);
+      expect(report.invocationChecks).toContainEqual(expect.objectContaining({ cli: 'codex', status: 'blocked',
+        diagnostics: [expect.objectContaining({ code: 'OG_ADAPTER_UNQUALIFIED', pointer: '/parallelism/clis/codex',
+          message: expect.stringContaining('aiwg doctor --probe-workers --qualify') })] }));
+      if (kind === 'unsigned') expect(probed.stdout).toContain('one-time requalification');
+    }
+  });
+
+  it('reports unavailable signing keys and leaves dispatch-disabled doctor behavior unchanged', async () => {
+    const f = await fixture();
+    await rm(f.signing.keyPath);
+    const qualification = await f.qualifyInProcess();
+    expect(qualification).toMatchObject({ status: 'failed', results: [expect.objectContaining({ cli: 'codex', status: 'failed',
+      message: expect.stringContaining('effects.keyProvider') })] });
+    expect(qualification.results[0].message).toContain('aiwg effect keys init');
+    await expect(access(path.join(f.config, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const filename = path.join(f.project, '.aiwg/aiwg.config');
+    const config = JSON.parse(await readFile(filename, 'utf8'));
+    config.parallelism.worker_dispatch = false;
+    await writeFile(filename, JSON.stringify(config));
+    const disabled = await f.run(['doctor', '--probe-workers', '--json']);
+    expect(disabled.code, disabled.stdout + disabled.stderr).toBe(0);
+    expect(disabled.stdout).toContain('WORKER_DIRECT_DISABLED');
+    expect(disabled.stdout).not.toContain('signing trust is unavailable');
+  });
+
   it('preserves null effort for models with no applicable effort control', () => {
     const policy = { roleGuidance: { efficiency: { groups: ['workers'], tier: 'standard' as const,
       initialEffort: null, effortLadder: [], allowNotApplicableEffort: true } } };
@@ -234,7 +276,7 @@ describe('doctor worker qualification through the public CLI (fake CLIs only)', 
     const f = await fixture();
     const second = path.join(f.root, 'second-project');
     await mkdir(path.join(second, '.aiwg'), { recursive: true });
-    for (const filename of ['.aiwg/aiwg.config', 'models.json', 'brief.txt']) {
+    for (const filename of ['.aiwg/aiwg.config', '.aiwg-location', 'models.json', 'brief.txt']) {
       await writeFile(path.join(second, filename), await readFile(path.join(f.project, filename)));
     }
     const qualificationArgs = ['doctor', '--probe-workers', '--qualify', '--yes', '--json'];
@@ -459,7 +501,7 @@ if (process.argv[2] === 'seed') {
     const refused = await f.runNode([script, 'launch']);
     expect(refused.code).not.toBe(0);
     expect(refused.stderr).toContain('OG_ADAPTER_UNQUALIFIED');
-    expect(refused.stderr).toContain('environment-name');
+    expect(refused.stderr).toContain('signature-invalid');
     expect(refused.stderr).not.toContain('synthetic-private-content');
   });
 
@@ -577,7 +619,8 @@ try {
     const { WorkerPolicyError } = await import('../../../src/models/provider-policy.js');
     const load = vi.spyOn(host, 'loadRecordedWorkerInstallations');
     if (fail) load.mockRejectedValue(new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', 'sensitive-installation-details'));
-    else load.mockResolvedValue({ ...f.snapshot, observations: { codex: f.snapshot.catalog.discovery!.instances!.codex }, drivers: {
+    else load.mockResolvedValue({ ...f.snapshot, qualificationFailures: { missing: 'signature-missing' },
+      observations: { codex: f.snapshot.catalog.discovery!.instances!.codex }, drivers: {
       codex: { qualification: { adapter: f.snapshot.registry.providers.codex.workerAdapter,
         installation: { cwd: root, profile: 'fixture-shell' } },
       buildInvocation: async () => ({ argv: ['/synthetic/worker'], stdin: 'closed', envNames: [] }) },
@@ -588,6 +631,9 @@ try {
       expect(checks.find(check => check.cli === 'codex')?.status).toBe(fail ? 'blocked' : 'passed');
       expect(checks.find(check => check.cli === 'missing')).toMatchObject({ status: 'blocked',
         diagnostics: [expect.objectContaining({ code: 'OG_ADAPTER_UNQUALIFIED' })] });
+      if (!fail) expect(checks.find(check => check.cli === 'missing')?.diagnostics[0]).toMatchObject({
+        pointer: '/parallelism/clis/missing', message: expect.stringContaining('one-time requalification'),
+      });
       expect(JSON.stringify(checks)).not.toContain('sensitive-installation-details');
     } finally { load.mockRestore(); vi.unstubAllEnvs(); }
   });
@@ -903,7 +949,7 @@ try {
     expect(qualified.code, qualified.stdout + qualified.stderr).toBe(0);
     const worktree = path.join(f.project, 'worktree');
     await mkdir(path.join(worktree, '.aiwg'), { recursive: true });
-    for (const filename of ['.aiwg/aiwg.config', 'models.json', 'brief.txt']) {
+    for (const filename of ['.aiwg/aiwg.config', '.aiwg-location', 'models.json', 'brief.txt']) {
       await writeFile(path.join(worktree, filename), await readFile(path.join(f.project, filename)));
     }
     const probed = await f.run(['doctor', '--probe-workers', '--json'], worktree);

@@ -169,7 +169,9 @@ export async function checkRecordedWorkerInvocationBuilds({ projectDir, config, 
     for (const worker of workers.filter(worker => worker.ready)) {
       if (!loaded.drivers[worker.cli]) {
         checks.push({ cli: worker.cli, workdir: projectDir, status: 'blocked', diagnostics: [workerInvocationDiagnostic(
-          new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', 'Trusted installation qualification is required'), `/parallelism/clis/${worker.cli}`)] });
+          new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', 'Trusted installation qualification is required', {
+            rejections: [{ registration: null, reason: loaded.qualificationFailures?.[worker.cli] ?? 'no-records' }],
+          }), `/parallelism/clis/${worker.cli}`)] });
         continue;
       }
       checks.push(...await checkWorkerInvocationBuilds({ projectDir, config, policy, cli: worker.cli,
@@ -178,7 +180,7 @@ export async function checkRecordedWorkerInvocationBuilds({ projectDir, config, 
     return checks;
   } catch (error) {
     return workers.filter(worker => worker.ready).map(worker => ({ cli: worker.cli, workdir: projectDir, status: 'blocked',
-      diagnostics: [workerInvocationDiagnostic(error, '/parallelism/clis', 'OG_ADAPTER_UNQUALIFIED')] }));
+      diagnostics: [workerInvocationDiagnostic(error, `/parallelism/clis/${worker.cli}`, 'OG_ADAPTER_UNQUALIFIED')] }));
   }
 }
 
@@ -314,7 +316,7 @@ export async function qualifyProbedWorkers({ projectDir, packageRoot, config, re
         results.push({ cli: row.cli, status: 'failed', invocationChecks, ...(codexSandboxChecks.length ? { codexSandboxChecks } : {}) });
         continue;
       }
-      const result = await host.recordWorkerInstallation(driver, { cli: row.cli, installation,
+      const result = await host.recordWorkerInstallation(driver, { cli: row.cli, installation, projectDir,
         binding: { cliVersion: row.installedVersion, profile, accountScope,
           endpointFingerprint: `local-cli:${row.cli}`, identityEvidence: 'runtime-configured' },
         modelObservations: { provider: adapter.provider, source: 'native', observedAt: observed?.observedAt ?? verifiedAt,

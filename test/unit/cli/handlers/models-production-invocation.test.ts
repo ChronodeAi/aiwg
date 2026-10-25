@@ -1,6 +1,8 @@
+import { mkdtempSync } from 'node:fs';
+import { workerSigningFixture } from '../../../helpers/worker-qualification-signing.js';
 import { copyNode } from '../../../helpers/copy-node.js';
 import { createHash } from 'node:crypto';
-import { link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -9,7 +11,7 @@ import { loadWorkerInputs, modelsHandler } from '../../../../src/cli/handlers/mo
 import { ConfigLoader } from '../../../../src/models/config-loader.js';
 import { requiredWorkerControls } from '../../../../src/models/provider-policy.js';
 import { resolveWorkerPlan } from '../../../../src/models/resolver.js';
-import { hasProvider as hasInstalledProvider, registerProvider } from '../../../../src/models/worker-installation.mjs';
+import { hasProvider as hasInstalledProvider, loadRecordedWorkerInstallations, registerProvider } from '../../../../src/models/worker-installation.mjs';
 import { qualificationDigest } from '../../../../src/models/qualification-digest.mjs';
 import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuite } from '../../../../tools/ralph-external/lib/provider-adapter.mjs';
 import { workerResolutionFixture } from '../../../fixtures/worker-resolution.js';
@@ -20,7 +22,7 @@ afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const roo
 
 async function productionFixture(adapterFrame = false) {
   vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
-  const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-production-worker-')); roots.push(root);
+  const root = mkdtempSync(path.join(os.tmpdir(), 'aiwg-production-worker-')); roots.push(root);
   const cwd = path.join(root, 'project');
   const workdir = path.join(cwd, 'worktree');
   const configDir = path.join(root, 'host-config');
@@ -94,14 +96,15 @@ async function productionFixture(adapterFrame = false) {
     cases: Object.fromEntries(Object.keys(workerNegativeFixtureSuite.cases).map(name => [name, 'passed'])) };
   const brief = path.join(cwd, 'brief.txt'); await writeFile(brief, 'Do the synthetic task.');
   const finalPath = path.join(workdir, 'final.json');
-  const record = { cli: id, binding, adapter, installation };
+  const signing = await workerSigningFixture(root, cwd);
+  const record = signing.sign({ cli: id, binding, adapter, installation });
   const call = async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const args = ['resolve', '--role=coding', '--group=workers', '--task=implementation', `--brief=${brief}`, `--workdir=${workdir}`, `--final-output=${finalPath}`, '--format=json'];
     const result = await modelsHandler.execute({ args, rawArgs: ['models', ...args], cwd, frameworkRoot });
     const output = String(log.mock.calls.at(-1)?.[0]); log.mockRestore(); return { result, output, plan: JSON.parse(output) };
   };
-  return { ...f, call, record, configDir, finalPath, installed, owner, cwd, frameworkRoot };
+  return { ...f, call, record, configDir, finalPath, installed, owner, cwd, frameworkRoot, signing };
 }
 
 describe('models resolve production installation loading', () => {
@@ -139,7 +142,7 @@ describe('models resolve production installation loading', () => {
   });
 
   it.each([false, true])('loads literal fixture configuration (adapter frame: %s)', async adapterFrame => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'driver-literal-')); roots.push(root);
+    const root = mkdtempSync(path.join(os.tmpdir(), 'driver-literal-')); roots.push(root);
     const cli = `path with spaces; '" \\ newline\n`;
     const id = `adapter-'"; process.exit(9); //`;
     await writeFile(path.join(root, 'driver.mjs'), await readFile(path.resolve('test/fixtures/production-worker-driver.mjs')));
@@ -205,6 +208,7 @@ describe('models resolve production installation loading', () => {
         f.record.adapter.invocationProfiles![f.record.binding.profile].installationQualification!.verifiedAt = '2001-01-01T00:00:00Z';
       }
       if (kind === 'negative-case') f.record.installation.evidence.cases['forbidden-write'] = 'failed';
+      f.signing.sign(f.record);
       const records = kind === 'duplicate' ? [f.record, f.record] : [f.record];
       const storeDir = kind === 'worker-writable-store' ? f.record.installation.cwd : f.configDir;
       vi.stubEnv('AIWG_CONFIG', storeDir);
@@ -238,6 +242,7 @@ describe('models resolve production installation loading', () => {
         installation.evidence.scopeDigest = scope.scopeDigest;
         f.record.adapter.invocationProfiles![f.record.binding.profile].installationQualification!.scopeDigest = scope.scopeDigest;
       }
+      f.signing.sign(f.record);
       await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [f.record] }), { mode: 0o600 });
       const error = await loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] }).catch(error => error);
       expect(error).toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', details: { rejections: [{ registration: 0, reason }] } });
@@ -262,21 +267,73 @@ describe('models resolve production installation loading', () => {
     const scope = await f.owner.inspectWorkerInstallation(f.record.installation);
     f.record.installation.evidence.scopeDigest = scope.scopeDigest;
     profile.installationQualification!.scopeDigest = scope.scopeDigest;
-    const qualified = await f.owner.recordWorkerInstallation(f.record);
+    const qualified = await f.owner.recordWorkerInstallation({ ...f.record, projectDir: f.cwd });
     expect(qualified).toMatchObject({ status: 'ENABLED' });
     const stored = await readFile(path.join(f.configDir, 'worker-installations.json'), 'utf8');
     expect(stored).not.toContain(value);
     expect(JSON.parse(stored).registrations[0].installation.environmentNames).toEqual([name, 'AIWG_FAKE_WORKER_CONFIG']);
     expect(JSON.parse(stored).registrations[0].installation.environment).toBeUndefined();
+    expect(JSON.parse(stored).registrations[0].signature).toMatchObject({
+      keyid: f.signing.keyring.keys[0].keyid, sig: expect.any(String), signedAt: expect.any(String), projectDir: f.cwd,
+    });
+    expect(stored).not.toContain(await readFile(f.signing.keyPath, 'utf8'));
     const result = await f.call();
     expect(result.result.exitCode, result.output).toBe(0);
     expect(result.plan.invocation.envNames).toEqual([name, 'AIWG_FAKE_WORKER_CONFIG']);
   });
 
+  it.each(['unsigned', 'signature', 'keyid', 'edited-record', 'signing-time'])(
+    'rejects %s evidence with valid installation digests before importing an adapter', async kind => {
+      const f = await productionFixture();
+      if (kind === 'unsigned') delete (f.record as any).signature;
+      if (kind === 'signature') f.record.signature.sig = Buffer.alloc(64).toString('base64');
+      if (kind === 'keyid') f.record.signature.keyid = `sha256:${'0'.repeat(64)}`;
+      if (kind === 'edited-record') f.record.binding.endpointFingerprint = 'forged-but-digests-unchanged';
+      if (kind === 'signing-time') f.record.signature.signedAt = '2000-01-01T00:00:00.000Z';
+      await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [f.record] }), { mode: 0o600 });
+      const expectedReason = kind === 'unsigned' ? 'signature-missing' : kind === 'keyid' ? 'signature-unknown-keyid' : 'signature-invalid';
+      await expect(loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] }))
+        .rejects.toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', details: { rejections: [{ registration: 0, reason: expectedReason }] } });
+      expect(hasInstalledProvider(f.record.adapter.id)).toBe(false);
+      const result = await f.call();
+      expect(result.plan.status).toBe('blocked');
+      expect(result.plan.invocation).toBeUndefined();
+      expect(result.output).toContain('aiwg doctor --probe-workers --qualify');
+      if (kind === 'unsigned') expect(result.output).toContain('one-time requalification');
+    });
+
+  it('fails closed without writing when the existing signing key is unavailable', async () => {
+    const f = await productionFixture();
+    await rm(f.signing.keyPath);
+    const result = await f.owner.recordWorkerInstallation({ ...f.record, projectDir: f.cwd });
+    expect(result).toMatchObject({ status: 'DISABLED', reason: expect.stringContaining('effects.keyProvider') });
+    expect(result.reason).toContain('aiwg effect keys init');
+    expect(result.reason).toContain('aiwg doctor --probe-workers --qualify');
+    await expect(readFile(path.join(f.configDir, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('verifies existing approvals with public keys while the private key is unavailable', async () => {
+    const f = await productionFixture();
+    await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [f.record] }), { mode: 0o600 });
+    await rm(f.signing.keyPath);
+    expect((await f.call()).result.exitCode).toBe(0);
+  });
+
+  it('keeps a forged peer disabled and retains its diagnostic while loading a signed approval', async () => {
+    const f = await productionFixture();
+    const forged = { ...structuredClone(f.record), cli: 'forged-cli' };
+    await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1,
+      registrations: [f.record, forged] }), { mode: 0o600 });
+    const loaded = await loadRecordedWorkerInstallations({ registry: f.snapshot.registry, cwd: f.cwd,
+      policy: f.record.installation.policy });
+    expect(Object.keys(loaded.drivers)).toEqual([f.record.cli]);
+    expect(loaded.qualificationFailures).toEqual({ 'forged-cli': 'signature-invalid' });
+  });
+
   it('refuses to record missing negative qualification evidence', async () => {
     const f = await productionFixture();
     delete f.record.installation.evidence;
-    const result = await f.owner.recordWorkerInstallation(f.record);
+    const result = await f.owner.recordWorkerInstallation({ ...f.record, projectDir: f.cwd });
     expect(result.status).toBe('DISABLED');
     await expect(readFile(path.join(f.configDir, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
