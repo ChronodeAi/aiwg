@@ -8,6 +8,37 @@ function fake(script: string) {
 }
 
 describe('Grok Build bounded headless transport', () => {
+  it('replays every event and callback from the live 1.0.38 capture', async () => {
+    const wire = readFileSync(new URL('../../fixtures/providers/grok-build/health/live-1.0.38-stream.ndjson', import.meta.url), 'utf8');
+    const captured = wire.trim().split('\n').map(line => JSON.parse(line));
+    const callbacks: Record<string, unknown>[] = [];
+    const result = await runGrokHeadless({
+      ...fake(`process.stdout.write(${JSON.stringify(wire)})`), prompt: 'offline replay',
+      onEvent: event => callbacks.push(event),
+    });
+    expect(result.events).toEqual(captured);
+    expect(callbacks).toEqual(captured);
+    expect(result.events.map(event => event.type)).toEqual([
+      'available_commands', 'available_commands', ...Array(13).fill('text'),
+      'available_commands', 'usage', 'tool_call', ...Array(4).fill('tool_call_update'),
+      'text', 'available_commands', 'usage', 'end',
+    ]);
+    expect(result.events.filter(event => event.type === 'tool_call_update').map(event => event.status))
+      .toEqual([null, 'in_progress', 'in_progress', 'completed']);
+    expect(result.events.at(-1)).toMatchObject({ type: 'end', stopReason: 'end_turn', num_turns: 2 });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('parses the live 1.0.38 single JSON result separately from streaming events', async () => {
+    const wire = readFileSync(new URL('../../fixtures/providers/grok-build/health/live-1.0.38-result.json', import.meta.url), 'utf8');
+    const result = await runGrokHeadless({
+      ...fake(`process.stdout.write(${JSON.stringify(wire)})`), prompt: 'offline replay', format: 'json',
+    });
+    expect(result.events).toEqual([JSON.parse(wire)]);
+    expect(result.events[0]).toMatchObject({ text: 'ok', stopReason: 'end_turn', num_turns: 1 });
+    expect(result.exitCode).toBe(0);
+  });
+
   it('replays every documented non-error ACP event from the shared health fixture', async () => {
     const wire = readFileSync(new URL('../../fixtures/providers/grok-build/health/stream.ndjson', import.meta.url), 'utf8');
     const result = await runGrokHeadless({ ...fake(`process.stdout.write(${JSON.stringify(wire)})`), prompt: 'hello' });
