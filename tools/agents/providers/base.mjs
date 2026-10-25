@@ -3170,8 +3170,9 @@ export function migrateCommandsDirectory(commandsDir, opts = {}) {
     const rel = path.relative(process.cwd(), commandsDir);
     // The condition is a property of the directory, not of each deployed unit;
     // emit it once per run no matter how many units pass through.
-    if (warnedCommandsDirs.has(commandsDir)) return false;
-    warnedCommandsDirs.add(commandsDir);
+    const warned = opts.warnedCommandsDirs || warnedCommandsDirs;
+    if (warned.has(commandsDir)) return false;
+    warned.add(commandsDir);
 
     const stale = listManagedCommandFiles(commandsDir);
     if (stale.length === 0) return false;

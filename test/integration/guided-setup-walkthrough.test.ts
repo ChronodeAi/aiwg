@@ -61,10 +61,10 @@ globalThis.fetch = async (url, init) => {
     };
     const run = (args: string[]) => {
       const result = spawnSync(process.execPath, [CLI, 'setup', ...args], {
-        // `setup --apply` runs a real `aiwg use sdlc`, which still launches one
-        // deploy-agents process per addon serially: about 60 s idle and up to
-        // about 185 s on the shared CI runner (main run 90503 hit the old 180 s).
-        // #3558 makes those passes in-process and restores the tighter budget.
+        // `setup --apply` runs a real `aiwg use sdlc`: about 60 s idle and up to
+        // about 185 s on the shared CI runner before #3558 (main run 90503 hit
+        // the old 180 s). #3558 runs the deployment passes in-process (about 38%
+        // faster under load); restore a tighter budget once CI shows the margin.
         cwd: project, env, encoding: 'utf8', input: '', timeout: STEP_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024,
       });
       expect(result.error, result.stderr).toBeUndefined();
