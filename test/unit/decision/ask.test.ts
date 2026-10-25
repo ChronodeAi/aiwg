@@ -75,6 +75,21 @@ function enabledEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 }
 
 describe('decision ask', () => {
+  it('ordinary ask never invokes a baseline, including on Jev fallback', async () => {
+    const baselineNetwork = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('baseline must never run'));
+    try {
+      for (const confidence of [0.99, 0.51]) {
+        const adapter = new FakeAdapter(confidence);
+        const evaluate = vi.spyOn(adapter, 'evaluate');
+        const result = await askDecision({ question: 'Is this a bounded decision?', mode: { kind: 'yes-no' },
+          passes: 1, escalationPasses: 1 }, { adapter, env: enabledEnv(), now: () => 1000 });
+        expect(result.status).toBe(confidence > 0.8 ? 'answered' : 'fallback');
+        expect(evaluate).toHaveBeenCalledTimes(1);
+      }
+      expect(baselineNetwork).not.toHaveBeenCalled();
+    } finally { baselineNetwork.mockRestore(); }
+  });
+
   let directories: string[] = [];
   afterEach(async () => {
     await Promise.all(directories.map(directory => rm(directory, { recursive: true, force: true })));

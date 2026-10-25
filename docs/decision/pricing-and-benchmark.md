@@ -83,11 +83,89 @@ savings. Missing token usage and cached billing can limit precision. See the
 [quickstart savings section](jev-quickstart.md#reading-savings-and-setting-weights)
 for caller assumptions and legacy reporting.
 
+## Opt-in live paired collection
+
+Build the CLI first. Supply credentials in the caller environment at run time:
+`JEV_API_KEY` (or `AIWG_DECISION_JEV_API_KEY`) and `OPENAI_API_KEY`. The benchmark
+reads no credential or token files. The default baseline uses the Responses API,
+with tools disabled, no stored response and no retries. Library callers inject a
+baseline client; tests inject both clients and the clock.
+
+```bash
+npm run build:cli
+node tools/decision/benchmark.mjs --live --max-calls 24 --max-usd 1 \
+  --dataset test/fixtures/decision/benchmark-smoke.json --capture captures/paired.json \
+  --passes 3 --baseline-model <model-version> --baseline-price captures/baseline-rate.json --json
+node tools/decision/benchmark.mjs --replay captures/paired.json --json
+node tools/decision/benchmark.mjs --live --max-calls 12 --max-usd 2 \
+  --extend captures/paired.json --passes 5 --json
+```
+
+Create the output directory before collection. New captures refuse to overwrite
+existing files; `--extend` appends observations in place, using atomic checkpoints.
+It also accepts a separate `--capture` destination. Source captures remain values
+only; no paths or code from their contents are executed. Existing standalone
+captures still accept `--dataset`.
+
+Both `--max-calls` and a positive `--max-usd` are mandatory with `--live`. The call
+cap must cover all missing observations before any provider runs. Each Jev
+observation explicitly requests one ask pass with no escalation; each case gets
+one independent baseline call. Extension reuses existing baselines and Jev
+prefixes, calls only missing observations, and refuses a smaller pass count or
+changed dataset, split or baseline label. It never triggers a baseline when all
+baseline observations are already present.
+
+Collection stops before another call once recorded spend reaches 80% of the USD
+cap. A request already in flight can cross that threshold, so this is a stop based
+on reported usage, not an invoice ceiling. Extension includes all prior recorded
+spend against its USD cap; `max-calls` counts new calls. Unknown served versions,
+usage or billing produce a null cost and stop further calls. Unpriced captures
+cannot be safely extended. Interrupted captures contain only real observations,
+including a baseline without Jev passes if that is where collection stopped.
+They validate as checkpoints; analysis requires complete observations for every
+case at each requested pass count. Increase the USD cap to resume a priced
+interrupted capture. If baseline rows are still missing, also supply the original
+`--baseline-model`, `--baseline-effort` and `--baseline-price` settings.
+
+Live collection always uses `splitBenchmarkHoldout`, default fraction `0.3` and
+seed `3291`, before invoking either client. Both arms receive the same question,
+mode and context; neither receives gold labels or split assignments. Retain the
+same `--holdout` and `--seed` when extending a custom split. Only tuning cases
+select a policy; holdout cases assess it afterward.
+
+Each observation records the served model, token counts, measured latency,
+answered/fallback status and `cost: {usd, price}`. A known price includes the
+exact model, HTTPS source, checked date and existing `TokenPrice` fields. Jev
+uses complete sourced rates from `decision.ask.cost.*` when configured, otherwise
+the dated bundled TypeSafe snapshot. An unrecognized served version stays
+unknown. Supply baseline rates explicitly in a JSON file such as:
+
+```json
+{
+  "model": "exact-served-model-version",
+  "source": "https://provider.example/pricing",
+  "checkedAt": "2026-10-25",
+  "inputPerMillionUsd": 2,
+  "outputPerMillionUsd": 4,
+  "cachedInputPerMillionUsd": 1
+}
+```
+
+Those numbers are synthetic examples; replace them with verified provider rates.
+Cache-aware billing requires reported cached-input counts. Missing billable
+usage is unknown, even when all rates are zero. Captures preserve their sourced
+costs for offline replay regardless of later project config changes. Optional
+`collection` metadata records the stop reason, new call count and known USD
+subtotal. Legacy captures remain readable with the existing config-based pricing. Extension
+can price their historical observations using supplied sourced rates; missing
+billable usage or matching rates still prevents extension.
+No live pricing refresh or production policy change occurs.
+
 ## Offline paired benchmark analysis
 
-The benchmark tool replays saved observations only. It makes no provider or model
-calls, executes no capture content, writes no capture or config, and never hooks
-into `decision ask`. Live paired collection and capture extension are a later stage.
+The benchmark tool analyzes saved observations offline and supports explicit, bounded
+paired collection. Offline modes make no provider calls and write no capture or
+config. Ordinary `decision ask` never runs a baseline.
 
 ```bash
 npm run build:cli
@@ -144,7 +222,9 @@ Include one row per case and 1–20 Jev observations per row. Answered values mu
 match the case mode. Fallbacks use `status: fallback` and may have a null answer;
 confidence, model and usage can be null. Usage components can be null, and optional
 `cachedInputTokens` must not exceed input tokens. Optional `probability` is a
-0–1 truth probability used for yes/no Brier scores. Unknown fields are rejected.
+0–1 truth probability used for yes/no Brier scores. The optional `cost` and
+`collection` fields described above also validate within this v1 capture format.
+Other unknown fields are rejected.
 The JSON above illustrates a row; a valid dataset needs both splits and matching
 rows for every case.
 
@@ -165,8 +245,9 @@ scale-score deviation, ordinal MAE and yes/no Brier scores. One pass cannot esti
 sample SD; categorical answers receive no numeric score. Repeated passes may be
 correlated, and nested prefixes are not independent experiments.
 
-Pricing is optional and comes only from explicit `decision.ask.cost.*` in the
-existing project config, using main's savings helper. `llm_per_mtok` prices the
+Legacy-capture pricing is optional and comes from explicit `decision.ask.cost.*`
+in the existing project config, using the savings helper. New captures use their
+recorded sourced costs. `llm_per_mtok` prices the
 saved baseline; Jev uses a complete split pair or explicit `jev_per_mtok`. A
 configured `jev_model` must match the saved model. Defaults are not treated as
 benchmark evidence. Missing rates, incomplete billable usage, or nonzero cached usage

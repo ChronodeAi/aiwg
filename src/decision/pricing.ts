@@ -136,3 +136,16 @@ export async function decisionPricing(options: PricingOptions) {
   return { refreshed: true, written: !options.dryRun, dryRun: !!options.dryRun, current: after, diff,
     sourceUrl: snapshot.source, warning, snapshotDate: source === 'typesafe-snapshot' ? after.checked_at : null };
 }
+
+/** API-equivalent cost from complete billable usage. Missing cache billing stays unknown. */
+export function tokenCost(usage: { inputTokens: number | null; outputTokens: number | null; cachedInputTokens?: number | null } | null,
+  price: TokenPrice): number | null {
+  if (!validTokenPrice(price) || !usage || usage.inputTokens === null
+    || (price.outputPerMillionUsd > 0 && usage.outputTokens === null)) return null;
+  if (![usage.inputTokens, usage.outputTokens ?? 0].every(n => Number.isSafeInteger(n) && n >= 0)) return null;
+  const cached = price.cachedInputPerMillionUsd === undefined ? 0 : usage.cachedInputTokens;
+  if (cached == null || !Number.isSafeInteger(cached) || cached < 0 || cached > usage.inputTokens) return null;
+  return ((usage.inputTokens - cached) * price.inputPerMillionUsd
+    + cached * (price.cachedInputPerMillionUsd ?? price.inputPerMillionUsd)
+    + (usage.outputTokens ?? 0) * price.outputPerMillionUsd) / 1_000_000;
+}
