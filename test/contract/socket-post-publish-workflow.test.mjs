@@ -89,3 +89,13 @@ test('Socket recovery supplies the immutable tag and peeled commit', () => {
   assert.match(socketRunbook, /-f commit="\$COMMIT"/);
   assert.match(socketRunbook, /COMMIT="\$\(git rev-parse "\$\{TAG\}\^\{commit\}"\)"/);
 });
+
+test('Socket audit paces across quota windows with a job timeout that covers the wait', () => {
+  assert.match(
+    socketWorkflow,
+    /SOCKET_PACE_QUOTA_MINUTES: \$\{\{ vars\.SOCKET_PACE_QUOTA_MINUTES \|\| '120' \}\}/,
+  );
+  const timeout = Number(socketWorkflow.match(/^\s*timeout-minutes: (\d+)$/m)?.[1]);
+  assert.ok(timeout >= 120 + 15, `job timeout ${timeout} must exceed the 120-minute pace window plus scan time`);
+  assert.match(socketRunbook, /SOCKET_PACE_QUOTA_MINUTES/);
+});
