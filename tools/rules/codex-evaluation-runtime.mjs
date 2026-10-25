@@ -10,7 +10,7 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
 const ENV_KEYS = ['PATH', 'HOME', 'USERPROFILE', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'TMPDIR', 'AIWG_ROOT', 'AIWG_HOME', 'AIWG_CONFIG', 'AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH'];
 const WRITABLE_ENV_KEYS = ['XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'TMPDIR', 'AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH'];
-const RUNTIME_FILES = new Set(['.sandbox_migration', 'installation_id', 'models_cache.json']);
+const RUNTIME_FILES = new Set(['.sandbox_migration', '.sqlite-maintenance.lock', 'installation_id', 'models_cache.json']);
 const RUNTIME_DATABASE = /^(?:goals_1|logs_2|memories_1|queue_1|state_5)\.sqlite(?:-(?:shm|wal))?$/;
 const DIAGNOSTIC_BYTES = 1024 * 1024;
 

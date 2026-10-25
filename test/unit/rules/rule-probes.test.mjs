@@ -573,20 +573,22 @@ describe('trace evidence and U5/U7 gates (no vendor executables)', () => {
     plan.calls = plan.calls.filter(call => call.probe === 'compound-discovery'); plan.call_count = 1;
     expect(plan.calls[0].prompt).toContain('Run each CLI command separately so their completion order is observable; use JSON discovery output.');
     const check = { rule_id: 'aiwg:rule:abc', fetch_command: 'aiwg show rule aiwg:rule:abc' };
-    const fake = (checks, late = false) => () => {
+    const fake = (checks, late = false, bodyFlag = false) => () => {
       const cmd = (id, command, output) => [
         { type: 'item.started', item: { id, type: 'command_execution' } },
         { type: 'item.completed', item: { id, type: 'command_execution', command, aggregated_output: output, status: 'completed', exit_code: 0 } },
       ];
-      const discover = cmd('d', 'aiwg discover fleet --json', JSON.stringify({ results: [{ id: 'aiwg:agent:xyz', type: 'agent', name: 'fleet-quiet-bot', ...(checks ? { required_rule_checks: [check], bound_rules: [{ name: 'quiet-mode' }] } : {}) }] }));
-      const fetch = cmd('f', 'aiwg show rule aiwg:rule:abc', 'body');
+      const discover = cmd('d', 'aiwg discover fleet --json', JSON.stringify({ results: [{ id: 'aiwg:agent:xyz', type: 'agent', name: 'fleet-quiet-bot', ...(checks ? { required_rule_checks: [{ ...check, fetch_command: check.fetch_command + (bodyFlag ? ' --body' : '') }], bound_rules: [{ name: 'quiet-mode' }] } : {}) }] }));
+      const fetch = cmd('f', 'aiwg show rule aiwg:rule:abc' + (bodyFlag ? ' --body' : ''), 'body');
       const action = cmd('a', 'aiwg show agent aiwg:agent:xyz', 'agent');
       const events = [...discover, ...(late ? action : fetch), ...(late ? fetch : action),
         { type: 'item.completed', item: { type: 'agent_message', text: '{"reason":"selection"}' } }, { type: 'turn.completed' }];
       return { status: 0, stdout: events.map(JSON.stringify).join('\n'), stderr: '' };
     };
-    const run = async (checks, late, requireCompoundChecks) => (await executePlan(plan, { packageRoot: ROOT, output: path.join(tempDir(), 'report.json'), requireCompoundChecks, spawn: fake(checks, late) })).runs[0];
+    const run = async (checks, late, requireCompoundChecks, bodyFlag = false) => (await executePlan(plan, { packageRoot: ROOT, output: path.join(tempDir(), 'report.json'), requireCompoundChecks, spawn: fake(checks, late, bodyFlag) })).runs[0];
     expect(await run(true, false, true)).toMatchObject({ compliant: true, compound: { status: 'checked' } });
+    expect(await run(true, false, true, true)).toMatchObject({ compliant: true, compound: { status: 'checked' } });
+    expect(await run(true, true, true, true)).toMatchObject({ compliant: false, compound: { status: 'checked' } });
     expect(await run(true, true, true)).toMatchObject({ compliant: false, compound: { status: 'checked' } });
     expect(await run(false, false, false)).toMatchObject({ compliant: true, compound: { status: 'legacy-or-unbound' } });
     expect(await run(false, false, true)).toMatchObject({ compliant: false, compound: { status: 'legacy-or-unbound' } });
