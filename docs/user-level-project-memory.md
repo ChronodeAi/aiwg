@@ -321,11 +321,37 @@ for another revision of the same owner. Global, transient/session, opaque and
 provider-native files are refused by these writers. Provider files remain
 owned by existing regeneration workflows. Canonical resident projections and
 line-memory loading exclude demoted/retired content; artifact rebuilds retain
-lifecycle exclusions. There is no canonical-context-to-provider regeneration
-consumer in the current codebase: use its filtered `residentEntries()` API
-when adding one. Portable exports deliberately retain history. These commands
-do not rewrite a running session or automatically regenerate provider files;
-all effects are reported as next-session changes.
+lifecycle exclusions. Portable exports deliberately retain history.
+
+After commit, `apply`/`restore` and read-only `verify` report `providerCopies`
+with `status: current|stale|not-applicable` and the exact regeneration command.
+`stale` means the managed resident block differs from the current canonical
+projection (or is missing/malformed). `not-applicable` means neither resident
+entries nor an emitted block exist. This status is advisory and separate from
+owner end-state verification. Run the reported command when stale:
+
+```bash
+aiwg regenerate --workspace --provider generic
+```
+
+The explicit generic selector refreshes the shared projection even when several
+providers are configured; provider adapters continue pointing to it. Workspace-context
+migration (`aiwg workspace-context migrate --apply`) and `aiwg use` also use
+the shared workspace generator. It places only active resident canonical entries
+from the resolved artifact store in one bounded managed block in `WORKSPACE.md`;
+provider startup adapters point there. Regeneration removes demoted/retired
+entries, includes restored resident entries, and emits nothing for an empty
+projection. The existing `rules.inline_budget_tokens` budget applies, including
+its environment override; over-budget regeneration fails for placement review.
+Operator-authored copies outside the managed block require manual review.
+Canonical context lives under the resolved artifact root
+(`<artifact_root>/context/compound-memory/`). If the artifact root is external
+and a store still exists at the repository-local `.aiwg/context/compound-memory/`
+while the external one does not, canonical context commands and regeneration
+stop and name both paths; move the directory to the external root. The local
+store is never silently hidden behind an empty external store.
+These commands never automatically regenerate provider files or rewrite a
+running session; all effects remain next-session changes.
 
 
 ## Qualification
@@ -356,8 +382,13 @@ they do not qualify native embeddings. Quality and source-survival gates must
 pass independently of successful edits or reduced cost. Thresholds and latency
 rates in `test/fixtures/memory-maintenance/qualification.json` are configurable
 local defaults, not universal release targets. Expected no-memory and unchanged
-failures are negative controls. Common index regeneration is covered; native
-startup copies still require manual review under the limitation described above.
+failures are negative controls. Common index regeneration and native startup
+adapter generation through the shared resident projection are covered offline.
+For every registry startup target, the roster checks demotion/retirement,
+restoration and byte-identical empty output through both regeneration paths.
+Canonical removal scenarios inject a synthetic retrieval proof; the default
+owner's unsupported-removal gate remains intact. Live startup loading still
+requires native qualification.
 
 Live qualification is explicit operator opt-in through the existing
 [rule-binding probes](../test/uat/rule-binding/README.md). Plan without calls:
@@ -483,9 +514,10 @@ The expected diff is `resident/active -> indexed/active`; scope, authority and
 body stay intact. The semantic owner checks its own published active record and
 content digest before resident removal. A stale/absent index blocks this path.
 Default line-memory and compound-memory owners lack that native proof and refuse
-resident removal, even with `--link`. Demotion does not remove text already
-copied into a provider's startup files; review the existing regeneration owner's
-source and inspect a fresh native session before claiming runtime savings.
+resident removal, even with `--link`. Demotion does not automatically rewrite
+startup context. Regenerate a stale managed canonical block using the reported
+command; manually copied semantic-memory text remains operator-owned. Inspect
+a fresh native session before claiming runtime savings.
 
 ### Correct taxonomy without changing placement
 

@@ -207,15 +207,41 @@ Owner history retains prior records/tombstones after restore.
 
 ### Provider regeneration follow-up
 
-No existing provider regeneration or deployment consumer reads canonical
-context's `residentEntries()` projection. #3282 does not add that consumer:
-editing canonical placement/lifecycle does not remove text already copied
-into `WORKSPACE.md`, provider startup files, rules or adapters, and does not
-change a running session. Existing regeneration workflows continue to read
-their own sources; this change cannot promise that those workflows exclude
-previously copied canonical content.
+The regeneration gap is closed by #3553. Before that change, no provider
+regeneration/deployment path consumed canonical compound-memory entries:
+`aiwg regenerate` used the workspace graph, transactional existing-project
+adoption, or legacy normalized-context injection; `aiwg workspace-context
+migrate` staged the same workspace document; `aiwg use` used the shared
+context generator for project, global-project and repaired deployments.
+Those paths rendered framework/discovery context and provider adapters,
+never canonical context records.
 
-Exclusion implemented today is limited to the owning retrieval surfaces:
+The workspace generator now renders one `AIWG:resident-memory` block inside
+the existing `WORKSPACE.md` managed graph. Both ordinary regeneration and
+transactional workspace-context migration use it; deploy's shared generator
+inherits it. Provider startup adapters continue to load/direct the harness to
+that single provider-neutral file. The only content source is
+`CanonicalContextRepository.residentEntries()` in the resolved artifact store.
+The rendered block is checked against the existing `rules.inline_budget_tokens`
+budget and UTF-8 bytes/4 estimator used by memory cost; exceeding the budget
+refuses regeneration rather than silently dropping reviewed entries. An empty
+projection emits no block or extra whitespace. Replacing the managed graph
+removes demoted/retired entries and restores active resident entries after
+reviewed restore. Operator text outside that graph is preserved.
+
+`aiwg memory apply` (after owner commit), `restore`, and `verify` report
+`providerCopies: { status: 'current'|'stale'|'not-applicable', regenerate:
+'aiwg regenerate --workspace --provider generic' }`. The explicit generic
+selector refreshes the shared projection without requiring provider selection.
+The check compares the emitted block's digest with the resident projection,
+normalizing line endings. Missing,
+edited or malformed blocks are stale when emission is required; no expected
+or emitted block is not applicable. Reporting never regenerates files.
+Legacy inline injection does not consume canonical memory. Arbitrary manual
+copies in operator text, provider files or rules remain operator-owned, and
+no edit changes a running session. Effects remain next-session only.
+
+Owning retrieval surfaces also enforce exclusion:
 artifact query/discovery and graph neighbours exclude inactive or archived
 index records; context packs filter wiki dispositions and line-memory's
 resident projection; compound-memory review signals ignore disposed content.
@@ -232,13 +258,14 @@ recovery, so old aggregate entries are removed.
 Line-memory and canonical owners refuse resident removal through the default
 maintenance CLI because neither has an owner-native indexed retrieval proof.
 
-A future provider regeneration integration must read
-`CanonicalContextRepository.residentEntries()` from the resolved canonical
-store, regenerate its owned output from that projection, and remove previously
-emitted entries absent from it. It must never use `read().entries` or portable
-`export()` as a resident projection, because they preserve history. That
-follow-up needs tests for demotion, retirement, restore and regeneration of
-previously emitted text, while retaining next-session effect reporting.
+Regeneration must never use `read().entries` or portable `export()` as a
+resident projection: both retain history. The #3285 registry-derived roster
+now qualifies startup adapters through both regeneration paths for every
+provider with a produced startup file, including inherited base adapters:
+demote/retire removes emitted text, restore brings it back, and empty
+projections leave output byte-identical. These are offline file-generation
+checks, not live provider reload evidence. Synthetic retrieval proofs used
+by these scenarios do not enable unsupported default owner operations.
 
 Semantic-memory source frontmatter keeps the latest 16 prior memory records;
 `trimmedHistory` records the count and a chained SHA-256 digest of older

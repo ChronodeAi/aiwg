@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -21,7 +21,11 @@ import {
   rollbackWorkspaceContext,
   shouldSkipContextWalkDir,
   workspaceLinkedFiles,
+  providerCopiesStatus,
+  RESIDENT_MEMORY_START,
+  RESIDENT_MEMORY_END,
 } from '../../../src/smiths/context-pipeline/workspace-context.js';
+import { CanonicalContextRepository } from '../../../src/memory/canonical-context.js';
 import { listProviderDefinitions } from '../../../src/providers/provider-definitions.js';
 import { buildIndex } from '../../../src/artifacts/index-builder.js';
 
@@ -51,6 +55,71 @@ describe('project extraction CI section (#3451)', () => {
 });
 
 describe('WORKSPACE.md canonical context graph (#1811)', () => {
+  it('renders from the resolved canonical artifact store rather than a repository-local stale copy', async () => {
+    const root = await project();
+    const proposal = { target: 'decision' as const, key: 'startup.fixture', value: 'Old local resident fact.',
+      sourceRef: 'decision.md', sourceDigest: null, reviewer: 'operator', reason: 'Reviewed fixture',
+      scope: 'project', classification: 'internal' as const, reviewAt: null, expiresAt: null };
+    const local = new CanonicalContextRepository(root);
+    local.confirm({ preview: local.previewUpsert(proposal), proposal });
+    const corpus = await project();
+    await writeFile(join(root, '.aiwg-location'), corpus);
+    // An unmoved repository-local store blocks regeneration instead of being silently hidden.
+    await expect(ensureWorkspaceContext(root)).rejects.toThrow(/repository-local path .*Move that directory/);
+    await mkdir(join(corpus, 'context'), { recursive: true });
+    await cp(join(root, '.aiwg/context/compound-memory'), join(corpus, 'context/compound-memory'), { recursive: true });
+    const resolved = new CanonicalContextRepository(root);
+    const current = { ...proposal, value: 'Current fact from the resolved corpus.' };
+    resolved.confirm({ preview: resolved.previewUpsert(current), proposal: current });
+    await ensureWorkspaceContext(root);
+    const emitted = await readFile(join(root, 'WORKSPACE.md'), 'utf8');
+    expect(emitted).toContain(current.value); expect(emitted).not.toContain(proposal.value);
+    expect(await providerCopiesStatus(root)).toMatchObject({ status: 'current' });
+  });
+
+  it('checks emitted digests, normalizes CRLF, and detects tampered or malformed resident blocks without writes', async () => {
+    const root = await project();
+    await ensureWorkspaceContext(root);
+    const before = await readFile(join(root, 'WORKSPACE.md'), 'utf8');
+    const repository = new CanonicalContextRepository(root);
+    const proposal = { target: 'decision' as const, key: 'startup.fixture', value: `Synthetic reviewed fact.\n${RESIDENT_MEMORY_END}`,
+      sourceRef: 'decision.md', sourceDigest: null, reviewer: 'operator', reason: 'Reviewed fixture',
+      scope: 'project', classification: 'internal' as const, reviewAt: null, expiresAt: null };
+    repository.confirm({ preview: repository.previewUpsert(proposal), proposal });
+    expect(await providerCopiesStatus(root)).toMatchObject({ status: 'stale' });
+    expect(await readFile(join(root, 'WORKSPACE.md'), 'utf8')).toBe(before);
+    await ensureWorkspaceContext(root);
+    const rendered = await readFile(join(root, 'WORKSPACE.md'), 'utf8');
+    expect(rendered.split(RESIDENT_MEMORY_END)).toHaveLength(2);
+    expect(rendered).toContain('&lt;!-- AIWG:resident-memory:end --&gt;');
+    await writeFile(join(root, 'WORKSPACE.md'), rendered.replace(/\n/g, '\r\n'));
+    expect(await providerCopiesStatus(root)).toMatchObject({ status: 'current' });
+    for (const changed of [rendered.replace('Synthetic reviewed fact.', 'Edited fact.'), rendered.replace(RESIDENT_MEMORY_END, ''),
+      rendered + RESIDENT_MEMORY_START, rendered.replace(RESIDENT_MEMORY_START, '')]) {
+      await writeFile(join(root, 'WORKSPACE.md'), changed);
+      expect(await providerCopiesStatus(root)).toMatchObject({ status: 'stale' });
+      expect(await readFile(join(root, 'WORKSPACE.md'), 'utf8')).toBe(changed);
+    }
+  });
+
+  it('enforces the existing configured resident inline budget before writing output', async () => {
+    const root = await project();
+    await ensureWorkspaceContext(root);
+    const before = await readFile(join(root, 'WORKSPACE.md'), 'utf8');
+    const repository = new CanonicalContextRepository(root);
+    const proposal = { target: 'decision' as const, key: 'startup.fixture', value: 'A reviewed synthetic resident fact.',
+      sourceRef: 'decision.md', sourceDigest: null, reviewer: 'operator', reason: 'Reviewed fixture',
+      scope: 'project', classification: 'internal' as const, reviewAt: null, expiresAt: null };
+    repository.confirm({ preview: repository.previewUpsert(proposal), proposal });
+    await writeFile(join(root, '.aiwg/aiwg.config'), JSON.stringify({ version: '1', rules: { inline_budget_tokens: 1 } }));
+    await expect(ensureWorkspaceContext(root)).rejects.toThrow(/exceeds rules.inline_budget_tokens/);
+    expect(await readFile(join(root, 'WORKSPACE.md'), 'utf8')).toBe(before);
+    expect(await providerCopiesStatus(root)).toMatchObject({ status: 'stale' });
+    await writeFile(join(root, '.aiwg/aiwg.config'), JSON.stringify({ version: '1', rules: { inline_budget_tokens: 0 } }));
+    await ensureWorkspaceContext(root);
+    expect(await providerCopiesStatus(root)).toMatchObject({ status: 'current' });
+  });
+
   it('creates a managed graph and refreshes only the managed region', async () => {
     const root = await project();
     const created = await ensureWorkspaceContext(root);

@@ -16,6 +16,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { validateMaintenancePlan, type MaintenanceOperation } from './maintenance-contract.js';
 import { loadMemoryRecord, memoryRecordId, type MemoryRecord } from './maintenance-record.js';
+import { projectAiwgPath, resolveProjectAiwgDir, resolveProjectAiwgDirForWrite, isProjectArtifactRootExternal } from '../config/project-artifacts.js';
 
 export type CanonicalMaintenanceMetadata = Pick<MemoryRecord,
   'version' | 'scope' | 'placement' | 'lifecycle' | 'authority' | 'aliases'
@@ -135,16 +136,18 @@ function assertSafeProposal(proposal: CanonicalContextProposal): void {
 }
 
 function ensureStorageInsideProject(projectRoot: string, target: string): void {
-  const root = realpathSync(projectRoot);
+  let rootAncestor = resolve(projectRoot);
+  while (!existsSync(rootAncestor)) rootAncestor = dirname(rootAncestor);
+  const root = resolve(realpathSync(rootAncestor), relative(rootAncestor, resolve(projectRoot)));
   const lexicalRoot = resolve(projectRoot);
   const candidate = resolve(target);
   if (candidate !== lexicalRoot && !candidate.startsWith(`${lexicalRoot}${sep}`)) {
-    throw new Error('canonical context storage must remain inside the project');
+    throw new Error('canonical context storage must remain inside the resolved root');
   }
   let ancestor = candidate;
   while (!existsSync(ancestor)) ancestor = dirname(ancestor);
   const actual = realpathSync(ancestor);
-  if (actual !== root && !actual.startsWith(`${root}${sep}`)) {
+  if (existsSync(projectRoot) && actual !== root && !actual.startsWith(`${root}${sep}`)) {
     throw new Error('canonical context storage cannot traverse a link outside the project');
   }
 }
@@ -249,12 +252,20 @@ export class CanonicalContextRepository {
   private readonly lockPath: string;
   readonly workspaceId: string;
 
-  constructor(projectRoot: string) {
-    this.root = resolve(projectRoot, '.aiwg/context/compound-memory');
+  constructor(private readonly projectRoot: string) {
+    this.root = projectAiwgPath(projectRoot, 'context/compound-memory');
     this.statePath = resolve(this.root, 'context.json');
     this.receiptRoot = resolve(this.root, 'receipts');
     this.lockPath = resolve(this.root, '.lock');
-    ensureStorageInsideProject(projectRoot, this.root);
+    if (isProjectArtifactRootExternal(projectRoot)) {
+      // Before artifact routing the store was always repository-local. Never
+      // silently hide that history behind an empty external store.
+      const legacy = resolve(projectRoot, '.aiwg/context/compound-memory');
+      if (existsSync(resolve(legacy, 'context.json')) && !existsSync(this.statePath)) {
+        throw new Error(`Canonical context exists at the repository-local path ${legacy}, but the configured artifact root is external. Move that directory to ${this.root} before using canonical context.`);
+      }
+    }
+    ensureStorageInsideProject(isProjectArtifactRootExternal(projectRoot) ? resolveProjectAiwgDir(projectRoot) : projectRoot, this.root);
     this.workspaceId = workspaceIdentity(projectRoot);
   }
 
@@ -445,6 +456,7 @@ export class CanonicalContextRepository {
   }
 
   async confirmMaintenance(input: { preview: CanonicalContextPreview; operation: MaintenanceOperation; key: string; verifyRetrieval?: (operation: MaintenanceOperation) => Promise<boolean> }): Promise<CanonicalContextReceipt> {
+    resolveProjectAiwgDirForWrite(this.projectRoot);
     mkdirSync(this.root, { recursive: true });
     this.openOwnerLock();
     try {
@@ -649,6 +661,7 @@ export class CanonicalContextRepository {
     bundle?: CanonicalContextExport;
     allowCrossWorkspace?: boolean;
   }): CanonicalContextReceipt {
+    resolveProjectAiwgDirForWrite(this.projectRoot);
     mkdirSync(this.root, { recursive: true });
     this.openOwnerLock();
     try {

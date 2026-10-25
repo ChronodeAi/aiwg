@@ -15,6 +15,12 @@ import { loadMetadataIndex } from '../../../src/artifacts/index-reader.js';
 import { applyMaintenancePlan, maintenancePlanDigest, maintenanceOperationKey, previewMaintenancePlan, verifyMaintenancePlan } from '../../../src/memory/maintenance.js';
 import type { MaintenancePlan } from '../../../src/memory/maintenance-contract.js';
 import { at, body, compareBaselines, config, gate, plan, rebuild, retrieve, roster, seedCorpus, seedLocalProviders, snapshot, sourcePath, write } from './fixtures.js';
+import { CanonicalContextRepository } from '../../../src/memory/canonical-context.js';
+import { CanonicalMaintenanceOwner } from '../../../src/memory/canonical-maintenance.js';
+import { runMemoryMaintenanceCli } from '../../../src/memory/maintenance-cli.js';
+import { regenerateHandler } from '../../../src/cli/handlers/regenerate.js';
+import { generate } from '../../../src/smiths/context-pipeline/generator.js';
+import { migrateWorkspaceContext, buildWorkspaceManagedBlock, providerCopiesStatus } from '../../../src/smiths/context-pipeline/workspace-context.js';
 
 // libuv homedir does not reliably follow Vitest's virtualized environment.
 vi.mock('node:os', async importOriginal => {
@@ -42,6 +48,7 @@ beforeEach(() => {
     HERMES_HOME: '.hermes', GROK_HOME: '.grok', CLAUDE_CONFIG_DIR: '.claude', CODEX_HOME: '.codex' })) vi.stubEnv(key, path.join(home, dir));
   vi.spyOn(process, 'cwd').mockReturnValue(root);
   output = vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
   seedLocalProviders(root);
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); fs.rmSync(temp, { recursive: true, force: true }); });
@@ -257,6 +264,80 @@ describe('memory maintenance provider qualification (#3285), offline default lan
     expect(baselines.find(row => row.baseline === 'selected-context')!.metrics.totalContextTokens)
       .toBeLessThan(baselines.find(row => row.baseline === 'indexed')!.metrics.totalContextTokens);
     scenarios['held-out-baseline-quality-gates'] = 'pass';
+    const nativeStartup = adapter.context.bootstrapTargets.length > 0;
+    if (nativeStartup) await scenario('native-startup-copy-regeneration', async () => {
+      for (const route of ['regenerate', 'workspace-context'] as const) {
+        const nativeRoot = path.join(temp, route); fs.mkdirSync(nativeRoot);
+        write(nativeRoot, '.aiwg/aiwg.config', JSON.stringify({ version: '1', providers: [adapter.providerId], installed: {}, scripts: {} }));
+        // Migration emits every registry bootstrap target, including providers
+        // whose deploy generator only refreshes the shared workspace document.
+        await migrateWorkspaceContext(nativeRoot, { apply: true });
+        // Same generator used by aiwg use; no framework deployment or network.
+        await generate({ provider: adapter.providerId, projectPath: nativeRoot, sections: [] });
+        const files = ['WORKSPACE.md', ...adapter.context.bootstrapTargets];
+        const bytes = () => files.map(file => fs.readFileSync(path.join(nativeRoot, file), 'utf8'));
+        const empty = bytes();
+        expect(empty[0]).toContain(buildWorkspaceManagedBlock(nativeRoot));
+        for (const text of empty.slice(1)) expect(text).toContain('WORKSPACE.md');
+        const regenerate = async () => {
+          if (route === 'regenerate') {
+            const args = ['--workspace', '--provider', adapter.providerId];
+            const result = await regenerateHandler.execute({ args, rawArgs: ['regenerate', ...args], cwd: nativeRoot, frameworkRoot: nativeRoot });
+            expect(result.exitCode, result.message).toBe(0);
+          } else await migrateWorkspaceContext(nativeRoot, { apply: true });
+        };
+        // Warm migration's existing formatting before the byte-for-byte baseline.
+        await regenerate();
+        const baseline = bytes();
+        await regenerate(); expect(bytes()).toEqual(baseline);
+        expect(await providerCopiesStatus(nativeRoot)).toMatchObject({ status: 'not-applicable' });
+        const repository = new CanonicalContextRepository(nativeRoot);
+        const proposal = { target: 'decision' as const, key: 'startup.fixture', value: 'Retained synthetic resident fact 3553.',
+          sourceRef: 'decision.md', sourceDigest: null, reviewer: 'synthetic operator', reason: 'Reviewed fixture',
+          scope: 'project', classification: 'internal' as const, reviewAt: null, expiresAt: null };
+        repository.confirm({ preview: repository.previewUpsert(proposal), proposal });
+        expect(await providerCopiesStatus(nativeRoot)).toMatchObject({ status: 'stale' });
+        await regenerate();
+        expect(bytes()[0]).toContain(proposal.value);
+        expect(await providerCopiesStatus(nativeRoot)).toMatchObject({ status: 'current' });
+        // Inject an explicit synthetic retrieval proof. The default CLI still
+        // refuses canonical resident removal without an owner-native index.
+        const canonical = new CanonicalMaintenanceOwner(nativeRoot, { verifyRetrieval: async () => true });
+        for (const op of ['demote', 'promote', 'retire', 'restore', 'retire'] as const) {
+          const record = (await canonical.records())[0];
+          const input: MaintenancePlan = { schemaVersion: 'aiwg.maintenance-plan.v1', operations: [{
+            op, target: { id: record.id, digest: record.digest, version: record.version },
+            precondition: { digest: record.digest, version: record.version },
+            owner: { name: canonical.name, handle: record.aliases[0], snapshot: await canonical.snapshot() },
+            review: { reviewer: 'synthetic operator', retirementBasis: 'review' },
+            from: { placement: record.placement, lifecycle: record.lifecycle },
+            to: { placement: op === 'demote' ? 'indexed' : op === 'promote' ? 'resident' : record.placement,
+              lifecycle: op === 'retire' ? 'retired' : op === 'restore' ? 'active' : record.lifecycle },
+            scope: record.scope, rationale: 'Reviewed fixture', uncertainty: 'No native live session evidence',
+            impactedLinks: [], sessionEffect: 'next-session',
+          }] };
+          write(nativeRoot, 'plan.json', JSON.stringify(input));
+          const before = bytes();
+          await runMemoryMaintenanceCli('apply', ['--plan', 'plan.json', '--yes', '--json'], { root: nativeRoot, owners: [canonical] });
+          expect(JSON.parse(String(output.mock.calls.at(-1)![0])).providerCopies)
+            .toEqual({ status: 'stale', regenerate: 'aiwg regenerate --workspace --provider generic' });
+          expect(bytes()).toEqual(before);
+          await runMemoryMaintenanceCli('verify', ['--plan', 'plan.json', '--json'], { root: nativeRoot, owners: [canonical] });
+          expect(JSON.parse(String(output.mock.calls.at(-1)![0])).providerCopies.status).toBe('stale');
+          await regenerate();
+          const present = ['promote', 'restore'].includes(op);
+          const emitted = bytes();
+          if (present) expect(emitted[0]).toContain(proposal.value);
+          else expect(emitted[0]).not.toContain(proposal.value);
+          for (const text of emitted.slice(1)) expect(text).not.toContain(proposal.value);
+          await runMemoryMaintenanceCli('verify', ['--plan', 'plan.json', '--json'], { root: nativeRoot, owners: [canonical] });
+          const report = JSON.parse(String(output.mock.calls.at(-1)![0]));
+          expect(report.findings).toEqual([]);
+          expect(report.providerCopies.status).toBe(present ? 'current' : 'not-applicable');
+          if (!present) expect(bytes()).toEqual(baseline);
+        }
+      }
+    });
     const report = {
       provider: id, adapter: adapter.providerId, disposition: row.disposition,
       deterministicFixture: { status: 'pass', scenarios }, commonFallback: { status: 'pass', path: 'aiwg memory + project artifact index (local)' },
@@ -264,7 +345,8 @@ describe('memory maintenance provider qualification (#3285), offline default lan
         limitation: row.disposition === 'inherited-common-fallback' ? 'Command probes the base adapter only; derived native behavior requires manual qualification'
           : adapter.providerId === 'codex' ? 'Explicit operator opt-in; existing rule-binding probes only, not live memory-task outcomes' : 'Existing rule-binding live transport supports Codex only; manual native qualification required' },
       opaqueManual: { limits: adapter.limits, support: adapter.context.support, diagnostic: adapter.diagnostic, sessionEffect: adapter.sessionEffect('retire'),
-        providerRegeneration: 'manual/unqualified: provider startup copies have no canonical resident projection consumer; common index regeneration is qualified' },
+        providerRegeneration: nativeStartup ? 'qualified offline: startup adapters -> WORKSPACE.md resident projection; regenerate and workspace-context migration'
+          : 'not-applicable: no project startup file produced by this path' },
       migrations: { kind: 'fixture lexical fallback; no native model or embedding execution', provider: `${id} -> ${adapter.providerId === 'generic' ? 'codex' : 'generic'}`, model: 'synthetic-model-v1 -> synthetic-model-v2', embedder: 'synthetic-embedder-v1 -> synthetic-embedder-v2', recall: migrationRecall },
       thresholds: config.thresholds, baselines,
     };

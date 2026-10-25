@@ -38,6 +38,39 @@ beforeEach(async () => {
 afterEach(() => fs.rmSync(temporary, { recursive: true, force: true }));
 
 describe('built memory maintenance CLI', () => {
+  it('reports stale startup copies after commit and verify, then current after explicit regeneration', () => {
+    const regenerate = (args: string[]) => {
+      const result = spawnSync(process.execPath, [cli, ...args],
+        { cwd: workspace, env, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    };
+    regenerate(['regenerate', '--workspace', '--provider', 'codex']);
+    const original = fs.readFileSync(path.join(workspace, 'WORKSPACE.md'), 'utf8');
+    // The reported command must remain executable with ambiguous provider config.
+    fs.writeFileSync(path.join(workspace, '.aiwg/aiwg.config'), JSON.stringify({ version: '1', providers: ['codex', 'claude'], installed: {}, scripts: {} }));
+    const repository = new CanonicalContextRepository(workspace);
+    const proposal = { target: 'decision' as const, key: 'startup.fixture', value: 'Synthetic reviewed startup fact.',
+      sourceRef: 'decision.md', sourceDigest: null, reviewer: 'operator', reason: 'Reviewed fixture',
+      scope: 'project', classification: 'internal' as const, reviewAt: null, expiresAt: null };
+    const entryId = repository.confirm({ preview: repository.previewUpsert(proposal), proposal }).entryIds[0];
+    run(['plan', '--owner', 'compound-memory', '--target', entryId, '--op', 'recategorize', '--category', 'decisions',
+      '--reviewer', 'operator', '--rationale', 'Reviewed category', '--out', 'category.json']);
+    const applied = JSON.parse(run(['apply', '--plan', 'category.json', '--yes', '--json']));
+    expect(MaintenanceReceiptSchema.parse(applied)).toEqual(applied);
+    expect(applied.providerCopies).toEqual({ status: 'stale', regenerate: 'aiwg regenerate --workspace --provider generic' });
+    expect(fs.readFileSync(path.join(workspace, 'WORKSPACE.md'), 'utf8')).toBe(original);
+    const before = snapshot(temporary);
+    const checked = JSON.parse(run(['verify', '--plan', 'category.json', '--json']));
+    expect(checked.findings).toEqual([]); expect(checked.providerCopies.status).toBe('stale');
+    expect(snapshot(temporary)).toEqual(before);
+    regenerate(applied.providerCopies.regenerate.split(' ').slice(1));
+    expect(fs.readFileSync(path.join(workspace, 'WORKSPACE.md'), 'utf8')).toContain(proposal.value);
+    expect(fs.readFileSync(path.join(workspace, 'AGENTS.md'), 'utf8')).toContain('WORKSPACE.md');
+    expect(JSON.parse(run(['verify', '--plan', 'category.json', '--json'])).providerCopies.status).toBe('current');
+    expect(run(['verify', '--plan', 'category.json'])).toContain('Provider copies: current');
+  });
+
   it('plans without ancillary writes, previews read-only, retires and restores through the indexed owner', () => {
     const before = snapshot(temporary);
     const flags = ['--owner', 'semantic-memory', '--target', '.aiwg/wiki/decision.md', '--op', 'retire', '--reviewer', 'synthetic operator', '--rationale', 'Reviewed obsolete fact'];

@@ -65,12 +65,19 @@ export const MaintenancePlanSchema = z.object({
   schemaVersion: z.literal('aiwg.maintenance-plan.v1'),
   operations: z.array(MaintenanceOperationSchema),
 }).strict();
+export const ProviderCopiesSchema = z.object({
+  status: z.enum(['current', 'stale', 'not-applicable']),
+  regenerate: z.literal('aiwg regenerate --workspace --provider generic'),
+}).strict();
+export type ProviderCopies = z.infer<typeof ProviderCopiesSchema>;
+
 export const MaintenanceReceiptSchema = z.object({
   schemaVersion: z.literal('aiwg.maintenance-receipt.v1'),
   planDigest: MemoryDigestSchema,
   ownerReceipts: z.array(z.unknown()),
   partial: z.object({ completed: z.array(z.string().min(1)), pending: z.array(z.string().min(1)) }).strict().optional(),
   resumedFrom: z.string().min(1).optional(),
+  providerCopies: ProviderCopiesSchema.optional(),
 }).strict();
 
 export type MaintenanceOp = z.infer<typeof MaintenanceOpSchema>;
