@@ -1,0 +1,3 @@
+Fortemi/fortemi commit b88084407751153e67a9279fff9303cc3db70474
+Source: contracts/knowledge-shard/2.2.0/
+Status: unreleased-candidate; local full-v1 qualification only.
