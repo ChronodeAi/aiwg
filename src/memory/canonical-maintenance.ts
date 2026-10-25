@@ -3,6 +3,8 @@ import { CanonicalContextRepository, canonicalMemoryRecord } from './canonical-c
 import type { MaintenanceOperation } from './maintenance-contract.js';
 import type { MaintenanceOwner } from './maintenance-owner.js';
 import type { MemoryRecord } from './maintenance-record.js';
+import { sha256 } from './context-pack.js';
+import { isDeepStrictEqual } from 'node:util';
 
 /** Routes reviewed placement and lifecycle changes through the canonical owner. */
 export class CanonicalMaintenanceOwner implements MaintenanceOwner {
@@ -39,10 +41,44 @@ export class CanonicalMaintenanceOwner implements MaintenanceOwner {
     return receipt;
   }
 
-  async receipt(key: string): Promise<unknown | undefined> {
+  async receipt(key: string, options: { readOnly?: boolean } = {}): Promise<unknown | undefined> {
     const receipt = this.repository.maintenanceReceipt(key);
-    if (receipt !== undefined) await this.refreshIndex();
+    if (receipt !== undefined && !options.readOnly) await this.refreshIndex();
     return receipt;
+  }
+
+  async verifyEndState(operation: MaintenanceOperation, key: string): Promise<string[]> {
+    const state = this.repository.read();
+    const receipt = this.repository.maintenanceReceipt(key);
+    const findings: string[] = [];
+    if (receipt && (receipt.operation !== 'maintenance'
+      || receipt.operationId !== sha256(JSON.stringify({ operation, snapshot: operation.owner?.snapshot })))) {
+      findings.push('Owner receipt does not bind the exact reviewed operation');
+    }
+    for (const target of [operation.target, ...(operation.related ?? [])]) {
+      const entry = Object.values(state.entries).find(item => canonicalMemoryRecord(item).id === target.id);
+      if (!entry) continue;
+      const history = entry.maintenance?.history;
+      if (history !== undefined && !Array.isArray(history)) throw new Error('Invalid canonical maintenance history');
+      const prior = history?.find(item => item.record.id === target.id && item.record.version === target.version
+        && item.record.digest === target.digest && item.record.placement === operation.from.placement
+        && item.record.lifecycle === operation.from.lifecycle);
+      if (!prior) findings.push(`Reviewed source history is missing: ${target.id}`);
+      if (operation.category && entry.maintenance?.category !== operation.category) findings.push(`Reviewed category differs: ${target.id}`);
+      if (prior && !isDeepStrictEqual(prior.record.authority, canonicalMemoryRecord(entry).authority)) {
+        findings.push(`Source authority changed: ${target.id}`);
+      }
+      if (operation.op === 'restore' && !prior?.record.tombstone) findings.push(`Recovery tombstone history is missing: ${target.id}`);
+      if (canonicalMemoryRecord(entry).lifecycle !== 'active' && !entry.maintenance?.tombstone) findings.push(`Retained owner tombstone is missing: ${target.id}`);
+      if (receipt && !receipt.entryIds.includes(entry.entryId)) findings.push(`Receipt omits retained source: ${target.id}`);
+    }
+    for (const replacement of operation.replacements ?? []) {
+      const entry = Object.values(state.entries).find(item => item.key === replacement.key
+        && receipt?.entryIds.includes(item.entryId));
+      if (!entry || sha256(entry.value) !== sha256(replacement.value)) findings.push(`Receipt replacement differs: ${replacement.key}`);
+      if (replacement.category && entry?.maintenance?.category !== replacement.category) findings.push(`Replacement category differs: ${replacement.key}`);
+    }
+    return findings;
   }
 
   private async refreshIndex(): Promise<void> {

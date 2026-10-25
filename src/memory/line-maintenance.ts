@@ -13,6 +13,7 @@ interface LineOwnerModule {
     options: { verifyRetrieval?: (operation: MaintenanceOperation) => Promise<boolean> }): Promise<unknown>;
   readLineMaintenanceReceipt(root: string, key: string): Promise<unknown | undefined>;
   pendingLineMaintenance(root: string, operation: MaintenanceOperation): Promise<boolean>;
+  verifyLineMaintenanceEndState(root: string, operation: MaintenanceOperation, key: string): Promise<string[]>;
 }
 
 /** Resolve the shipped lifecycle owner from source or compiled CLI installations. */
@@ -62,10 +63,14 @@ export class LineMaintenanceOwner implements MaintenanceOwner {
     return receipt;
   }
 
-  async receipt(key: string): Promise<unknown | undefined> {
+  async receipt(key: string, options: { readOnly?: boolean } = {}): Promise<unknown | undefined> {
     const receipt = await (await lineOwner()).readLineMaintenanceReceipt(this.projectRoot, key);
-    if (receipt !== undefined) await this.refreshIndex();
+    if (receipt !== undefined && !options.readOnly) await this.refreshIndex();
     return receipt;
+  }
+
+  async verifyEndState(operation: MaintenanceOperation, key: string): Promise<string[]> {
+    return (await lineOwner()).verifyLineMaintenanceEndState(this.projectRoot, operation, key);
   }
 
   private async refreshIndex(): Promise<void> {

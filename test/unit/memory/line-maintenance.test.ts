@@ -7,6 +7,9 @@ import { LineMaintenanceOwner } from '../../../src/memory/line-maintenance.js';
 import type { MaintenanceOperation, MaintenanceOp } from '../../../src/memory/maintenance-contract.js';
 import type { MemoryRecord } from '../../../src/memory/maintenance-record.js';
 import { sha256 } from '../../../src/memory/context-pack.js';
+import { maintenanceOperationKey, verifyMaintenancePlan } from '../../../src/memory/maintenance.js';
+import type { MaintenancePlan } from '../../../src/memory/maintenance-contract.js';
+import { MaintenancePlanSchema } from '../../../src/memory/maintenance-contract.js';
 import { assertProjectRelativePath, runLineMemory } from '../../../agentic/code/addons/line-memory/commands/line-memory.mjs';
 
 let root: string;
@@ -48,6 +51,51 @@ async function operation(op: MaintenanceOp, store = owner(), item?: MemoryRecord
 }
 
 describe('line-memory maintenance through its existing lifecycle owner', () => {
+  it.each(['recategorize', 'demote', 'retire', 'restore', 'merge', 'split', 'supersede'] as const)('verifies %s receipts, retained history and publication without writes', async name => {
+    seed({ second: name === 'merge' });
+    const store = owner();
+    if (name === 'restore') await store.apply(await operation('retire', store), 'prior-retirement');
+    const op = await operation(name, store);
+    if (name === 'demote') op.to.placement = 'indexed';
+    if (name === 'recategorize') op.category = 'reviewed';
+    if (['merge', 'split', 'supersede'].includes(name)) {
+      op.replacements = [{ key: 'replacement', value: 'Reviewed replacement' }];
+      if (name === 'split') op.replacements.push({ key: 'second', value: 'Second reviewed replacement' });
+      if (name === 'merge') {
+        const related = (await store.records())[1];
+        op.related = [{ id: related.id, digest: related.digest, version: related.version }];
+      }
+    }
+    const plan: MaintenancePlan = { schemaVersion: 'aiwg.maintenance-plan.v1', operations: [op] };
+    await store.apply(MaintenancePlanSchema.parse(plan).operations[0], maintenanceOperationKey(plan, 0));
+    const snapshot = await store.snapshot();
+    const indexFile = path.join(root, '.aiwg/.index/metadata.json');
+    const index = fs.readFileSync(indexFile, 'utf8');
+    expect((await verifyMaintenancePlan(plan, [store])).findings).toEqual([]);
+    expect(await store.snapshot()).toBe(snapshot);
+    expect(fs.readFileSync(indexFile, 'utf8')).toBe(index);
+    expect(fs.existsSync(path.join(root, '.aiwg/memory/line-memory.lock'))).toBe(false);
+    const state = metadata();
+    state.entries[handle].maintenance.history = [];
+    if (name === 'recategorize') state.entries[handle].maintenance.category = 'drift';
+    fs.writeFileSync(path.join(root, meta), JSON.stringify(state));
+    const findings = (await verifyMaintenancePlan(plan, [store])).findings.join(' ');
+    expect(findings).toMatch(/history/);
+    if (name === 'recategorize') expect(findings).toMatch(/category/);
+  });
+  it('keeps receipt reads and stale resident publication checks strictly read-only', async () => {
+    seed(); const store = owner(); const op = await operation('retire', store);
+    const plan: MaintenancePlan = { schemaVersion: 'aiwg.maintenance-plan.v1', operations: [op] };
+    const key = maintenanceOperationKey(plan, 0); await store.apply(MaintenancePlanSchema.parse(plan).operations[0], key);
+    const indexFile = path.join(root, '.aiwg/.index/metadata.json');
+    const stale = JSON.stringify({ entries: { [meta]: { path: meta } } });
+    fs.writeFileSync(indexFile, stale);
+    fs.writeFileSync(path.join(root, memory), 'Keep a verified source\n');
+    expect(await store.receipt(key, { readOnly: true })).toBeDefined();
+    expect((await verifyMaintenancePlan(plan, [store])).findings.join(' ')).toMatch(/Resident publication/);
+    expect(fs.readFileSync(indexFile, 'utf8')).toBe(stale);
+    expect(fs.readFileSync(path.join(root, memory), 'utf8')).toBe('Keep a verified source\n');
+  });
   it('reads missing stores and legacy facts without creating metadata or locks', async () => {
     expect(await owner().records()).toEqual([]);
     expect(fs.readdirSync(root)).toEqual([]);

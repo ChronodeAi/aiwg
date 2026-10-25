@@ -11,6 +11,8 @@
  */
 
 import { runSubsystemCli } from '../storage/subsystem-cli.js';
+import { memoryUsage, memoryInput, MEMORY_EXIT_USAGE } from './cli-result.js';
+import { listProviderMemoryAdapters } from './provider-memory-adapter.js';
 import type { ProjectMemoryLookup } from './project-registry.js';
 
 interface ProjectMemoryCliOptions {
@@ -21,40 +23,38 @@ interface ProjectMemoryCliOptions {
   memoryRoot?: string;
 }
 
-export async function main(args: string[]): Promise<void> {
+export async function main(args: string[]): Promise<number | void> {
   if (args[0] === 'recommend') {
     const { runMemoryRecommendCli } = await import('./recommend-cli.js');
-    await runMemoryRecommendCli(args.slice(1));
-    return;
+    return runMemoryRecommendCli(args.slice(1));
   }
-  if (['plan', 'apply', 'restore'].includes(args[0])) {
+  if (['plan', 'apply', 'verify', 'restore'].includes(args[0])) {
     const { runMemoryMaintenanceCli } = await import('./maintenance-cli.js');
-    await runMemoryMaintenanceCli(args[0], args.slice(1));
-    return;
+    return runMemoryMaintenanceCli(args[0], args.slice(1));
   }
   if (args[0] === 'audit') {
     const { auditMemory, formatMemoryAudit } = await import('./audit.js');
-    const opts = parseMemoryAuditOptions(args.slice(1));
+    const opts = memoryUsage(() => parseMemoryAuditOptions(args.slice(1)));
     if (opts.help) { console.log(MEMORY_AUDIT_USAGE); return; }
     const report = await auditMemory(opts);
     if (opts.cost) {
       const { costMemory, formatMemoryCost } = await import('./cost.js');
       const cost = costMemory(report);
       console.log(opts.json ? JSON.stringify(cost, null, 2) : formatMemoryCost(cost));
-      return;
+      return report.findings.length ? 1 : 0;
     }
     console.log(opts.json ? JSON.stringify(report, null, 2) : formatMemoryAudit(report));
-    return;
+    return report.findings.length ? 1 : 0;
   }
   if (args[0] === 'cost') {
     const { auditMemory } = await import('./audit.js');
     const { costMemory, formatMemoryCost } = await import('./cost.js');
-    const opts = parseMemoryCostOptions(args.slice(1));
+    const opts = memoryUsage(() => parseMemoryCostOptions(args.slice(1)));
     if (opts.help) { console.log(MEMORY_COST_USAGE); return; }
     const report = await auditMemory(opts);
-    const cost = costMemory(report, await resolveMemoryCostInputs(opts));
+    const cost = costMemory(report, await memoryInput(() => resolveMemoryCostInputs(opts)));
     console.log(opts.json ? JSON.stringify(cost, null, 2) : formatMemoryCost(cost));
-    return;
+    return report.findings.length ? 1 : 0;
   }
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     console.log(MEMORY_AUDIT_USAGE);
@@ -206,8 +206,9 @@ Static eligibility does not establish live context loading. JSON: aiwg.memory-au
 The cost subcommand adds --demote previews, a #2936 startup-measurement report
 and caller-supplied usage evidence; all views are read-only and write nothing.
 Read-only recommendations: recommend (use --help for evidence and review export).
-Reviewed lifecycle: plan, apply, restore (use --help for exact-plan options).
-Other memory subcommands: path, list, get, put, delete, append-log, project.`;
+Reviewed lifecycle: plan, apply, verify, restore (use --help for exact-plan options).
+Other memory subcommands: path, list, get, put, delete, append-log, project.
+${MEMORY_EXIT_USAGE}`;
 
 export const MEMORY_COST_USAGE = `Usage: aiwg memory cost [--scope global|project|provider] [--provider <id>] [--json] [--demote <id|path> ...] [--startup-measurement <file>] [--usage <file>]
 
@@ -217,7 +218,8 @@ Token estimates reuse the existing UTF-8 bytes estimators (#2936 startup measure
 stays unknown, never guessed. --demote previews before/after cost with the
 retrieval anchors required to keep demoted content reachable. --usage reads a
 JSON object of { "<item-id>": { retrieved, used, rejected, evidence } } held in
-memory only. JSON: aiwg.memory-cost.v1. Writes nothing.`;
+memory only. JSON: aiwg.memory-cost.v1. Writes nothing.
+${MEMORY_EXIT_USAGE}`;
 
 export function parseMemoryAuditOptions(args: string[]): {
   scope?: 'global' | 'project' | 'provider'; provider?: string; json?: boolean; help?: boolean; cost?: boolean;
@@ -244,6 +246,7 @@ export function parseMemoryAuditOptions(args: string[]): {
     } else opts.provider = value;
   }
   if (opts.scope === 'provider' && !opts.provider && !opts.help) throw new Error('--scope provider requires --provider <id>');
+  if (!opts.help && opts.provider && !listProviderMemoryAdapters().some(adapter => adapter.providerId === opts.provider)) throw new Error(`Unknown memory provider '${opts.provider}'`);
   return opts;
 }
 
@@ -286,6 +289,7 @@ export function parseMemoryCostOptions(args: string[]): MemoryCostCliOptions {
     else opts.usage = value;
   }
   if (opts.scope === 'provider' && !opts.provider && !opts.help) throw new Error('--scope provider requires --provider <id>');
+  if (!opts.help && opts.provider && !listProviderMemoryAdapters().some(adapter => adapter.providerId === opts.provider)) throw new Error(`Unknown memory provider '${opts.provider}'`);
   return opts;
 }
 

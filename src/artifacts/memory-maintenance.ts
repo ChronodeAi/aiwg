@@ -250,8 +250,8 @@ export class ArtifactMaintenanceOwner implements MaintenanceOwner {
       const found = candidates.some(source => {
         const referenced = operation.impactedLinks.includes(source.sourcePath) || operation.impactedLinks.includes(source.entry.path)
           || operation.impactedLinks.includes(source.record.id);
-        const ownDemotion = operation.op === 'demote' && source.record.id === target.id;
-        if ((!referenced && !ownDemotion) || source.record.digest !== target.digest) return false;
+        const retainedActive = operation.to.lifecycle === 'active' && source.record.id === target.id;
+        if ((!referenced && !retainedActive) || source.record.digest !== target.digest) return false;
         // Compare the published index revision and source body, not merely an existing locator.
         if (source.entry.memoryRecord && (source.entry.memoryRecord.digest !== source.record.digest
           || source.entry.memoryRecord.version !== source.record.version || source.entry.memoryRecord.lifecycle !== 'active')) return false;
@@ -404,12 +404,90 @@ export class ArtifactMaintenanceOwner implements MaintenanceOwner {
     } finally { await release(); }
   }
 
-  async receipt(key: string): Promise<unknown | undefined> {
+  async receipt(key: string, options: { readOnly?: boolean } = {}): Promise<unknown | undefined> {
+    if (options.readOnly) {
+      for (const { index } of this.indexes()) {
+        for (const entry of Object.values(index.entries)) {
+          const full = entry.path.startsWith('.aiwg/')
+            ? path.join(resolveProjectAiwgDir(this.root), entry.path.slice('.aiwg/'.length)) : path.resolve(this.root, entry.path);
+          let file: string;
+          try { file = this.resolveSource(path.relative(this.root, full)); } catch { continue; }
+          if (!fs.existsSync(file)) continue;
+          const { data } = parseMemoryMarkdown(fs.readFileSync(file, 'utf8'));
+          const receipt = ownerMetadata(data).receipts.find(item => item.key === key);
+          if (receipt) return receipt;
+        }
+      }
+      return undefined;
+    }
     for (const source of this.sources()) {
       const receipt = ownerMetadata(source.data).receipts.find(item => item.key === key);
       if (receipt) return receipt;
     }
     return undefined;
+  }
+
+  async verifyEndState(operation: MaintenanceOperation, key: string): Promise<string[]> {
+    const findings: string[] = [];
+    const anchorFile = this.resolveSource(operation.owner!.handle);
+    if (!fs.existsSync(anchorFile)) return ['Retained owner receipt source is missing'];
+    const anchor = parseMemoryMarkdown(fs.readFileSync(anchorFile, 'utf8'));
+    const receipt = ownerMetadata(anchor.data).receipts.find(item => item.key === key);
+    if (receipt && (receipt.owner !== this.name || receipt.operationDigest !== sha256(JSON.stringify(operation)))) {
+      findings.push('Owner receipt does not bind the exact reviewed operation');
+    }
+    const paths = new Set([operation.owner!.handle, ...(receipt?.records ?? []).map(item => item.sourcePath),
+      ...(operation.replacements ?? []).map(item => item.sourcePath!)]);
+    const sources = [];
+    for (const sourcePath of paths) {
+      const file = this.resolveSource(sourcePath);
+      if (!fs.existsSync(file)) { findings.push(`Retained source is missing: ${sourcePath}`); continue; }
+      const { data, body } = parseMemoryMarkdown(fs.readFileSync(file, 'utf8'));
+      if (data.memoryRecord === undefined) { findings.push(`Committed source metadata is missing: ${sourcePath}`); continue; }
+      const record = loadMemoryRecord(data.memoryRecord);
+      const journal = ownerMetadata(data);
+      if (journal.history !== undefined && !Array.isArray(journal.history)) throw new Error('Invalid artifact maintenance history');
+      if (record.sourcePath !== sourcePath || record.digest !== sha256(body)) findings.push(`Retained source body differs: ${sourcePath}`);
+      const committed = receipt?.records.find(item => item.sourcePath === sourcePath);
+      if (committed && (record.id !== committed.id || record.digest !== committed.digest || record.version !== committed.version)) {
+        findings.push(`Source differs from its exact owner receipt: ${sourcePath}`);
+      }
+      const target = [operation.target, ...(operation.related ?? [])].find(item => item.id === record.id);
+      if (target) {
+        const prior = journal.history?.find(item => item.id === target.id && item.version === target.version
+          && item.digest === target.digest && item.placement === operation.from.placement && item.lifecycle === operation.from.lifecycle);
+        if (!prior) findings.push(`Reviewed source history is missing: ${target.id}`);
+        if (prior && !isDeepStrictEqual(prior.authority, record.authority)) findings.push(`Source authority changed: ${target.id}`);
+        if (operation.op === 'restore' && !prior?.tombstone) findings.push(`Recovery tombstone history is missing: ${target.id}`);
+        if (operation.category && data.memoryCategory !== operation.category) findings.push(`Reviewed category differs: ${target.id}`);
+      }
+      const replacement = operation.replacements?.find(item => item.sourcePath === sourcePath);
+      const expectedCategory = replacement?.category ?? (replacement ? operation.category : undefined);
+      if (expectedCategory && data.memoryCategory !== expectedCategory) findings.push(`Replacement category differs: ${sourcePath}`);
+      sources.push({ file, sourcePath, data, record });
+    }
+    // Inspect every published graph containing an affected source. The normal query path
+    // consumes this exact metadata, including inactive dispositions and category changes.
+    const indexes = this.indexes();
+    for (const source of sources) {
+      let published = false;
+      for (const { graph, index } of indexes) {
+        const entries = Object.values(index.entries).filter(entry => {
+          const full = entry.path.startsWith('.aiwg/')
+            ? path.join(resolveProjectAiwgDir(this.root), entry.path.slice('.aiwg/'.length)) : path.resolve(this.root, entry.path);
+          return full === source.file;
+        });
+        for (const entry of entries) {
+          published = true;
+          if (!isDeepStrictEqual(entry.memoryRecord, source.record)
+            || entry.memoryCategory !== source.data.memoryCategory) {
+            findings.push(`Published index revision differs: ${source.sourcePath} (${graph || 'default'})`);
+          }
+        }
+      }
+      if (!published) findings.push(`Indexed source is unavailable: ${source.sourcePath}`);
+    }
+    return findings;
   }
 
   async pending(operation: MaintenanceOperation): Promise<boolean> {

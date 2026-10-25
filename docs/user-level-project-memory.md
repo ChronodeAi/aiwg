@@ -233,7 +233,7 @@ separate commands.
 
 ## Reviewed placement and retirement
 
-`aiwg memory plan`, `apply` and `restore` coordinate the existing line-memory,
+`aiwg memory plan`, `apply`, `verify` and `restore` coordinate the existing line-memory,
 compound-memory canonical context, and semantic-memory artifact-index owners.
 They preserve source bodies, original handles, aliases, lineage and owner
 history. Retirement records a tombstone; it never deletes a source file.
@@ -246,6 +246,7 @@ aiwg memory plan --owner semantic-memory --target .aiwg/knowledge/decision.md \
   --retirement-basis review --out retire-plan.json --json
 aiwg memory apply --plan retire-plan.json --preview --json
 aiwg memory apply --plan retire-plan.json --yes --json
+aiwg memory verify --plan retire-plan.json --json
 ```
 
 Use a line-memory handle (`lm_…`), canonical-context entry handle, or indexed
@@ -279,6 +280,12 @@ Supplying `--link` cannot enable these unsupported operations. Other reviewed
 operations remain available. Pinned mandatory constraints cannot be retired by age;
 `--retirement-basis` defaults to `age`. Native line-memory capacity handling
 also refuses to prune a pinned constraint.
+
+Before mutation, human output and the JSON review event show the resolved project
+root and scope, operation diff, owner review requirements, and native/next-session
+limitations. JSON review events go to stderr; stdout retains the result JSON.
+Review this targeting even when supplying `--yes`: global audit does not authorize
+a global write.
 
 Apply checks the reviewed source digests, revisions and owner snapshot under
 owner locks. At a TTY, type the exact displayed plan digest; headless callers
@@ -319,3 +326,184 @@ consumer in the current codebase: use its filtered `residentEntries()` API
 when adding one. Portable exports deliberately retain history. These commands
 do not rewrite a running session or automatically regenerate provider files;
 all effects are reported as next-session changes.
+
+
+## Discover and verify maintenance
+
+The `harness-memory-maintenance` skill is the natural-language entry point on
+supported providers. Discover the operation, then fetch only its section:
+
+```bash
+aiwg discover "harness memory audit"
+aiwg show skill harness-memory-maintenance --section audit
+aiwg discover "harness memory cleanup"
+aiwg show skill harness-memory-maintenance --section cleanup
+aiwg show skill harness-memory-maintenance --section demote
+aiwg show skill harness-memory-maintenance --section recategorize
+aiwg show skill harness-memory-maintenance --section retire
+```
+
+The same route handles "harness memory promote" and "harness memory demote".
+The discovery anchor stays small; deployment adds no always-loaded maintenance
+rule or full operation instructions. The generic `aiwg memory` commands below
+remain usable without a skill or provider integration.
+
+After apply or restore, run `aiwg memory verify --plan <file> [--json]`.
+Verification writes nothing: it checks the exact operation's existing owner
+receipt, recorded end state, retained tombstone/history, and required published
+indexed retrieval. It does not create a verification store, reapply a plan,
+repair drift, regenerate provider files, or prove that a running native session
+has reloaded. Missing receipts, changed records, or unavailable retrieval are
+findings to investigate; an unreadable/failed owner check is an execution failure.
+After a later reviewed operation changes the target, verify that newer plan;
+an older plan's expected end state may legitimately differ.
+
+The maintenance subcommands share these exit codes, in human and JSON modes:
+
+| Code | Meaning | Operator action |
+|---|---|---|
+| `0` | Success, no findings, or help | Continue; preview success authorizes no write. |
+| `1` | Findings: audit/cost inventory findings, recommendation candidates, or verification drift | Inspect the report; recommendations remain advisory. |
+| `2` | Usage error, including malformed input or invalid option combinations | Correct the invocation/input and retry. |
+| `3` | Stale plan/source, failed execution, or partial apply | Re-review stale input; resume the exact plan for interrupted owner work. |
+
+`--help` gives concise operation flags. JSON reports remain available when
+findings produce exit `1`; automation must preserve stdout before evaluating
+status. Opaque runtime surfaces remain reported limitations; exit `0` establishes
+only the static checks. A successful apply receipt alone does not establish native reload.
+
+## Worked maintenance examples
+
+Run these commands from the intended project root. Each saved plan filename
+must be new, with an existing parent directory. The source examples assume
+`.aiwg/knowledge/release-checklist.md` is an existing semantic-memory Markdown
+source published in the project index. For an external artifact root, substitute
+the actual canonical source path returned by audit; `.aiwg/` paths below are
+illustrative. Do not copy provider-native startup files into an executable plan.
+
+### Global and project audit
+
+Inspect explicit user-wide exposure first, then isolate the project. Both scans
+are read-only, and an exit `1` still leaves a findings report on stdout:
+
+```bash
+aiwg memory audit --scope global --provider claude --json > global-audit.json
+global_status=$?
+aiwg memory audit --scope project --provider claude --json > project-audit.json
+project_status=$?
+printf 'global=%s project=%s\n' "$global_status" "$project_status"
+aiwg memory cost --scope project --provider claude --json > project-cost.json
+```
+
+Review the global report's registered roots and the project's resolved source
+locators, exposure chains and finding IDs. Global selection can inspect user
+stores and registered projects; it does not enable global plan/apply. To change
+an eligible registered project's source, enter that project and create a fresh
+project-owned plan. Opaque/inaccessible/truncated coverage remains uncertain.
+
+### Demote a low-use resident item
+
+Suppose operator task reviews establish that the release checklist is rarely
+needed, while an owner review confirms it is neither pinned nor a rare
+obligation. Low use opens placement review; it does not justify retirement.
+For an already-resident semantic-memory record, refresh its published index and
+review the conditional footprint change before making a plan:
+
+```bash
+aiwg index build --graph project --force
+aiwg memory cost --scope project --provider claude \
+  --demote .aiwg/knowledge/release-checklist.md --json
+aiwg memory plan --owner semantic-memory \
+  --target .aiwg/knowledge/release-checklist.md --op demote --placement indexed \
+  --reviewer operator --rationale 'Task reviews show occasional use; retain indexed retrieval' \
+  --out checklist-demote.json --json
+aiwg memory apply --plan checklist-demote.json --preview --json
+aiwg memory apply --plan checklist-demote.json --yes --json
+aiwg memory verify --plan checklist-demote.json --json
+```
+
+The expected diff is `resident/active -> indexed/active`; scope, authority and
+body stay intact. The semantic owner checks its own published active record and
+content digest before resident removal. A stale/absent index blocks this path.
+Default line-memory and compound-memory owners lack that native proof and refuse
+resident removal, even with `--link`. Demotion does not remove text already
+copied into a provider's startup files; review the existing regeneration owner's
+source and inspect a fresh native session before claiming runtime savings.
+
+### Correct taxonomy without changing placement
+
+After the prior apply completes, create a new owner snapshot for the category
+correction. This changes the category to `procedure` and leaves the current
+placement, lifecycle, scope and authority unchanged:
+
+```bash
+aiwg memory plan --owner semantic-memory \
+  --target .aiwg/knowledge/release-checklist.md --op recategorize --category procedure \
+  --reviewer operator --rationale 'Checklist is an operating procedure, not a decision' \
+  --out checklist-category.json --json
+aiwg memory apply --plan checklist-category.json --preview --json
+aiwg memory apply --plan checklist-category.json --yes --json
+aiwg memory verify --plan checklist-category.json --json
+```
+
+For promotion, explicitly select `--op promote --placement task-context` or
+`resident` only after owner review establishes the needed placement and budget.
+Review the same exact-plan preview and verify steps; promotion never raises
+knowledge into instruction authority.
+
+### Retire and restore retained knowledge
+
+Suppose a source review now establishes that the indexed checklist is obsolete.
+Retire it with an explicit review basis; age alone is insufficient for protected
+obligations. This example follows demotion, so the source is already indexed:
+
+```bash
+aiwg memory plan --owner semantic-memory \
+  --target .aiwg/knowledge/release-checklist.md --op retire \
+  --reviewer operator --rationale 'Release process review confirms this checklist is obsolete' \
+  --retirement-basis review --out checklist-retire.json --json
+aiwg memory apply --plan checklist-retire.json --preview --json
+aiwg memory apply --plan checklist-retire.json --yes --json
+aiwg memory verify --plan checklist-retire.json --json
+```
+
+Expected result: lifecycle `retired`, unchanged source body, a retained tombstone
+and owner history, and exclusion from ordinary retrieval. Retiring a resident
+semantic item instead requires `--link <indexed-path>` identifying an active
+published same-digest retained copy. Retirement never purges either source.
+
+If a later review reinstates the checklist, target the retained source with a
+new plan and apply it through the restore command:
+
+```bash
+aiwg memory plan --owner semantic-memory \
+  --target .aiwg/knowledge/release-checklist.md --op restore \
+  --reviewer operator --rationale 'Reviewed reinstatement for the supported release process' \
+  --out checklist-restore.json --json
+aiwg memory restore --plan checklist-restore.json --preview --json
+aiwg memory restore --plan checklist-restore.json --yes --json
+aiwg memory verify --plan checklist-restore.json --json
+```
+
+Expected result: lifecycle `active`, indexed retrieval restored, prior retirement
+retained in history, and unchanged authority/scope. Verify the restore plan; the
+retirement plan now describes an earlier end state.
+
+### Recover an interrupted apply or investigate verification drift
+
+If apply exits `3` with `partial.completed`/`partial.pending`, preserve the exact
+plan and owner/coordinator journals. Once the reported owner/index problem is
+resolved, rerun the same command; existing owner receipts prevent duplicate work:
+
+```bash
+aiwg memory apply --plan checklist-category.json --yes --json
+aiwg memory verify --plan checklist-category.json --json
+```
+
+Use the interrupted plan here, before any later plan in the examples. If a source
+or owner snapshot changed before execution, do not edit the saved plan or remove
+locks/journals to force it through. Re-audit, resolve the change with the owner,
+and create a new reviewed plan. If verify exits `1`, inspect its receipt/state,
+history and retrieval findings; verify itself cannot repair them. Missing owner
+receipts after an incomplete transaction call for resuming the original apply,
+while an intentional later transition calls for verifying its newer plan.

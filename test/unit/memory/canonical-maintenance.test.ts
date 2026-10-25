@@ -6,6 +6,9 @@ import { CanonicalContextRepository, canonicalMemoryRecord, type CanonicalContex
 import { CanonicalMaintenanceOwner } from '../../../src/memory/canonical-maintenance.js';
 import { loadMetadataIndex } from '../../../src/artifacts/index-reader.js';
 import type { MaintenanceOperation } from '../../../src/memory/maintenance-contract.js';
+import type { MaintenancePlan } from '../../../src/memory/maintenance-contract.js';
+import { MaintenancePlanSchema } from '../../../src/memory/maintenance-contract.js';
+import { maintenanceOperationKey, verifyMaintenancePlan } from '../../../src/memory/maintenance.js';
 
 let root: string;
 let repository: CanonicalContextRepository;
@@ -44,6 +47,40 @@ async function operation(op: MaintenanceOperation['op'], overrides: Partial<Main
 }
 
 describe('canonical maintenance owner', () => {
+  it.each(['recategorize', 'demote', 'retire', 'restore', 'merge', 'split', 'supersede'] as const)('verifies %s with exact receipts, history and no index refresh', async name => {
+    if (name === 'restore') await owner.apply(await operation('retire'), 'prior-retirement');
+    if (name === 'merge') {
+      const second = { ...proposal, key: 'other', value: 'Second reviewed decision' };
+      repository.confirm({ preview: repository.previewUpsert(second), proposal: second });
+    }
+    const op = await operation(name);
+    if (name === 'recategorize') op.category = 'reviewed';
+    if (['merge', 'split', 'supersede'].includes(name)) {
+      op.replacements = [{ key: 'replacement', value: 'Reviewed replacement' }];
+      if (name === 'split') op.replacements.push({ key: 'second', value: 'Second reviewed replacement' });
+      if (name === 'merge') {
+        const related = (await owner.records())[1];
+        op.related = [{ id: related.id, digest: related.digest, version: related.version }];
+      }
+    }
+    const plan: MaintenancePlan = { schemaVersion: 'aiwg.maintenance-plan.v1', operations: [op] };
+    const key = maintenanceOperationKey(plan, 0); await owner.apply(MaintenancePlanSchema.parse(plan).operations[0], key);
+    const snapshot = await owner.snapshot();
+    const indexFile = join(root, '.aiwg/.index/metadata.json');
+    const stale = JSON.stringify({ entries: { aggregate: { path: '.aiwg/context/compound-memory/context.json' } } });
+    writeFileSync(indexFile, stale);
+    expect((await verifyMaintenancePlan(plan, [owner])).findings).toEqual([]);
+    expect(await owner.snapshot()).toBe(snapshot);
+    expect(readFileSync(indexFile, 'utf8')).toBe(stale);
+    expect(existsSync(join(root, '.aiwg/context/compound-memory/.lock'))).toBe(false);
+    const state = repository.read();
+    state.entries[op.owner!.handle].maintenance!.history = [];
+    if (name === 'recategorize') state.entries[op.owner!.handle].maintenance!.category = 'drift';
+    writeFileSync(join(root, '.aiwg/context/compound-memory/context.json'), JSON.stringify(state));
+    const findings = (await verifyMaintenancePlan(plan, [owner])).findings.join(' ');
+    expect(findings).toMatch(/history/);
+    if (name === 'recategorize') expect(findings).toMatch(/category/);
+  });
   it('previews read-only, demotes and promotes without changing scope, authority or source content', async () => {
     const before = (await owner.records())[0];
     const request = await operation('demote');
