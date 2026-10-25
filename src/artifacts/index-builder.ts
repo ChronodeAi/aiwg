@@ -45,6 +45,7 @@ import { resolveIndexWorkers, runIndexPreparation, type IndexPreparationJob, typ
 import { collectGraphIndexFiles, findArtifactFiles, indexPathFor, type ArtifactDiscoveryOptions } from './index-files.js';
 import { acquireDirectoryLock } from './prebuilt-build-lock.js';
 import { graphIndexDigest, indexAdapterRegistry, recordIndexVerification, type IndexAdapter } from './index-adapters.js';
+import { loadMemoryRecord } from '../memory/maintenance-record.js';
 
 export interface BuildOptions {
   force?: boolean;
@@ -952,15 +953,24 @@ export async function collectRuleBindingEntries(cwd: string, scope: string): Pro
 
 /** Shared serial/worker read, checksum and extraction. No index output or global reduction. */
 export function prepareIndexArtifact(job: IndexPreparationJob): IndexPreparationResult {
-  return extractIndexArtifact(job, false);
+  const warnings: string[] = [];
+  const result = extractIndexArtifact(job, false, warnings);
+  return { ...result, ...(warnings.length ? { warnings } : {}) };
 }
 
-function extractIndexArtifact(job: IndexPreparationJob, bindingOnly: boolean): IndexPreparationResult {
+function extractIndexArtifact(job: IndexPreparationJob, bindingOnly: boolean, warnings: string[] = []): IndexPreparationResult {
   const { fullPath, relativePath } = job;
   const content = fs.readFileSync(fullPath, 'utf8');
   const checksum = computeChecksum(content);
   if (job.existingChecksum === checksum) return { checksum };
   const { data, body } = parseFrontmatter(content);
+  let memoryRecord: MetadataEntry['memoryRecord'];
+  if (data.memoryRecord !== undefined) {
+    try { memoryRecord = loadMemoryRecord(data.memoryRecord); }
+    catch (error) {
+      warnings.push(`${relativePath}: invalid memoryRecord metadata quarantined: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const inferredType = inferType(data, relativePath);
   const bindingType = ['skill', 'agent', 'flow'].includes(inferredType);
   // Only YAML flows can promote an otherwise unrelated document to a binding target.
@@ -984,6 +994,7 @@ function extractIndexArtifact(job: IndexPreparationJob, bindingOnly: boolean): I
   // search terms, mentions, links, or constructing a persistent graph.
   if (bindingOnly) return { checksum, entry: {
     path: relativePath, type, title, phase,
+    ...(memoryRecord ? { memoryRecord } : {}),
     name: flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.name
       ?? (OPERATIONAL_DISCOVERY_TYPES.includes(type as typeof OPERATIONAL_DISCOVERY_TYPES[number])
         ? extractCanonicalName(data, relativePath) : undefined),
@@ -1020,6 +1031,8 @@ function extractIndexArtifact(job: IndexPreparationJob, bindingOnly: boolean): I
   const name = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
 
   const entry: MetadataEntry = {
+    ...(memoryRecord ? { memoryRecord } : {}),
+    ...(typeof data.memoryCategory === 'string' ? { memoryCategory: data.memoryCategory } : {}),
     path: relativePath,
     type,
     ...(kind ? { kind } : {}),
@@ -1323,6 +1336,9 @@ async function buildIndexSnapshot(
   }
   const preparation = await runIndexPreparation(jobs, prepareIndexArtifact, import.meta.url, workers,
     options.onDiagnostic ?? (message => console.warn(`Index preparation: ${message}`)));
+  for (const result of preparation.results) for (const warning of result.warnings ?? []) {
+    (options.onDiagnostic ?? (message => console.warn(`Index preparation: ${message}`)))(warning);
+  }
   const preparedArtifacts = new Map(jobs.map((job, index) => [job.fullPath, preparation.results[index]]));
 
   for (const fullPath of files) {

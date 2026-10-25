@@ -270,6 +270,49 @@ describe('line-memory commands', () => {
     });
   });
 
+  it.each(['archive', 'supersede'])('refuses ambiguous numeric %s selectors when owner-disposed lines are filtered, while handles work', async action => {
+    await runLineMemory('add', ['hidden fact', '--json'], projectDir);
+    const hidden = JSON.parse(output.pop()!).entry.id;
+    await runLineMemory('add', ['1', '--json'], projectDir);
+    const active = JSON.parse(output.pop()!).entry.id;
+    const metadataPath = path.join(projectDir, DEFAULT_CONFIG.metadataPath);
+    const metadata = JSON.parse(await readFile(metadataPath, 'utf8'));
+    metadata.entries[hidden].maintenance = { lifecycle: 'retired', placement: 'indexed' };
+    await writeFile(metadataPath, JSON.stringify(metadata));
+    const before = await memoryText();
+    const extra = action === 'supersede' ? ['--by', 'wiki:replacement'] : [];
+    for (const mode of ['--dry-run', '--confirm']) {
+      const outcome = await runLineMemory(action, ['1', ...extra, mode], projectDir);
+      expect(outcome.exitCode).toBe(1);
+      expect(outcome.message).toMatch(/ambiguous.*--handle/);
+      expect(await memoryText()).toBe(before);
+    }
+    expect((await runLineMemory(action, ['--handle', active, ...extra, '--confirm'], projectDir)).exitCode).toBe(0);
+    const after = JSON.parse(await readFile(metadataPath, 'utf8'));
+    expect(after.entries[active].status).toBe(action === 'archive' ? 'archived' : 'superseded');
+    expect(after.entries[hidden].maintenance.lifecycle).toBe('retired');
+  });
+
+  it.each(['retired', 'demoted'])('refuses %s import identically in dry-run and confirmation without writing', async disposition => {
+    await runLineMemory('add', ['retained fact', '--json'], projectDir);
+    const handle = JSON.parse(output.pop()!).entry.id;
+    const metadataPath = path.join(projectDir, DEFAULT_CONFIG.metadataPath);
+    const metadata = JSON.parse(await readFile(metadataPath, 'utf8'));
+    metadata.entries[handle].status = disposition === 'retired' ? 'retired' : 'active';
+    metadata.entries[handle].maintenance = { lifecycle: disposition === 'retired' ? 'retired' : 'active', placement: 'indexed' };
+    await writeFile(metadataPath, JSON.stringify(metadata));
+    const beforeMemory = await memoryText();
+    const beforeMetadata = await readFile(metadataPath, 'utf8');
+    const args = ['retained fact', '--source-ref', 'session:reviewed', '--reviewer', 'reviewer'];
+    const preview = await runLineMemory('import', [...args, '--dry-run'], projectDir);
+    const confirmed = await runLineMemory('import', [...args, '--confirm'], projectDir);
+    expect(preview.exitCode).toBe(1);
+    expect(confirmed).toEqual(preview);
+    expect(preview.message).toMatch(/explicit maintenance restore or promotion/);
+    expect(await memoryText()).toBe(beforeMemory);
+    expect(await readFile(metadataPath, 'utf8')).toBe(beforeMetadata);
+  });
+
   it('archives, removes, and supersedes entries by stable handle with tombstones', async () => {
     await runLineMemory('add', ['archive me', '--json'], projectDir);
     const archiveHandle = JSON.parse(output.pop()!).entry.id;

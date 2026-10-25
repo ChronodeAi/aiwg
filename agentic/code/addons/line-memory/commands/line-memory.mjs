@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -72,7 +72,7 @@ function normalizeMemory(value) {
   return value.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function assertProjectRelativePath(cwd, candidate) {
+export function assertProjectRelativePath(cwd, candidate, resolveRealPath = realpathSync) {
   if (typeof candidate !== 'string' || candidate.trim() === '') {
     throw new Error('Config path must be a non-empty project-relative path.');
   }
@@ -83,6 +83,23 @@ function assertProjectRelativePath(cwd, candidate) {
   const relative = path.relative(path.resolve(cwd), resolved);
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error('Config path must remain inside the project.');
+  }
+  const base = resolveRealPath(cwd);
+  let ancestor = resolved;
+  let actual;
+  while (true) {
+    try {
+      actual = resolveRealPath(ancestor);
+      break;
+    } catch (error) {
+      // Lock and transaction files can disappear between concurrent owner writes.
+      // Resolve their surviving parent without ever walking above the project.
+      if (!['ENOENT', 'ENOTDIR'].includes(error?.code) || ancestor === path.resolve(cwd)) throw error;
+      ancestor = path.dirname(ancestor);
+    }
+  }
+  if (actual !== base && !actual.startsWith(`${base}${path.sep}`)) {
+    throw new Error('Config path must remain inside the project through symlinks.');
   }
   return resolved;
 }
@@ -127,7 +144,7 @@ function normalizeConfig(raw, cwd) {
 }
 
 export async function loadConfig(cwd, { warn = true } = {}) {
-  const configPath = path.join(cwd, CONFIG_PATH);
+  const configPath = assertProjectRelativePath(cwd, CONFIG_PATH);
   try {
     const raw = JSON.parse(await fs.readFile(configPath, 'utf8'));
     return { config: normalizeConfig(raw, cwd), recovered: false, configPath };
@@ -161,7 +178,7 @@ async function writeConfig(configPath, config) {
 }
 
 async function withLock(cwd, operation) {
-  const lockPath = path.join(cwd, LOCK_PATH);
+  const lockPath = assertProjectRelativePath(cwd, LOCK_PATH);
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
   let handle;
   // A healthy writer can hold the lock longer than 100 polls under load.
@@ -209,7 +226,7 @@ function projectRelative(cwd, target) {
 }
 
 async function commitMemoryState(cwd, memoryPath, lines, metadataPath, metadata, operation) {
-  const transactionRoot = path.join(cwd, TRANSACTION_PATH);
+  const transactionRoot = assertProjectRelativePath(cwd, TRANSACTION_PATH);
   await fs.mkdir(transactionRoot, { recursive: true });
   const operationId = createHash('sha256').update(JSON.stringify({
     operation,
@@ -234,7 +251,7 @@ async function commitMemoryState(cwd, memoryPath, lines, metadataPath, metadata,
 }
 
 async function recoverTransactions(cwd) {
-  const transactionRoot = path.join(cwd, TRANSACTION_PATH);
+  const transactionRoot = assertProjectRelativePath(cwd, TRANSACTION_PATH);
   let names;
   try {
     names = await fs.readdir(transactionRoot);
@@ -291,8 +308,15 @@ async function writeMetadata(metadataPath, metadata) {
 function ensureEntry(metadata, value, now = new Date().toISOString(), preferredId) {
   const digest = memoryDigest(value);
   const existing = Object.values(metadata.entries).find(
-    (entry) => entry.digest === digest && entry.value === value && entry.status === 'active',
+    (entry) => entry.digest === digest && entry.value === value && entry.status === 'active'
+      && (!entry.maintenance?.placement || entry.maintenance.placement === 'resident')
+      && (!entry.maintenance?.lifecycle || entry.maintenance.lifecycle === 'active'),
   );
+  if (!existing && Object.values(metadata.entries).some(entry => entry.value === value
+    && (entry.status !== 'active' || (entry.maintenance?.placement && entry.maintenance.placement !== 'resident')
+      || (entry.maintenance?.lifecycle && entry.maintenance.lifecycle !== 'active')))) {
+    throw new Error('Disposed or demoted memory requires explicit maintenance restore or promotion.');
+  }
   const id = existing?.id ?? (preferredId ? validatedMemoryId(preferredId) : newMemoryId());
   if (!existing && metadata.entries[id] && metadata.entries[id].value !== value) {
     throw new Error(`line-memory handle already belongs to a different fact: ${id}`);
@@ -373,9 +397,17 @@ export async function readMemoryLines(cwd, config) {
 
   const lines = raw.split(/\r?\n/);
   if (lines.at(-1) === '') lines.pop();
+  const { metadata } = await loadMetadata(cwd, config);
+  const eligible = lines.filter(value => {
+    const matches = Object.values(metadata.entries).filter(entry => entry.value === value);
+    return matches.length === 0 || matches.some(entry => entry.status === 'active'
+      && (!entry.maintenance?.placement || entry.maintenance.placement === 'resident')
+      && (!entry.maintenance?.lifecycle || entry.maintenance.lifecycle === 'active'));
+  });
   return {
-    lines: config.trimBlankLines ? lines.filter((line) => line.trim() !== '') : lines,
+    lines: config.trimBlankLines ? eligible.filter((line) => line.trim() !== '') : eligible,
     memoryPath,
+    filteredLines: eligible.length !== lines.length,
   };
 }
 
@@ -383,17 +415,20 @@ function memoryCount(lines) {
   return lines.filter((line) => line.trim() !== '').length;
 }
 
-export function pruneLines(lines, maxLines) {
+export function pruneLines(lines, maxLines, metadata) {
   const output = [...lines];
+  const pinned = new Set(Object.values(metadata?.entries ?? {}).filter(entry =>
+    entry.status === 'active' && entry.maintenance?.authority?.protection === 'pinned').map(entry => entry.value));
   let excess = memoryCount(output) - maxLines;
   for (let index = 0; excess > 0 && index < output.length;) {
-    if (output[index].trim() !== '') {
+    if (output[index].trim() !== '' && !pinned.has(output[index])) {
       output.splice(index, 1);
       excess--;
     } else {
       index++;
     }
   }
+  if (excess > 0) throw new Error('Pinned mandatory constraints exceed the requested line-memory capacity');
   return output;
 }
 
@@ -437,12 +472,18 @@ async function addMemory(args, cwd, config, operation = 'add') {
 
   const { lines, memoryPath } = await readMemoryLines(cwd, config);
   const { metadataPath, metadata } = await loadMetadata(cwd, config);
+  const prior = Object.values(metadata.entries).filter(entry => entry.value === memory);
+  if (prior.length && !prior.some(entry => entry.status === 'active'
+    && (!entry.maintenance?.placement || entry.maintenance.placement === 'resident')
+    && (!entry.maintenance?.lifecycle || entry.maintenance.lifecycle === 'active'))) {
+    return result(1, 'Disposed or demoted memory requires explicit maintenance restore or promotion.');
+  }
   reconcileMetadata(lines, metadata);
   const next = config.dedupe
     ? lines.filter((line) => line !== memory)
     : [...lines];
   next.push(memory);
-  const pruned = pruneLines(next, config.maxLines);
+  const pruned = pruneLines(next, config.maxLines, metadata);
   const now = new Date().toISOString();
   const entry = ensureEntry(metadata, memory, now, optionValue(args, '--handle'));
   entry.lastAccessedAt = now;
@@ -452,6 +493,7 @@ async function addMemory(args, cwd, config, operation = 'add') {
       (candidate) => candidate.digest === memoryDigest(value) && candidate.value === value && candidate.status === 'active',
     );
     if (removed) {
+      recordMaintenanceDisposition(removed, config, 'retired', now, 'line-memory', 'Recency capacity pruning');
       removed.status = 'pruned';
       removed.updatedAt = now;
     }
@@ -590,11 +632,12 @@ async function pruneMemory(args, cwd, config) {
   const { lines, memoryPath } = await readMemoryLines(cwd, config);
   const { metadataPath, metadata } = await loadMetadata(cwd, config);
   const before = memoryCount(lines);
-  const pruned = pruneLines(lines, config.maxLines);
+  const pruned = pruneLines(lines, config.maxLines, metadata);
   const retained = new Set(pruned);
   const now = new Date().toISOString();
   for (const value of lines.filter((line) => line.trim() && !retained.has(line))) {
     const entry = ensureEntry(metadata, value, now);
+    recordMaintenanceDisposition(entry, config, 'retired', now, 'line-memory', 'Recency capacity pruning');
     entry.status = 'pruned';
     entry.updatedAt = now;
   }
@@ -625,9 +668,11 @@ async function importMemory(args, cwd, config) {
         && entry.digest === memoryDigest(memory)
         && entry.status === 'active',
     );
+    // Apply the same owner validation as confirmation to this in-memory copy.
+    ensureEntry(metadata, memory, new Date().toISOString(), optionValue(args, '--handle'));
     const next = config.dedupe ? lines.filter((line) => line !== memory) : [...lines];
     next.push(memory);
-    const retained = pruneLines(next, config.maxLines);
+    const retained = pruneLines(next, config.maxLines, metadata);
     const preferred = optionValue(args, '--handle');
     const proposedHandle = existing?.id
       ?? (preferred ? validatedMemoryId(preferred) : null);
@@ -659,10 +704,14 @@ async function dispositionMemory(action, args, cwd, config) {
       : 'remove';
   const expectedStatus = action === 'remove' ? 'removed' : action;
   const dryRun = args.includes('--dry-run');
-  const selector = normalizeMemory(positionalArgs(args).join(' '));
+  const explicitHandle = optionValue(args, '--handle');
+  const selector = explicitHandle ?? normalizeMemory(positionalArgs(args).join(' '));
   if (!selector) return result(1, `A memory handle or exact value is required for ${operation}.`);
   if (!dryRun && !args.includes('--confirm')) return result(1, `${operation} requires --confirm.`);
-  const { lines, memoryPath } = await readMemoryLines(cwd, config);
+  const { lines, memoryPath, filteredLines } = await readMemoryLines(cwd, config);
+  if (!explicitHandle && /^\d+$/.test(selector) && filteredLines) {
+    return result(1, 'Positional line-memory selectors are ambiguous when disposed or demoted lines are filtered; use --handle <stable-handle>.');
+  }
   const { metadataPath, metadata } = await loadMetadata(cwd, config);
   const selectedEntry = metadata.entries[selector];
   const index = lines.findIndex((line) => line === selector || (
@@ -717,6 +766,8 @@ async function dispositionMemory(action, args, cwd, config) {
     : lines.filter((_, candidate) => candidate !== index);
   const now = new Date().toISOString();
   const entry = ensureEntry(metadata, value, now);
+  recordMaintenanceDisposition(entry, config, expectedStatus === 'superseded' ? 'superseded' : 'retired', now,
+    optionValue(args, '--reviewer') ?? 'line-memory', optionValue(args, '--reason') ?? `Owner ${operation}`, replacement);
   entry.status = expectedStatus;
   entry.updatedAt = now;
   entry.disposition = {
@@ -821,6 +872,240 @@ function deterministicPromotionHandle(candidateId, version) {
   return `lm_${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
+function maintenanceRecord(entry, config) {
+  const digest = memoryDigest(entry.value);
+  const sourcePath = `${config.metadataPath}#${entry.id}`;
+  const id = memoryDigest(JSON.stringify({ sourcePath, digest }));
+  const axes = entry.maintenance ?? {};
+  const lifecycle = axes.lifecycle ?? (entry.status === 'active' ? 'active'
+    : entry.status === 'superseded' ? 'superseded' : 'retired');
+  const at = entry.updatedAt ?? entry.createdAt ?? '1970-01-01T00:00:00.000Z';
+  return {
+    schemaVersion: 'aiwg.memory-record.v1', id, sourcePath, digest,
+    version: axes.version ?? 1, aliases: [entry.id, ...(axes.aliases ?? [])],
+    supersedes: axes.supersedes ?? [], mergedFrom: axes.mergedFrom ?? [], splitFrom: axes.splitFrom ?? [],
+    scope: axes.scope ?? 'project', placement: axes.placement ?? (entry.status === 'active' ? 'resident' : 'archived'),
+    lifecycle, authority: axes.authority ?? { owner: 'line-memory', source: 'operator', protection: 'unprotected' },
+    observation: { status: 'on-disk', evidence: { source: sourcePath, at, session: null, provider: null, version: null } },
+    ...(lifecycle === 'active' ? {} : { tombstone: axes.tombstone ?? {
+      id, digest, disposition: lifecycle, reason: entry.disposition?.reason ?? 'Existing owner disposition',
+      reviewer: entry.disposition?.reviewer ?? 'line-memory', at: entry.disposition?.recordedAt ?? at,
+    } }),
+  };
+}
+
+/** Native archive/prune commands retain the same revision and tombstone semantics after adoption. */
+function recordMaintenanceDisposition(entry, config, lifecycle, at, reviewer, reason, successor) {
+  if (!entry.maintenance) return;
+  const record = maintenanceRecord(entry, config);
+  entry.maintenance = { ...entry.maintenance, version: record.version + 1, lifecycle,
+    history: [...(entry.maintenance.history ?? []), { op: lifecycle, reviewer, reason, at,
+      from: { placement: record.placement, lifecycle: record.lifecycle },
+      to: { placement: record.placement, lifecycle } }],
+    tombstone: { id: record.id, digest: record.digest, disposition: lifecycle, reason, reviewer, at,
+      ...(successor ? { successor } : {}) },
+  };
+}
+
+/** Read-only exact preview over the existing fact file, sidecar and configuration. */
+export async function readLineMaintenanceState(cwd) {
+  const rawConfig = safeRequireText(assertProjectRelativePath(cwd, CONFIG_PATH));
+  const config = rawConfig ? normalizeConfig(JSON.parse(rawConfig), cwd) : { ...DEFAULT_CONFIG };
+  const memoryPath = assertProjectRelativePath(cwd, config.path);
+  const metadataPath = assertProjectRelativePath(cwd, config.metadataPath);
+  const rawMemory = safeRequireText(memoryPath);
+  const rawMetadata = safeRequireText(metadataPath);
+  const metadata = rawMetadata ? JSON.parse(rawMetadata) : {
+    schemaVersion: 'aiwg.line-memory.v1', version: 1,
+    store: { memoryPath: config.path, metadataPath: config.metadataPath }, entries: {},
+  };
+  if (metadata.version !== 1 || !metadata.entries || typeof metadata.entries !== 'object'
+    || Array.isArray(metadata.entries)) throw new Error('Invalid line-memory metadata; repair through its owner before maintenance');
+  const lines = rawMemory.split(/\r?\n/).filter(line => line.trim() !== '').filter(value => {
+    const matches = Object.values(metadata.entries).filter(entry => entry.value === value);
+    return !matches.length || matches.some(entry => entry.status === 'active'
+      && (!entry.maintenance?.placement || entry.maintenance.placement === 'resident')
+      && (!entry.maintenance?.lifecycle || entry.maintenance.lifecycle === 'active'));
+  });
+  for (const value of lines) {
+    const existing = Object.values(metadata.entries).find(entry => entry.value === value && entry.status === 'active');
+    if (!existing) ensureEntry(metadata, value, '1970-01-01T00:00:00.000Z', deterministicPromotionHandle(`legacy:${memoryDigest(value)}`, 1));
+  }
+  const records = Object.values(metadata.entries).map(entry => maintenanceRecord(entry, config));
+  return { config, metadata, memoryPath, metadataPath, lines, records,
+    snapshot: memoryDigest(JSON.stringify([rawConfig, rawMemory, rawMetadata])) };
+}
+
+function validateLineOperation(state, operation) {
+  const binding = operation.owner;
+  if (binding?.name !== 'line-memory' || !binding.handle || !binding.snapshot || !operation.review?.reviewer?.trim()) {
+    throw new Error('Line-memory maintenance requires exact owner binding and review');
+  }
+  if (binding.snapshot !== state.snapshot) throw new Error('Stale line-memory owner snapshot');
+  if (operation.sessionEffect !== 'next-session') throw new Error('Line-memory owner edits require next-session effect');
+  const entry = state.metadata.entries[binding.handle];
+  const record = entry && maintenanceRecord(entry, state.config);
+  function match(current, expected) {
+    if (!current || current.id !== expected.id || current.digest !== expected.digest || current.version !== expected.version) {
+      throw new Error('Stale line-memory digest or version precondition');
+    }
+  }
+  match(record, operation.target);
+  match(record, { id: operation.target.id, ...operation.precondition });
+  if (record.scope !== operation.scope) throw new Error('Maintenance cannot implicitly change scope');
+  if (record.placement !== operation.from.placement || record.lifecycle !== operation.from.lifecycle) {
+    throw new Error('Stale line-memory placement or lifecycle');
+  }
+  if (operation.op === 'retire' && operation.review.retirementBasis === 'age' && record.authority.protection === 'pinned') {
+    throw new Error('Pinned rare obligations cannot be retired by age');
+  }
+  if (operation.to.lifecycle === 'purged') throw new Error('Maintenance cannot purge sources');
+  if (operation.from.placement !== operation.to.placement && operation.from.lifecycle !== operation.to.lifecycle) {
+    throw new Error('Maintenance cannot implicitly change a second axis');
+  }
+  if (['promote', 'demote', 'recategorize'].includes(operation.op)
+    && operation.from.lifecycle !== operation.to.lifecycle) throw new Error('Placement and category operations preserve lifecycle');
+  if (operation.op === 'recategorize' && operation.from.placement !== operation.to.placement) throw new Error('Recategorize preserves placement');
+  if (['retire', 'restore', 'supersede', 'merge', 'split'].includes(operation.op)
+    && operation.from.placement !== operation.to.placement) throw new Error('Lifecycle operations preserve placement');
+  if (operation.op === 'retire' && operation.to.lifecycle !== 'retired') throw new Error('Retire requires retired lifecycle');
+  if (operation.op === 'restore' && operation.to.lifecycle !== 'active') throw new Error('Restore requires active lifecycle');
+  const related = (operation.related ?? []).map(expected => {
+    const current = state.records.find(item => item.id === expected.id || item.aliases.includes(expected.id));
+    match(current, expected);
+    if (current.scope !== record.scope || JSON.stringify(Object.entries(current.authority).sort(([left], [right]) => left.localeCompare(right)))
+      !== JSON.stringify(Object.entries(record.authority).sort(([left], [right]) => left.localeCompare(right)))) {
+      throw new Error('Merge cannot change scope or authority');
+    }
+    if (current.lifecycle !== 'active' || current.placement !== record.placement) throw new Error('Merge requires active inputs at the same placement');
+    return current;
+  });
+  const inputs = [record, ...related];
+  if (new Set(inputs.map(item => item.id)).size !== inputs.length) throw new Error('Maintenance source inputs overlap');
+  if (inputs.some(item => item.version >= Number.MAX_SAFE_INTEGER)) throw new Error('Maintenance revision counter is exhausted');
+  const replacements = operation.replacements ?? [];
+  if (['merge', 'split', 'supersede'].includes(operation.op)) {
+    if (!replacements.length || (operation.op === 'split' && replacements.length < 2)) throw new Error('Replacement facts are required');
+    if (operation.op === 'merge' && related.length < 1) throw new Error('Merge requires another bound source');
+    if (operation.to.lifecycle !== 'superseded') throw new Error('Replacement operation must supersede its original');
+    const keys = new Set();
+    for (const replacement of replacements) {
+      if (!replacement.key || keys.has(replacement.key) || !normalizeMemory(replacement.value)
+        || replacement.value !== normalizeMemory(replacement.value)) throw new Error('Replacement facts require unique keys and normalized values');
+      keys.add(replacement.key);
+      if (replacement.sourcePath && replacement.sourcePath !== record.sourcePath) {
+        throw new Error('Line-memory replacements retain owner source provenance; arbitrary destination sources are unsupported');
+      }
+    }
+  } else if (replacements.length || related.length) throw new Error('Replacement inputs require merge, split or supersede');
+  if (operation.op === 'recategorize' && !operation.category?.trim()) throw new Error('Recategorize requires category');
+  const removed = new Set([entry.value, ...related.map(item => state.metadata.entries[item.aliases[0]].value)]);
+  const next = state.lines.filter(value => !removed.has(value));
+  if (operation.to.placement === 'resident' && operation.to.lifecycle === 'active') next.push(entry.value);
+  if (operation.to.placement === 'resident') next.push(...replacements.map(item => item.value));
+  if (memoryCount(next) > state.config.maxLines) throw new Error('Maintenance exceeds line-memory capacity; explicit demotion is required');
+  return { entry, record, related, next };
+}
+
+export async function validateLineMaintenance(cwd, operation) {
+  if (await pendingLineMaintenance(cwd, operation)) return;
+  validateLineOperation(await readLineMaintenanceState(cwd), operation);
+}
+
+/** A prepared owner WAL can be replayed only for the exact reviewed operation. */
+export async function pendingLineMaintenance(cwd, operation) {
+  const root = assertProjectRelativePath(cwd, TRANSACTION_PATH);
+  let names;
+  try { names = await fs.readdir(root); }
+  catch (error) { if (error?.code === 'ENOENT') return false; throw error; }
+  const digest = memoryDigest(JSON.stringify(operation));
+  for (const name of names.filter(name => name.endsWith('.json'))) {
+    const journal = JSON.parse(await fs.readFile(path.join(root, name), 'utf8'));
+    if (journal.schemaVersion !== 'aiwg.line-memory.transaction.v1') throw new Error('Invalid line-memory transaction journal');
+    const metadata = JSON.parse(journal.metadataContent);
+    if (Object.values(metadata.maintenanceReceipts ?? {}).some(receipt => receipt.operationDigest === digest)) return true;
+  }
+  return false;
+}
+
+/** Mutation, receipt and retained history use the same owner lock and WAL as archive/supersede. */
+export async function applyLineMaintenance(cwd, operation, key, { verifyRetrieval } = {}) {
+  return withLock(cwd, async () => {
+    const state = await readLineMaintenanceState(cwd);
+    const prior = state.metadata.maintenanceReceipts?.[key];
+    if (prior) {
+      if (prior.operationDigest !== memoryDigest(JSON.stringify(operation))) throw new Error('Maintenance idempotency key collision');
+      return prior;
+    }
+    const { entry, record, related, next } = validateLineOperation(state, operation);
+    for (const input of [record, ...related]) {
+      if (input.placement === 'resident' && input.lifecycle === 'active'
+        && (input.id !== record.id || operation.to.placement !== 'resident' || operation.to.lifecycle !== 'active')) {
+        const verification = input.id === record.id ? operation : { ...operation,
+          target: { id: input.id, digest: input.digest, version: input.version },
+          precondition: { digest: input.digest, version: input.version },
+          owner: { ...operation.owner, handle: input.aliases[0] },
+        };
+        if (!verifyRetrieval) throw new Error('line-memory resident removal is unsupported: no owner-native indexed retrieval projection is available');
+        if (!await verifyRetrieval(verification)) throw new Error('Indexed retrieval must be verified before resident removal');
+      }
+    }
+    const now = new Date().toISOString();
+    const lineage = [record.id, ...related.map(item => item.id)];
+    const successors = (operation.replacements ?? []).map(replacement => {
+      const handle = deterministicPromotionHandle(`maintenance:${key}:${replacement.key}`, 1);
+      if (state.metadata.entries[handle]) throw new Error('Replacement handle already exists');
+      const successor = {
+        id: handle, value: replacement.value, digest: memoryDigest(replacement.value), status: 'active',
+        createdAt: now, updatedAt: now, lastAccessedAt: now, accessCount: 0,
+        sources: [...(entry.sources ?? [])],
+        maintenance: { version: 1, scope: record.scope, authority: record.authority,
+          placement: operation.to.placement, lifecycle: 'active', aliases: [],
+          supersedes: operation.op === 'supersede' ? lineage : [],
+          mergedFrom: operation.op === 'merge' ? lineage : [], splitFrom: operation.op === 'split' ? lineage : [],
+          category: replacement.category ?? entry.maintenance?.category,
+        },
+      };
+      state.metadata.entries[handle] = successor;
+      return maintenanceRecord(successor, state.config);
+    });
+    for (const original of [record, ...related]) {
+      const current = state.metadata.entries[original.aliases[0]];
+      const lifecycle = original.id === record.id ? operation.to.lifecycle : 'superseded';
+      const placement = original.id === record.id ? operation.to.placement : original.placement;
+      const tombstone = lifecycle === 'active' ? undefined : {
+        id: original.id, digest: original.digest, disposition: lifecycle,
+        reason: operation.rationale, reviewer: operation.review.reviewer, at: now,
+        ...(successors.length ? { successor: successors[0].id } : {}),
+      };
+      const history = [...(current.maintenance?.history ?? []), {
+        op: operation.op, reviewer: operation.review.reviewer, reason: operation.rationale, at: now,
+        from: { placement: original.placement, lifecycle: original.lifecycle },
+        to: { placement, lifecycle }, ...(current.maintenance?.tombstone ? { tombstone: current.maintenance.tombstone } : {}),
+      }];
+      current.maintenance = { ...current.maintenance, version: original.version + 1,
+        scope: original.scope, authority: original.authority, placement, lifecycle, history,
+        ...(operation.category ? { category: operation.category } : {}), tombstone };
+      current.status = lifecycle === 'active' ? 'active' : lifecycle === 'superseded' ? 'superseded' : 'archived';
+      current.updatedAt = now;
+      if (lifecycle !== 'active') current.disposition = {
+        reviewer: operation.review.reviewer, reason: operation.rationale,
+        replacement: successors[0]?.aliases[0] ?? null, recordedAt: now,
+      };
+    }
+    const receipt = { owner: 'line-memory', key, operationDigest: memoryDigest(JSON.stringify(operation)),
+      target: record.id, successors: successors.map(item => item.id), sessionEffect: operation.sessionEffect,
+      operation: operation.op, at: now };
+    state.metadata.maintenanceReceipts = { ...state.metadata.maintenanceReceipts, [key]: receipt };
+    await commitMemoryState(cwd, state.memoryPath, next, state.metadataPath, state.metadata, `maintenance:${operation.op}`);
+    return receipt;
+  });
+}
+
+export async function readLineMaintenanceReceipt(cwd, key) {
+  return (await readLineMaintenanceState(cwd)).metadata.maintenanceReceipts?.[key];
+}
+
 /**
  * Session promotion adapter that writes through the same locked store used by
  * the CLI. The plan contains only inert fact/provenance data; the reviewed
@@ -836,7 +1121,7 @@ export class LineMemoryPromotionDestination {
     const fact = normalizeMemory(candidate.assertion ?? '');
     if (!fact) throw new Error('line-memory promotion requires a nonblank candidate assertion');
     const sourceRef = `session-candidate:${candidate.candidateId}:v${candidate.version}`;
-    const configPath = path.join(this.projectRoot, CONFIG_PATH);
+    const configPath = assertProjectRelativePath(this.projectRoot, CONFIG_PATH);
     let config = { ...DEFAULT_CONFIG };
     try {
       config = normalizeConfig(JSON.parse(requireText(configPath)), this.projectRoot);

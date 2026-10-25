@@ -6,3 +6,5 @@ export * from './maintenance-record.js';
 export * from './maintenance-contract.js';
 export * from './provider-memory-adapter.js';
 export * from './audit.js';
+export * from './maintenance-owner.js';
+export * from './maintenance.js';

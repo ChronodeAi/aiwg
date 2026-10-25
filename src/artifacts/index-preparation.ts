@@ -4,7 +4,7 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { signalChild } from '../process/signal-child.mjs';
 import type { MetadataEntry } from './types.js';
 export interface IndexPreparationJob { fullPath: string; relativePath: string; mtimeMs: number; birthtimeMs: number; sizeBytes: number; existingChecksum?: string }
-export interface IndexPreparationResult { checksum: string; entry?: MetadataEntry }
+export interface IndexPreparationResult { checksum: string; entry?: MetadataEntry; warnings?: string[] }
 
 const MIB = 1024 ** 2;
 const WORKER_HEAP_MB = 256;

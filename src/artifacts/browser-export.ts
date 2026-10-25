@@ -725,6 +725,7 @@ function recordForEntry(
             phase: entry.phase,
             type: entry.type,
             frontmatter: {
+              ...(entry.memoryRecord ? { aiwg_memory_record: entry.memoryRecord } : {}),
               ...(entry.kernel === undefined ? {} : { kernel: entry.kernel }),
               ...(entry.kind ? { aiwg_kind: entry.kind } : {}),
               ...(entry.sourceType ? { aiwg_source_type: entry.sourceType } : {}),

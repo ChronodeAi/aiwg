@@ -375,6 +375,8 @@ function entryFromRecord(record: AiwgFortemiRecord): MetadataEntry {
   const indexedScript = indexedFrontmatter.aiwg_script;
   return {
     path: record.source.path,
+    ...(indexedFrontmatter.aiwg_memory_record && typeof indexedFrontmatter.aiwg_memory_record === 'object'
+      ? { memoryRecord: indexedFrontmatter.aiwg_memory_record as MetadataEntry['memoryRecord'] } : {}),
     type: artifactTypeFromRecord(record),
     kind:
       typeof indexedFrontmatter.aiwg_kind === "string"

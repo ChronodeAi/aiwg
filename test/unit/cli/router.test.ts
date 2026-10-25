@@ -106,7 +106,7 @@ describe('router', () => {
       });
     });
 
-    it.each([0, 1])('keeps memory audit free of hooks and telemetry at exit status %s', async status => {
+    it.each([['audit', '--json'], ['plan', '--input', 'plan.json', '--preview'], ['apply', '--plan', 'plan.json', '--preview'], ['restore', '--plan', 'plan.json', '--preview']].flatMap(args => [0, 1].map(status => ({ args, status }))))('keeps memory $args free of hooks and telemetry at exit status $status', async ({ args, status }) => {
       const registry = await initRouter();
       const handler = registry.handlerMap.get('memory')!;
       const execute = vi.spyOn(handler, 'execute').mockResolvedValue({ exitCode: status });
@@ -115,8 +115,8 @@ describe('router', () => {
       const log = vi.spyOn(commandLog, 'maybeAppendCommandLog');
       const usage = vi.spyOn(skillUsage, 'maybeAppendSkillUsage');
       try {
-        if (status) await expect(run(['memory', 'audit', '--json'])).rejects.toThrow('process.exit called with 1');
-        else await run(['memory', 'audit', '--json']);
+        if (status) await expect(run(['memory', ...args])).rejects.toThrow('process.exit called with 1');
+        else await run(['memory', ...args]);
         expect(execute).toHaveBeenCalledOnce();
         expect(root).toHaveBeenCalledWith({ createIfMissing: false });
         expect(hooks).not.toHaveBeenCalled();

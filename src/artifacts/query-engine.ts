@@ -54,6 +54,14 @@ function normalizeIndexedPath(entryPath: string): string {
   return entryPath.replace(/\\/g, '/');
 }
 
+/** Historical records stay in the index for explicit show/history lookup. */
+export function isOrdinaryMemoryEntry(entry: MetadataEntry, _cwd?: string): boolean {
+  // Maintenance owners publish dispositions into the index before returning.
+  // Retrieval must not read sources: ordinary legacy entries need no memory
+  // stamp, and temporary source I/O failures cannot hide active metadata.
+  return !entry.memoryRecord || (entry.memoryRecord.lifecycle === 'active' && entry.memoryRecord.placement !== 'archived');
+}
+
 /**
  * Resolve an index entry's source file path and read its body (frontmatter
  * stripped). Entry paths are normally relative to the project; framework-graph
@@ -751,6 +759,8 @@ export async function queryIndex(
     candidates = allEntries;
   }
 
+  // Retained tombstones are history, never ordinary retrieval results.
+  candidates = candidates.filter(entry => isOrdinaryMemoryEntry(entry, cwd));
   // Apply filters
   if (params.type) {
     candidates = candidates.filter(e => e.type === params.type);
@@ -800,8 +810,10 @@ export async function queryIndex(
       }
       process.exit(1);
     }
-    results = queried.results.map(result => {
+    const candidateByPath = new Map(candidates.map(entry => [entry.path, entry]));
+    results = queried.results.filter(result => candidateByPath.has(result.path)).map(result => {
       const entry: MetadataEntry = {
+        ...(candidateByPath.get(result.path)?.memoryRecord ? { memoryRecord: candidateByPath.get(result.path)!.memoryRecord } : {}),
         path: result.path,
         type: result.type,
         phase: result.phase,
@@ -851,7 +863,7 @@ export async function queryIndex(
 
   // Apply limit
   const limit = params.limit ?? 20;
-  results = results.slice(0, limit);
+  results = results.filter(result => isOrdinaryMemoryEntry(result.entry, cwd)).slice(0, limit);
 
   const queryTimeMs = Date.now() - startTime;
 
@@ -1221,6 +1233,7 @@ export async function discoverCapability(
   }
 
   // Filter by type
+  entries = entries.filter(entry => isOrdinaryMemoryEntry(entry, cwd));
   const candidates = entries.filter(e => types.includes(e.type));
 
   // Score (strict overlap gate). Keep the full sorted list so the facet
@@ -1605,7 +1618,7 @@ async function loadShowEntries(
         } as MetadataEntry, 'framework');
       });
       const localEntries = params.graph ? [] : defaultCapabilityGraphs(cwd).filter(graph => graph !== 'framework')
-        .flatMap(graph => loadLocalCapabilityEntries(cwd, graph));
+        .flatMap(graph => loadLocalCapabilityEntries(cwd, graph, undefined, true));
       const compactEntries = [...localEntries, ...frameworkEntries];
       if ((params.typeFilter?.every(type => ['skill', 'agent', 'flow', 'command', 'rule', 'behavior'].includes(type)))
         || findShowMatches(compactEntries, params.typeFilter ?? [...OPERATIONAL_SHOW_TYPES], params.name.trim()).length) {
@@ -1707,14 +1720,14 @@ async function loadShowEntries(
       process.exit(1);
     }
   } else {
-    entries = loadLocalCapabilityEntries(cwd, params.graph);
+    entries = loadLocalCapabilityEntries(cwd, params.graph, undefined, true);
   }
   return { entries, aiwgRoot, resourceSource: 'local', relations };
 }
 
 /** Local index inputs shared by show and exact rule-binding validation (#2938). */
 export function loadLocalCapabilityEntries(
-  cwd: string, graph?: GraphType, snapshot?: Map<string, MetadataEntry[]>,
+  cwd: string, graph?: GraphType, snapshot?: Map<string, MetadataEntry[]>, includeHistory = false,
 ): MetadataEntry[] {
   const entries: MetadataEntry[] = [];
   for (const selectedGraph of graph ? [graph] : defaultCapabilityGraphs(cwd)) {
@@ -1731,7 +1744,7 @@ export function loadLocalCapabilityEntries(
     const legacy = loadMetadataIndex(cwd);
     if (legacy) entries.push(...Object.values(legacy.entries));
   }
-  return entries;
+  return includeHistory ? entries : entries.filter(entry => isOrdinaryMemoryEntry(entry, cwd));
 }
 
 /** Project/user inputs only; package artifacts come from a validated compact table. */

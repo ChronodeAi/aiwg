@@ -119,9 +119,14 @@ export async function collectGraphIndexFiles(
     throw new Error(`Unknown graph: ${graph}`);
   }
   const artifactRoot = resolveProjectAiwgDir(cwd);
-  const excludedDirs = [path.join(cwd, DEFAULT_PROJECT_AIWG_DIR), artifactRoot]
-    .flatMap(root => INDEX_SCRATCH_DIRS.map(name => path.resolve(root, name)));
-  const excludedPaths = new Set(excludedDirs);
+  const artifactRoots = [path.join(cwd, DEFAULT_PROJECT_AIWG_DIR), artifactRoot];
+  // Aggregate owner state contains history, tombstones and transaction payloads.
+  // It is not an ordinary artifact: only each owner's public projection is a
+  // retrieval surface, never the backing store or maintenance receipts.
+  const privateDirs = ['context/compound-memory', 'memory/transactions', 'memory/maintenance'];
+  const privateFiles = ['memory/line-memory.meta.json', 'memory/line-memory.config.json', 'memory/line-memory.lock'];
+  const excludedDirs = artifactRoots.flatMap(root => [...INDEX_SCRATCH_DIRS, ...privateDirs].map(name => path.resolve(root, name)));
+  const excludedPaths = new Set([...excludedDirs, ...artifactRoots.flatMap(root => privateFiles.map(name => path.resolve(root, name)))]);
   // A directory's ancestors are shared by thousands of sibling artifacts.
   // Cache only within this scan so the next build still notices new symlinks.
   const safePaths = new Map<string, boolean>();
@@ -140,7 +145,7 @@ export async function collectGraphIndexFiles(
     }
     const inputPath = file;
     file = path.resolve(file);
-    if (excludedDirs.some(dir => process.platform === 'win32'
+    if (excludedPaths.has(file) || excludedDirs.some(dir => process.platform === 'win32'
       ? pathContains(dir, file) : file === dir || file.startsWith(dir + path.sep))) return false;
     if (knownStat && !knownStat.isSymbolicLink() && safePaths.get(path.dirname(file)) === true) {
       if (knownStat.isFile()) options.fileStats?.set(inputPath, knownStat);

@@ -117,3 +117,92 @@ Scanning stops at 12 levels, 5,000 files, 20,000 directory/discovery entries,
 `scan-truncated` findings identify incomplete scans. Credential files, dependency
 and build directories are excluded. Durable size never establishes injected size;
 provider ceiling findings are risks, not measured runtime truncation.
+
+## Reviewed placement and retirement
+
+`aiwg memory plan`, `apply` and `restore` coordinate the existing line-memory,
+compound-memory canonical context, and semantic-memory artifact-index owners.
+They preserve source bodies, original handles, aliases, lineage and owner
+history. Retirement records a tombstone; it never deletes a source file.
+
+Plan a single owner revision, inspect it, then apply that exact plan:
+
+```bash
+aiwg memory plan --owner semantic-memory --target .aiwg/knowledge/decision.md \
+  --op retire --reviewer operator --rationale 'Reviewed obsolete decision' \
+  --retirement-basis review --out retire-plan.json --json
+aiwg memory apply --plan retire-plan.json --preview --json
+aiwg memory apply --plan retire-plan.json --yes --json
+```
+
+Use a line-memory handle (`lm_…`), canonical-context entry handle, or indexed
+Markdown source path as the target. Plans include digests, revision, owner
+snapshot, placement/lifecycle, project scope, rationale, uncertainty, impacted
+links, reviewer and next-session effect. `--out` must be a new file inside the
+workspace whose parent already exists. Planning writes only that file;
+`--preview` writes nothing. `--input <plan-file>` validates an existing exact
+plan; `--out <new-file>` saves the validated preview.
+
+Promotion/demotion uses `--placement resident|indexed|task-context|archived`;
+recategorization uses `--category <name>`. Lifecycle and placement are separate
+operations, so retirement leaves the placement axis intact. `--replacements`
+reads a JSON array of `{ "key", "value", "sourcePath"?, "category"? }` objects;
+semantic-memory requires a new canonical `sourcePath` for each replacement.
+Supersede takes one replacement, split at least two, and merge one replacement
+plus `--related <file>` containing a JSON array of additional source handles.
+All merge inputs bind their own digest/version and must retain scope and
+authority. No promotion grants instruction authority.
+
+Semantic-memory verifies active published index records with the same content
+digest before resident removal. Demotion to indexed placement can verify its
+own published record; retirement requires a retained active copy supplied with
+`--link <indexed-path>`. A Markdown file alone is insufficient. If the index
+is absent, stale or unavailable, removal fails closed.
+
+The default line-memory and canonical-context maintenance owners explicitly
+refuse demotion, retirement or replacement that removes resident content:
+neither publishes an owner-native indexed retrieval projection today.
+Supplying `--link` cannot enable these unsupported operations. Other reviewed
+operations remain available. Pinned mandatory constraints cannot be retired by age;
+`--retirement-basis` defaults to `age`. Native line-memory capacity handling
+also refuses to prune a pinned constraint.
+
+Apply checks the reviewed source digests, revisions and owner snapshot under
+owner locks. At a TTY, type the exact displayed plan digest; headless callers
+must supply `--yes` or `--confirm <plan-digest>`. JSON mode requires explicit
+confirmation. Changed plans need a new review. `--yes` confirms the specified
+file; it does not bypass stale-source or owner checks.
+
+Each owner persists its own receipt with its transaction. Coordinator journals
+under `.aiwg/memory/maintenance/` contain receipt metadata and progress, not
+memory bodies. An interruption or failed index refresh reports
+`partial: { completed, pending }` with stable operation keys. Rerun the same
+apply command to resume. Completed owner work is recovered even if the process
+stopped before coordinator journaling. A different plan cannot take over an
+unfinished owner transaction. Keep the plan and journals until recovery is
+complete; do not clear a live owner's lock.
+
+To restore, first review a new plan targeting the retained record:
+
+```bash
+aiwg memory plan --owner semantic-memory --target .aiwg/knowledge/decision.md \
+  --op restore --reviewer operator --rationale 'Reviewed reinstatement' \
+  --out restore-plan.json
+aiwg memory restore --plan restore-plan.json --yes --json
+```
+
+Restoration retains prior dispositions in owner history and preserves scope
+and authority. Superseded content may require resolving an active replacement
+conflict before restore.
+
+Executable plans currently support project-owned sources and one operation per
+owner snapshot; a plan may coordinate different owners. Review another plan
+for another revision of the same owner. Global, transient/session, opaque and
+provider-native files are refused by these writers. Provider files remain
+owned by existing regeneration workflows. Canonical resident projections and
+line-memory loading exclude demoted/retired content; artifact rebuilds retain
+lifecycle exclusions. There is no canonical-context-to-provider regeneration
+consumer in the current codebase: use its filtered `residentEntries()` API
+when adding one. Portable exports deliberately retain history. These commands
+do not rewrite a running session or automatically regenerate provider files;
+all effects are reported as next-session changes.

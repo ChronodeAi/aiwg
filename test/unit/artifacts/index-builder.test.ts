@@ -539,6 +539,39 @@ References:
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
+    it('keeps owner-private aggregate stores and maintenance journals out of every project index', async () => {
+      const files = ['context/compound-memory/context.json', 'context/compound-memory/maintenance/receipt.json',
+        'memory/line-memory.meta.json', 'memory/line-memory.config.json', 'memory/transactions/pending.json',
+        'memory/maintenance/journal.json', 'wiki/public.md'];
+      for (const file of files) {
+        const target = path.join(tmpDir, '.aiwg', file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, file.endsWith('.md') ? '# Public source\nRetained source fact.\n' : '{"value":"retired private fact"}');
+      }
+      for (const graph of [undefined, 'project'] as const) {
+        await buildIndex(tmpDir, { graph, force: true, quiet: true, workers: 0 });
+        const indexDir = graph ? getGraphIndexDir(tmpDir, graph) : path.join(tmpDir, INDEX_DIR);
+        const index = JSON.parse(fs.readFileSync(path.join(indexDir, 'metadata.json'), 'utf8'));
+        expect(Object.keys(index.entries)).toEqual(['.aiwg/wiki/public.md']);
+      }
+    });
+
+    it('quarantines malformed memory metadata with a warning and keeps indexing every file', async () => {
+      const aiwgDir = path.join(tmpDir, '.aiwg/wiki');
+      fs.mkdirSync(aiwgDir, { recursive: true });
+      fs.writeFileSync(path.join(aiwgDir, 'corrupt.md'), '---\ntitle: Corrupt stamp\nmemoryRecord: { schemaVersion: broken, lifecycle: retired }\n---\nStill searchable body.\n');
+      fs.writeFileSync(path.join(aiwgDir, 'healthy.md'), '# Healthy page\nRetained content.\n');
+      const diagnostics: string[] = [];
+      await buildIndex(tmpDir, { force: true, quiet: true, workers: 0, onDiagnostic: message => diagnostics.push(message) });
+      const index = JSON.parse(fs.readFileSync(path.join(tmpDir, INDEX_DIR, 'metadata.json'), 'utf8'));
+      expect(Object.keys(index.entries)).toHaveLength(2);
+      expect(index.entries['.aiwg/wiki/corrupt.md']).toMatchObject({ title: 'Corrupt stamp' });
+      expect(index.entries['.aiwg/wiki/corrupt.md'].memoryRecord).toBeUndefined();
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatch(/corrupt.md: invalid memoryRecord metadata quarantined/);
+      await expect(buildIndex(tmpDir, { quiet: true, workers: 0 })).resolves.toBeUndefined();
+    });
+
     it('should build index from .aiwg/ directory', async () => {
       // Create test artifacts
       const aiwgDir = path.join(tmpDir, '.aiwg', 'requirements');
@@ -588,7 +621,7 @@ New users can register.
       // Check metadata content
       const metadata = JSON.parse(fs.readFileSync(path.join(indexDir, 'metadata.json'), 'utf-8'));
       expect(metadata.version).toBe('1.0.0');
-      expect(metadata.extractorVersion).toBe('2026.10.19.1');
+      expect(metadata.extractorVersion).toBe('2026.10.24.1');
       expect(Object.keys(metadata.entries)).toHaveLength(2);
 
       const uc001 = metadata.entries['.aiwg/requirements/UC-001.md'];
@@ -787,7 +820,7 @@ state_transfer:
       logSpy.mockRestore();
       const rebuilt = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
       expect(rebuilt.version).toBe('1.0.0');
-      expect(rebuilt.extractorVersion).toBe('2026.10.19.1');
+      expect(rebuilt.extractorVersion).toBe('2026.10.24.1');
       expect(rebuilt.buildConfigHash).toMatch(/^[a-f0-9]{64}$/);
       expect(rebuilt.entries[entryPath].type).toBe('runbook');
       expect(rebuilt.entries[entryPath].kind).toBe('Runbook');

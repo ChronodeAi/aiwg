@@ -259,7 +259,7 @@ maybeWarnUnbuiltDist();
 // Propagate the strict no-write contract through helpers that may resolve
 // installation/channel state before the command context exists.
 function isReadOnlyReport(args) {
-  return (args[0] === 'memory' && (['audit', 'cost'].includes(args[1]) || args.includes('--help') || args.includes('-h')))
+  return (args[0] === 'memory' && (['audit', 'cost', 'plan'].includes(args[1]) || args.includes('--preview') || args.includes('--help') || args.includes('-h')))
     || (args[0] === 'help' && args[1] === 'memory')
     || (args[0] === 'rules' && ['inventory', 'list'].includes(args[1]))
     || (['doctor', '-doctor', '--doctor'].includes(args[0]) && args.includes('--decision-offload'))

@@ -1928,11 +1928,15 @@ export const reflectionsHandler: CommandHandler = {
 export const memoryHandler: CommandHandler = {
   id: 'memory',
   name: 'Memory',
-  description: 'Memory storage, project registry, and read-only audit (audit --help)',
+  description: 'Memory storage, project registry, read-only audit, and reviewed lifecycle operations',
   category: 'utility',
   aliases: [],
 
-  async help(): Promise<HandlerResult> {
+  async help(ctx: HandlerContext): Promise<HandlerResult> {
+    if (['plan', 'apply', 'restore'].includes(ctx.args[0])) {
+      const { MEMORY_MAINTENANCE_USAGE } = await import('../../memory/maintenance-cli.js');
+      return { exitCode: 0, message: MEMORY_MAINTENANCE_USAGE, rawOutput: true };
+    }
     const { MEMORY_AUDIT_USAGE } = await import('../../memory/cli.js');
     return { exitCode: 0, message: MEMORY_AUDIT_USAGE, rawOutput: true };
   },
