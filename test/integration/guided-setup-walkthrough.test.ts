@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const CLI = path.join(ROOT, 'bin', 'aiwg.mjs');
 const temporary: string[] = [];
+const STEP_TIMEOUT_MS = 420_000;
 
 afterEach(() => {
   for (const root of temporary.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -60,7 +61,11 @@ globalThis.fetch = async (url, init) => {
     };
     const run = (args: string[]) => {
       const result = spawnSync(process.execPath, [CLI, 'setup', ...args], {
-        cwd: project, env, encoding: 'utf8', input: '', timeout: 180_000, maxBuffer: 8 * 1024 * 1024,
+        // `setup --apply` runs a real `aiwg use sdlc`, which still launches one
+        // deploy-agents process per addon serially: about 60 s idle and up to
+        // about 185 s on the shared CI runner (main run 90503 hit the old 180 s).
+        // #3558 makes those passes in-process and restores the tighter budget.
+        cwd: project, env, encoding: 'utf8', input: '', timeout: STEP_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024,
       });
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -129,5 +134,5 @@ globalThis.fetch = async (url, init) => {
     expect(run(['--apply', '--yes', '--json'])).toMatchObject({ classification: 'success', results: [] });
     expect(snapshot()).toEqual(beforeRepeat);
     expect(fs.readFileSync(requests, 'utf8').trim().split('\n')).toHaveLength(1);
-  }, 240_000);
+  }, STEP_TIMEOUT_MS + 120_000);
 });
