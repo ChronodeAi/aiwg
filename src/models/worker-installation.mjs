@@ -443,6 +443,19 @@ export function boundedVersionProbe(executable, argv, environment, cwd, timeoutM
     || !Array.isArray(argv) || argv.some(arg => typeof arg !== 'string' || arg.includes('\0'))) {
     throw new Error('Invalid probe bounds');
   }
+  // ETXTBSY: the executable still has a writer somewhere, typically a sibling
+  // process forked while the file was being written or a CLI mid-update. It
+  // clears in milliseconds, so retry the spawn within the same overall bound.
+  const deadline = Date.now() + timeoutMs;
+  const attempt = delayMs => runBoundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxBytes, versionPattern)
+    .catch(error => {
+      if (error?.code !== 'ETXTBSY' || Date.now() + delayMs >= deadline) throw error;
+      return new Promise(resolveDelay => setTimeout(resolveDelay, delayMs)).then(() => attempt(Math.min(delayMs * 2, 200)));
+    });
+  return attempt(10);
+}
+
+function runBoundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxBytes, versionPattern) {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, argv, { cwd, env: environment, stdio: 'pipe', detached: true, shell: false });
     let output = Buffer.alloc(0);
