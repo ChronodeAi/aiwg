@@ -9,7 +9,7 @@ import {
   verifyQualificationArtifacts,
 } from '../../../src/decision/qualification/runner.js';
 import { REQUIRED_VENDOR_CASE_IDS } from '../../../src/decision/qualification/manifest.js';
-import { DERIVED_GATE_EVIDENCE } from '../../../src/decision/qualification/gate-evidence.js';
+import { DERIVED_GATE_EVIDENCE, loadManifestDigest } from '../../../src/decision/qualification/gate-evidence.js';
 import { QUALIFICATION_PRIVACY_SURFACES } from '../../../src/decision/qualification/privacy.js';
 import type { QualificationCase, QualificationRunManifest } from '../../../src/decision/qualification/types.js';
 import {
@@ -374,6 +374,12 @@ describe('decision qualification executable runner', () => {
     };
     const passing = await plan(base, artifact);
     expect(passing.report.gates.find(gate => gate.id === 'G5')?.status).toBe('pass');
+    expect(passing.manifest.gateArtifacts?.['load-manifest-qualified']?.schemaVersion).toBe('decision-load-result/v2');
+    const { reservedUsage, reportedUsage: _, digest: __, ...fields } = artifact;
+    const legacyBody = { ...fields, schemaVersion: 'decision-load-result/v1', usage: reservedUsage };
+    const legacy = await plan(base, { ...legacyBody, digest: loadManifestDigest(legacyBody) });
+    expect(legacy.report.gates.find(gate => gate.id === 'G5')?.status).toBe('pass');
+    expect(legacy.manifest.gateArtifacts?.['load-manifest-qualified']?.schemaVersion).toBe('decision-load-result/v1');
     for (const [run, value] of [
       [{ ...base, dirty: true }, artifact],
       [{ ...base, sourceCommit: 'f'.repeat(40) }, artifact],
@@ -393,6 +399,10 @@ describe('decision qualification executable runner', () => {
       gateArtifacts: { 'load-manifest-qualified': path },
       executors: Object.fromEntries(cases.map(({ id }) => [id, () => ({ outcome: 'pass' as const })])),
     });
+    const changedVersion = { ...executed, gateArtifacts: { ...executed.gateArtifacts,
+      'load-manifest-qualified': { ...executed.gateArtifacts!['load-manifest-qualified']!, schemaVersion: 'decision-load-result/v1' } } };
+    const mismatched = await evaluateExecutedQualification(changedVersion, root);
+    expect(mismatched.gateVerification).toContainEqual({ flag: 'load-manifest-qualified', verified: false, reason: 'invalid-artifact' });
     for (const candidate of [{ ...executed, dirty: true }, { ...executed, sourceCommit: 'f'.repeat(40) }]) {
       const result = await evaluateExecutedQualification(candidate, root);
       expect(result.gateVerification).toContainEqual({ flag: 'load-manifest-qualified', verified: false, reason: 'invalid-artifact' });

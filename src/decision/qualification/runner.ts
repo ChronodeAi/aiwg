@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
+import { DECISION_STAGED_LOAD_RESULT_VERSIONS } from './load.js';
 import { evaluateQualification } from './gates.js';
 import {
   deriveGateEvidence, DERIVED_GATE_EVIDENCE, GATE_ARTIFACT_FLAGS, GATE_ARTIFACT_SCHEMAS,
@@ -329,7 +330,7 @@ async function attachGateArtifacts(
     const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
     await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
     await rename(temporary, target);
-    refs[flag] = { artifact: relative, digest: digest(bytes), schemaVersion: GATE_ARTIFACT_SCHEMAS[flag] };
+    refs[flag] = { artifact: relative, digest: digest(bytes), schemaVersion: (parsed as { schemaVersion: string }).schemaVersion };
     context.accepted[flag] = parsed;
   }
   return refs;
@@ -360,8 +361,11 @@ export async function verifyQualificationGateArtifacts(
     const parsed = parseJson(bytes);
     const versionOk = flag === 'immutable-splits'
       ? (IMMUTABLE_SPLIT_VERSIONS as readonly string[]).includes(ref.schemaVersion)
-      : ref.schemaVersion === GATE_ARTIFACT_SCHEMAS[flag];
-    if (!versionOk || !validateGateArtifact(flag, parsed, context)) {
+      : flag === 'load-manifest-qualified'
+        ? (DECISION_STAGED_LOAD_RESULT_VERSIONS as readonly string[]).includes(ref.schemaVersion)
+        : ref.schemaVersion === GATE_ARTIFACT_SCHEMAS[flag];
+    if (!versionOk || (flag === 'load-manifest-qualified' && (parsed as { schemaVersion?: string })?.schemaVersion !== ref.schemaVersion)
+      || !validateGateArtifact(flag, parsed, context)) {
       results.push({ flag, verified: false, reason: 'invalid-artifact' });
       continue;
     }

@@ -3,7 +3,7 @@ import { canonicalJson } from '../../security/artifact-trust.js';
 import { AdmissionError, DecisionAdmissionRegistry } from '../admission.js';
 import type { AdapterObservation, DecisionAdmissionEvidence, DecisionAdmissionLimits, DecisionSchedulerPolicy } from '../types.js';
 
-import { verifyDecisionStagedLoadRecord, type DecisionLoadManifestV3, type DecisionStagedLoadRecord } from './load-staged.js';
+import { verifyDecisionStagedLoadRecord, type DecisionLoadManifestV3, type DecisionStagedLoadRecord, type DecisionStagedLoadRecordV1 } from './load-staged.js';
 export * from './load-staged.js';
 
 export type DecisionLoadManifest = DecisionLoadManifestV2 | DecisionLoadManifestV3;
@@ -451,7 +451,7 @@ export function verifyDecisionLoadResultRecord(record: DecisionLoadResultRecord,
 }
 
 /** Historical offline evidence stays separate from verified, exact-commit v3 G5 artifacts. */
-export function decisionLoadEvidenceFlags(records: readonly (DecisionLoadResultRecord | DecisionStagedLoadRecord)[], manifestDigest: string,
+export function decisionLoadEvidenceFlags(records: readonly (DecisionLoadResultRecord | DecisionStagedLoadRecord | DecisionStagedLoadRecordV1)[], manifestDigest: string,
   sourceCommit?: string): Record<string, boolean> {
   const legacy = records.filter((record): record is DecisionLoadResultRecord => 'schema' in record);
   const bound = legacy.filter(record => verifyDecisionLoadResultRecord(record, manifestDigest));
