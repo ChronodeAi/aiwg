@@ -6,6 +6,7 @@
   "policy": {
     "materialScoreDrop": 0.1,
     "blockingSeverities": ["high", "critical"],
+    "informationalAlertTypes": ["socketUpgradeAvailable"],
     "reviewOwner": "AIWG maintainers",
     "reviewExpiresOn": "2026-11-14"
   },

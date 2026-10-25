@@ -4,14 +4,18 @@ AIWG captures Socket package-analysis evidence after npm trusted publishing succ
 
 ## What is evaluated
 
-The workflow evaluates both published entry points, `aiwg` and `@aiwg/cli`, at the exact release version. It inventories the published dependency tree plus every explicitly configured npm and Cargo lockfile, queries every resolved package version, and records findings in two groups:
+The workflow evaluates both published entry points, `aiwg` and `@aiwg/cli`, at the exact release version. It inventories the published dependency tree plus every explicitly configured npm and Cargo lockfile, queries resolved external package versions, and records findings in two groups:
 
 - **direct** — alerts and category scores on the two AIWG packages;
 - **transitive** — alerts on packages reached through their runtime dependency tree.
 
+Secondary npm lockfile roots, private packages, and workspace links are not query targets. Cargo packages at version `0.0.0` without a `source` are local workspace packages and are excluded, including `aiwg-cockpit-desktop`. Registry and git dependencies at `0.0.0` remain in the inventory. The two published release entry points remain explicit targets.
+
 Category scores are compared independently with [`ci/socket-score-baseline.json`](../../ci/socket-score-baseline.json). A score drop of 0.10 or greater triggers review. Scanner scoring models can evolve, so a score change is evidence to investigate—not authorization to remove or degrade a supported capability.
 
 Intentional capability alerts require a review record containing a rationale, owner, review date, expiry date, and a condition that triggers early revalidation. Expired records fail the audit. Unreviewed high or critical alerts also fail.
+
+The baseline classifies `socketUpgradeAvailable` as informational: it advertises a Socket replacement package rather than a security defect. Reports retain the original severity and replacement props. Socket's organization-level `action` values do not override this repository's policy.
 
 ## Failure and unavailable states
 
@@ -21,9 +25,17 @@ Every run uploads JSON and Markdown reports even when evaluation fails. Reports 
 
 Each finding is bound to the scanned commit and carries one provenance record per matching workspace: manifest path, lockfile path, SHA-256 lock digest, package ecosystem, and dependency path. Repeated package/artifact/rule findings collapse into one record with all affected paths. Because the query is derived from current locks, removed packages disappear on the next successful scan instead of surviving as stale root findings.
 
-Behavioral findings fail closed unless the scanner supplies the artifact hash, file location, detector/rule identifier, an excerpt or behavior trace, and a confidence rationale. Code-shape-only obfuscation is informational unless provenance or behavior evidence establishes security impact. Accept-risk reviews require a rationale and the exact artifact hash; a materially different artifact is therefore reviewed again.
+Live alerts supply a detector key, type, severity, category, and optional file and props. The evaluator retains props and maps `key` to the evidence rule identifier. Artifact hashes, files, symbols, excerpts, behavior traces, and confidence rationales are optional enrichments: their absence does not produce validation errors. Supplied evidence must still have the expected type and nonempty text; advisory URLs must use HTTP(S), and patched versions must be valid versions. Behavioral alerts still require a rule identifier. Code-shape-only obfuscation is informational unless provenance or behavior evidence establishes security impact. Accept-risk reviews require a rationale and the exact artifact hash; a materially different artifact is therefore reviewed again. Without a matching review, direct capability alerts still block even when enrichment is absent.
 
-Export validation rejects duplicate finding IDs, CVE findings without advisory identifiers, vulnerability findings without advisory URLs, and patched-version guidance that points outside the observed major release line. The configured organization name is rendered in the report rather than a hard-coded label.
+Export validation rejects duplicate finding IDs and CVE findings without advisory identifiers or URLs. For CVE alerts (including `mediumCVE` and `mildCVE`), advisory evidence maps from `props.cveId` (falling back to `props.ghsaId`), `props.url`, and `props.firstPatchedVersionIdentifier`; legacy top-level fields remain supported. Upstream first-patched versions may belong to a newer major release and are preserved as advisory data, not asserted to be compatible upgrades. Capability alerts such as `potentialVulnerability` do not require an advisory URL when no advisory is supplied. The configured organization name is rendered in the report rather than a hard-coded label.
+
+## Captured response regression fixture
+
+[`test/fixtures/release/socket-live-npm.ndjson`](../../test/fixtures/release/socket-live-npm.ndjson) is reduced from the 2026-10-25 live organization PURL response for 335 npm components, requested with `alerts=true&summary=true`. It contains public package data, retaining original artifact metadata and unmodified alerts (including complete CVE props). The original capture SHA-256 is `0770c83ba6663fd1f560a1091883a2692308a12c87e64eaaad9c554d9033ae3f`.
+
+Reduction keeps the first three alerts of each type in response order and drops artifacts without retained alerts and the aggregate summary, whose counts describe the unreduced response. There are 33 artifacts and 60 alerts across 22 types. `installScripts`, `potentialVulnerability`, and `gptDidYouMean` each occur only once in the source, so their single available example is retained. The fixture includes body-parser and both zod CVEs, install scripts, filesystem, network, shell, and replacement notices. Tests evaluate this fixture directly without network access.
+
+Two earlier synthetic test expectations changed for #3578: absent behavioral enrichments now pass validation because the live API omits them, and valid first-patched versions from a different major line are retained because Socket supplies that shape for zod. Severity blocking, review expiry and artifact binding, duplicate IDs, missing CVE identifiers, and score regression checks remain covered.
 
 ## Repository configuration
 
