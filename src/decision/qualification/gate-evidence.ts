@@ -7,6 +7,8 @@ import { validateCaseInventory } from './manifest.js';
 import { verifyQualificationSplits, type FrozenBinaryBenchmarkPlan } from './quality.js';
 import { verifyDecisionStagedLoadRecord } from './load.js';
 import type { QualificationGateArtifactRef, QualificationRunManifest } from './types.js';
+import type { ReviewEvaluation } from '../review/types.js';
+import { validateReviewEvaluation } from '../review/validate.js';
 
 /**
  * Gate evidence that is computed from recorded case evidence. Callers cannot
@@ -88,6 +90,7 @@ export interface QualificationReviewRecord {
   reviewer: string;
   decision: 'approve' | 'reject';
   recordedAt: string;
+  evaluation?: ReviewEvaluation;
 }
 
 const sha256Pattern = /^sha256:[0-9a-f]{64}$/;
@@ -183,6 +186,7 @@ function validLoadResult(value: unknown, context: GateArtifactContext): boolean 
 function validReview(value: unknown, context: GateArtifactContext): boolean {
   if (!record(value) || value.schemaVersion !== GATE_ARTIFACT_SCHEMAS['review-decision-recorded']) return false;
   const review = value as unknown as QualificationReviewRecord;
+  try { validateReviewEvaluation(review.evaluation); } catch { return false; }
   return review.runId === context.manifest.runId && review.sourceCommit === context.manifest.sourceCommit
     && typeof review.reviewer === 'string' && review.reviewer.trim().length > 0 && review.decision === 'approve'
     && validDate(review.recordedAt) && review.outcomesDigest === qualificationOutcomesDigest(context.manifest);

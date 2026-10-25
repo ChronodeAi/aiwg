@@ -17,6 +17,21 @@ export function reviewOperatorEventId(reviewId: string, sequence: number): strin
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const restrictedKey = /(?:password|credential|api.?key|secret|private.?reasoning|provider.?body|raw.?state|vault.?locator)/i;
 const restrictedValue = /(?:vault:\/\/|\b(?:sk-(?:test-)?[a-z0-9_-]{12,}|ghp_[a-z0-9]{12,})\b)/i;
+/** Optional review evidence remains strict when present, including imported records. */
+export function validateReviewEvaluation(value: unknown): void {
+  if (value === undefined) return;
+  const object = (item: unknown): item is Record<string, unknown> =>
+    typeof item === 'object' && item !== null && !Array.isArray(item);
+  const text = (item: unknown) => typeof item === 'string' && item.trim().length > 0 && item.length <= 8192;
+  const fields = ['evaluatorModel', 'evaluatorVendor', 'evaluatorFamily', 'acceptanceCriteriaRef', 'reReviewOf'];
+  if (!object(value) || Object.keys(value).some(key => key !== 'disagreements' && !fields.includes(key))
+    || fields.some(key => value[key] !== undefined && !text(value[key]))) throw new ReviewIntegrityError('Invalid review evaluation');
+  if (value.disagreements !== undefined && (!Array.isArray(value.disagreements) || value.disagreements.some(item =>
+    !object(item) || Object.keys(item).some(key => !['claimRef', 'generatorPosition', 'evaluatorPosition', 'resolutionRef'].includes(key))
+    || !text(item.claimRef) || !text(item.generatorPosition) || !text(item.evaluatorPosition)
+    || (item.resolutionRef !== undefined && !text(item.resolutionRef))))) throw new ReviewIntegrityError('Invalid review disagreements');
+  assertReviewProjection(value);
+}
 /** Enforce reference-only default review payloads; do not echo rejected material. */
 export function assertReviewProjection(value: unknown): void {
   if (typeof value === 'string') {
@@ -64,7 +79,10 @@ export function validateReview(review: DecisionReview): void {
     assertReviewProjection(proposal.rationale);
     if (proposal.version !== index + 1 || proposal.actionDigest !== reviewDigest(proposal.action)) throw new ReviewIntegrityError('Invalid proposal lineage');
   });
-  review.decisions.forEach(decision => { assertReviewProjection(decision.reviewer); assertReviewProjection(decision.rationale); });
+  review.decisions.forEach(decision => {
+    assertReviewProjection(decision.reviewer); assertReviewProjection(decision.rationale);
+    validateReviewEvaluation(decision.evaluation);
+  });
   review.events.forEach(event => { assertReviewProjection(event.actor); assertReviewProjection(event.rationale); });
   if (review.effectReceipt) assertReviewProjection(review.effectReceipt.result);
   review.events.forEach((event, index) => {
@@ -95,7 +113,8 @@ export function validateReview(review: DecisionReview): void {
           if (!['pending', 'claimed'].includes(state)) throw new ReviewIntegrityError('Illegal decision');
           const decision = review.decisions[decisionIndex++];
           if (!decision || decision.proposalVersion !== version || decision.decision !== (event.type === 'approved' ? 'approve' : 'reject') ||
-              canonicalJson(decision.reviewer) !== canonicalJson(event.actor) || decision.rationale !== event.rationale || decision.atEpochMs !== event.atEpochMs) {
+              canonicalJson(decision.reviewer) !== canonicalJson(event.actor) || decision.rationale !== event.rationale || decision.atEpochMs !== event.atEpochMs ||
+              canonicalJson(decision.evaluation ?? null) !== canonicalJson(event.data?.evaluation ?? null)) {
             throw new ReviewIntegrityError('Decision event mismatch');
           }
           if (event.type === 'rejected') state = 'rejected';

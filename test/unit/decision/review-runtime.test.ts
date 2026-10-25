@@ -32,6 +32,57 @@ async function harness(nowRef = { value: 1_000 }, authOverrides: Partial<ReviewA
 }
 
 describe('durable decision review runtime', () => {
+  it('retains per-evaluator evidence across restart and links re-review after material fixes', async () => {
+    const h = await harness();
+    await h.service.create(scope(actor('alice', ['requester'])), input(1000));
+    const evaluation = {
+      evaluatorModel: 'synthetic-snapshot-1', evaluatorVendor: 'fixture-vendor', evaluatorFamily: 'fixture-family',
+      acceptanceCriteriaRef: 'criteria/v1#sha256-fixture',
+      disagreements: [{ claimRef: 'claim-1', generatorPosition: 'accept', evaluatorPosition: 'reject', resolutionRef: 'check/failure-1' }],
+    };
+    const rejected = await h.service.decide(scope(actor('bob')), 'review-1', 'reject', 'check failed', evaluation);
+    evaluation.disagreements[0]!.generatorPosition = 'mutated outside writer';
+    expect(rejected.decisions[0]?.evaluation?.disagreements?.[0]?.generatorPosition).toBe('accept');
+    await h.service.create(scope(actor('alice', ['requester'])), input(1000, {
+      reviewId: 'review-2', action: { kind: 'notify', target: 'fixed-fixture' },
+    }));
+    const rereview = { ...evaluation, disagreements: [], reReviewOf: 'review-1/decisions/0' };
+    await h.service.decide(scope(actor('carol')), 'review-2', 'approve', 'fixed check passed', rereview);
+    const restarted = new DecisionReviewService(new FileDecisionReviewStore(h.directory, new Uint8Array(32).fill(7)), h.authorization, () => 1001);
+    const stored = await restarted.export(scope(actor('auditor')), 'review-2');
+    expect(stored?.decisions[0]?.evaluation).toEqual(rereview);
+    expect(stored?.events.at(-1)?.data?.evaluation).toEqual(rereview);
+    expect((await restarted.read(scope(actor('auditor')), 'review-1'))?.decisions[0]?.evaluation).toEqual(rejected.decisions[0]?.evaluation);
+    const schema = JSON.parse(await readFile(new URL('../../../schemas/decision/DecisionReview.schema.json', import.meta.url), 'utf8'));
+    expect(new Ajv2020({ strict: false }).validate(schema, stored)).toBe(true);
+    const forged = structuredClone(stored!);
+    forged.decisions[0]!.evaluation!.evaluatorFamily = 'forged-family';
+    expect(() => validateReview(forged)).toThrow('Decision event mismatch');
+  });
+
+  it('rejects malformed or restricted evaluator evidence without appending a decision', async () => {
+    const h = await harness();
+    const created = await h.service.create(scope(actor('alice', ['requester'])), input(1000));
+    const schema = JSON.parse(await readFile(new URL('../../../schemas/decision/DecisionReview.schema.json', import.meta.url), 'utf8'));
+    const schemaValid = new Ajv2020({ strict: false }).compile(schema);
+    for (const invalid of [null, [], { evaluatorModel: 42 }, { evaluatorVendor: ' ' }, { evaluatorFamily: '' },
+      { acceptanceCriteriaRef: false }, { reReviewOf: 12 }, { unexpected: true }, { disagreements: {} },
+      { disagreements: [{ claimRef: 'c', generatorPosition: 'yes' }] },
+      { disagreements: [{ claimRef: 'c', generatorPosition: 'yes', evaluatorPosition: 'no', resolutionRef: '' }] },
+    ]) {
+      const evaluation = invalid as unknown as NonNullable<DecisionReview['decisions'][number]['evaluation']>;
+      await expect(h.service.decide(scope(actor('bob')), 'review-1', 'approve', 'review', evaluation)).rejects.toThrow(/Invalid review/);
+      const forged = { ...created, decisions: [{ reviewer: actor('bob'), proposalVersion: 1, decision: 'approve', rationale: 'review', atEpochMs: 1000, evaluation }] };
+      expect(schemaValid(forged), JSON.stringify(invalid)).toBe(false);
+    }
+    await expect(h.service.decide(scope(actor('bob')), 'review-1', 'approve', 'review', {
+      acceptanceCriteriaRef: 'vault://synthetic/fixture',
+    })).rejects.toThrow('Restricted review payload');
+    expect((await h.service.read(scope(actor('bob')), 'review-1'))?.decisions).toEqual([]);
+    const approved = await h.service.decide(scope(actor('bob')), 'review-1', 'approve', 'human acceptance', { disagreements: [] });
+    expect(schemaValid(approved)).toBe(true);
+  });
+
   it('persists append-only review state across service/store restart', async () => {
     const h = await harness(); const requester = actor('alice', ['requester']); const reviewer = actor('bob');
     await h.service.create(scope(requester), input(1_000));

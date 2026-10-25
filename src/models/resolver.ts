@@ -399,6 +399,7 @@ export interface WorkerPlanRequest {
   /** Only the named, eligible replacement may depart from an exact pin. */
   substitution?: WorkerChoice & { rationale: string };
   reviewOf?: WorkerModelObservation;
+  /** Enforce observed family diversity; this does not establish independent errors or correctness. */
   requireDifferentFamily?: boolean;
   authority?: ModelRouteRequest;
   requiredControls?: string[];

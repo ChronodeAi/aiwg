@@ -629,3 +629,9 @@ The host resource gate and saved-plan revalidation still apply. Launch mode is
 pinned in the config digest and resolved invocation; changing it requires a fresh
 `models resolve` plan. After changing the policy, run
 `aiwg doctor --probe-workers --qualify --yes` and resolve again.
+
+## Cross-family review evidence
+
+The resolver's `reviewOf` and `requireDifferentFamily` check observed lineage.
+Different CLI names do not establish different families; different families do
+not establish independent errors. Agreement is not proof, including same-vendor and cross-vendor agreement. Consequential claims require an executable check or accountable human acceptance. Prefer independent voting, or structured review with diverse initial answers and calibrated confidence, over plain debate. Record observed evaluator model/vendor/family, acceptance criteria reference, generator/evaluator disagreements and a re-review link after material fixes. Do not claim reduced human-review time. See `docs/decision/evaluator-calibration.md` for calibration and REF-2922, REF-2923, REF-2919/2921 public sources.

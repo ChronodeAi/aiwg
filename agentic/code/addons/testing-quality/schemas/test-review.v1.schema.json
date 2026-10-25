@@ -188,6 +188,9 @@
             ]
           },
           "minItems": 1
+        },
+        "evaluation": {
+          "$ref": "#/$defs/evaluation"
         }
       },
       "required": [
@@ -204,5 +207,84 @@
     "kind",
     "metadata",
     "spec"
-  ]
+  ],
+  "$defs": {
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Observed evaluator provenance and evidence. Agreement does not establish independent errors or proof.",
+      "properties": {
+        "evaluatorModel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "pattern": "\\S"
+        },
+        "evaluatorVendor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "pattern": "\\S"
+        },
+        "evaluatorFamily": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "pattern": "\\S",
+          "description": "Observed model family; unknown remains unknown. CLI names are not model families."
+        },
+        "acceptanceCriteriaRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "pattern": "\\S"
+        },
+        "reReviewOf": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "pattern": "\\S",
+          "description": "Reference to the previous review/decision, recorded on a re-review after material fixes."
+        },
+        "disagreements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "claimRef",
+              "generatorPosition",
+              "evaluatorPosition"
+            ],
+            "properties": {
+              "claimRef": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192,
+                "pattern": "\\S"
+              },
+              "generatorPosition": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192,
+                "pattern": "\\S"
+              },
+              "evaluatorPosition": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192,
+                "pattern": "\\S"
+              },
+              "resolutionRef": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192,
+                "pattern": "\\S"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }

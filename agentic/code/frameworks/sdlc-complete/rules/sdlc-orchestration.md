@@ -133,7 +133,7 @@ Commands retained by a provider are adapters only. Explicit `/flow-*` input from
 Follow this logical pattern when the selected skill calls for collaborative artifact work:
 
 ```text
-Primary Author -> Independent Reviewers -> Synthesizer -> Baseline/Archive
+Primary Author -> Separate Initial Reviews -> Synthesizer -> Baseline/Archive
 ```
 
 Use the current provider's supported delegation and parallelism primitives. Consult steward/provider guidance when mechanics differ. Parallelize only independent work, respect the workspace concurrency cap, and synthesize all results before finalizing artifacts. Do not mandate Claude's `Task` syntax in provider-neutral guidance.
@@ -170,6 +170,10 @@ Common adapter parameters such as `--guidance` and `--interactive` remain valid 
 7. **Parallel Execution**: Launch only independent work concurrently and respect configured provider/workspace caps.
 8. **Wire-As-You-Go**: Include AIWG @-mentions in generated artifacts according to the active mention-wiring rule.
 9. **Complete Docset by Default**: Do not silently skip or abbreviate required artifacts. If an artifact seems low-value, use the selected skill's HITL mechanism to confirm the exception.
+
+## Review Evidence
+
+Agreement is not proof, including same-vendor and cross-vendor agreement. Consequential claims require an executable check or accountable human acceptance. Prefer independent voting, or structured review with diverse initial answers and calibrated confidence, over plain debate. Record observed evaluator model/vendor/family, acceptance criteria reference, generator/evaluator disagreements and a re-review link after material fixes. Do not claim reduced human-review time. See `$AIWG_ROOT/docs/decision/evaluator-calibration.md` for calibration and REF-2922, REF-2923, REF-2919/2921 public sources.
 
 ## Phase Overview
 

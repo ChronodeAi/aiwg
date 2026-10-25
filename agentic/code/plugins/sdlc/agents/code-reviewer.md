@@ -224,3 +224,7 @@ Three full worked reviews — null-reference bug (simple), N+1 query performance
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/research/lats-evaluation.yaml — LATS hybrid value function for artifact quality assessment
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/ensemble-review.yaml — Ensemble review patterns and panel sizing
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/quality-assessment.yaml — GRADE quality assessment methodology
+
+## Evaluator evidence
+
+Agreement is not proof, including same-vendor and cross-vendor agreement. Consequential claims require an executable check or accountable human acceptance. Prefer independent voting, or structured review with diverse initial answers and calibrated confidence, over plain debate. Record observed evaluator model/vendor/family, acceptance criteria reference, generator/evaluator disagreements and a re-review link after material fixes. Do not claim reduced human-review time. See `$AIWG_ROOT/docs/decision/evaluator-calibration.md` for calibration and REF-2922, REF-2923, REF-2919/2921 public sources.

@@ -671,6 +671,9 @@ describe('T-OG-07/12/15/19 remaining parallelism policy facts (#2893)', () => {
     expect(section).toContain('reviewer must use a different observed model family from the writer');
     expect(section).toContain('Different CLI names do not prove different families');
     expect(section).toContain('direct CLI does not accept review-lineage flags');
+    expect(section).toContain('Family diversity does not establish independent errors');
+    expect(section).toContain('same-vendor or cross-vendor agreement is not proof');
+    expect(section).toContain('Consequential claims require an executable check or human acceptance');
     f.request.requireDifferentFamily = true;
     expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
     f.request.reviewOf = { ...structuredClone(f.observation), cliId: 'muse' };
