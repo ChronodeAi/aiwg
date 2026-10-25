@@ -140,6 +140,8 @@ export interface CollectBenchmarkOptions {
   jev?: (input: DecisionAskInput) => Promise<BenchmarkObservation>;
   baselinePrices?: BenchmarkPrice[];
   jevPrices?: BenchmarkPrice[];
+  /** Reuse a complete Jev response set while collecting a new baseline. */
+  jevCapture?: BenchmarkCapture;
   extendCapture?: BenchmarkCapture;
   holdout?: number;
   seed?: string;
@@ -168,9 +170,16 @@ export async function collectBenchmark(dataset: BenchmarkCase[], options: Collec
   if (!Number.isFinite(options.maxUsd) || options.maxUsd <= 0) throw new Error('Positive maxUsd required for live collection.');
   if (!Number.isInteger(options.passes) || options.passes < 1 || options.passes > MAX_BENCHMARK_PASSES)
     throw new Error('passes must be 1..20.');
+  if (options.jevCapture && options.extendCapture) throw new Error('Cannot combine Jev reuse and capture extension.');
   const cases = splitBenchmarkHoldout(dataset, options.holdout ?? 0.3, options.seed ?? '3291');
   const prior = options.extendCapture;
   if (prior) validateBenchmarkCapture(cases, prior);
+  const reused = options.jevCapture;
+  if (reused) {
+    validateBenchmarkCapture(cases, reused);
+    if (reused.rows.length !== cases.length || reused.rows.some(row => row.jev.length !== options.passes))
+      throw new Error('Reused Jev capture must contain every case with the same pass count.');
+  }
   if (typeof options.baselineLabel !== 'string' || !options.baselineLabel.trim() || options.baselineLabel.length > 200
     || prior && prior.baselineLabel !== options.baselineLabel) throw new Error('Invalid or changed baseline label.');
   const jevPrices = options.jevPrices ?? Object.entries(BUNDLED_JEV_PRICING.models).map(([model, price]) => ({
@@ -184,7 +193,7 @@ export async function collectBenchmark(dataset: BenchmarkCase[], options: Collec
   if (rows.some(row => row.jev.length > options.passes)) throw new Error('Extension cannot remove existing passes.');
   const planned = cases.reduce((sum, c) => {
     const row = rows.find(r => r.id === c.id);
-    return sum + (row ? 0 : 1) + Math.max(0, options.passes - (row?.jev.length ?? 0));
+    return sum + (row ? 0 : 1) + (reused ? 0 : Math.max(0, options.passes - (row?.jev.length ?? 0)));
   }, 0);
   if (planned > options.maxCalls) throw new Error(`Insufficient maxCalls: need ${planned}; no providers invoked.`);
   const now = options.now ?? Date.now;
@@ -210,7 +219,7 @@ export async function collectBenchmark(dataset: BenchmarkCase[], options: Collec
     return capture;
   }
   const environment = options.env ?? process.env;
-  if (!options.jev && planned > 0 && cases.some(c => (rows.find(r => r.id === c.id)?.jev.length ?? 0) < options.passes)
+  if (!reused && !options.jev && planned > 0 && cases.some(c => (rows.find(r => r.id === c.id)?.jev.length ?? 0) < options.passes)
     && !(environment.JEV_API_KEY?.trim() || environment.AIWG_DECISION_JEV_API_KEY?.trim()))
     throw new Error('Live benchmark requires JEV_API_KEY or AIWG_DECISION_JEV_API_KEY in the caller environment.');
   const jev = options.jev ?? (async (input: DecisionAskInput) => {
@@ -240,7 +249,11 @@ export async function collectBenchmark(dataset: BenchmarkCase[], options: Collec
   };
   for (const c of cases) {
     let row = rows.find(r => r.id === c.id);
-    if (!row) { row = { id: c.id, baseline: await invoke(c, true), jev: [] }; rows.push(row); }
+    if (!row) {
+      row = { id: c.id, baseline: await invoke(c, true),
+        jev: structuredClone(reused?.rows.find(r => r.id === c.id)!.jev ?? []) };
+      rows.push(row);
+    }
     if (options.onCheckpoint) await options.onCheckpoint(snapshot());
     if (stopReason !== 'incomplete') break;
     while (row.jev.length < options.passes) {

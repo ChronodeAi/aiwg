@@ -101,14 +101,14 @@ export async function runBenchmark(args, dependencies = {}) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     capture: { type: 'string' }, dataset: { type: 'string' }, holdout: { type: 'string' }, seed: { type: 'string', default: '3291' },
     live: { type: 'boolean' }, 'max-calls': { type: 'string' }, 'max-usd': { type: 'string' }, passes: { type: 'string', default: '3' },
-    replay: { type: 'string' }, extend: { type: 'string' }, 'baseline-model': { type: 'string' },
+    replay: { type: 'string' }, extend: { type: 'string' }, 'jev-capture': { type: 'string' }, 'baseline-model': { type: 'string' },
     'baseline-effort': { type: 'string', default: 'low' }, 'baseline-price': { type: 'string' },
     'pass-counts': { type: 'string' }, thresholds: { type: 'string', default: '0.7,0.8,0.9,0.95' },
     agreement: { type: 'string', default: '0.67' }, 'minimum-accuracy': { type: 'string', default: '1' },
     'maximum-fallback-rate': { type: 'string', default: '0.5' }, json: { type: 'boolean' }, help: { type: 'boolean' },
   } });
   if (values.help) {
-    print('Usage: node tools/decision/benchmark.mjs analyze|replay|plan --capture <file> [--dataset <cases.json>] [--holdout <fraction> --seed <text>] [--pass-counts 1,3,5] [--thresholds 0.7,0.9] [--agreement 0.67] [--json]\nCollect: --live --max-calls N --max-usd X --dataset <cases.json> --capture <output> --baseline-model <model> --baseline-price <sourced-rate.json> [--passes 3]\nReplay: --replay <capture>; append: --live --max-calls N --max-usd X --extend <capture> --passes N');
+    print('Usage: node tools/decision/benchmark.mjs analyze|replay|plan --capture <file> [--dataset <cases.json>] [--holdout <fraction> --seed <text>] [--pass-counts 1,3,5] [--thresholds 0.7,0.9] [--agreement 0.67] [--json]\nCollect: --live --max-calls N --max-usd X --dataset <cases.json> --capture <output> --baseline-model <model> --baseline-price <sourced-rate.json> [--passes 3] [--jev-capture <prior-capture>]\nReplay: --replay <capture>; append: --live --max-calls N --max-usd X --extend <capture> --passes N');
     return;
   }
   if (values.live && (values['max-calls'] === undefined || !values['max-calls'].trim()
@@ -118,20 +118,21 @@ export async function runBenchmark(args, dependencies = {}) {
     || !Number.isFinite(Number(values['max-usd'])) || Number(values['max-usd']) <= 0))
     throw new Error('--live requires positive --max-usd X.');
   if (values.replay && (values.live || values.extend || values.capture || positionals.length)
+    || values['jev-capture'] && (!values.live || values.extend || values.replay)
     || values.extend && !values.live || values.live && positionals.length
     || !values.live && ['max-calls', 'max-usd', 'baseline-model', 'baseline-price'].some(k => values[k] !== undefined))
-    throw new Error('Live, replay and extension flags conflict; --extend requires --live.');
+    throw new Error('Live, replay, Jev reuse and extension flags conflict; --extend and --jev-capture require --live.');
   const mode = values.live ? 'collect' : values.replay ? 'replay' : positionals[0];
   if (!values.live && !values.replay && (positionals.length !== 1 || !['analyze', 'replay', 'plan'].includes(mode) || !values.capture))
     throw new Error('Require analyze|replay|plan --capture <file>, --replay <file>, or --live; see --help.');
-  let cases, capture;
-  const inputPath = values.extend ?? values.replay ?? (!values.live ? values.capture : undefined);
+  let cases, capture, jevCapture;
+  const inputPath = values['jev-capture'] ?? values.extend ?? values.replay ?? (!values.live ? values.capture : undefined);
   if (inputPath) {
     const input = await readJson(inputPath, cwd);
     cases = values.dataset ? await readJson(values.dataset, cwd) : input.cases;
     capture = values.dataset ? input.capture ?? input : input.capture;
     if (!values.dataset && (!input || Object.keys(input).some(k => !['cases', 'capture'].includes(k)))) throw new Error('Expected {cases, capture} envelope.');
-    validateBenchmarkCapture(cases, capture);
+    if (!values['jev-capture']) validateBenchmarkCapture(cases, capture);
   } else {
     if (!values.dataset) throw new Error('Live collection requires --dataset.');
     cases = await readJson(values.dataset, cwd);
@@ -141,6 +142,11 @@ export async function runBenchmark(args, dependencies = {}) {
   if (values.live || values.holdout !== undefined) {
     cases = splitBenchmarkHoldout(cases, Number(values.holdout ?? '0.3'), values.seed);
     if (capture && !values.live) capture = { ...capture, datasetDigest: benchmarkDigest(cases) };
+  }
+  if (values['jev-capture']) {
+    validateBenchmarkCapture(cases, capture);
+    jevCapture = capture;
+    capture = undefined;
   }
   const policiesFor = available => {
     const counts = values['pass-counts'] ? values['pass-counts'].split(',').map(Number)
@@ -182,7 +188,7 @@ export async function runBenchmark(args, dependencies = {}) {
         ? [{ model: rates.jev_model, source: JEV_PRICING_SOURCE, checkedAt: rates.checked_at,
           inputPerMillionUsd: rates.jev_input_per_mtok, outputPerMillionUsd: rates.jev_output_per_mtok }] : undefined,
       jev: dependencies.jev, now: dependencies.now, env: dependencies.env,
-      extendCapture: capture, holdout: Number(values.holdout ?? '0.3'), seed: values.seed,
+      extendCapture: capture, jevCapture, holdout: Number(values.holdout ?? '0.3'), seed: values.seed,
       onCheckpoint: checkpoint => saveCapture(target, cases, checkpoint) });
     if (capture.collection.stopReason !== 'complete') {
       const result = { mode, capture: target, collection: capture.collection, report: null };
