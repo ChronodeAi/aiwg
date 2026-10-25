@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { buildIndex } from '../../src/artifacts/index-builder.js';
 import { CanonicalContextRepository } from '../../src/memory/canonical-context.js';
 import { createMaintenanceOwners } from '../../src/memory/maintenance-cli.js';
+import { MaintenanceReceiptSchema } from '../../src/memory/maintenance-contract.js';
 import { removesResident } from '../../src/memory/maintenance.js';
 import { runLineMemory } from '../../agentic/code/addons/line-memory/commands/line-memory.mjs';
 
@@ -14,7 +15,10 @@ let temporary: string;
 let workspace: string;
 let env: NodeJS.ProcessEnv;
 function run(args: string[]): string {
-  return execFileSync(process.execPath, [cli, 'memory', ...args], { cwd: workspace, env, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+  const result = spawnSync(process.execPath, [cli, 'memory', ...args], { cwd: workspace, env, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  return result.stdout;
 }
 function snapshot(root: string): unknown[] {
   return fs.readdirSync(root).sort().map(name => {
@@ -44,14 +48,26 @@ describe('built memory maintenance CLI', () => {
     expect(JSON.parse(run(['apply', '--plan', 'retire.json', '--preview', '--json'])).planDigest).toBe(preview.planDigest);
     expect(snapshot(temporary)).toEqual(planned);
     const noConfirmation = spawnSync(process.execPath, [cli, 'memory', 'apply', '--plan', 'retire.json'], { cwd: workspace, env, encoding: 'utf8', timeout: 30000 });
-    expect(noConfirmation.status).toBe(1); expect(noConfirmation.stderr).toContain('Noninteractive');
+    expect(noConfirmation.status).toBe(2); expect(noConfirmation.stderr).toContain('Noninteractive');
     const receipt = JSON.parse(run(['apply', '--plan', 'retire.json', '--yes', '--json']));
+    expect(MaintenanceReceiptSchema.parse(receipt)).toEqual(receipt);
+    expect(preview.review.targeting).toMatchObject({ scope: 'project', global: false, workspace });
+    expect(preview.review.ownerReview[0].review.reviewer).toBe('synthetic operator');
     expect(receipt.schemaVersion).toBe('aiwg.maintenance-receipt.v1'); expect(receipt.partial).toBeUndefined();
     expect(fs.readFileSync(path.join(workspace, '.aiwg/wiki/decision.md'), 'utf8')).toContain('disposition: retired');
+    const afterApply = snapshot(temporary);
+    expect(JSON.parse(run(['verify', '--plan', 'retire.json', '--json'])).findings).toEqual([]);
+    expect(snapshot(temporary)).toEqual(afterApply);
     expect(JSON.parse(run(['apply', '--plan', 'retire.json', '--yes', '--json'])).ownerReceipts).toHaveLength(1);
     run(['plan', '--owner', 'semantic-memory', '--target', '.aiwg/wiki/decision.md', '--op', 'restore', '--reviewer', 'synthetic operator', '--rationale', 'Reviewed reinstatement', '--out', 'restore.json']);
     expect(JSON.parse(run(['restore', '--plan', 'restore.json', '--yes', '--json'])).partial).toBeUndefined();
     expect(fs.readFileSync(path.join(workspace, '.aiwg/wiki/decision.md'), 'utf8')).toContain('lifecycle: active');
+    const afterRestore = snapshot(temporary);
+    expect(JSON.parse(run(['verify', '--plan', 'restore.json', '--json'])).findings).toEqual([]);
+    expect(snapshot(temporary)).toEqual(afterRestore);
+    const outdated = spawnSync(process.execPath, [cli, 'memory', 'verify', '--plan', 'retire.json', '--json'], { cwd: workspace, env, encoding: 'utf8', timeout: 30000 });
+    expect(outdated.status).toBe(1);
+    expect(JSON.parse(outdated.stdout).findings.length).toBeGreaterThan(0);
   });
   it('successfully demotes resident artifact content through the real indexed verifier', () => {
     const common = ['--owner', 'semantic-memory', '--target', '.aiwg/wiki/decision.md',
@@ -63,6 +79,9 @@ describe('built memory maintenance CLI', () => {
     expect(removesResident(demotion.plan.operations[0])).toBe(true);
     expect(JSON.parse(run(['apply', '--plan', 'demote.json', '--preview', '--json'])).planDigest).toBe(demotion.planDigest);
     expect(JSON.parse(run(['apply', '--plan', 'demote.json', '--yes', '--json'])).partial).toBeUndefined();
+    const verified = snapshot(temporary);
+    expect(JSON.parse(run(['verify', '--plan', 'demote.json', '--json'])).findings).toEqual([]);
+    expect(snapshot(temporary)).toEqual(verified);
     const index = JSON.parse(fs.readFileSync(path.join(workspace, '.aiwg/.index/metadata.json'), 'utf8'));
     expect(index.entries['.aiwg/wiki/decision.md'].memoryRecord).toMatchObject({ placement: 'indexed', lifecycle: 'active' });
     expect(fs.readFileSync(path.join(workspace, '.aiwg/wiki/decision.md'), 'utf8')).toContain('Keep bounded retry constraints.');
@@ -101,9 +120,9 @@ describe('built memory maintenance CLI', () => {
       for (const mode of [['--preview'], ['--yes']]) {
         const result = spawnSync(process.execPath, [cli, 'memory', 'apply', '--plan', planPath, ...mode, '--json'],
           { cwd: workspace, env, encoding: 'utf8', timeout: 30000 });
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain(`${ownerName} resident removal is unsupported`);
-        expect(result.stderr).toContain('owner-native indexed retrieval projection');
+        expect(result.status).toBe(3);
+        expect(result.stdout + result.stderr).toContain(`${ownerName} resident removal is unsupported`);
+        expect(result.stdout + result.stderr).toContain('owner-native indexed retrieval projection');
         expect(await owner.snapshot()).toBe(before);
       }
     }
@@ -113,10 +132,60 @@ describe('built memory maintenance CLI', () => {
     const before = snapshot(workspace);
     for (const args of [['plan', '--out'], ['apply', '--plan', 'x', '--yes=no'], ['restore', '--plan', 'x', '--unknown']]) {
       const result = spawnSync(process.execPath, [cli, 'memory', ...args], { cwd: workspace, env, encoding: 'utf8', timeout: 30000 });
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(2);
     }
     // Invalid mutation arguments may resolve artifact routing but must not create lifecycle owner state.
     expect(fs.existsSync(path.join(workspace, '.aiwg/memory/maintenance'))).toBe(false);
     expect(snapshot(workspace)).toEqual(before);
   });
+  it('reports unapplied plans, stale publication and malformed inputs with deterministic JSON statuses', () => {
+    fs.writeFileSync(path.join(workspace, '.aiwg/aiwg.config'), JSON.stringify({ version: '1',
+      command_log: { enabled: true, scopes: ['project', 'global'] },
+      telemetry: { skill_usage: { enabled: true, scopes: ['project', 'global'] } } }));
+    const result = (args: string[]) => spawnSync(process.execPath, [cli, 'memory', ...args], {
+      cwd: workspace, env, encoding: 'utf8', timeout: 30000,
+    });
+    const plan = JSON.parse(run(['plan', '--owner', 'semantic-memory', '--target', '.aiwg/wiki/decision.md',
+      '--op', 'recategorize', '--category', 'decision', '--reviewer', 'operator', '--rationale', 'Reviewed taxonomy',
+      '--out', 'category.json', '--json']));
+    expect(plan.review.diff[0]).toMatchObject({ category: 'decision', scope: 'project' });
+    const before = snapshot(temporary);
+    const unapplied = result(['verify', '--plan', 'category.json', '--json']);
+    expect(unapplied.status).toBe(1);
+    expect(JSON.parse(unapplied.stdout).findings.length).toBeGreaterThan(0);
+    expect(snapshot(temporary)).toEqual(before);
+    const applied = result(['apply', '--plan', 'category.json', '--yes', '--json']);
+    expect(applied.status).toBe(0);
+    const review = JSON.parse(applied.stderr.trim());
+    expect(review.event).toBe('maintenance-review');
+    expect(review.review.targeting).toMatchObject({ scope: 'project', global: false });
+    expect(review.review.limitations.join(' ')).toContain('next-session');
+    expect(MaintenanceReceiptSchema.parse(JSON.parse(applied.stdout))).toMatchObject({ ownerReceipts: expect.any(Array) });
+    expect(result(['verify', '--plan', 'category.json', '--json']).status).toBe(0);
+    const indexFile = path.join(workspace, '.aiwg/.index/metadata.json');
+    const index = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+    index.entries['.aiwg/wiki/decision.md'].memoryRecord.version = 1;
+    fs.writeFileSync(indexFile, JSON.stringify(index));
+    const stale = snapshot(temporary);
+    const checked = result(['verify', '--plan', 'category.json', '--json']);
+    expect(checked.status).toBe(1);
+    expect(JSON.parse(checked.stdout).findings.length).toBeGreaterThan(0);
+    expect(snapshot(temporary)).toEqual(stale);
+    fs.writeFileSync(path.join(workspace, 'malformed.json'), '{');
+    for (const args of [['verify', '--plan', 'malformed.json', '--json'], ['verify', '--plan', 'category.json', '--yes', '--json'],
+      ['plan', '--scope', 'global', '--json']]) {
+      const failed = result(args);
+      expect(failed.status).toBe(2);
+      expect(JSON.parse(failed.stdout)).toMatchObject({ exitCode: 2 });
+    }
+    fs.writeFileSync(path.join(workspace, '.aiwg/wiki/decision.md'), 'Concurrent body edit');
+    const failedApply = result(['apply', '--plan', 'category.json', '--yes', '--json']);
+    expect(failedApply.status).toBe(3);
+    expect(JSON.parse(failedApply.stdout)).toMatchObject({ exitCode: 3 });
+    fs.writeFileSync(indexFile, '{');
+    const unreadable = result(['verify', '--plan', 'category.json', '--json']);
+    expect(unreadable.status).toBe(3);
+    expect(JSON.parse(unreadable.stdout)).toMatchObject({ exitCode: 3 });
+  });
+
 });

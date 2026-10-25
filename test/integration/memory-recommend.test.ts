@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { buildIndex } from '../../src/artifacts/index-builder.js';
 import type { MemoryRecommendations } from '../../src/memory/recommend.js';
 import type { MemoryAudit } from '../../src/memory/audit.js';
@@ -17,11 +17,14 @@ function write(relative: string, value: unknown): void {
   fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value));
 }
 function run(args: string[]): string {
-  return execFileSync(process.execPath, [cli, 'memory', ...args], { cwd: workspace, env, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+  const result = spawnSync(process.execPath, [cli, 'memory', ...args], { cwd: workspace, env, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+  expect(result.error).toBeUndefined();
+  expect(['audit', 'cost', 'recommend'].includes(args[0]) ? [0, 1] : [0]).toContain(result.status);
+  return result.stdout;
 }
-function fail(args: string[]): string {
+function fail(args: string[], status = 3): string {
   const result = spawnSync(process.execPath, [cli, 'memory', ...args], { cwd: workspace, env, encoding: 'utf8', timeout: 30000 });
-  expect(result.status).toBe(1);
+  expect(result.status).toBe(status);
   return result.stdout + result.stderr;
 }
 function snapshot(root: string): unknown[] {
@@ -134,8 +137,8 @@ describe('built read-only recommendation CLI', () => {
     setupEvidence();
     const report = exportCandidate();
     write('review.json', report);
-    expect(fail(['plan', '--recommendation', 'review.json', '--preview'])).toContain('--reviewer');
-    expect(fail(['plan', '--recommendation', 'review.json', '--reviewer', 'operator', '--op', 'retire', '--preview'])).toContain('cannot be combined');
+    expect(fail(['plan', '--recommendation', 'review.json', '--preview'], 2)).toContain('--reviewer');
+    expect(fail(['plan', '--recommendation', 'review.json', '--reviewer', 'operator', '--op', 'retire', '--preview'], 2)).toContain('cannot be combined');
     write('.aiwg/wiki/decision.md', 'Concurrent source revision');
     expect(fail(['plan', '--recommendation', 'review.json', '--reviewer', 'operator', '--preview'])).toContain('Stale recommendation');
     report.candidates[0].status = 'blocked';
@@ -179,10 +182,10 @@ describe('built read-only recommendation CLI', () => {
     expect(run(['recommend', '--help'])).toContain('--emit-review-input');
     expect(run(['plan', '--help'])).toContain('--recommendation');
     for (const args of [['--write'], ['--scope', 'provider'], ['--json=true'], ['--candidate', 'id'], ['--provider', 'missing']]) {
-      expect(fail(['recommend', ...args])).toMatch(/memory command failed|Unknown memory provider/);
+      expect(fail(['recommend', ...args], 2)).toMatch(/memory command failed|Unknown memory provider/);
     }
     write('evidence.json', { thresholds: { minimumAgeDays: -1 } });
-    expect(fail(['recommend', '--evidence', 'evidence.json'])).toContain('memory command failed');
+    expect(fail(['recommend', '--evidence', 'evidence.json'], 2)).toContain('memory command failed');
     expect(fail(['recommend', '--candidate', 'missing', '--emit-review-input'])).toContain('missing or changed');
   });
 });

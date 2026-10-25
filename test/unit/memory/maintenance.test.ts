@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyMaintenancePlan, maintenanceOperationKey, maintenancePlanDigest, MaintenanceApplyError, previewMaintenancePlan } from '../../../src/memory/maintenance.js';
+import { applyMaintenancePlan, maintenanceOperationKey, maintenancePlanDigest, MaintenanceApplyError, previewMaintenancePlan, verifyMaintenancePlan } from '../../../src/memory/maintenance.js';
 import { parseMemoryMaintenanceOptions, runMemoryMaintenanceCli } from '../../../src/memory/maintenance-cli.js';
 import type { MaintenanceOwner } from '../../../src/memory/maintenance-owner.js';
 import type { MaintenancePlan } from '../../../src/memory/maintenance-contract.js';
@@ -46,6 +46,34 @@ function fixture(name = 'synthetic-owner') {
 }
 
 describe('maintenance coordinator', () => {
+  it('verifies exact receipts read-only and reports unapplied, drifted and unretrievable state', async () => {
+    const dir = root(); const { plan, owner, item } = fixture();
+    owner.verifyRetrieval = async () => true;
+    const receipt = vi.spyOn(owner, 'receipt');
+    expect((await verifyMaintenancePlan(plan, [owner])).findings.join(' ')).toMatch(/unapplied/);
+    await applyMaintenancePlan(plan, { root: dir, owners: [owner], confirmedDigest: maintenancePlanDigest(plan) });
+    const result = await verifyMaintenancePlan(plan, [owner]);
+    expect(result).toMatchObject({ planDigest: maintenancePlanDigest(plan), findings: [],
+      operations: [{ operationId: maintenanceOperationKey(plan, 0), owner: owner.name, findings: [] }] });
+    expect(receipt).toHaveBeenLastCalledWith(maintenanceOperationKey(plan, 0), { readOnly: true });
+    item.version++;
+    expect((await verifyMaintenancePlan(plan, [owner])).findings.join(' ')).toMatch(/revision/);
+    item.version--; owner.verifyRetrieval = async () => false;
+    expect((await verifyMaintenancePlan(plan, [owner])).findings.join(' ')).toMatch(/retrieval/);
+    owner.records = async () => { throw new Error('Unreadable owner state'); };
+    await expect(verifyMaintenancePlan(plan, [owner])).rejects.toThrow('Unreadable owner state');
+    expect(owner.apply).toHaveBeenCalledTimes(1);
+  });
+  it('validates verify plans and owner selection without invoking mutation previews', async () => {
+    const { plan, owner } = fixture();
+    await expect(verifyMaintenancePlan({}, [owner])).rejects.toThrow();
+    await expect(verifyMaintenancePlan({ ...plan, operations: [] }, [owner])).rejects.toThrow(/at least one/);
+    await expect(verifyMaintenancePlan(plan, [])).rejects.toThrow(/Unavailable/);
+    await expect(verifyMaintenancePlan({ ...plan, operations: [...plan.operations, ...plan.operations] }, [owner])).rejects.toThrow(/per owner/);
+    plan.operations[0].scope = 'global';
+    await expect(verifyMaintenancePlan(plan, [owner])).rejects.toThrow(/project scope/);
+    expect(owner.apply).not.toHaveBeenCalled();
+  });
   it('publishes journals despite a stale temporary file from a reused process id', async () => {
     const dir = root(); const { plan, owner } = fixture();
     const journal = path.join(dir, '.aiwg/memory/maintenance', `${maintenancePlanDigest(plan).replace(':', '_')}.json`);

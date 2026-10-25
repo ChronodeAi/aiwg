@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 
 const cli = path.resolve('bin/aiwg.mjs');
 let temp: string;
@@ -21,7 +21,10 @@ function snapshot(root: string): unknown[] {
   });
 }
 function run(args: string[]): string {
-  return execFileSync(process.execPath, [cli, 'memory', ...args], { cwd: workspace, env, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+  const result = spawnSync(process.execPath, [cli, 'memory', ...args], { cwd: workspace, env, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+  expect(result.error).toBeUndefined();
+  expect(['audit', 'cost', 'recommend'].includes(args[0]) ? [0, 1] : [0]).toContain(result.status);
+  return result.stdout;
 }
 beforeEach(() => {
   temp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-memory-audit-cli-'));
@@ -57,8 +60,28 @@ describe('built memory audit CLI', () => {
     expect(run(['audit', '--help'])).toContain('--scope global|project|provider');
     for (const args of [['--write'], ['--scope', 'provider'], ['--scope', 'global', '--unknown'], ['--provider', 'does-not-exist']]) {
       const result = spawnSync(process.execPath, [cli, 'memory', 'audit', ...args], { cwd: workspace, env, encoding: 'utf8', timeout: 30000 });
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(2);
       expect(result.stdout + result.stderr).toMatch(/memory command failed|memory audit|Unknown memory provider/);
     }
   });
+  it('uses success and findings statuses consistently for the read-only report family', () => {
+    const invoke = (command: string, provider: string) => spawnSync(process.execPath,
+      [cli, 'memory', command, '--scope', 'provider', '--provider', provider, '--json'],
+      { cwd: workspace, env, encoding: 'utf8', timeout: 30000 });
+    for (const command of ['audit', 'cost', 'recommend']) {
+      const clean = invoke(command, 'generic');
+      expect(clean.status, clean.stdout + clean.stderr).toBe(0);
+      expect(JSON.parse(clean.stdout)).toHaveProperty('schemaVersion');
+    }
+    write('.claude/rules/one.md', 'Synthetic duplicate constraint');
+    write('.claude/rules/two.md', 'Synthetic duplicate constraint');
+    const before = snapshot(temp);
+    for (const command of ['audit', 'cost', 'recommend']) {
+      const findings = invoke(command, 'claude');
+      expect(findings.status, findings.stdout + findings.stderr).toBe(1);
+      expect(JSON.parse(findings.stdout)).toHaveProperty('schemaVersion');
+    }
+    expect(snapshot(temp)).toEqual(before);
+  });
+
 });

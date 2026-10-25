@@ -11,8 +11,9 @@ import { discoverCapability, queryIndex, showArtifact } from '../../../src/artif
 import type { MaintenanceOperation } from '../../../src/memory/maintenance-contract.js';
 import type { MemoryRecord } from '../../../src/memory/maintenance-record.js';
 import { sha256 } from '../../../src/memory/context-pack.js';
-import { applyMaintenancePlan, MaintenanceApplyError, maintenancePlanDigest } from '../../../src/memory/maintenance.js';
+import { applyMaintenancePlan, MaintenanceApplyError, maintenancePlanDigest, maintenanceOperationKey, verifyMaintenancePlan } from '../../../src/memory/maintenance.js';
 import type { MaintenancePlan } from '../../../src/memory/maintenance-contract.js';
+import { MaintenancePlanSchema } from '../../../src/memory/maintenance-contract.js';
 
 let root: string;
 let owner: ArtifactMaintenanceOwner;
@@ -51,6 +52,54 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('semantic-memory owner maintenance', () => {
+  it.each(['recategorize', 'demote', 'retire', 'restore', 'merge', 'split', 'supersede'] as const)('verifies %s receipts, source history and all published index revisions read-only', async name => {
+    if (name === 'restore') await owner.apply(await operation('retire'), 'prior-retirement');
+    if (name === 'demote') {
+      const promote = await operation('promote'); promote.to.placement = 'resident'; await owner.apply(promote, 'prior-promotion');
+    }
+    const op = await operation(name);
+    if (name === 'recategorize') op.category = 'reviewed';
+    if (name === 'demote') op.to.placement = 'indexed';
+    if (['merge', 'split', 'supersede'].includes(name)) {
+      op.replacements = [{ key: 'replacement', value: '# Reviewed replacement\n', sourcePath: '.aiwg/wiki/replacement.md' }];
+      if (name === 'split') op.replacements.push({ key: 'second', value: '# Second reviewed replacement\n', sourcePath: '.aiwg/wiki/second-replacement.md' });
+      if (name === 'merge') {
+        const related = (await owner.records()).find(item => item.sourcePath === second)!;
+        op.related = [{ id: related.id, digest: related.digest, version: related.version }];
+      }
+    }
+    const plan: MaintenancePlan = { schemaVersion: 'aiwg.maintenance-plan.v1', operations: [op] };
+    await owner.apply(MaintenancePlanSchema.parse(plan).operations[0], maintenanceOperationKey(plan, 0));
+    const snapshot = await owner.snapshot();
+    expect((await verifyMaintenancePlan(plan, [owner])).findings).toEqual([]);
+    expect(await owner.snapshot()).toBe(snapshot);
+    const metadataFile = path.join(root, '.aiwg/.index/project/metadata.json');
+    const index = JSON.parse(fs.readFileSync(metadataFile, 'utf8'));
+    index.entries[first].memoryRecord.version++;
+    const stale = JSON.stringify(index); fs.writeFileSync(metadataFile, stale);
+    expect((await verifyMaintenancePlan(plan, [owner])).findings.join(' ')).toMatch(/Published index revision/);
+    expect(fs.readFileSync(metadataFile, 'utf8')).toBe(stale);
+    const current = source();
+    const journal = current.data.memoryMaintenance as { history: MemoryRecord[] };
+    journal.history = [];
+    fs.writeFileSync(path.join(root, first), `---\n${dump(current.data, { noRefs: true, lineWidth: -1 })}---\n${current.body}`);
+    expect((await verifyMaintenancePlan(plan, [owner])).findings.join(' ')).toMatch(/history/);
+  });
+  it('reports source body drift and forged operation receipts without mutating malformed state', async () => {
+    const op = await operation('recategorize'); op.category = 'reviewed';
+    const plan: MaintenancePlan = { schemaVersion: 'aiwg.maintenance-plan.v1', operations: [op] };
+    await owner.apply(MaintenancePlanSchema.parse(plan).operations[0], maintenanceOperationKey(plan, 0));
+    const current = source();
+    const journal = current.data.memoryMaintenance as { receipts: Array<{ operationDigest: string }> };
+    journal.receipts[0].operationDigest = sha256('another operation');
+    fs.writeFileSync(path.join(root, first), `---\n${dump(current.data, { noRefs: true, lineWidth: -1 })}---\n${current.body}Changed source body\n`);
+    const before = fs.readFileSync(path.join(root, first), 'utf8');
+    const findings = (await verifyMaintenancePlan(plan, [owner])).findings.join(' ');
+    expect(findings).toMatch(/drifted/); expect(findings).toMatch(/exact reviewed operation/);
+    expect(fs.readFileSync(path.join(root, first), 'utf8')).toBe(before);
+    fs.writeFileSync(path.join(root, first), `---\n${dump({ ...current.data, memoryMaintenance: { receipts: 'malformed' } })}---\n${current.body}`);
+    await expect(verifyMaintenancePlan(plan, [owner])).rejects.toThrow(/Invalid artifact maintenance journal/);
+  });
   it('keeps unrelated maintenance available when a source has quarantined memory metadata', async () => {
     const malformed = source(second);
     fs.writeFileSync(path.join(root, second), `---\n${dump({ ...malformed.data, memoryRecord: { schemaVersion: 'broken' } })}---\n${malformed.body}`);

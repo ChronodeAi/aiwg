@@ -1,3 +1,4 @@
+import { memoryUsage, memoryInput, MEMORY_EXIT_USAGE } from './cli-result.js';
 import { readFile } from 'node:fs/promises';
 import { parseMemoryCostOptions, resolveMemoryCostInputs, type MemoryCostCliOptions } from './cli.js';
 import { auditMemory } from './audit.js';
@@ -13,7 +14,8 @@ Unknown history and rare obligations block retirement. Thresholds are local star
 New knowledge defaults to indexed storage; prefer buildWorkspaceContextPack before residency.
 --emit-review-input prints one selected advisory candidate as JSON to stdout. Save it with
 shell redirection, review it, then use memory plan --recommendation <file> --reviewer <name>
---out <new-plan-file>. Conflicts and blocked/rejected proposals require owner resolution.`;
+--out <new-plan-file>. Conflicts and blocked/rejected proposals require owner resolution.
+${MEMORY_EXIT_USAGE}`;
 
 export interface MemoryRecommendCliOptions extends MemoryCostCliOptions {
   evidence?: string;
@@ -55,12 +57,12 @@ export function parseMemoryRecommendOptions(args: string[]): MemoryRecommendCliO
   return opts;
 }
 
-export async function runMemoryRecommendCli(args: string[]): Promise<void> {
-  const opts = parseMemoryRecommendOptions(args);
+export async function runMemoryRecommendCli(args: string[]): Promise<number | void> {
+  const opts = memoryUsage(() => parseMemoryRecommendOptions(args));
   if (opts.help) { console.log(MEMORY_RECOMMEND_USAGE); return; }
-  const input = opts.evidence ? RecommendationInputsSchema.parse(JSON.parse(await readFile(opts.evidence, 'utf8'))) : {};
+  const input = opts.evidence ? await memoryInput(async () => RecommendationInputsSchema.parse(JSON.parse(await readFile(opts.evidence!, 'utf8')))) : {};
   const audit = await auditMemory(opts);
-  const report = recommendMemory(audit, input, await resolveMemoryCostInputs(opts));
+  const report = recommendMemory(audit, input, await memoryInput(() => resolveMemoryCostInputs(opts)));
   if (opts.candidate) {
     const selected = report.candidates.find(c => c.id === opts.candidate);
     if (!selected) throw new Error('Recommendation candidate is missing or changed; rerun recommend');
@@ -68,4 +70,5 @@ export async function runMemoryRecommendCli(args: string[]): Promise<void> {
     report.candidates = [selected];
   }
   console.log(opts.json || opts.emitReviewInput ? JSON.stringify(report, null, 2) : formatMemoryRecommendations(report));
+  return report.candidates.length || audit.findings.length ? 1 : 0;
 }

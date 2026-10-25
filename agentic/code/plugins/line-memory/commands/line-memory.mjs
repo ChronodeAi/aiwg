@@ -1106,6 +1106,46 @@ export async function readLineMaintenanceReceipt(cwd, key) {
   return (await readLineMaintenanceState(cwd)).metadata.maintenanceReceipts?.[key];
 }
 
+/** Inspect owner history and resident publication without reconciling or recovering writes. */
+export async function verifyLineMaintenanceEndState(cwd, operation, key) {
+  const state = await readLineMaintenanceState(cwd);
+  const receipt = state.metadata.maintenanceReceipts?.[key];
+  const findings = [];
+  if (receipt && (receipt.owner !== 'line-memory' || receipt.key !== key
+    || receipt.operationDigest !== memoryDigest(JSON.stringify(operation)))) {
+    findings.push('Owner receipt does not bind the exact reviewed operation');
+  }
+  const physicalLines = safeRequireText(state.memoryPath).split(/\r?\n/).filter(value => value.trim());
+  for (const target of [operation.target, ...(operation.related ?? [])]) {
+    const record = state.records.find(item => item.id === target.id);
+    if (!record) continue;
+    const entry = state.metadata.entries[record.aliases[0]];
+    const history = entry.maintenance?.history;
+    if (history !== undefined && !Array.isArray(history)) throw new Error('Invalid line-memory maintenance history');
+    const prior = history?.find(item => item.op === operation.op && item.reviewer === operation.review.reviewer
+      && item.reason === operation.rationale && item.at === receipt?.at
+      && item.from?.placement === operation.from.placement && item.from?.lifecycle === operation.from.lifecycle);
+    if (!prior) findings.push(`Reviewed source history is missing: ${target.id}`);
+    if (operation.category && entry.maintenance?.category !== operation.category) findings.push(`Reviewed category differs: ${target.id}`);
+    if (operation.op === 'restore' && !prior?.tombstone) findings.push(`Recovery tombstone history is missing: ${target.id}`);
+    if (record.lifecycle !== 'active' && !entry.maintenance?.tombstone) findings.push(`Retained owner tombstone is missing: ${target.id}`);
+    const resident = record.placement === 'resident' && record.lifecycle === 'active';
+    if (physicalLines.includes(entry.value) !== resident) findings.push(`Resident publication differs from the end state: ${target.id}`);
+  }
+  for (const replacement of operation.replacements ?? []) {
+    const handle = deterministicPromotionHandle(`maintenance:${key}:${replacement.key}`, 1);
+    const entry = state.metadata.entries[handle];
+    if (!entry || entry.value !== replacement.value || !receipt?.successors?.includes(maintenanceRecord(entry, state.config).id)) {
+      findings.push(`Receipt replacement differs: ${replacement.key}`);
+    }
+    if (replacement.category && entry?.maintenance?.category !== replacement.category) findings.push(`Replacement category differs: ${replacement.key}`);
+    if (entry && physicalLines.includes(entry.value) !== (entry.maintenance?.placement === 'resident' && entry.status === 'active')) {
+      findings.push(`Resident replacement publication differs: ${replacement.key}`);
+    }
+  }
+  return findings;
+}
+
 /**
  * Session promotion adapter that writes through the same locked store used by
  * the CLI. The plan contains only inert fact/provenance data; the reviewed

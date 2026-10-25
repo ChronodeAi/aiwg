@@ -1933,11 +1933,15 @@ export const memoryHandler: CommandHandler = {
   aliases: [],
 
   async help(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args[0] === 'cost') {
+      const { MEMORY_COST_USAGE } = await import('../../memory/cli.js');
+      return { exitCode: 0, message: MEMORY_COST_USAGE, rawOutput: true };
+    }
     if (ctx.args[0] === 'recommend') {
       const { MEMORY_RECOMMEND_USAGE } = await import('../../memory/recommend-cli.js');
       return { exitCode: 0, message: MEMORY_RECOMMEND_USAGE, rawOutput: true };
     }
-    if (['plan', 'apply', 'restore'].includes(ctx.args[0])) {
+    if (['plan', 'apply', 'verify', 'restore'].includes(ctx.args[0])) {
       const { MEMORY_MAINTENANCE_USAGE } = await import('../../memory/maintenance-cli.js');
       return { exitCode: 0, message: MEMORY_MAINTENANCE_USAGE, rawOutput: true };
     }
@@ -1948,10 +1952,20 @@ export const memoryHandler: CommandHandler = {
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {
       const { main } = await import('../../memory/cli.js');
-      await main(ctx.args);
-      return { exitCode: 0 };
+      return { exitCode: (await main(ctx.args)) ?? 0 };
     } catch (error) {
       const result = handlerResultFromError(error);
+      if (['audit', 'cost', 'recommend', 'plan', 'apply', 'verify', 'restore'].includes(ctx.args[0])) {
+        const { isAiwgError } = await import('../errors.js');
+        const exitCode = isAiwgError(error) ? error.exitCode : 3;
+        const receipt = error && typeof error === 'object' && 'receipt' in error ? error.receipt : undefined;
+        if (ctx.args.includes('--json')) {
+          console.log(JSON.stringify({ error: result.message, exitCode,
+            ...(receipt !== undefined ? { receipt } : {}) }, null, 2));
+          return { exitCode };
+        }
+        return { ...result, exitCode, message: `memory command failed: ${result.message}${receipt !== undefined ? `\n${JSON.stringify({ receipt }, null, 2)}` : ''}` };
+      }
       return { ...result, message: `memory command failed: ${result.message}` };
     }
   },

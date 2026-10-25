@@ -12,7 +12,9 @@ export interface MaintenanceOwner {
   /** Idempotency key is bound to the exact plan and operation. Persist with the owner mutation. */
   apply(operation: MaintenanceOperation, key: string): Promise<unknown>;
   /** Retrieve a committed operation after interruption before coordinator journaling. */
-  receipt(key: string): Promise<unknown | undefined>;
+  receipt(key: string, options?: { readOnly?: boolean }): Promise<unknown | undefined>;
+  /** Read-only native checks for retained history, categories and published owner state. */
+  verifyEndState?(operation: MaintenanceOperation, key: string): Promise<string[]>;
   /** Exact interrupted transaction recognized by its lifecycle owner. Never authorizes another plan. */
   pending?(operation: MaintenanceOperation): Promise<boolean>;
   /** Verify an ordinary indexed retrieval path, not just a source file's existence. */

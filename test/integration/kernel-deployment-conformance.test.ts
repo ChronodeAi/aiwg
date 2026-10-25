@@ -164,6 +164,8 @@ describe('kernel deployment conformance', () => {
         .sort();
 
       expect(deployed).toEqual(EXPECTED_KERNEL);
+      expect(existsSync(join(deployedRoot, 'harness-memory-maintenance', 'SKILL.md'))).toBe(false);
+      expect(existsSync(join(provider.standardRoot(project, home), 'harness-memory-maintenance', 'SKILL.md'))).toBe(false);
       for (const name of deployed) {
         const content = readFileSync(join(deployedRoot, name, 'SKILL.md'), 'utf8');
         // Provider translators may intentionally remove AIWG-only routing

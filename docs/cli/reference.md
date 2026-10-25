@@ -5559,7 +5559,7 @@ Storage operations on the AIWG memory subsystem. Routes through `resolveStorage(
 aiwg memory <subcommand>
 ```
 
-**Subcommands:** `audit` / `cost` / `recommend` / `plan` / `apply` / `restore` / `path` / `list` / `get` / `put` / `delete` / `append-log` / `project`.
+**Subcommands:** `audit` / `cost` / `recommend` / `plan` / `apply` / `verify` / `restore` / `path` / `list` / `get` / `put` / `delete` / `append-log` / `project`.
 
 **Examples:**
 
@@ -5567,6 +5567,7 @@ aiwg memory <subcommand>
 aiwg memory plan --help                                  # reviewed placement/lifecycle preview
 aiwg memory apply --plan reviewed.json --preview --json  # read-only exact-plan preview
 aiwg memory apply --plan reviewed.json --yes --json      # explicit headless confirmation
+aiwg memory verify --plan reviewed.json --json           # read-only receipt/end-state check
 aiwg memory restore --plan restore.json --yes --json     # reviewed restoration
 aiwg memory audit --provider codex --json                 # read-only static workspace inventory
 aiwg memory audit --scope global --provider claude        # explicit user scope
@@ -5585,6 +5586,25 @@ echo '{"op":"ingest","summary":"foo"}' \
 ```
 
 **`recommend` semantics (#3283):** read-only evidence-ranked candidates for consolidation, taxonomy correction, conflicts/supersession, demotion, promotion and retirement. JSON: `aiwg.memory-recommendations.v1`. `--evidence <file>` supplies scoped owner pins, criticality, provenance, creation/review age, history, lineage and configurable local thresholds; `--usage <file>` reuses cost utility evidence. Unknown history and protected obligations block retirement. New knowledge defaults to indexed placement, bounded task packs precede residency, and incomplete resident proposals are rejected. Candidate savings retain estimator confidence; unknown stays unknown. `--candidate <id> --emit-review-input` prints one advisory review input to stdout; recommend writes nothing. `plan --recommendation <file> --reviewer <name>` separately binds unchanged source content and current owner revisions. See [input format, defaults and handoff limits](../user-level-project-memory.md#read-only-cleanup-and-tier-recommendations).
+
+**Maintenance discovery:** `aiwg discover "harness memory cleanup"` → `aiwg show skill harness-memory-maintenance --section cleanup`. The same skill handles audit, recategorize, promote, demote and retire; fetch the corresponding operation section. Deployment keeps only a small discovery anchor, with no new always-loaded maintenance instructions. The CLI works independently of the skill.
+
+**`plan` / `apply` / `restore` semantics:** select the operation with `plan --op promote|demote|recategorize|merge|split|supersede|retire|restore`. Use `--owner line-memory|compound-memory|semantic-memory`, `--target <owner-handle>`, `--reviewer <name>` and `--rationale <text>`; add `--placement`, `--category`, reviewed `--replacements`, `--related`, or `--link` as required by the operation. `--out <new-file>` saves an exact owner-bound plan; `--preview` is read-only. `plan --input <file>` validates an existing exact plan. JSON previews include the plan/digest and review details. Before mutation, human output and a JSON stderr review event identify the root/project scope, operation diff, owner review requirements and native/next-session limitations. Apply/restore require the exact digest (`--confirm <digest>`) or explicit `--yes` outside an interactive digest prompt. JSON success output preserves the existing receipt schema; the review object is in the stderr event. A changed source/snapshot fails closed; retry the exact plan to resume interrupted owner work.
+
+Executable writers support project-owned sources only; global inventory does not authorize a global write. Semantic resident removal requires published same-digest indexed retrieval. Default line-memory and compound-memory owners refuse resident removal because they lack an owner-native indexed projection. Retirement retains bodies, tombstones and history, and never purges. Provider files remain with their regeneration owners; these commands report next-session effects and do not establish live reload.
+
+**`verify` semantics:** `aiwg memory verify --plan <file> [--json]` checks every operation's expected end state against existing owner receipts, retained tombstone/history and required published indexed retrievability. It is read-only and creates no store or receipt. Verify after apply/restore, using the latest reviewed plan for a target; a later intentional transition can make an older plan's end state differ. Missing receipts or state/history/retrieval drift are findings, while a failed owner check is an execution error. Verification does not repair a partial transaction or prove a native session reloaded.
+
+**Maintenance exit codes:** shared by `audit`, `cost`, `recommend`, `plan`, `apply`, `verify` and `restore`, for both human and JSON output:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success/no findings, or help. |
+| `1` | Findings: audit/cost inventory findings, recommendation candidates, or verification drift. |
+| `2` | Usage error, malformed input, or invalid option combinations. |
+| `3` | Stale plan/source, failed execution, or partial apply. |
+
+JSON reports remain readable on exit `1`; save stdout before handling status. Review stderr for pre-mutation review events; JSON failures include any partial receipt on stdout. See the [worked global/project audit, demotion, taxonomy, retirement and recovery examples](../user-level-project-memory.md#worked-maintenance-examples) for the complete CLI fallback.
 
 **`append-log` semantics:** reads a single JSON object from stdin, appends as one JSONL line. Atomic via `adapter.append` (#976) on backends that support it.
 
