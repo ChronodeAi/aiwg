@@ -359,12 +359,18 @@ async function waitForQuotaWindow({ token, fetchImpl, deadline, now, sleep, log 
   return true
 }
 
+// Socket bills the org-scoped purl endpoint per request (up to 100 units on a
+// 500-unit hourly free plan), not per component, so a release of ~800
+// components must go in a few large requests rather than many small ones.
+export const SOCKET_PURL_BATCH_SIZE = 500
+
 export async function fetchArtifacts({
   components,
   token,
   orgSlug,
   fetchImpl = fetch,
   paceQuotaMs = 0,
+  batchSize = SOCKET_PURL_BATCH_SIZE,
   now = Date.now,
   sleep = ms => new Promise(resolveDelay => setTimeout(resolveDelay, ms)),
   log = message => console.error(message)
@@ -374,8 +380,9 @@ export async function fetchArtifacts({
   // a 429 waits for the next quota window (bounded by paceQuotaMs overall)
   // instead of consuming a retry. Without it, behaviour is unchanged.
   const paceDeadline = paceQuotaMs > 0 ? now() + paceQuotaMs : null
-  for (let offset = 0; offset < components.length; offset += 100) {
-    const batch = components.slice(offset, offset + 100)
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1) throw new Error('Socket batch size must be a positive integer')
+  for (let offset = 0; offset < components.length; offset += batchSize) {
+    const batch = components.slice(offset, offset + batchSize)
     const url = new URL(`https://api.socket.dev/v0/orgs/${encodeURIComponent(orgSlug)}/purl`)
     url.search = new URLSearchParams({ alerts: 'true', poll: 'true', timeoutSec: '300', summary: 'true' }).toString()
     let response
@@ -447,7 +454,9 @@ async function main() {
       if (!token || !orgSlug) throw new Error('Socket audit credentials are unavailable')
       const paceMinutes = Number(args['pace-quota-minutes'] ?? process.env.SOCKET_PACE_QUOTA_MINUTES ?? 0)
       if (!Number.isFinite(paceMinutes) || paceMinutes < 0) throw new Error('--pace-quota-minutes must be a non-negative number')
-      artifacts = await fetchArtifacts({ components, token, orgSlug, paceQuotaMs: paceMinutes * 60_000 })
+      const batchSize = Number(args['batch-size'] ?? process.env.SOCKET_PURL_BATCH_SIZE ?? SOCKET_PURL_BATCH_SIZE)
+      if (!Number.isSafeInteger(batchSize) || batchSize < 1) throw new Error('--batch-size must be a positive integer')
+      artifacts = await fetchArtifacts({ components, token, orgSlug, paceQuotaMs: paceMinutes * 60_000, batchSize })
     }
   } catch (error) {
     fetchError = error instanceof Error ? error.message : String(error)

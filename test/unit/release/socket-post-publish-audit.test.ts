@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { componentsFromCargoLock, componentsFromLock, evaluateSocketArtifacts, fetchArtifacts } from '../../../tools/release/socket-post-publish-audit.mjs'
+import { componentsFromCargoLock, componentsFromLock, evaluateSocketArtifacts, fetchArtifacts, SOCKET_PURL_BATCH_SIZE } from '../../../tools/release/socket-post-publish-audit.mjs'
 
 const baseline = {
   policy: { materialScoreDrop: 0.1, blockingSeverities: ['high', 'critical'] },
@@ -178,6 +178,23 @@ describe('Socket quota pacing', () => {
     const fetchImpl = async (url: URL | string) => (String(url).endsWith('/v0/quota') ? quota('2026-10-16T19:00:00Z') : limited) as never
     await expect(fetchArtifacts({ components, token: 't', orgSlug: 'org', fetchImpl, paceQuotaMs: 10 * 60_000, now, sleep, log: () => {} }))
       .rejects.toThrow('HTTP 429')
+  })
+
+  it('sends a release-sized component set in few large requests (Socket bills per request)', async () => {
+    const many = Array.from({ length: 794 }, (_, i) => ({ purl: `pkg:npm/p${i}@1.0.0` }))
+    const bodies: number[] = []
+    const fetchImpl = async (_url: URL | string, init?: { body?: string }) => {
+      bodies.push(JSON.parse(String(init?.body)).components.length)
+      return ndjson('') as never
+    }
+    await fetchArtifacts({ components: many as never, token: 't', orgSlug: 'org', fetchImpl, log: () => {} })
+    expect(SOCKET_PURL_BATCH_SIZE).toBe(500)
+    expect(bodies).toEqual([500, 294])
+    bodies.length = 0
+    await fetchArtifacts({ components: many as never, token: 't', orgSlug: 'org', fetchImpl, batchSize: 1000, log: () => {} })
+    expect(bodies).toEqual([794])
+    await expect(fetchArtifacts({ components: many as never, token: 't', orgSlug: 'org', fetchImpl, batchSize: 0, log: () => {} }))
+      .rejects.toThrow('batch size')
   })
 
   it('never queries the quota endpoint when pacing is off', async () => {
