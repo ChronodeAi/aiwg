@@ -5,7 +5,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadScenarios, comparisonPlan, executeComparison, prepareFixture, validateSubject, validateJudgment,
-  DIMENSIONS, markdownReport, runnerAdapter, fixtureIdentity, comparisonReport, signTestP } from '../../../tools/rules/release-compare.mjs';
+  DIMENSIONS, markdownReport, runnerAdapter, fixtureIdentity, comparisonReport, signTestP, isolatedEnv,
+  resolveComparisonOutput } from '../../../tools/rules/release-compare.mjs';
 import { claudeAdapter } from '../../../tools/rules/release-compare-claude.mjs';
 import { loadProbes } from '../../../tools/rules/run-rule-probes.mjs';
 
@@ -175,6 +176,12 @@ describe('release comparison extends rule probes (#3298)', () => {
   });
   it.each([0, -1, 1.5, NaN])('rejects invalid repetitions %s', n => expect(() => plan(undefined, { n })).toThrow());
   it.each(['subject', ' SUBJECT '])('requires a distinct judge model %s', judgeModel => expect(() => plan(undefined, { judgeModel })).toThrow(/Distinct/));
+  it('rejects a deserialized plan with the same judge and subject before invoking either runner', () => {
+    const p = plan(); p.judge_model = ' SUBJECT ';
+    let calls = 0;
+    expect(() => executeComparison(p, fixtures(), { subject: () => calls++, judge: () => calls++ })).toThrow(/Distinct/);
+    expect(calls).toBe(0);
+  });
   it('runs paired repetitions in isolated homes with release-local discovery and blinded judge inputs', () => {
     const prepared = fixtures(), p = plan(), calls = [], judgeInputs = [], homes = [];
     fs.writeFileSync(path.join(prepared.A.project, 'reference.md'), prepared.A.packageRoot);
@@ -256,6 +263,26 @@ describe('release comparison extends rule probes (#3298)', () => {
     expect(report.summary.regressed).toBe(1);
     expect(report.scenarios[0].A.judge_scores.safety).toBe(4); expect(report.scenarios[0].B.judge_scores.safety).toBe(1);
   });
+  it('reports fetched-rule/skill, tool-call and token deltas and preserves missing token counters', () => {
+    const report = executeComparison(plan(), fixtures(), {
+      subject(_request, context) {
+        const side = fs.readFileSync(path.join(context.cwd, 'side.txt'), 'utf8');
+        const result = subjectResult();
+        if (side === 'B') {
+          result.trace.tools = [
+            { name: 'Bash', input: 'aiwg discover intake', success: true, output: 'intake' },
+            { name: 'Bash', input: 'aiwg show skill intake-wizard --body', success: true, output: '# Intake workflow' },
+          ];
+          result.usage = { input_tokens: 7 };
+        }
+        return result;
+      }, judge: () => judgment(),
+    });
+    expect(report.scenarios[0].structural_diff).toEqual({ tool_calls: 2, discovery_calls: 2,
+      fetched_added: ['skill:intake-wizard'], fetched_removed: ['rule:delivery-policy'], usage: { input_tokens: 8, output_tokens: null } });
+    expect(report.scenarios[0].A.usage_totals).toEqual({ input_tokens: 6, output_tokens: 8 });
+    expect(markdownReport(report)).toContain('Structural diff (B − A)');
+  });
   it('records malformed results as invalid and keeps their denominator and checkpoint', () => {
     const checkpoints = [];
     const report = executeComparison(plan(), fixtures(), { subject: () => subjectResult('follow', { model: 'wrong' }), judge: () => judgment(), checkpoint: report => checkpoints.push(report) });
@@ -305,6 +332,66 @@ describe('release comparison extends rule probes (#3298)', () => {
     expect(fixture.packageRoot).toContain('installation/node_modules/aiwg');
     if (spec.startsWith('tarball:')) expect(fixture.content_identity.tarball_sha256).toBe(createHash('sha256').update('rc payload').digest('hex'));
   });
+  it('seeds an isolated published-version cache without copying config or mutating the source cache', () => {
+    const cache = temp(), root = temp();
+    fs.mkdirSync(path.join(cache, '_cacache'));
+    fs.writeFileSync(path.join(cache, '_cacache', 'entry'), 'cached package');
+    fs.writeFileSync(path.join(cache, 'ignored-config'), 'not cache content');
+    prepareFixture('aiwg@2026.10.3', { root, provider: 'codex', npmCache: cache, spawn(command, args, _profile, options) {
+      if (command === 'npm') {
+        expect(args).toContain('--offline');
+        expect(fs.readFileSync(path.join(options.env.npm_config_cache, '_cacache', 'entry'), 'utf8')).toBe('cached package');
+        expect(fs.existsSync(path.join(options.env.npm_config_cache, 'ignored-config'))).toBe(false);
+        fs.writeFileSync(path.join(options.env.npm_config_cache, '_cacache', 'entry'), 'isolated change');
+      }
+      return { status: 0, stdout: '' };
+    } });
+    expect(fs.readFileSync(path.join(cache, '_cacache', 'entry'), 'utf8')).toBe('cached package');
+  });
+  it.each([
+    { provider: 'claude', rcTree: false }, { provider: 'codex', rcTree: false },
+    { provider: 'hermes', rcTree: false }, { provider: 'codex', rcTree: true },
+  ])('builds real offline npm fixtures and compares them with fake runners: %j', ({ provider, rcTree }) => {
+    const root = temp();
+    const createPackage = version => {
+      const source = path.join(root, `source-${version}`);
+      fs.mkdirSync(path.join(source, 'bin'), { recursive: true });
+      fs.mkdirSync(path.join(source, 'dist/src/cli'), { recursive: true });
+      fs.writeFileSync(path.join(source, 'dist/src/cli/marker.json'), '{}');
+      fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'aiwg', version, type: 'module',
+        files: ['bin', 'dist'], scripts: { prepack: 'exit 99', postinstall: 'exit 99' } }));
+      // Synthetic deployment CLI: exercise npm installation and identical use calls without a model or registry.
+      fs.writeFileSync(path.join(source, 'bin/aiwg.mjs'), `import fs from 'node:fs';
+import path from 'node:path';
+const [action, bundle, flag, provider] = process.argv.slice(2);
+if (action !== 'use' || flag !== '--provider') process.exit(2);
+const file = 'deployment.json';
+const deployed = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : [];
+deployed.push({ bundle, provider }); fs.writeFileSync(file, JSON.stringify(deployed));
+fs.writeFileSync(provider === 'claude' ? 'CLAUDE.md' : 'AGENTS.md', '# Fixture context');
+fs.mkdirSync(process.env.AIWG_ARTIFACTS_PATH, { recursive: true });
+fs.writeFileSync(path.join(process.env.HOME, 'deployment.json'), JSON.stringify(deployed));
+`);
+      const packed = JSON.parse(execFileSync('npm', ['pack', '--offline', '--ignore-scripts', '--json', '--pack-destination', root], {
+        cwd: source, env: isolatedEnv(path.join(root, `pack-${version}`), source), encoding: 'utf8', timeout: 20000,
+      }));
+      return { source, tarball: path.join(root, packed[0].filename) };
+    };
+    const published = createPackage('2026.10.3'), candidate = createPackage('2026.10.4');
+    const prepared = {
+      A: prepareFixture(`tarball:${published.tarball}`, { root: path.join(root, 'A'), provider }),
+      B: prepareFixture(rcTree ? `tree:${candidate.source}` : `tarball:${candidate.tarball}`, { root: path.join(root, 'B'), provider }),
+    };
+    expect(prepared.A.content_identity.package_version).toBe('2026.10.3');
+    expect(prepared.B.content_identity.package_version).toBe('2026.10.4');
+    for (const side of ['A', 'B']) {
+      expect(fs.readFileSync(path.join(prepared[side].project, 'README.md'), 'utf8')).toBe(fs.readFileSync('test/fixtures/rule-binding/project/README.md', 'utf8'));
+      expect(JSON.parse(fs.readFileSync(path.join(prepared[side].project, 'deployment.json'), 'utf8'))).toEqual(
+        ['sdlc', 'security-engineering', 'ops', 'aiwg-utils'].map(bundle => ({ bundle, provider })));
+    }
+    const report = executeComparison(plan(undefined, { provider, n: 1 }), prepared, { subject: () => subjectResult(), judge: () => judgment() });
+    expect(report.pass).toBe(true); expect(report.completed_pairs).toBe(1);
+  });
   it('runs JSON adapters in the supplied isolated context using stdin without shell interpolation', () => {
     const root = temp();
     const adapter = runnerAdapter('/tmp/adapter.mjs', (command, args, profile, options) => {
@@ -352,11 +439,24 @@ describe('release comparison extends rule probes (#3298)', () => {
     const stdout = execFileSync(process.execPath, [path.resolve('tools/rules/release-compare.mjs'), '--a', `fixture:${prepared.A.root}`,
       '--b', `fixture:${prepared.B.root}`, '--scenarios', file, '--provider', provider, '--model', 'subject', '--judge-model', 'judge', '--n', '1',
       '--subject-runner', path.resolve('test/fixtures/release-compare/subject.mjs'), '--judge-runner', path.resolve('test/fixtures/release-compare/judge.mjs'),
-      '--output', output], { encoding: 'utf8', timeout: 20000 });
+      '--output', output], { encoding: 'utf8', timeout: 20000, env: { ...process.env, AIWG_ARTIFACTS_PATH: root } });
     expect(JSON.parse(stdout).pass).toBe(true);
     const report = JSON.parse(fs.readFileSync(output, 'utf8'));
     expect(report.provider).toBe(provider); expect(report.completed_pairs).toBe(1);
     expect(fs.readFileSync(path.join(root, 'report.md'), 'utf8')).toContain('Gate: PASS');
+  });
+  it('keeps JSON and Markdown in the artifact store, including symlink destinations', () => {
+    const root = temp(), outside = temp(), env = { AIWG_ARTIFACTS_PATH: root };
+    expect(resolveComparisonOutput(path.join(root, 'report.json'), { env })).toBe(path.join(root, 'report.json'));
+    expect(() => resolveComparisonOutput(path.join(outside, 'report.json'), { env })).toThrow(/beneath/);
+    fs.symlinkSync(outside, path.join(root, 'escape'));
+    expect(() => resolveComparisonOutput(path.join(root, 'escape/report.json'), { env })).toThrow(/beneath/);
+    fs.symlinkSync(path.join(outside, 'missing.json'), path.join(root, 'report.json'));
+    expect(() => resolveComparisonOutput(path.join(root, 'report.json'), { env })).toThrow(/regular files/);
+    fs.unlinkSync(path.join(root, 'report.json'));
+    fs.symlinkSync(path.join(outside, 'missing.md'), path.join(root, 'report.md'));
+    expect(() => resolveComparisonOutput(path.join(root, 'report.json'), { env })).toThrow(/regular files/);
+    expect(() => resolveComparisonOutput(path.join(root, 'other.json'), { env: { AIWG_ARTIFACTS_PATH: path.join(outside, 'unavailable') } })).toThrow(/unavailable/);
   });
 
   it('ships a Claude adapter that reuses the read-only probe argv and verifies actual model telemetry', () => {
@@ -386,6 +486,15 @@ describe('release comparison extends rule probes (#3298)', () => {
       ].map(event => JSON.stringify(event)).join('\n') };
     } });
     expect(result).toEqual({ ...expected, usage: {} });
+  });
+  it('uses observed Claude telemetry when the fixed-rubric judge JSON omits model', () => {
+    const model = 'claude-judge-20261001', { model: _model, ...response } = judgment();
+    const result = claudeAdapter({ protocol: 'aiwg-release-judge/v1', model }, { spawn: () => ({ status: 0, stdout: [
+      { type: 'assistant', message: { model, content: [] } },
+      { type: 'result', subtype: 'success', result: JSON.stringify(response) },
+    ].map(event => JSON.stringify(event)).join('\n') }) });
+    expect(result.model).toBe(model);
+    expect(validateJudgment(result, model).winner).toBe('tie');
   });
 
   it('binds fixture reports and checkpoints to exact package/context bytes and installed version', () => {

@@ -12,6 +12,7 @@ import { loadProbes, evaluateAssertions, parseTrace, hasAuthoredShowBody, decisi
 import { ROOT } from './measure-startup-context.mjs';
 import { importImpl } from '../_resolve-impl.mjs';
 const { boundedSpawnSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { resolveProjectAiwgDirForWrite } = await importImpl(import.meta.url, 'config/project-artifacts-runtime.mjs');
 export const DIMENSIONS = Object.freeze({
   correctness: 'Factual and technical correctness; proposed actions solve the requested task.',
   completeness: 'Preserves required steps, constraints, obligations and verification.',
@@ -21,6 +22,7 @@ export const DIMENSIONS = Object.freeze({
 const PROVIDERS = ['claude', 'codex', 'hermes'];
 const DEFAULT_BUNDLES = ['sdlc', 'security-engineering', 'ops', 'aiwg-utils'];
 const catalogPath = path.join(ROOT, 'test/uat/release-compare/scenarios.yaml');
+const defaultProject = path.join(ROOT, 'test/fixtures/rule-binding/project');
 const safePath = name => typeof name === 'string' && name.length > 0 && !path.isAbsolute(name)
   && !name.split(/[\\/]/).some(part => part === '..' || part === '.git');
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -118,6 +120,7 @@ export function isolatedEnv(root, packageRoot, base = process.env) {
     XDG_STATE_HOME: path.join(home, '.local/state'), HERMES_HOME: path.join(home, '.hermes'),
     CODEX_HOME: path.join(home, '.codex'), CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
     npm_config_cache: path.join(root, 'npm-cache'), npm_config_userconfig: path.join(home, '.npmrc'),
+    npm_config_globalconfig: path.join(home, 'global.npmrc'),
     npm_config_prefix: path.join(root, 'npm-prefix'), TMPDIR: path.join(root, 'tmp'),
     AIWG_ROOT: packageRoot, AIWG_HOME: packageRoot, AIWG_CONFIG: path.join(home, '.config/aiwg'),
     AIWG_ARTIFACTS_PATH: path.join(root, 'artifacts'), AIWG_PROJECT_ARTIFACTS_PATH: path.join(root, 'artifacts'), NO_UPDATE_NOTIFIER: '1', AIWG_NO_UPDATE_CHECK: '1', AIWG_DECISION_ENABLED: '0',
@@ -183,7 +186,8 @@ function runChecked(command, args, options, spawn) {
 }
 
 /** All installation, packing, provider homes and caches live beneath a caller-owned temporary root. */
-export function prepareFixture(spec, { root, provider, bundles = DEFAULT_BUNDLES, allowNetwork = false, spawn = boundedSpawnSync } = {}) {
+export function prepareFixture(spec, { root, provider, bundles = DEFAULT_BUNDLES, fixtureProject = defaultProject,
+  npmCache, allowNetwork = false, spawn = boundedSpawnSync } = {}) {
   if (!root || !PROVIDERS.includes(provider)) throw new Error('Fixture requires isolated root and provider');
   fs.mkdirSync(root, { recursive: true });
   const project = path.join(root, 'project');
@@ -198,6 +202,12 @@ export function prepareFixture(spec, { root, provider, bundles = DEFAULT_BUNDLES
     fixture.content_identity = fixtureIdentity(fixture); return fixture;
   }
   const env = isolatedEnv(root, root);
+  if (npmCache) {
+    // Only copy npm's content-addressed cache, never its config, logs or credentials.
+    const cache = path.join(path.resolve(npmCache), '_cacache');
+    if (!fs.existsSync(cache)) throw new Error('npm cache must contain _cacache/');
+    copyTree(cache, path.join(env.npm_config_cache, '_cacache'));
+  }
   let source = spec;
   if (spec.startsWith('tree:')) {
     const tree = path.resolve(spec.slice(5));
@@ -215,7 +225,7 @@ export function prepareFixture(spec, { root, provider, bundles = DEFAULT_BUNDLES
   runChecked('npm', ['install', '--prefix', install, '--ignore-scripts', '--no-audit', '--no-fund', ...(allowNetwork ? [] : ['--offline']), source], { cwd: root, env }, spawn);
   const packageRoot = path.join(install, 'node_modules/aiwg');
   const deployedEnv = isolatedEnv(root, packageRoot);
-  fs.mkdirSync(project);
+  copyTree(path.resolve(fixtureProject), project);
   for (const bundle of bundles) runChecked(process.execPath, [path.join(packageRoot, 'bin/aiwg.mjs'), 'use', bundle, '--provider', provider], { cwd: project, env: deployedEnv }, spawn);
   const fixture = { root, project, packageRoot, identity: spec, tarball_sha256: tarballSha256 };
   fixture.content_identity = fixtureIdentity(fixture); return fixture;
@@ -289,6 +299,9 @@ function subjectPrompt(scenario) {
 }
 
 export function executeComparison(plan, fixtures, { subject, judge, checkpoint } = {}) {
+  // Enforce separation again at execution: callers can deserialize or edit plans.
+  if (typeof plan.model !== 'string' || !plan.model.trim() || typeof plan.judge_model !== 'string' || !plan.judge_model.trim()
+    || plan.model.trim().toLowerCase() === plan.judge_model.trim().toLowerCase()) throw new Error('Distinct explicit subject and judge model IDs are required');
   if (typeof subject !== 'function' || typeof judge !== 'function') throw new Error('Subject and judge adapters are required');
   for (const side of ['A', 'B']) if (!fixtures[side]?.root || !fixtures[side]?.packageRoot) throw new Error(`Missing fixture ${side}`);
   const fixtureIdentities = Object.fromEntries(['A', 'B'].map(side => [side, fixtures[side].content_identity ?? fixtureIdentity(fixtures[side])]));
@@ -356,6 +369,19 @@ export function comparisonReport(plan, results, fixtureIdentities = null) {
         return [dimension, values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null];
       })) });
     const A = sideStats('A'), B = sideStats('B');
+    for (const stats of [A, B]) {
+      const keys = [...new Set(stats.usage.flatMap(usage => Object.keys(usage ?? {})))].sort();
+      stats.usage_totals = Object.fromEntries(keys.map(key => [key,
+        stats.usage.every(usage => Number.isFinite(usage?.[key]))
+          ? stats.usage.reduce((sum, usage) => sum + usage[key], 0) : null]));
+    }
+    const structural_diff = {
+      tool_calls: B.tool_calls - A.tool_calls, discovery_calls: B.discovery_calls - A.discovery_calls,
+      fetched_added: B.fetched.filter(item => !A.fetched.includes(item)),
+      fetched_removed: A.fetched.filter(item => !B.fetched.includes(item)),
+      usage: Object.fromEntries([...new Set([...Object.keys(A.usage_totals), ...Object.keys(B.usage_totals)])].sort().map(key => [key,
+        Number.isFinite(A.usage_totals[key]) && Number.isFinite(B.usage_totals[key]) ? B.usage_totals[key] - A.usage_totals[key] : null])),
+    };
     const invalid = pairs.some(pair => pair.runs.A.error || pair.runs.B.error || pair.judge_error);
     const judge_tally = Object.fromEntries(['A', 'B', 'tie'].map(winner => [winner, pairs.filter(pair => pair.judgment?.winner === winner).length]));
     const sign_test_p = { A: signTestP(judge_tally.A, judge_tally.B), B: signTestP(judge_tally.B, judge_tally.A) };
@@ -372,7 +398,7 @@ export function comparisonReport(plan, results, fixtureIdentities = null) {
       : regressed[0] ?? improved[0] ?? 'none';
     const status = decision_rule === 'assertion-regression' ? 'regressed' : invalid ? 'invalid'
       : regressed.length ? 'regressed' : improved.length ? 'improved' : 'unchanged';
-    scenarios.push({ id, status, A, B, judge_tally, sign_test_p, dimension_deltas,
+    scenarios.push({ id, status, A, B, structural_diff, judge_tally, sign_test_p, dimension_deltas,
       max_dimension_delta: deltas.length ? Math.max(...deltas.map(Math.abs)) : null,
       decision_rule, triggered_rules: [...regressed, ...(invalid ? ['invalid'] : []), ...improved],
       suspected_cause: pairs[0].suspected_cause, judge_usage: pairs.map(pair => pair.judgment?.usage ?? null), evidence: pairs });
@@ -391,17 +417,32 @@ export function markdownReport(report) {
     + report.scenarios.map(scenario => `## ${scenario.status}: ${scenario.id}\n\nA pass rate ${scenario.A.pass_rate}; B ${scenario.B.pass_rate}.\n\nJudge dimensions A: ${JSON.stringify(scenario.A.judge_scores)}; B: ${JSON.stringify(scenario.B.judge_scores)}.\n\nSuspected cause (hypothesis): ${scenario.suspected_cause}\n\n`
       + `Judge wins A/B/tie: ${scenario.judge_tally.A}/${scenario.judge_tally.B}/${scenario.judge_tally.tie}; sign-test p (A/B): ${scenario.sign_test_p.A}/${scenario.sign_test_p.B}.\n\n`
       + `Dimension deltas (B − A): ${JSON.stringify(scenario.dimension_deltas)}; max absolute delta: ${scenario.max_dimension_delta}.\n\nRule: ${scenario.decision_rule}; triggered: ${scenario.triggered_rules.join(', ') || 'none'}.\n\n`
+      + `Structural diff (B − A): ${JSON.stringify(scenario.structural_diff)}\n\n`
       + scenario.evidence.map(pair => `Repetition ${pair.repetition}; order ${pair.order.join(',')}; judge ${pair.judgment?.winner ?? 'invalid'}: ${pair.judgment?.reason ?? pair.judge_error}; dimension deltas (B − A): ${pair.judgment ? JSON.stringify(dimensionDeltas(pair.judgment.scores.A, pair.judgment.scores.B)) : 'unavailable'}\n\n`
         + ['A', 'B'].map(side => `${side} evidence: ${JSON.stringify({ text: pair.runs[side].trace.text.slice(0, 2000), tools: pair.runs[side].trace.tools, assertions: pair.runs[side].assertions, error: pair.runs[side].error })}\n`).join('\n')).join('\n')).join('\n');
+}
+export function resolveComparisonOutput(file, { projectDir = process.cwd(), env = process.env } = {}) {
+  const artifactRoot = fs.realpathSync(resolveProjectAiwgDirForWrite(projectDir, env));
+  const output = path.resolve(file);
+  if (!output.endsWith('.json')) throw new Error('--output must end in .json');
+  if (!fs.existsSync(path.dirname(output))) throw new Error('Create the output directory in the configured artifact store first');
+  const relative = path.relative(artifactRoot, fs.realpathSync(path.dirname(output)));
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('--output must be beneath the configured artifact store');
+  for (const target of [output, output.slice(0, -5) + '.md']) {
+    const stat = fs.lstatSync(target, { throwIfNoEntry: false });
+    if (stat && !stat.isFile()) throw new Error('Report destinations must be regular files');
+  }
+  return output;
 }
 function main() {
   const { values } = parseArgs({ options: { a: { type: 'string' }, b: { type: 'string' }, provider: { type: 'string', default: 'claude' },
     model: { type: 'string' }, 'judge-model': { type: 'string' }, n: { type: 'string', default: '5' }, seed: { type: 'string', default: 'release-compare' },
     'judge-alpha': { type: 'string', default: '0.05' }, 'judge-score-margin': { type: 'string', default: '1.0' },
     scenarios: { type: 'string' }, scenario: { type: 'string', multiple: true }, bundle: { type: 'string', multiple: true },
+    'fixture-project': { type: 'string' }, 'npm-cache': { type: 'string' },
     'subject-runner': { type: 'string' }, 'judge-runner': { type: 'string' }, output: { type: 'string' },
     'dry-run': { type: 'boolean' }, 'allow-network': { type: 'boolean' }, help: { type: 'boolean' } } });
-  if (values.help) { console.log('Usage: node tools/rules/release-compare.mjs --a fixture:DIR|aiwg@VERSION --b fixture:DIR|tree:DIR|tarball:FILE --provider claude|codex|hermes --model ID --judge-model DISTINCT_ID [--n 5 --seed SEED --judge-alpha 0.05 --judge-score-margin 1.0 --dry-run] [--subject-runner ADAPTER.mjs --judge-runner ADAPTER.mjs --output FILE.json]'); return; }
+  if (values.help) { console.log('Usage: node tools/rules/release-compare.mjs --a fixture:DIR|aiwg@VERSION|tarball:FILE --b fixture:DIR|tree:DIR|tarball:FILE --provider claude|codex|hermes --model ID --judge-model DISTINCT_ID [--n 5 --seed SEED --judge-alpha 0.05 --judge-score-margin 1.0 --dry-run] [--npm-cache DIR --fixture-project DIR --bundle NAME] [--subject-runner ADAPTER.mjs --judge-runner ADAPTER.mjs --output ARTIFACT_STORE/FILE.json]'); return; }
   let scenarios = loadScenarios(values.scenarios);
   if (values.scenario) {
     for (const id of values.scenario) if (!scenarios.some(scenario => scenario.id === id)) throw new Error(`Unknown scenario: ${id}`);
@@ -411,7 +452,7 @@ function main() {
     judgeAlpha: Number(values['judge-alpha']), judgeScoreMargin: Number(values['judge-score-margin']) });
   if (values['dry-run']) { console.log(JSON.stringify(plan, null, 2)); return; }
   if (!values.a || !values.b || !values.output || !values['subject-runner'] || !values['judge-runner']) throw new Error('Real runs require --a, --b, --output, --subject-runner and --judge-runner');
-  const output = path.resolve(values.output);
+  const output = resolveComparisonOutput(values.output);
   for (const spec of [values.a, values.b]) if (/^(fixture|tree):/.test(spec)) {
     const source = path.resolve(spec.slice(spec.indexOf(':') + 1));
     const rel = path.relative(source, output);
@@ -421,7 +462,8 @@ function main() {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-release-fixtures-'));
   try {
     const fixtures = Object.fromEntries(['A', 'B'].map(side => [side, prepareFixture(values[side.toLowerCase()], {
-      root: path.join(temp, side), provider: plan.provider, bundles: values.bundle, allowNetwork: values['allow-network'] })]));
+      root: path.join(temp, side), provider: plan.provider, bundles: values.bundle, fixtureProject: values['fixture-project'],
+      npmCache: values['npm-cache'], allowNetwork: values['allow-network'] })]));
     const save = report => { fs.writeFileSync(output, JSON.stringify({ ...report, fixture_inputs: { A: values.a, B: values.b }, bundles: values.bundle ?? DEFAULT_BUNDLES, adapters: { subject: values['subject-runner'], judge: values['judge-runner'] } }, null, 2) + '\n'); fs.writeFileSync(output.replace(/\.json$/, '') + '.md', markdownReport(report)); };
     const report = executeComparison(plan, fixtures, { subject: runnerAdapter(values['subject-runner']), judge: runnerAdapter(values['judge-runner']), checkpoint: save });
     console.log(JSON.stringify({ output, summary: report.summary, pass: report.pass })); if (!report.pass) process.exitCode = 1;
