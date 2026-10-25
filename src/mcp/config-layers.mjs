@@ -18,7 +18,7 @@
 import { lstat, mkdtemp, readFile, readlink, realpath, rmdir } from 'fs/promises';
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from 'path';
 import { assertConfigDestination, assertConfigObject, assertNoSymlinkParents, writeConfigAtomic } from './config-file.mjs';
-import { resolveCredentialPolicy, stricterCredentialPolicy, warnCredentialPolicyRelaxation, warnDroppedOverlayPolicy } from './credentials.mjs';
+import { credentialPolicyViolations, resolveCredentialPolicy, stricterCredentialPolicy, warnCredentialPolicyRelaxation, warnDroppedOverlayPolicy } from './credentials.mjs';
 
 /**
  * `platform` lets tests validate Windows path semantics (`C:\org`, UNC
@@ -313,10 +313,17 @@ export async function saveLayerData(file, data, collection, layers, layering, ex
   // Without layering, `file` is whatever single directory the caller
   // configured (which may be a shared, group-readable organisation checkout
   // maintained directly, not a private identity directory): an existing file
-  // keeps its mode, while a newly created file starts private at 0600.
+  // keeps its mode unless the persisted servers carry literal credentials,
+  // while a newly created file starts private at 0600.
+  const info = layers ? null : await assertConfigDestination(file);
+  const tighten = info && (info.mode & 0o077) !== 0 && collection === 'servers'
+    && Object.values(persisted[collection] || {}).some(server => credentialPolicyViolations(server, 'references').length > 0);
   await writeConfigAtomic(file, JSON.stringify(persisted, null, 2) + '\n', layers
     ? { userScope: true, rejectSymlinkParents: true }
-    : { newFileMode: 0o600, rejectSymlinkParents: true });
+    : { newFileMode: 0o600, rejectSymlinkParents: true, ...(tighten ? { mode: 0o600 } : {}) });
+  if (tighten) {
+    console.warn(`Warning: tightened MCP registry ${file} from ${(info.mode & 0o7777).toString(8).padStart(4, '0')} to 0600 because it contains literal credentials.`);
+  }
   if (layering) {
     layering.own = new Set(Object.keys(persisted[collection] || {}));
     layering.ownFields = new Set(Object.keys(persisted).filter(field => field !== collection));

@@ -722,6 +722,9 @@ async function injectToml(
   projectRoot?: string,
   toolPlan: ToolFilterPlan | null = null,
 ): Promise<InjectResult> {
+  // A deliberately aliased Codex home is trusted; descendants below it are not.
+  const destinationRoot = projectRoot ?? (process.env.CODEX_HOME || resolve(process.env.HOME || process.env.USERPROFILE || homedir(), '.codex'));
+  await assertConfigDestination(configPath, destinationRoot);
   let existing = '';
   try {
     existing = await readFile(configPath, 'utf-8');
@@ -738,7 +741,7 @@ async function injectToml(
   }
 
   if (!dryRun) {
-    await writeConfigAtomic(configPath, existing, { userScope, projectRoot });
+    await writeConfigAtomic(configPath, existing, { userScope, projectRoot: destinationRoot });
 
     for (const server of servers) {
       await registry.recordInjection(server.name, provider);
