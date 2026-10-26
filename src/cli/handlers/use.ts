@@ -14,6 +14,7 @@ import { trackTemporaryDirectory } from '../../utils/temporary-directory.js';
  */
 
 import fs from 'fs/promises';
+import { existsSync, rmSync, rmdirSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { pathToFileURL } from 'node:url';
@@ -34,7 +35,7 @@ import {
 } from '../cli-extension-loader.js';
 import { translateSkillsToCommands, providerNeedsCommands } from '../../plugin/skill-command-translator.js';
 import * as ui from '../ui.js';
-import { readAiwgConfig, writeAiwgConfig, updateInstalled, hashManifest, emptyConfig, getProjectDir } from '../../config/aiwg-config.js';
+import { readAiwgConfig, writeAiwgConfig, updateInstalled, hashManifest, emptyConfig, getProjectDir, getConfigPath } from '../../config/aiwg-config.js';
 import { appendGitignore } from '../../config/gitignore.js';
 import { getLogger } from '../log.js';
 import { installCockpit } from './cockpit.js';
@@ -3313,6 +3314,13 @@ export class UseHandler implements CommandHandler {
       || remainingArgs.includes('-y')
       || remainingArgs.includes('--non-interactive');
 
+    // An auto-created config is removed again if the target turns out to be unknown,
+    // so a mistyped `aiwg use <name>` leaves the project untouched.
+    let autoCreatedConfig: { path: string; controlDirExisted: boolean } | null = null;
+    if (!config && !_isDryRun) {
+      const configPath = getConfigPath(projectDir);
+      autoCreatedConfig = { path: configPath, controlDirExisted: existsSync(path.dirname(configPath)) };
+    }
     if (!config) {
       if (_providersValue) {
         // --providers shorthand: write config without wizard
@@ -3630,6 +3638,12 @@ export class UseHandler implements CommandHandler {
         };
       }
 
+      if (autoCreatedConfig) {
+        rmSync(autoCreatedConfig.path, { force: true });
+        if (!autoCreatedConfig.controlDirExisted) {
+          try { rmdirSync(path.dirname(autoCreatedConfig.path)); } catch { /* not empty or already gone */ }
+        }
+      }
       return {
         exitCode: 1,
         message: `Error: Unknown target '${framework}'\nFrameworks: ${VALID_FRAMEWORKS.join(', ')}\n\n'all' deploys the kernel surface (kernel skills, kernel and core rules, behaviors).\nFor a single addon, run 'aiwg list' to see available addons.\nFor extensions (sys, net, it, sec, stream, dev), see $AIWG_ROOT/agentic/code/extensions/.\nFor project-local artifacts, run 'aiwg list --project-local'.\nRun 'aiwg help' for usage information.`,

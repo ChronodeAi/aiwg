@@ -347,16 +347,29 @@ describe('CLI Router Characterization Tests', () => {
         }
       });
 
+      // Run in an empty project: an unknown target must leave no config behind.
       it('should reject unknown frameworks', () => {
-        const result = runCli(['use', 'invalid-framework']);
-        expect(result.stderr).toMatch(/Unknown target/i);
-        expect(result.exitCode).toBe(1);
+        const project = mkdtempSync(join(tmpdir(), 'aiwg-router-unknown-'));
+        try {
+          const result = runCli(['use', 'invalid-framework'], { cwd: project });
+          expect(result.stderr).toMatch(/Unknown target/i);
+          expect(result.exitCode).toBe(1);
+          expect(existsSync(join(project, '.aiwg'))).toBe(false);
+        } finally {
+          rmSync(project, { recursive: true, force: true });
+        }
       });
 
       it('should list valid frameworks on error', () => {
-        const result = runCli(['use', 'invalid']);
-        expect(result.stdout + result.stderr).toMatch(/sdlc/i);
-        expect(result.stdout + result.stderr).toMatch(/marketing/i);
+        const project = mkdtempSync(join(tmpdir(), 'aiwg-router-unknown-'));
+        try {
+          const result = runCli(['use', 'invalid'], { cwd: project });
+          expect(result.stdout + result.stderr).toMatch(/sdlc/i);
+          expect(result.stdout + result.stderr).toMatch(/marketing/i);
+          expect(existsSync(join(project, '.aiwg'))).toBe(false);
+        } finally {
+          rmSync(project, { recursive: true, force: true });
+        }
       });
     });
 
