@@ -7,6 +7,162 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.7] - 2026-10-26
+
+### Added
+
+- Standard sensitive-value input for MCP profile login, Jev setup, auth secret
+  storage and guided setup/apply: masked terminal entry, explicit stdin,
+  private file, named OS-store entry and named environment variable, in that
+  preference order. `aiwg auth secret set|delete` manages named raw values
+  separately from OAuth credentials. Setup plans retain references and resolve
+  their bytes only at apply (#3079 slice 1, #3597).
+- Saved Jev capture reuse in the paired benchmark collector with
+  `--jev-capture <capture>`. Schema, dataset digest, split and exact pass count
+  must match before any provider call; only the new baseline calls and spend
+  count against the new run's bounds. Original Jev observations and costs remain
+  available to the analyzer (#3291, #3592).
+- OpenRouter paired benchmark baselines through
+  `--baseline-provider openai|openrouter`, with strict decision JSON, no tools
+  and mapped usage. OpenRouter's reported `usage.cost` takes precedence for
+  spend accounting; sourced baseline price files remain supported. **Upgrade
+  note:** `openai` remains the default; select `openrouter` explicitly and supply
+  `OPENROUTER_API_KEY` in the caller environment (#3291, #3603).
+- Release comparison fixture preparation from cached published packages, local
+  RC tarballs or built trees, sharing the same project template. Reports add
+  structural deltas for fetched rules/skills, tool calls and tokens, list
+  regressions first and include suspected causes. Judge/subject separation uses
+  observed model telemetry, and report output must use the configured artifact
+  store (#3298, #3601).
+- OpenRouter transport for the Claude release-comparison adapter, selected by
+  `AIWG_RELEASE_CLAUDE_TRANSPORT=openrouter`, with matching model telemetry.
+  `--max-usd`, `--max-calls` and sourced `--price-file` accounting reserve each
+  comparison pair, stop before projected spend exceeds 80% of the USD cap and
+  record per-call spend and `stop_reason`. Early stops cannot pass; an in-flight
+  request still requires a provider-side spending limit for an invoice ceiling.
+  The evidence verifier checks the new accounting against the trusted plan and
+  continues to accept legacy reports (#3298, #3604).
+- Knowledge Shard 2.2.0 full-v1 consumer support for nullable
+  `embedding_sets.query_template`, `embedding_sets.vector_source` and
+  `embedding_configs.provider_dimension`, preserving them through persistence
+  and export. Invalid vector sources are rejected before database writes;
+  absent/null vector sources mean internal. **Compatibility:** this is a pinned
+  unreleased Fortemi candidate contract; only full-v1 accepts 2.2.0, other
+  profiles fail closed, and 1.x/2.0.0/2.1.0 behavior is retained (#3157, #3594).
+
+### Changed
+
+- Worker recovery scopes require trusted launcher observations or bounded
+  recovery probes; worker-authored outage text alone cannot open a scope.
+  One bounded ENOENT executable-binding correction consumes an existing attempt
+  and preserves allowances, deadline, cancellation and policy. CLI text/JSON and
+  MCP status expose sanitized
+  reasons, eligibility, canary activity and bounded transition history through
+  closure (#3048, #3049, #3595).
+- **Behavior change:** D05 load result v2 separates conservative `reservedUsage`
+  for admission/budget bounds from provider `reportedUsage` for tokens and sourced
+  cost. Unknown usage stays null with a labeled known subtotal; CLI output shows
+  both, and receipts retain served model and safe request ID when supplied.
+  Existing v1 evidence remains verifiable and acceptable to G5 (#2682, #3582,
+  #3589).
+- **Behavior and upgrade note:** adopted secret-input commands require an explicit
+  source without a terminal; piped input requires its stdin flag. Multiple sources
+  use the shared precedence, and a selected empty/inaccessible source fails
+  without fallback. Jev setup environment input now requires
+  `--token-env JEV_API_KEY`; runtime credential lookup retains its existing
+  contract. MCP profile login without source flags now prompts for a hidden key
+  instead of delegating OAuth. Private files must be user-owned, regular,
+  single-link and inaccessible to group/others; Windows file input refuses until
+  ACL validation exists, with stdin/store available instead (#3079, #3597).
+- U5 kernel-move probes retain all four candidate rules as always-loaded kernel
+  rules: positive compliance was 0.1/0.1/0.2/0.6–0.8, below the move gates.
+  Compound positive/negative probes and the ADR record ship for future
+  evaluation; no candidate rule placements or reduced-kernel claims ship
+  (#3292, #2944, #3602).
+
+### Fixed
+
+- Failed `aiwg use` deployments roll back context files using a journal of actual
+  completed writes across generators, hooks, finalization and provider writers.
+  **Behavior change:** files edited since the deploy wrote them are preserved
+  and reported as rollback conflicts, including in structured JSON results.
+  Linux uses directory-descriptor access and no-follow identity checks; other
+  platforms use a checked path fallback with a documented residual race.
+  A provider shim permits read-only imports when the safety layer cannot load,
+  but refuses every context write in that state (#3037, #2873, #3599).
+- Deploy journal identity tests hold the old inode with a hard link before
+  replacement, avoiding filesystem inode-reuse flakes while retaining the
+  rollback conflict assertion; the identity helper documents its remaining
+  same-inode/same-bytes replacement limit (#3600).
+- D05/Jev error and invalid-answer responses preserve available model, request
+  ID and usage metadata. Provider-reported usage on an invalid HTTP 200 answer
+  is charged instead of the full reservation; unknown usage retains its
+  conservative ceiling (#2680, #3582, #3589).
+- Socket post-publish audits install production dependencies with scripts
+  disabled before running the evaluator, preventing the missing-`semver` crash;
+  contract coverage pins dependency availability and step ordering (#3051,
+  #3591).
+- Socket audits wait for exact-version npm visibility of `aiwg`, `@aiwg/cli`
+  and `@aiwg/cockpit` before inventory/scanning. The default wait is 45 minutes,
+  configurable from 1–90; expiry records `unavailable: npm-review-pending`
+  and re-dispatch guidance and remains a failing unavailable outcome. The job's
+  240-minute timeout covers visibility wait, quota pacing and overhead (#3590,
+  #3593).
+- Knowledge Shard 2.2.0 contract schemas are registered in the repository schema
+  catalog, fixing the post-merge stale-catalog failure; full-v1 corpus coverage
+  runs explicitly in the shard conformance workflow (#3594, #3598).
+- Rule probes accept the discovery engine's `aiwg show rule <id> --body` form.
+  Cold resolution retains canonical rule IDs through staged deployment, and
+  the qualified Codex runtime admits 0.163's `.sqlite-maintenance.lock` state
+  file so subsequent live probes can run (#3292, #2944, #3602).
+- Release comparison runs with a Codex judge or subject no longer mark pairs
+  invalid because of Codex's own `tmp/arg0-linux/codex-arg0*/` helper links,
+  which Codex leaves behind and reaps on a later start. The account check admits
+  only those helper names at that depth when they resolve to the declared Codex
+  executable, and it names the path of any other rejected symlink (#3606, #3607).
+
+### Security
+
+- Worker installation qualifications are signed with the existing effect-ledger
+  Ed25519 key and bound to the canonical record, timestamp, project and keyring
+  scope. Loading checks trusted key IDs and validity before importing an
+  adapter; missing, edited, invalid or wrong-key records disable that installation.
+  **Upgrade required for existing unsigned approvals:** initialize the selected
+  key provider with `aiwg effect keys init` (check `effects.keyProvider`), then
+  deliberately requalify with `aiwg doctor --probe-workers --qualify`. Existing
+  unsigned records are never silently signed (#2959, #3596).
+- Reviewed helper children receive named environment allowlists, and Codex
+  profile login receives its key on stdin with bounded/redacted output. Proxy,
+  CA and platform plumbing remain available; provider/deploy children that need
+  provider variables retain their existing recipient contracts. The release
+  comparison OpenRouter key reaches only the intended CLI environment and stays
+  out of argv, retained output and reports; errors are redacted (#3079, #3597;
+  #3298, #3604).
+- Git package fetches (`aiwg install github:…|gitea:…`, Git marketplace
+  adapters) no longer put tokens in HTTPS clone URLs, where they reached git's
+  argv and child debug logs. The token reaches git through an origin-scoped
+  include file in a private temporary directory, as Basic `x-access-token`
+  credentials (GitHub rejects Bearer on git smart HTTP); output and errors are
+  redacted, credentials embedded in URLs are refused, and SSH-agent fallback
+  is unchanged. New `--token-{interactive,stdin,file,store,env}` sources take
+  precedence over `GITHUB_TOKEN`/`GITEA_TOKEN` and the legacy token files.
+  Windows token fetches fail closed pending ACL validation; use SSH there
+  (#3079 slice 2, #3605).
+- `aiwg marketplace publish --key` validates the signing PEM as a private file
+  (regular, owner-only, no symlink or extra hard link) and also accepts it on
+  stdin or through hidden multiline terminal entry (#3605).
+- `aiwg agentcard verify` takes `--bearer-{interactive,stdin,file,store,env}`.
+  **Deprecated:** the literal `--bearer <token>` still works but warns that it
+  exposes the value on argv. With no source, card access stays unauthenticated
+  (#3605).
+- `aiwg issue import|export --live` accept `--token-*` sources ahead of the
+  existing provider variables; with neither, requests stay unauthenticated as
+  before. Reflected tokens are scrubbed from responses and errors (#3605).
+- Still deferred to a later slice: resource bearer lookup, Jev runtime lookup,
+  MCP registry literals, `cost-report` key refs, daemon/messaging, storage
+  backends, UHP profiles and provider execution boundaries; see the inventory
+  in `docs/cli/sensitive-values.md` (#3079).
+
 ## [2026.10.6] - 2026-10-25
 
 ### Added

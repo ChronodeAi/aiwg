@@ -192,6 +192,7 @@
     "references/REF-003-agentic-development-antipatterns",
     "references/REF-066-mcp-specification-2025",
     "releases",
+    "releases/v2026.10.7-announcement",
     "releases/v2026.5.11-announcement",
     "releases/v2026.5.10-announcement",
     "releases/v2026.5.9-announcement",
@@ -1615,6 +1616,13 @@
       "title": "Releases",
       "summary": "Release notes and changelog",
       "collapsed": true
+    },
+    {
+      "id": "releases/v2026.10.7-announcement",
+      "title": "v2026.10.7 — Signed Worker Approvals + Release Evidence",
+      "summary": "Signed worker qualification, standard secret inputs, deploy rollback, OpenRouter benchmarks and Knowledge Shard 2.2.0 support.",
+      "file": "releases/v2026.10.7-announcement.md",
+      "parent": "releases"
     },
     {
       "id": "releases/v2026.5.11-announcement",
