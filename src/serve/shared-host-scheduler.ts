@@ -382,7 +382,10 @@ export class FileAdmissionStore implements AdmissionStore {
       const file = openSync(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         const stat = fstatSync(file);
-        if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.() || stat.size > 16 * 1024 * 1024) throw new Error('host authority must be a private bounded regular file');
+        // nlink is 0 when a writer atomically renamed a new snapshot over the
+        // file after this reader opened it; the open descriptor is still a
+        // complete earlier snapshot. Only extra hard links are refused.
+        if (!stat.isFile() || stat.nlink > 1 || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.() || stat.size > 16 * 1024 * 1024) throw new Error('host authority must be a private bounded regular file');
         return JSON.parse(readFileSync(file, 'utf8')) as AdmissionSnapshot;
       } finally { closeSync(file); }
     }
