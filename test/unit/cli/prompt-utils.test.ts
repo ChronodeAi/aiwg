@@ -15,6 +15,7 @@ import { EventEmitter } from 'node:events';
 import type { Interface as ReadlineInterface } from 'readline';
 import {
   createSecretPromptInterface,
+  askMultilineSecret,
   askString,
   askYesNo,
   askChoice,
@@ -121,6 +122,69 @@ describe('askString', () => {
     const promise = askString(mock.iface, 'Name? ', '', controller.signal);
     await expect(promise).rejects.toBe('pre-aborted');
     expect(mock.closeSpy).toHaveBeenCalled();
+  });
+});
+
+describe('askMultilineSecret', () => {
+  it('collects every line of a synchronous paste through an empty line', async () => {
+    const mock = makeMockInterface();
+    const promise = askMultilineSecret(mock.iface);
+    for (const line of ['-----BEGIN PRIVATE KEY-----', 'synthetic-private-body', '-----END PRIVATE KEY-----', '']) {
+      mock.iface.emit('line', line);
+    }
+    await expect(promise).resolves.toBe('-----BEGIN PRIVATE KEY-----\nsynthetic-private-body\n-----END PRIVATE KEY-----');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mock.iface.listenerCount('line')).toBe(0);
+    expect(mock.iface.listenerCount('close')).toBe(0);
+    expect(console.log).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it('uses one deadline and discards partial material without printing it', async () => {
+    process.env['AIWG_PROMPT_TIMEOUT_MS'] = '1000';
+    const mock = makeMockInterface();
+    const promise = askMultilineSecret(mock.iface);
+    vi.advanceTimersByTime(700);
+    mock.iface.emit('line', 'synthetic-partial-private-material');
+    vi.advanceTimersByTime(300);
+    await expect(promise).resolves.toBe('');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mock.iface.listenerCount('line')).toBe(0);
+    expect(JSON.stringify(vi.mocked(console.log).mock.calls) + JSON.stringify(vi.mocked(console.error).mock.calls))
+      .not.toContain('synthetic-partial-private-material');
+  });
+
+  it('discards partial material when the terminal closes', async () => {
+    const mock = makeMockInterface();
+    const promise = askMultilineSecret(mock.iface);
+    mock.iface.emit('line', 'partial-private-material');
+    mock.emitClose();
+    await expect(promise).resolves.toBe('');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mock.iface.listenerCount('line')).toBe(0);
+  });
+
+  it.each([false, true])('honors cancellation (already aborted: %s) and cleans all listeners', async preAborted => {
+    const mock = makeMockInterface();
+    const controller = new AbortController();
+    if (preAborted) controller.abort('cancelled');
+    const promise = askMultilineSecret(mock.iface, controller.signal);
+    promise.catch(() => {});
+    if (!preAborted) { mock.iface.emit('line', 'partial-private-material'); controller.abort('cancelled'); }
+    await expect(promise).rejects.toBe('cancelled');
+    expect(mock.closeSpy).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mock.iface.listenerCount('line')).toBe(0);
+    expect(mock.iface.listenerCount('close')).toBe(0);
+  });
+
+  it('rejects an oversized paste without including its contents in the error', async () => {
+    const mock = makeMockInterface();
+    const promise = askMultilineSecret(mock.iface);
+    mock.iface.emit('line', 'private-material-'.repeat(1100));
+    await expect(promise).rejects.toThrow('Sensitive input exceeds 16384 characters.');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mock.iface.listenerCount('line')).toBe(0);
   });
 });
 

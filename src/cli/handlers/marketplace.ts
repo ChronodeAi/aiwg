@@ -10,6 +10,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { sensitiveInputOptions } from '../../auth/sensitive-input.js';
 
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { searchSkills } from '../../skills/registry.js';
@@ -42,7 +43,7 @@ const USAGE = [
   '  aiwg marketplace verify <package|lock>    Verify cached content and receipts offline',
   '  aiwg marketplace export <package> --output <archive.json>',
   '  aiwg marketplace import <archive.json> [--project-local]',
-  '  aiwg marketplace publish <source> --key <pem> --publisher <id>',
+  '  aiwg marketplace publish <source> --publisher <id> [--key-file <pem> | --key-stdin]',
   '  aiwg marketplace remove <catalog-id>',
   '  aiwg marketplace list                    List installed marketplace packages',
   '',
@@ -51,6 +52,11 @@ const USAGE = [
   '  --project-local    Store/read state below the target project .aiwg directory',
   '  --global           Store/read state in the user AIWG directory (default)',
   '  --policy <name>    Named trust policy or JSON policy path',
+  'Git fetch token sources:',
+  '  --token-interactive | --token-stdin | --token-file <path> | --token-store <name> | --token-env <name>',
+  'Publish key sources (multiline PEM):',
+  '  --key-interactive | --key-stdin | --key-file <path> | --key-store <name> | --key-env <name>',
+  '  --key <path>       Compatibility alias for --key-file (private file required)',
 ].join('\n');
 
 function parseFlag(args: string[], flag: string): string | undefined {
@@ -117,7 +123,10 @@ async function handleAdd(ctx: HandlerContext): Promise<HandlerResult> {
     const requestedRef = parseFlag(ctx.args, '--ref') ?? 'HEAD';
     const adapter = new GitAdapter();
     const source = { gitUrl: argument, ref: requestedRef, label: argument };
-    const cachePath = await adapter.fetch(source, { refresh: hasFlag(ctx.args, '--refresh') });
+    const cachePath = await adapter.fetch(source, {
+      refresh: hasFlag(ctx.args, '--refresh'),
+      tokenInput: sensitiveInputOptions(ctx.args, 'token'),
+    });
     const identity = await inspectGitCheckout(cachePath);
     const candidates = [
       path.join(cachePath, 'aiwg-marketplace-catalog.json'),
@@ -259,6 +268,7 @@ async function handleInstall(ctx: HandlerContext): Promise<HandlerResult> {
     }
     const installed = await installPackage(rawRef, {
       configDir,
+      tokenInput: sensitiveInputOptions(ctx.args, 'token'),
       ref,
       packageSelector: parseFlag(ctx.args, '--package'),
       refresh: hasFlag(ctx.args, '--refresh'),
@@ -344,8 +354,8 @@ async function handlePublish(ctx: HandlerContext): Promise<HandlerResult> {
   if (typeof argument !== 'string') return argument;
   const privateKeyPath = parseFlag(ctx.args, '--key');
   const publisher = parseFlag(ctx.args, '--publisher');
-  if (!privateKeyPath || !publisher) {
-    return { exitCode: 1, message: 'Error: Usage: aiwg marketplace publish <source> --key <ed25519.pem> --publisher <id> [--output <dir>]' };
+  if (!publisher) {
+    return { exitCode: 1, message: 'Error: Usage: aiwg marketplace publish <source> [--key-file <ed25519.pem> | --key-stdin] --publisher <id> [--output <dir>]' };
   }
   try {
     const outputDir = parseFlag(ctx.args, '--output') ?? path.join(path.resolve(argument), '.aiwg', 'marketplace');
@@ -356,6 +366,7 @@ async function handlePublish(ctx: HandlerContext): Promise<HandlerResult> {
       sourceDir: argument,
       outputDir,
       privateKeyPath,
+      keyInput: sensitiveInputOptions(ctx.args, 'key'),
       publicKeyPath: parseFlag(ctx.args, '--public-key'),
       keyId: parseFlag(ctx.args, '--key-id'),
       publisher,

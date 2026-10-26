@@ -13,17 +13,20 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { getFrameworkRoot } from '../channel/manager.mjs';
 import { readAiwgConfig } from '../config/aiwg-config.js';
+import { sensitiveInputOptions } from '../auth/sensitive-input.js';
 import {
   LocalIssueProviderCore,
   buildExternalIssueSnapshotFromLocal,
   buildLocalIssueConflictReport,
   createLiveIssueClient,
+  resolveLiveIssueToken,
   localIssueRoot,
   parseCommentIdMappings,
   parseExternalIssueSnapshot,
 } from './index.js';
 
 interface ParsedArgs {
+  raw: string[];
   positional: string[];
   flags: Map<string, string | boolean>;
 }
@@ -247,7 +250,7 @@ async function handleImport(issues: LocalIssueProviderCore, args: ParsedArgs): P
   const from = stringFlag(args, "from");
   if (from !== "gitea" && from !== "github") throw new Error("Usage: aiwg issue import --from gitea|github (--snapshot-file path | --live --repo owner/name --external-id N)");
   const snapshot = args.flags.has("live")
-    ? await createLiveIssueClient({ provider: from, repo: requiredStringFlag(args, "repo"), apiUrl: stringFlag(args, "api-url") }).importIssue(requiredStringFlag(args, "external-id"))
+    ? await (await liveClient(args, from)).importIssue(requiredStringFlag(args, "external-id"))
     : parseExternalIssueSnapshot(JSON.parse(await readRequiredFile(args, "snapshot-file")));
   if (from !== snapshot.provider) throw new Error(`snapshot provider ${snapshot.provider} does not match --from ${from}`);
   const issue = await issues.importIssue({
@@ -276,7 +279,7 @@ async function handleExport(issues: LocalIssueProviderCore, rest: string[], args
     return;
   }
 
-  const client = createLiveIssueClient({ provider, repo: requiredStringFlag(args, "repo"), apiUrl: stringFlag(args, "api-url") });
+  const client = await liveClient(args, provider);
   if (snapshot.external_id && !args.flags.has("force")) {
     const remote = await client.fetchIssue(snapshot.external_id);
     const report = buildLocalIssueConflictReport(issue, remote);
@@ -338,6 +341,12 @@ async function handleIndex(issues: LocalIssueProviderCore, rest: string[], args:
   if (rest[0] !== 'rebuild') throw new Error('Usage: aiwg issue index rebuild [--force]');
   const index = await issues.rebuildIssueIndex({ force: args.flags.has('force') });
   printJsonOrText(args, index, `Local issue index ready (${index.issues.length} issues)`);
+}
+
+async function liveClient(args: ParsedArgs, provider: 'gitea' | 'github') {
+  const repo = requiredStringFlag(args, 'repo');
+  const token = await resolveLiveIssueToken(provider, sensitiveInputOptions(args.raw, 'token'));
+  return createLiveIssueClient({ provider, repo, apiUrl: stringFlag(args, 'api-url'), token });
 }
 
 function requiredStringFlag(args: ParsedArgs, flag: string): string {
@@ -405,7 +414,7 @@ function parseArgs(args: string[]): ParsedArgs {
       flags.set(rawKey, true);
     }
   }
-  return { positional, flags };
+  return { raw: args, positional, flags };
 }
 
 function stringFlag(args: ParsedArgs, name: string): string | undefined {
@@ -428,9 +437,14 @@ function printUsage(): void {
   aiwg issue show <KEY> [--comments last:10|all]
   aiwg issue import --from gitea|github --snapshot-file path [--json]
   aiwg issue export <KEY> --to gitea|github [--out path]
+  aiwg issue import --from gitea|github --live --repo owner/name --external-id N [token source]
+  aiwg issue export <KEY> --to gitea|github --live --repo owner/name [token source]
   aiwg issue sync conflicts <KEY> --snapshot-file path [--out path]
   aiwg issue sync map-comments <KEY> --map-file path [--json]
   aiwg issue comment <KEY> --body "..." [--author name]
   aiwg issue close <KEY> [--reason "..."]
-  aiwg issue index rebuild [--force]`);
+  aiwg issue index rebuild [--force]
+
+Live token sources: --token-interactive, --token-stdin, --token-file <path>,
+  --token-store <name>, --token-env <NAME> (see docs/cli/sensitive-values.md).`);
 }

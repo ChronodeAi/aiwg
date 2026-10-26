@@ -1,5 +1,7 @@
 import type { ExternalIssueProvider, LocalIssueCommentIdMapping } from './types.js';
 import type { ExternalIssueCommentSnapshot, ExternalIssueSnapshot, LocalIssueExportSnapshot } from './sync.js';
+import { resolveSensitiveInput, type SensitiveInputDependencies, type SensitiveInputOptions } from '../auth/sensitive-input.js';
+import { isInteractive } from '../cli/env.js';
 
 export interface LiveIssueClientOptions {
   provider: ExternalIssueProvider;
@@ -114,24 +116,53 @@ export class LiveIssueClient {
     };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (this.options.token) headers.Authorization = `Bearer ${this.options.token}`;
-    const response = await this.fetchFn(`${this.baseUrl}${path}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new Error(`${this.options.provider} issue API ${method} ${path} failed: ${response.status}${text ? ` ${redactSecrets(text)}` : ''}`);
+    try {
+      const response = await this.fetchFn(`${this.baseUrl}${path}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`${this.options.provider} issue API ${method} ${path} failed: ${response.status}${text ? ` ${redactSecrets(text, this.options.token)}` : ''}`);
+      }
+      const result = await response.json() as T;
+      // A server can reflect request credentials in issue fields or comments.
+      // Scrub them before they reach local storage or CLI output.
+      if (!this.options.token) return result;
+      const encodedToken = JSON.stringify(this.options.token).slice(1, -1);
+      return JSON.parse(JSON.stringify(result).split(encodedToken).join('[REDACTED]')) as T;
+    } catch (error) {
+      throw new Error(redactSecrets(error instanceof Error ? error.message : 'Live issue request failed', this.options.token));
     }
-    return response.json() as Promise<T>;
   }
 }
 
-export function createLiveIssueClient(options: Omit<LiveIssueClientOptions, 'token'> & { tokenEnv?: NodeJS.ProcessEnv }): LiveIssueClient {
+export function createLiveIssueClient(options: LiveIssueClientOptions & { tokenEnv?: NodeJS.ProcessEnv }): LiveIssueClient {
   return new LiveIssueClient({
     ...options,
-    token: resolveToken(options.provider, options.tokenEnv ?? process.env),
+    token: options.token ?? resolveToken(options.provider, options.tokenEnv ?? process.env),
   });
+}
+
+/** CLI source selection; the synchronous client factory remains available to callers. */
+export async function resolveLiveIssueToken(
+  provider: ExternalIssueProvider,
+  source: SensitiveInputOptions = {},
+  dependencies: SensitiveInputDependencies = {},
+): Promise<string | undefined> {
+  const environment = dependencies.environment ?? process.env;
+  const isTTY = dependencies.isTTY ?? isInteractive();
+  const selected = { ...source, prefix: 'token' };
+  const hasSource = selected.interactive || selected.stdin || selected.file !== undefined || selected.store !== undefined || selected.env !== undefined;
+  if (!hasSource) {
+    // Established behavior: use the provider variable when set, otherwise make
+    // unauthenticated requests (public repositories). Prompt only on request.
+    const names = provider === 'gitea' ? ['AIWG_GITEA_TOKEN', 'GITEA_TOKEN'] : ['AIWG_GITHUB_TOKEN', 'GITHUB_TOKEN'];
+    selected.env = names.find(name => environment[name] !== undefined);
+    if (selected.env === undefined) return undefined;
+  }
+  return resolveSensitiveInput(selected, { ...dependencies, environment, isTTY });
 }
 
 export function resolveToken(provider: ExternalIssueProvider, env: NodeJS.ProcessEnv): string | undefined {
@@ -208,6 +239,9 @@ function requireString(value: unknown, field: string): string {
   throw new Error(`live issue response missing ${field}`);
 }
 
-function redactSecrets(value: string): string {
-  return value.replace(/(token|authorization|password|secret)["':=\s]+[^\s"',}]+/gi, '$1=[REDACTED]');
+function redactSecrets(value: string, token?: string): string {
+  const redacted = token ? value.split(token).join('[REDACTED]') : value;
+  return redacted
+    .replace(/Bearer\s+[^\s"',}]+/gi, 'Bearer [REDACTED]')
+    .replace(/(token|authorization|password|secret)["':=\s]+[^\s"',}]+/gi, '$1=[REDACTED]');
 }

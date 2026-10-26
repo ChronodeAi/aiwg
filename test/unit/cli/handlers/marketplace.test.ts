@@ -403,6 +403,28 @@ describe('marketplaceHandler', () => {
   // ── Git-native provenance workflow ──────────────────────────────────────
 
   describe('Git-native provenance subcommands', () => {
+    it.each([
+      ['--key-stdin', undefined, { stdin: true }],
+      ['--key-interactive', undefined, { interactive: true }],
+      ['--key-file', '/private/key.pem', { file: '/private/key.pem' }],
+      ['--key-store', 'publisher-key', { store: 'publisher-key' }],
+      ['--key-env', 'PUBLISHER_PEM', { env: 'PUBLISHER_PEM' }],
+      ['--key', '/private/legacy.pem', {}],
+    ] as const)('routes publish %s to the existing sensitive key owner', async (flag, reference, input) => {
+      vi.mocked(exchange.publishLocalPackage).mockResolvedValue({
+        lock: SAMPLE_LOCK, envelopePath: '/output/envelope.json', shardPath: '/output/provenance.shard',
+      } as never);
+      const { marketplaceHandler } = await import('../../../../src/cli/handlers/marketplace.js');
+      const result = await marketplaceHandler.execute(makeCtx([
+        'publish', '/package', '--publisher', 'acme', flag, ...(reference ? [reference] : []),
+      ]));
+      expect(result.exitCode).toBe(0);
+      expect(exchange.publishLocalPackage).toHaveBeenCalledWith(expect.objectContaining({
+        keyInput: { prefix: 'key', ...input },
+        ...(flag === '--key' ? { privateKeyPath: reference } : {}),
+      }));
+    });
+
     it('combines signed catalog observations with skill search results without endorsement', async () => {
       vi.mocked(exchange.searchCatalogs).mockResolvedValue([SAMPLE_CATALOG_ENTRY] as never);
       const { marketplaceHandler } = await import('../../../../src/cli/handlers/marketplace.js');

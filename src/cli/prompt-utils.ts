@@ -136,6 +136,59 @@ export async function askString(
   return askWithTimeout(rl, prompt, (a) => a.trim(), fallback, fallback || '(empty)', promptTimeoutMs(), signal);
 }
 
+/** Collect a hidden paste through an empty line, with one overall prompt deadline. */
+export function askMultilineSecret(rl: readline.Interface, signal?: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const lines: string[] = [];
+    let length = 0;
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      rl.removeListener('line', onLine);
+      rl.removeListener('close', onClose);
+      lines.length = 0;
+    };
+    const finish = (value: string) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const onLine = (line: string) => {
+      if (!line) { finish(lines.join('\n')); return; }
+      length += line.length + (lines.length ? 1 : 0);
+      if (length > 16384) {
+        settled = true;
+        cleanup();
+        reject(new Error('Sensitive input exceeds 16384 characters.'));
+        return;
+      }
+      lines.push(line);
+    };
+    // A closed terminal or timeout discards incomplete input, never echoes it.
+    const onClose = () => finish('');
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try { rl.close(); } catch { /* already closed */ }
+      reject(signal!.reason ?? new Error('Aborted'));
+    };
+    const timeoutMs = promptTimeoutMs();
+    const timer = setTimeout(() => {
+      if (settled) return;
+      ui.warn(`  No input completed within ${Math.round(timeoutMs / 1000)}s — discarding incomplete sensitive input`);
+      finish('');
+    }, timeoutMs);
+    timer.unref?.();
+    rl.on('line', onLine);
+    rl.on('close', onClose);
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 /**
  * Prompt for a yes/no answer with timeout and default. Answers starting with
  * 'y' (case-insensitive) are considered yes; everything else is no. On
