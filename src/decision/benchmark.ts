@@ -40,8 +40,8 @@ export interface BenchmarkObservation {
   model: string | null;
   usage: (NonNullable<DecisionAskResult['usage']> & { cachedInputTokens?: number | null }) | null;
   latencyMs: number;
-  /** Captured sourced rate, bound to the served model; null is never a free call. */
-  cost?: { usd: number | null; price: BenchmarkPrice | null };
+  /** Captured sourced rate or provider-reported USD; null is never a free call. */
+  cost?: { usd: number | null; price: BenchmarkPrice | null; source?: 'provider-reported' };
 }
 export interface BenchmarkRow {
   id: string;
@@ -87,7 +87,7 @@ export function benchmarkComparison(capture: BenchmarkCapture, pricing?: Benchma
       return `| Jev, ${passes} pass${passes === 1 ? '' : 'es'} | ${display(t.input)} | n/a | ${display(t.output)} | ${display(t.input === null || t.output === null ? null : t.input + t.output)} | ${t.latency.toFixed(1)} | ${money(t.cost)} |`;
     }),
     `| ${capture.baselineLabel.replace(/[|\r\n]/g, ' ')} | ${display(baseline.input)} | ${display(baseline.cached)} | ${display(baseline.output)} | ${display(baseline.input === null || baseline.output === null ? null : baseline.input + baseline.output)} | ${baseline.latency.toFixed(1)} | ${money(baseline.cost)} |`, '',
-    capture.rows.some(r => r.baseline.cost || r.jev.some(s => s.cost)) ? 'Captured costs use sourced rates recorded per observation; unknown costs remain unknown.' : pricing ? `Rates: decision.ask.cost.* (${pricing.source ?? 'manual'}, checked ${pricing.checked_at ?? 'unknown'}).` : 'Costs unknown: no explicit decision.ask.cost.* rates.',
+    capture.rows.some(r => r.baseline.cost || r.jev.some(s => s.cost)) ? 'Captured costs use provider-reported USD or sourced rates recorded per observation; unknown costs remain unknown.' : pricing ? `Rates: decision.ask.cost.* (${pricing.source ?? 'manual'}, checked ${pricing.checked_at ?? 'unknown'}).` : 'Costs unknown: no explicit decision.ask.cost.* rates.',
     'Costs use reported usage and explicit pricing assumptions, not subscription invoices.',
     'Standalone baseline requests do not measure the marginal cost of an inline LLM decision.',
   ];
@@ -158,6 +158,8 @@ function validPrice(price: BenchmarkPrice): boolean {
 function validCost(sample: BenchmarkObservation): boolean {
   if (sample.cost === undefined) return true;
   const cost = sample.cost;
+  if (cost?.source === 'provider-reported') return fields(cost, ['usd', 'price', 'source'])
+    && cost.price === null && typeof cost.usd === 'number' && Number.isFinite(cost.usd) && cost.usd >= 0;
   return fields(cost, ['usd', 'price']) && (cost.price === null ? cost.usd === null
     : validPrice(cost.price) && cost.price.model === sample.model && cost.usd === tokenCost(sample.usage, cost.price));
 }
@@ -241,8 +243,9 @@ export async function collectBenchmark(dataset: BenchmarkCase[], options: Collec
       ...(result.probability === undefined ? {} : { probability: result.probability }) };
     if (!validObservation(sample) || !modeAnswer(c, sample)) throw new Error(`Invalid provider observation: ${c.id}`);
     const price = (baseline ? options.baselinePrices ?? [] : jevPrices).find(p => p.model === sample.model) ?? null;
-    const usd = price ? tokenCost(sample.usage, price) : null;
-    sample.cost = { usd, price: structuredClone(price) };
+    sample.cost = result.cost?.source === 'provider-reported' && validCost(result)
+      ? structuredClone(result.cost) : { usd: price ? tokenCost(sample.usage, price) : null, price: structuredClone(price) };
+    const usd = sample.cost.usd;
     if (usd === null) stopReason = 'unknown-cost';
     else { knownUsd += usd; if (knownUsd >= options.maxUsd * 0.8) stopReason = 'usd-limit'; }
     return sample;
