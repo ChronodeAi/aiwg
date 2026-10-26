@@ -185,7 +185,7 @@ describe('Consolidated review regressions for #2883', () => {
     f.request.authority.premiumAuthorized = true;
     expect(resolve(f).status).toBe('eligible');
     // This finding requests documentation of behavior that already worked.
-    const source = readFileSync(new URL('../../../src/models/resolver.ts', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../../../src/models/worker-plan.ts', import.meta.url), 'utf8');
     expect(source).toContain('// Worker candidates always invoke a model; deterministic/routine hints must not bypass premium authority.');
   });
 });

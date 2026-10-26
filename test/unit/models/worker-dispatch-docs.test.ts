@@ -16,7 +16,7 @@ afterEach(async () => {
 
 describe('worker dispatch getting-started example (#3172)', () => {
   it('documents a separate external group and launching outside the conductor sandbox', async () => {
-    const doc = await readFile(path.join(frameworkRoot, 'docs/getting-started/worker-dispatch.md'), 'utf8');
+    const doc = await readFile(path.join(frameworkRoot, 'docs/getting-started/worker-dispatch-runtime.md'), 'utf8');
     const section = doc.split('## Running outside the conductor sandbox')[1].split('## Worker launch boundary')[0];
     const config = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(section)![1]);
     expect(validateParallelismConfig(config.parallelism)).toEqual([]);
@@ -27,6 +27,27 @@ describe('worker dispatch getting-started example (#3172)', () => {
     const rule = await readFile(path.join(frameworkRoot, 'agentic/code/addons/aiwg-utils/rules/subagent-scoping.md'), 'utf8');
     expect(rule).toContain('outside your own harness sandbox');
     expect(rule).toContain('never nest sandboxes');
+  });
+  it('loads the reusable two-profile template/rubric examples and rejects their documented inherited conflict', async () => {
+    const doc = await readFile(path.join(frameworkRoot, 'docs/getting-started/worker-dispatch.md'), 'utf8');
+    const base = doc.split('## Configure a worker group')[1].split('## Supported CLI versions')[0];
+    const config = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(base)![1]);
+    const section = doc.split('## Reusable group templates and project rubrics')[1].split('## Qualify the installed CLIs')[0];
+    const [templates, conflict, rubric] = [...section.matchAll(/```json\n([\s\S]*?)\n```/g)].map(match => JSON.parse(match[1]));
+    Object.assign(config.parallelism, templates);
+    root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-template-docs-'));
+    await mkdir(path.join(root, '.aiwg'));
+    const user = path.join(root, 'user'); await mkdir(user);
+    vi.stubEnv('AIWG_CONFIG', user); vi.stubEnv('AIWG_HOME', frameworkRoot);
+    await writeFile(path.join(root, '.aiwg/aiwg.config'), JSON.stringify(config));
+    await writeFile(path.join(root, 'models.json'), JSON.stringify({ defaults: { workerSelection: rubric } }));
+    const loader = new ConfigLoader(root);
+    expect(validateParallelismConfig(config.parallelism)).toEqual([]);
+    const loaded = await loader.load(config.parallelism);
+    expect(loaded.defaults.workerSelection!.roleGuidance!.maintenance.baseRole).toBe('coding');
+    expect(loaded.workerPolicyOrigins!['/parallelism/groups/maintenance/template']).toHaveLength(3);
+    await writeFile(path.join(user, 'models.json'), JSON.stringify(conflict));
+    await expect(loader.load(config.parallelism)).rejects.toThrow('OG_POLICY_RELAXATION');
   });
   it('loads the documented files and reaches qualification for all three roles', async () => {
     const doc = await readFile(path.join(frameworkRoot, 'docs/getting-started/worker-dispatch.md'), 'utf8');

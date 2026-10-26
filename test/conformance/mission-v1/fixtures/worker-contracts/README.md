@@ -7,7 +7,7 @@ Tier 0 packs). The latest source includes optional Revision 3 health definitions
 historical five-feature dispatch records and six-feature records both have shape
 vectors. S1 health-to-lease and Mission reconciliation mapping is frozen as
 pure codec vectors by #2916 (B-OG-54); managed scheduler/MC enforcement is
-not implemented here.
+not implemented here. #2925 additively amends parallelism and worker-selection fragments for groupTemplates/template, group effort/data ceilings and constrained baseRole aliases; manifest digests are refreshed and strict exact-match assertions remain unchanged. Direct/shared coverage is partial; managed protocol role vocabulary and MCP transport are unchanged.
 
 The fragment files are verbatim JSON contracts from configuration spec §4/§5.1.
 They have **no new published schema IDs**. After #2878, #2879 and #2880, the
@@ -52,6 +52,14 @@ extension round trips; other consumers advertise no worker support in
 `consumer-inventory.json` until their own conformance and boundary work passes.
 
 ## Disposition and consumer ownership
+
+### #2925 template and constrained alias amendment
+
+The parallelism fragment combines #2925 group templates, group effort/data
+ceilings and #2926 admission `starvationSeconds`. The worker-selection fragment
+adds constrained `baseRole` aliases. All fragment SHA-256 digests are recomputed;
+production-owner equality and strict validation remain enforced. Reserved alias
+keys and template ancestry beyond 64 levels are rejected by the shared loaders.
 
 ### #2926 diagnostic threshold amendment
 

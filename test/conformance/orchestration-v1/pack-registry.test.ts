@@ -30,13 +30,17 @@ describe('T-OG registry wiring gate (partial coverage is not release acceptance)
     expect(report.packs['T-OG-04'].testFiles.length).toBeGreaterThan(0);
     expect(report.packs['T-OG-05'].status).toBe('partial');
     expect(report.packs['T-OG-05'].testFiles.length).toBeGreaterThan(0);
-    expect(report.packs['T-OG-13'].status).toBe('partial');
-    // Shared P2/P3 pack: #2926 scheduler diagnostics, #2927 continuation and #2929 telemetry (packs.d fragments).
-    expect(report.packs['T-OG-13'].mechanismOwners).toEqual(['B-OG-22', 'B-OG-23', 'B-OG-25']);
+    expect(report.packs['T-OG-13']).toMatchObject({ name: 'P2/P3 extensions', ownerIssue: 'roctinam/aiwg#2875', status: 'partial' });
+    expect(report.packs['T-OG-13'].remaining).toContain('#2925: direct/shared group templates');
+    // Shared P2/P3 pack: #2925 templates, #2926 diagnostics, #2927 continuation and #2929 telemetry.
+    expect(report.packs['T-OG-13'].mechanismOwners).toEqual(['B-OG-22', 'B-OG-23', 'B-OG-25', 'B-OG-21']);
     expect(report.packs['T-OG-13'].testFiles).toEqual([
       'test/unit/serve/shared-host-scheduler-managed.test.ts',
       'test/unit/serve/shared-host-scheduler-budgets.test.ts',
       'test/unit/serve/shared-host-scheduler-host.test.ts',
+      'test/unit/config/worker-templates.test.ts',
+      'test/unit/models/worker-rubrics.test.ts',
+      'test/unit/smiths/parallelism-templates.test.ts',
       'test/unit/ralph-external/session-attempt.test.ts',
       'test/unit/ralph-external/ralph-group-cycle.test.ts',
       'test/unit/decision/worker-telemetry.test.ts',
@@ -298,15 +302,19 @@ describe('loadOrchestrationPackRegistry fragment merge', () => {
   it('merges owned scenario metadata without allowing fragments to upgrade status', () => {
     const directory = makeRoot();
     const scenario = { id: 'P01', requirement: 'NFR-OG-001', mechanismOwner: 'B-OG-34' };
-    writeFragment(directory, 'mapping.json', { 'T-OG-01': { testFiles: [], requirements: ['NFR-OG-001'], scenarios: [scenario] } });
-    writeFragment(directory, 'shared-requirement.json', { 'T-OG-01': { testFiles: [], requirements: ['NFR-OG-001'], scenarios: [{ ...scenario, id: 'P02' }] } });
+    const mechanismOwners = ['B-OG-34'];
+    writeFragment(directory, 'mapping.json', { 'T-OG-01': { testFiles: [], requirements: ['NFR-OG-001'], scenarios: [scenario], mechanismOwners } });
+    writeFragment(directory, 'shared-requirement.json', { 'T-OG-01': { testFiles: [], requirements: ['NFR-OG-001'], scenarios: [{ ...scenario, id: 'P02' }], mechanismOwners: ['B-OG-34', 'B-OG-21'] } });
     const pack = loadOrchestrationPackRegistry(directory).packs['T-OG-01'];
     expect(pack.requirements).toEqual(['NFR-OG-001']);
+    expect(pack.mechanismOwners).toEqual(['B-OG-34', 'B-OG-21']);
     expect(pack.scenarios).toEqual([scenario, { ...scenario, id: 'P02' }]);
     writeFragment(directory, 'mapping.json', { 'T-OG-01': { testFiles: [], status: 'implemented' } });
     expect(() => loadOrchestrationPackRegistry(directory)).toThrow(/unsupported fragment fields/);
     writeFragment(directory, 'mapping.json', { 'T-OG-01': { testFiles: [], scenarios: 'invalid' } });
     expect(() => loadOrchestrationPackRegistry(directory)).toThrow(/scenarios must be an array/);
+    writeFragment(directory, 'mapping.json', { 'T-OG-01': { testFiles: [], mechanismOwners: 'invalid' } });
+    expect(() => loadOrchestrationPackRegistry(directory)).toThrow(/mechanismOwners must be an array/);
   });
 
   it('throws on a fragment referencing an unknown pack ID', () => {

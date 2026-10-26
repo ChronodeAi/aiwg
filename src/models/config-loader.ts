@@ -12,8 +12,9 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
 import { findPackageRoot } from '../cli/find-package-root.js';
-import { workerConfigDigest, validateWorkerGroupReferences, type ParallelismConfig, type WorkerActivation } from '../config/aiwg-config.js';
+import { getConfigPath, validateParallelismConfig, workerConfigDigest, validateWorkerGroupReferences, type ParallelismConfig, type WorkerActivation } from '../config/aiwg-config.js';
 import { DEFAULT_WORKER_SELECTION, WorkerRoleEffortError, mergeWorkerSelection, WorkerSelectionPolicySchema, validateUserProjectModelConfig } from './provider-policy.js';
+import { expandWorkerGroupTemplates, mergeGroupWorkerPolicy } from '../config/worker-group-templates.js';
 import type {
   ModelConfig,
   ModelConfigV1,
@@ -70,6 +71,9 @@ export class ConfigLoader {
    * Precedence: project > user > AIWG default
    */
   async load(parallelism?: ParallelismConfig): Promise<MergedModelConfig> {
+    const expansion = expandWorkerGroupTemplates(parallelism, getConfigPath(dirname(this.locations.projectConfig)));
+    const errors = validateParallelismConfig(parallelism);
+    if (errors.length) throw new Error(errors.join('; '));
     // Load all configs
     const aiwgDefault = await this.loadAiwgDefault();
     const userConfig = await this.loadUserConfig();
@@ -98,7 +102,7 @@ export class ConfigLoader {
       ]);
       if (result.diagnostics.length) throw new Error(result.diagnostics.map(d => `${d.code}: ${d.pointer}: ${d.message}; origins=${JSON.stringify(d.origins ?? [])}`).join('; '));
       merged.defaults.workerSelection = result.policy;
-      merged.workerPolicyOrigins = result.origins;
+      merged.workerPolicyOrigins = { ...result.origins, ...expansion.origins };
     }
     if (parallelism?.worker_dispatch) {
       // Exact wrapper pins remain explainable alongside worker restrictions.
@@ -115,6 +119,10 @@ export class ConfigLoader {
             pointer, contribution: override['model-override'],
           });
         }
+      }
+      for (const group of Object.values(expansion.parallelism?.groups ?? {})) {
+        const narrowed = mergeGroupWorkerPolicy(merged.defaults.workerSelection!, group);
+        if (narrowed.diagnostics.length) throw new Error(narrowed.diagnostics.map(d => `${d.code}: ${d.message}`).join('; '));
       }
       const errors = validateWorkerGroupReferences(parallelism, merged.defaults.workerSelection!);
       if (errors.length) throw new Error(errors.join('; '));

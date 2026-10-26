@@ -109,7 +109,7 @@ export const MAX_SHOWN_GROUPS = 8;
  */
 function excludedMembers(parallelism: ParallelismConfig | undefined, group: WorkerGroup): string[] {
   const excluded: string[] = [];
-  for (const member of group.members) {
+  for (const member of (group.members ?? [])) {
     if (member.enabled === false) excluded.push(`${member.id} (member disabled)`);
     else if (parallelism?.clis?.[member.cli]?.enabled === false) excluded.push(`${member.id} (installation ${member.cli} disabled)`);
   }
@@ -118,12 +118,14 @@ function excludedMembers(parallelism: ParallelismConfig | undefined, group: Work
 
 function groupSummaries(entries: Array<[string, WorkerGroup]>, parallelism: ParallelismConfig | undefined): string[] {
   return entries.map(([id, group]) => {
-    const roles = [...new Set(group.members.flatMap(m => m.roles ?? []))].join('/');
-    const clis = [...new Set(group.members.map(m => m.cli))].join('/');
-    const parts = [`${oneLine(id, 64)} (members: ${group.members.length}`];
+    const roles = [...new Set((group.members ?? []).flatMap(m => m.roles ?? []))].join('/');
+    const clis = [...new Set((group.members ?? []).map(m => m.cli))].join('/');
+    const parts = [`${oneLine(id, 64)} (members: ${(group.members ?? []).length}`];
     if (clis) parts.push(`clis: ${oneLine(clis, 96)}`);
     if (roles) parts.push(`roles: ${oneLine(roles, 96)}`);
     if (group.maxParallel !== undefined) parts.push(`maxParallel: ${group.maxParallel}`);
+    if (group.efforts) parts.push(`efforts: ${oneLine(group.efforts.join('/'), 96)}`);
+    if (group.dataPolicy) parts.push(`dataPolicy: ${oneLine(JSON.stringify(group.dataPolicy), 240)}`);
     if (group.requiredRoles?.length) parts.push(`requiredRoles: ${group.requiredRoles.join('/')}`);
     parts.push('configured');
     const excluded = excludedMembers(parallelism, group);
@@ -162,13 +164,13 @@ async function observationSummaries(entries: Array<[string, WorkerGroup]>, deps:
     `Cached model observations read at ${readAt.toISOString()}; catalog fetchedAt: ${stamp(catalog?.discovery?.fetchedAt)}. Ages are measured at this read and grow afterward. This cache may differ from the resolver's current installation observations; no eligibility read is performed by context generation. Missing or ambiguous observations have unknown age.`,
     '',
     ...entries.map(([id, group]) => {
-      const observations = group.members.flatMap(member => {
+      const observations = (group.members ?? []).flatMap(member => {
         // Mirror the resolver's exact, unambiguous id/API-id lookup per installation.
         const rows = catalog?.discovery?.instances?.[member.cli]?.models
           .filter(row => row.id === member.model || row.apiModelId === member.model) ?? [];
         return rows.length === 1 && rows[0].worker ? [rows[0].worker] : [];
       });
-      return `- ${oneLine(id, 64)} cached observations: ${observations.length}/${group.members.length} members; observedAt: ${range(observations.map(row => row.observedAt))}; verifiedAt: ${range(observations.map(row => row.verifiedAt))}.`;
+      return `- ${oneLine(id, 64)} cached observations: ${observations.length}/${(group.members ?? []).length} members; observedAt: ${range(observations.map(row => row.observedAt))}; verifiedAt: ${range(observations.map(row => row.verifiedAt))}.`;
     }),
     '',
   ];
@@ -330,7 +332,7 @@ export async function buildParallelismSection(projectPath: string, deps: Paralle
     const hard = healthValue(health, 'hardTimeoutSeconds', 1800);
     lines.push('### Orchestration groups (group dispatch enabled)');
     lines.push('');
-    const entries = Object.entries(cfg.parallelism?.groups ?? {});
+    const entries = Object.entries(resolved.groups ?? {});
     if (entries.length > 0) {
       // Slice before summarizing so at most MAX_SHOWN_GROUPS summaries are built.
       const shown = groupSummaries(entries.slice(0, MAX_SHOWN_GROUPS), cfg.parallelism).join(' | ');
@@ -344,6 +346,12 @@ export async function buildParallelismSection(projectPath: string, deps: Paralle
     lines.push('');
     lines.push(...await observationSummaries(entries.slice(0, MAX_SHOWN_GROUPS), deps));
     const models = await new ConfigLoader(projectPath, { aiwgHome: resolveAiwgHome() }).load(cfg.parallelism);
+    for (const [pointer, origins] of Object.entries(models.workerPolicyOrigins ?? {})) {
+      if (!pointer.startsWith('/parallelism/groups/') || !pointer.endsWith('/template')) continue;
+      lines.push(`Template expansion ${oneLine(pointer, 160)}: ${origins.map(origin => `${oneLine(origin.source, 240)}#${oneLine(origin.pointer, 160)} (${origin.digest})`).join(' → ')}. Contributions are retained in workerPolicyOrigins; inherited ceilings remain binding.`);
+    }
+    const aliases = Object.entries(models.defaults.workerSelection?.roleGuidance ?? {}).filter(([, guidance]) => guidance.baseRole);
+    for (const [role, guidance] of aliases) lines.push(`Project role ${role} aliases ${guidance.baseRole}; ordered groups: ${guidance.groups.join(', ')}. Resolver eligibility and base-role qualification remain required.`);
     const freshness = models.defaults.workerSelection!.freshness!;
     lines.push(`Resolver freshness limits from merged model policy: observation warning after ${freshness.warnHours} hours; observation blocked after ${freshness.blockHours} hours; verification blocked after ${freshness.policyDays} days. Future-dated evidence is blocked. Re-resolve before launch; cached ages do not establish eligibility.`);
     lines.push('');

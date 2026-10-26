@@ -130,6 +130,13 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "baseRole": {
+          "enum": [
+            "efficiency",
+            "coding",
+            "reasoning"
+          ]
+        },
         "groups": {
           "type": "array",
           "items": {

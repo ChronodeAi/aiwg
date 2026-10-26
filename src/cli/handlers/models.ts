@@ -1,3 +1,4 @@
+import { resolveParallelism } from '../../config/aiwg-config.js';
 /**
  * Safe model-policy audit, resolution, and mutation commands.
  * @implements #1804
@@ -51,21 +52,20 @@ export async function loadWorkerInputs(ctx: HandlerContext) {
   const models = await loader.load(config.parallelism);
   const catalog = await effectiveCatalog(ctx, ctx.cwd, false, parseArgs(['resolve']));
   const registry = loadProviderModelCapabilities();
-  // Let the resolver explain the dispatch gate before requiring host qualification (#3070).
   if (!config.parallelism?.worker_dispatch) {
     return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
       registry, installations: {} }, drivers: {} };
   }
   // Explain missing policy before a recorded approval's digest check can
   // mask it. The host owner first preserves its missing-installation errors.
-  const parallelism = config.parallelism;
+  const parallelism = resolveParallelism(config.parallelism, config.providers[0]);
   const precheckPolicy = () => {
     if (!ctx.args.some(arg => arg === '--role' || arg.startsWith('--role='))) return;
     const request = parseWorkerCommandArgs(ctx.args.slice(1));
     const members = Object.entries(parallelism.groups ?? {})
       .filter(([id]) => !request.group || request.group === id)
-      .flatMap(([, group]) => group.members).filter(member => member.enabled !== false
-        && parallelism.clis?.[member.cli]?.enabled !== false && member.roles.includes(request.role));
+      .flatMap(([, group]) => group.members ?? []).filter(member => member.enabled !== false
+        && parallelism.clis?.[member.cli]?.enabled !== false && member.roles.includes((models.defaults.workerSelection?.roleGuidance?.[request.role]?.baseRole ?? request.role) as 'coding' | 'reasoning' | 'efficiency'));
     const requiresExplicit = members.length > 0 && members.every(member => {
       // Health metadata can identify the provider before an operator has
       // qualified its dispatch adapter. It grants no dispatch authority.
@@ -380,7 +380,7 @@ Direct worker resolution (plans an invocation; does not launch it):
   aiwg models resolve --role <role> --task <class> --group <group>
     --brief <file> --workdir <tree> --final-output <file>
     [--transport shell|mcp] [--format json|shell] [--authorize-premium]
-  --role                       efficiency | coding | reasoning
+  --role                       efficiency | coding | reasoning | configured project alias
   --task                       Task class from defaults.workerSelection.taskClasses
                                Built-ins: inventory, implementation, architecture, review
   --group                      Group from parallelism.groups and the role's guidance

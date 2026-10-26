@@ -627,6 +627,11 @@
             "pattern": "^[a-z][a-z0-9-]{0,62}$"
           }
         },
+        "groupTemplates": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+          "additionalProperties": { "$ref": "#/definitions/groupTemplate" }
+        },
         "groups": {
           "type": "object",
           "additionalProperties": {
@@ -1458,6 +1463,89 @@
         "roles"
       ]
     },
+    "groupTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/member"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "fallback": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true,
+          "default": []
+        },
+        "execution": {
+          "$ref": "#/definitions/execution"
+        },
+        "requiredRoles": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "efficiency",
+              "coding",
+              "reasoning"
+            ]
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "maxParallel": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "template": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$"
+        },
+        "efforts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "dataPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowedProcessing": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "local",
+                  "remote"
+                ]
+              },
+              "uniqueItems": true
+            },
+            "allowProductImprovement": {
+              "type": "boolean"
+            },
+            "allowUnknown": {
+              "type": "boolean"
+            },
+            "maxRetentionDays": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
     "group": {
       "type": "object",
       "additionalProperties": false,
@@ -1499,10 +1587,56 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 50
+        },
+        "template": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$"
+        },
+        "efforts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "dataPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowedProcessing": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "local",
+                  "remote"
+                ]
+              },
+              "uniqueItems": true
+            },
+            "allowProductImprovement": {
+              "type": "boolean"
+            },
+            "allowUnknown": {
+              "type": "boolean"
+            },
+            "maxRetentionDays": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         }
       },
-      "required": [
-        "members"
+      "anyOf": [
+        {
+          "properties": { "members": {} },
+          "required": ["members"]
+        },
+        {
+          "properties": { "template": {} },
+          "required": ["template"]
+        }
       ]
     },
     "execution": {

@@ -241,6 +241,8 @@ export interface WorkerDataPolicy {
   maxRetentionDays?: number;
 }
 export interface WorkerRoleGuidance {
+  /** Project alias constrained by this existing role. */
+  baseRole?: ModelRole;
   groups: string[];
   tier: ModelTier;
   initialEffort: string | null;

@@ -32,7 +32,7 @@ import { isCanonicalWorkerModelKey } from '../models/provider-policy.js';
 import type { CanonicalMission, WorkerExecution, WorkerHealthSummary, WorkerUsage } from '../mission-protocol/types.js';
 import { attemptBlock, capacityBlock, type AdmissionBlock } from './shared-host-admission-checks.js';
 import { projectAdmissionDiagnostics, type AdmissionDiagnostics } from './shared-host-starvation.js';
-import type { ParallelismConfig } from '../config/aiwg-config.js';
+import { resolveParallelism, type ParallelismConfig } from '../config/aiwg-config.js';
 
 export type AdmissionState =
   | 'queued'
@@ -152,10 +152,10 @@ export function managedDimensionKeys(projectId: string, worker: ManagedWorkerRes
   ];
 }
 
-/** Build the project policy for the existing config/activation owner. */
 export function managedProjectAdmissionPolicy(
   projectRoot: string, parallelism: ParallelismConfig, policyDigest: string, maxConcurrent: number,
 ): SharedHostPolicy {
+  parallelism = resolveParallelism(parallelism);
   const { projectId } = projectAdmissionAuthority(projectRoot);
   const admission = parallelism.admission;
   if ((admission?.authorityRef ?? 'project') !== 'project') throw new Error('only project admission authority is supported by the project policy builder');
@@ -188,7 +188,7 @@ export function managedProjectAdmissionPolicy(
       installations: Object.fromEntries(Object.entries(parallelism.clis ?? {}).filter(([, cli]) => cli.enabled !== false)
         .map(([id, cli]) => [id, { accountScope: cli.accountScope, quotaScope: cli.quotaScope }])),
       members: Object.fromEntries(Object.entries(parallelism.groups ?? {}).flatMap(([group, definition]) =>
-        definition.members.filter(member => member.enabled !== false && parallelism.clis?.[member.cli]?.enabled !== false)
+        (definition.members ?? []).filter(member => member.enabled !== false && parallelism.clis?.[member.cli]?.enabled !== false)
           .map(member => [`${group}/${member.id}`, { cli: member.cli }]))),
     },
   };

@@ -17,8 +17,12 @@ import { normalizeProviderDefinitionId } from '../providers/provider-definitions
 import { qualificationDigest } from './qualification-digest.mjs';
 import type {
   CanonicalModelPolicy, ModelCompilationOutcome, ModelEffort, ModelRole, Provider,
-  WorkerModelObservation, WorkerSelectionPolicy, WorkerDataPolicy, WorkerPolicyOrigin, WorkerPolicyDiagnostic,
+  WorkerModelObservation, WorkerSelectionPolicy, WorkerDataPolicy, WorkerPolicyDiagnostic,
 } from './types.js';
+
+import { DEFAULT_WORKER_SELECTION, WorkerSelectionPolicySchema, workerModelKey, ownWorkerRoleGuidance } from './worker-selection-policy.js';
+export { DEFAULT_WORKER_SELECTION, WorkerSelectionPolicySchema, mergeWorkerSelection, workerModelKey, isCanonicalWorkerModelKey } from './worker-selection-policy.js';
+export type { WorkerPolicyLayer } from './worker-selection-policy.js';
 
 const require = createRequire(import.meta.url);
 function requireModelResource(filename: string): unknown {
@@ -245,146 +249,6 @@ const PolicySchema = z.strictObject({
   effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
   override: z.string().min(1).optional(),
 });
-const uniqueStrings = z.array(z.string().min(1)).refine(values => new Set(values).size === values.length, 'Duplicate entries');
-const WorkerDataPolicySchema = z.strictObject({
-  allowedProcessing: z.array(z.enum(['local', 'remote'])).refine(values => new Set(values).size === values.length).optional(),
-  allowProductImprovement: z.boolean().optional(),
-  allowUnknown: z.boolean().optional(),
-  maxRetentionDays: integer().nonnegative().optional(),
-});
-const WorkerRoleSchema = z.strictObject({
-  groups: uniqueStrings.refine(values => values.length > 0),
-  tier: z.enum(['economy', 'standard', 'premium', 'max-quality']),
-  initialEffort: z.string().min(1).nullable(),
-  effortLadder: uniqueStrings,
-  escalateAfter: integer().positive().optional(),
-  maxEscalations: integer().nonnegative().optional(),
-  deescalateAfter: integer().positive().optional(),
-  allowNotApplicableEffort: z.boolean().optional(),
-});
-export const WorkerSelectionPolicySchema = z.strictObject({
-  roleGuidance: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), WorkerRoleSchema).optional(),
-  guards: z.strictObject({
-    deniedEfforts: uniqueStrings.optional(),
-    deniedModels: uniqueStrings.optional(),
-    denySelfDelegation: z.boolean().optional(),
-    requireExactModel: z.boolean().optional(),
-    allowedVisibility: z.array(z.enum(['listed', 'hidden'])).refine(v => new Set(v).size === v.length).optional(),
-    allowedLifecycle: z.array(z.enum(['active', 'deprecated'])).refine(v => new Set(v).size === v.length).optional(),
-    minimumIdentityEvidence: z.enum(['runtime-configured', 'backend-attested']).optional(),
-  }).optional(),
-  dataPolicy: WorkerDataPolicySchema.optional(),
-  dataClasses: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), WorkerDataPolicySchema).optional(),
-  freshness: z.strictObject({
-    warnHours: integer().positive().optional(),
-    blockHours: integer().positive().optional(),
-    policyDays: integer().positive().optional(),
-  }).optional(),
-  taskClasses: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), z.string().min(1)).optional(),
-}).superRefine((policy, context) => {
-  for (const [role, guidance] of Object.entries(policy.roleGuidance ?? {})) {
-    if (!['efficiency', 'coding', 'reasoning'].includes(role)) context.addIssue({ code: 'custom', path: ['roleGuidance', role], message: 'Unknown worker role' });
-    if (guidance.effortLadder.includes('none') || (guidance.initialEffort === 'none' ? guidance.effortLadder.length !== 0 : guidance.initialEffort !== null && !guidance.effortLadder.includes(guidance.initialEffort))) {
-      context.addIssue({ code: 'custom', path: ['roleGuidance', role], message: 'Initial effort must belong to the ladder; real none requires an empty ladder' });
-    }
-    if (guidance.initialEffort === null && (guidance.allowNotApplicableEffort !== true || guidance.effortLadder.length !== 0)) {
-      context.addIssue({ code: 'custom', path: ['roleGuidance', role], message: 'Null effort requires an empty ladder and allowNotApplicableEffort=true' });
-    }
-  }
-  for (const key of policy.guards?.deniedModels ?? []) {
-    if (!isCanonicalWorkerModelKey(key)) context.addIssue({ code: 'custom', path: ['guards', 'deniedModels'], message: 'Noncanonical inference model key' });
-  }
-  if (policy.freshness?.warnHours !== undefined && policy.freshness.blockHours !== undefined && policy.freshness.warnHours > policy.freshness.blockHours) {
-    context.addIssue({ code: 'custom', path: ['freshness'], message: 'warnHours must not exceed blockHours' });
-  }
-  for (const role of Object.values(policy.taskClasses ?? {})) {
-    if (!['coding', 'reasoning', 'efficiency'].includes(role)) context.addIssue({ code: 'custom', path: ['taskClasses'], message: 'Unknown worker role' });
-  }
-});
-
-/** Canonical RFC3986 identity; installation and account never enter the key. */
-export function workerModelKey(inferenceProvider: string, apiModelId: string): string {
-  if (!/^[a-z][a-z0-9-]{0,62}$/.test(inferenceProvider) || !apiModelId) throw new Error('OG_CONFIG_REFERENCE: invalid inference model identity');
-  return `${inferenceProvider}/${encodeURIComponent(apiModelId).replace(/[!'()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`;
-}
-export function isCanonicalWorkerModelKey(key: string): boolean {
-  const slash = key.indexOf('/');
-  try { return slash > 0 && workerModelKey(key.slice(0, slash), decodeURIComponent(key.slice(slash + 1))) === key; } catch { return false; }
-}
-
-export const DEFAULT_WORKER_SELECTION: WorkerSelectionPolicy = {
-  guards: { deniedEfforts: ['ultra'], deniedModels: [], denySelfDelegation: true, requireExactModel: true, allowedVisibility: ['listed'], allowedLifecycle: ['active'], minimumIdentityEvidence: 'runtime-configured' },
-  dataPolicy: { allowedProcessing: ['local', 'remote'], allowProductImprovement: false, allowUnknown: false },
-  freshness: { warnHours: 24, blockHours: 168, policyDays: 30 },
-  taskClasses: { inventory: 'efficiency', implementation: 'coding', architecture: 'reasoning', review: 'reasoning' },
-};
-
-export interface WorkerPolicyLayer {
-  source: string;
-  authority: WorkerPolicyOrigin['authority'];
-  digest: string;
-  policy?: WorkerSelectionPolicy;
-}
-
-/** Merge leaves, preserving pre-merge explicit origins and attempted relaxations. */
-export function mergeWorkerSelection(layers: WorkerPolicyLayer[]): {
-  policy: WorkerSelectionPolicy; origins: Record<string, WorkerPolicyOrigin[]>; diagnostics: WorkerPolicyDiagnostic[];
-} {
-  const policy: Record<string, any> = {};
-  const origins: Record<string, WorkerPolicyOrigin[]> = {};
-  const diagnostics: WorkerPolicyDiagnostic[] = [];
-  const visit = (target: Record<string, any>, input: Record<string, any>, parts: string[], layer: WorkerPolicyLayer): void => {
-    for (const [key, value] of Object.entries(input)) {
-      const path = [...parts, key];
-      const pointer = `/defaults/workerSelection/${path.map(p => p.replace(/~/g, '~0').replace(/\//g, '~1')).join('/')}`;
-      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-        target[key] ??= {};
-        visit(target[key], value, path, layer);
-        continue;
-      }
-      const origin: WorkerPolicyOrigin = { source: layer.source, authority: layer.authority, digest: layer.digest, pointer, contribution: structuredClone(value) };
-      const prior = origins[pointer] ?? [];
-      const explicit = prior.filter(o => o.authority !== 'builtin');
-      let effective = structuredClone(value);
-      let relaxation = false;
-      if (layer.authority !== 'builtin' && explicit.length > 0) {
-        const previous = target[key];
-        if (['deniedEfforts', 'deniedModels'].includes(key)) effective = [...new Set([...previous, ...value])];
-        else if (['allowedVisibility', 'allowedLifecycle', 'allowedProcessing'].includes(key)) {
-          relaxation = value.some((v: string) => !previous.includes(v));
-          effective = previous.filter((v: string) => value.includes(v));
-        } else if (['denySelfDelegation', 'requireExactModel'].includes(key)) {
-          relaxation = previous === true && value === false;
-          effective = previous || value;
-        } else if (['allowUnknown', 'allowProductImprovement'].includes(key)) {
-          relaxation = previous === false && value === true;
-          effective = previous && value;
-        } else if (['maxRetentionDays', 'warnHours', 'blockHours', 'policyDays'].includes(key)) {
-          relaxation = value > previous;
-          effective = Math.min(previous, value);
-        } else if (key === 'minimumIdentityEvidence') {
-          relaxation = previous === 'backend-attested' && value !== previous;
-          effective = previous === 'backend-attested' ? previous : value;
-        }
-      }
-      if (relaxation) diagnostics.push({ code: 'OG_POLICY_RELAXATION', pointer, message: 'Explicit restriction cannot relax an inherited restriction', origins: [...explicit, origin] });
-      target[key] = effective;
-      origins[pointer] = [...prior, origin];
-    }
-  };
-  for (const layer of layers) if (layer.policy) visit(policy, layer.policy, [], layer);
-  const validation = WorkerSelectionPolicySchema.safeParse(policy);
-  if (!validation.success) for (const issue of validation.error.issues) diagnostics.push({ code: 'OG_CONFIG_REFERENCE', pointer: `/defaults/workerSelection/${issue.path.join('/')}`, message: issue.message });
-  // Data classes are applied as further restrictions to the base path.
-  for (const dataClass of Object.values(policy.dataClasses ?? {}) as WorkerDataPolicy[]) {
-    const base = policy.dataPolicy ?? {};
-    if (dataClass.allowedProcessing) dataClass.allowedProcessing = dataClass.allowedProcessing.filter(p => !base.allowedProcessing || base.allowedProcessing.includes(p));
-    for (const key of ['allowUnknown', 'allowProductImprovement'] as const) if (base[key] === false) dataClass[key] = false;
-    if (base.maxRetentionDays !== undefined) dataClass.maxRetentionDays = Math.min(dataClass.maxRetentionDays ?? base.maxRetentionDays, base.maxRetentionDays);
-  }
-  return { policy, origins, diagnostics };
-}
-
 const UserProjectModelConfigSchema = z.looseObject({
   defaults: z.strictObject({
     tier: z.enum(['economy', 'standard', 'premium', 'max-quality']).optional(),
@@ -522,7 +386,7 @@ export class WorkerRoleEffortError extends WorkerPolicyError {
 /** Validate policy input before entering the sanitized adapter boundary. Null
  * remains valid for models whose effort is explicitly not applicable. */
 export function assertWorkerRoleEffort(policy: WorkerSelectionPolicy | undefined, role: string, requiresExplicit = false): void {
-  const effort = policy?.roleGuidance?.[role]?.initialEffort;
+  const effort = ownWorkerRoleGuidance(policy, role)?.initialEffort;
   if (effort === undefined || requiresExplicit && (effort === null || !effort.trim())) throw new WorkerRoleEffortError(role);
 }
 
@@ -553,7 +417,7 @@ export function assertWorkerSelectionAllowed(selected: {
   if (unknownDataClass) throw new WorkerPolicyError('OG_DATA_POLICY', 'Worker invocation has denied data-use: unknown data class');
   const observation = context.modelObservation ?? context.defaultObservation;
   if (!observation) throw new WorkerPolicyError('OG_MODEL_UNAPPROVED', 'Worker invocation requires model or default observation evidence');
-  const guidance = context.role ? policy.roleGuidance?.[context.role] : undefined;
+  const guidance = context.role ? ownWorkerRoleGuidance(policy, context.role) : undefined;
   if (isWorkerNullEffortDenied(selected.effort.value, observation, guidance)) {
     throw new WorkerPolicyError('OG_EFFORT_DENIED', 'Worker invocation denied effort: null effort requires qualified absence of an effort control');
   }
@@ -1039,7 +903,7 @@ function workerRouteDataPolicy(policy: WorkerSelectionPolicy, dataClass?: string
   data: WorkerDataPolicy; unknownDataClass: boolean;
 } {
   const data = { ...DEFAULT_WORKER_SELECTION.dataPolicy, ...policy.dataPolicy };
-  const narrowed = dataClass ? policy.dataClasses?.[dataClass] : undefined;
+  const narrowed = dataClass && policy.dataClasses && Object.hasOwn(policy.dataClasses, dataClass) ? policy.dataClasses[dataClass] : undefined;
   if (narrowed) {
     if (narrowed.allowedProcessing) data.allowedProcessing = data.allowedProcessing?.filter(p => narrowed.allowedProcessing!.includes(p));
     if (narrowed.allowUnknown === false) data.allowUnknown = false;
@@ -1098,8 +962,8 @@ export function validateWorkerPolicyRoute(input: {
     message: `Conflicting optional model evidence remains unknown: ${observation.conflicts.map(conflict => conflict.field).join(', ')}`,
   });
   const guards = input.policy.guards ?? DEFAULT_WORKER_SELECTION.guards!;
-  const guidance = input.policy.roleGuidance?.[input.role];
-  if (observation.qualification.status !== 'qualified' || !observation.qualification.roles.includes(input.role)) deny('OG_ADAPTER_UNQUALIFIED', '/worker/qualification', 'Role lacks qualified evidence. Run aiwg doctor --probe-workers --qualify.');
+  const guidance = ownWorkerRoleGuidance(input.policy, input.role);
+  if (observation.qualification.status !== 'qualified' || !observation.qualification.roles.includes(guidance?.baseRole ?? input.role)) deny('OG_ADAPTER_UNQUALIFIED', '/worker/qualification', 'Role lacks qualified evidence. Run aiwg doctor --probe-workers --qualify.');
   if (!guidance) deny('OG_CONFIG_REFERENCE', `/defaults/workerSelection/roleGuidance/${input.role}`, 'Role guidance is unavailable');
   const substitution = input.substitution?.model === input.selectedModel
     && input.substitution.effort === input.effort && input.substitution.rationale.trim();
