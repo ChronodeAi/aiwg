@@ -8,7 +8,7 @@
  */
 
 import fs from 'fs';
-import { lintRuleActivation } from './rule-activation.js';
+import { lintRuleActivation, loadRuleActivationEntries } from './rule-activation.js';
 import { guardRulesInlineBudget, type InlineBudgetOptions } from '../rules/inline-budget.mjs';
 import type { MetadataEntry } from '../artifacts/types.js';
 import { dropGitignored } from '../config/gitignore.js';
@@ -611,7 +611,7 @@ async function runRule(
     for (const check of rule.checks) {
       if (check.type === 'id-unique') continue; // Already handled
       if (check.type === 'rule-activation') {
-        diagnostics.push(...lintRuleActivation(content, file, projectRoot, artifactEntries, absPath));
+        diagnostics.push(...lintRuleActivation(content, file, projectRoot, artifactEntries ??= await loadRuleActivationEntries(projectRoot), absPath));
         continue;
       }
 

@@ -1,8 +1,9 @@
 import { main as lintMain } from '../../../src/lint/cli.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { autoDetectRulesets, runLint } from '../../../src/lint/runner.js';
 import { ruleActivationRuleset } from '../../../src/lint/rule-activation.js';
 import { discoverRulesets } from '../../../src/lint/loader.js';
@@ -12,12 +13,16 @@ import { stableRecordId, recordTypeForEntry } from '../../../src/artifacts/brows
 import type { MetadataEntry } from '../../../src/artifacts/types.js';
 
 const entry = (name: string, type: string, path = `agentic/code/addons/example/${type}s/${name}.md`) => ({ name, type, path, title: `Title ${name}` }) as MetadataEntry;
+const repo = fileURLToPath(new URL('../../../', import.meta.url));
 
 describe('activation lint in the existing runner (#2938)', () => {
   let dir: string;
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'aiwg-activation-lint-'));
     await mkdir(join(dir, 'rules'));
+    await mkdir(join(dir, 'home'));
+    vi.stubEnv('HOME', join(dir, 'home'));
+    vi.stubEnv('AIWG_CONFIG', join(dir, 'home/.aiwg'));
     vi.stubEnv('XDG_DATA_HOME', dir);
   });
   afterEach(async () => { vi.unstubAllEnvs(); vi.restoreAllMocks(); process.exitCode = undefined; await rm(dir, { recursive: true, force: true }); });
@@ -133,13 +138,35 @@ describe('activation lint in the existing runner (#2938)', () => {
     expect(() => resolveRuleBindingTarget([agent], 'agent', agent.title)).toThrow('Missing agent');
     expect(() => resolveRuleBindingTarget([agent], 'agent', agent.path)).toThrow('Missing agent');
   });
-  it('loads binding targets from the existing artifact index when not supplied', async () => {
+  it('loads canonical source targets even when a persisted index disagrees (#3643)', async () => {
+    vi.stubEnv('AIWG_ROOT', dir);
+    const agents = join(dir, 'agentic/code/addons/example/agents');
+    await mkdir(agents, { recursive: true });
+    await writeFile(join(agents, 'lint-source-agent.md'), '---\nname: lint-source-agent\n---\n# Source agent');
     const indexDir = join(dir, '.aiwg/.index/project');
     await mkdir(indexDir, { recursive: true });
-    await writeFile(join(indexDir, 'metadata.json'), JSON.stringify({ entries: { debugger: entry('debugger', 'agent') } }));
-    await writeFile(join(dir, 'rules/example.md'), '---\nactivation: bound\nsummary: Fix source.\nbound_to:\n  agents: [debugger]\n---\nBody');
+    await writeFile(join(indexDir, 'metadata.json'), JSON.stringify({ entries: { stale: entry('lint-source-agent', 'skill') } }));
+    await writeFile(join(dir, 'rules/example.md'), '---\nactivation: bound\nsummary: Fix source.\nbound_to:\n  agents: [lint-source-agent]\n---\nBody');
     const result = await runLint(dir, [ruleActivationRuleset], { respectGitignore: false });
     expect(result.summary.passed).toBe(true);
+  });
+  it('resolves every shipped binding with an empty HOME and AIWG_CONFIG (#3643)', async () => {
+    vi.stubEnv('AIWG_ROOT', repo);
+    vi.stubEnv('AIWG_FRAMEWORK_INDEX_CACHE', '');
+    expect(await readdir(join(dir, 'home'))).toEqual([]);
+    const result = await runLint(join(repo, 'agentic/code'), [ruleActivationRuleset], { respectGitignore: false, ci: true });
+    expect(result.summary.filesChecked).toBeGreaterThan(0);
+    expect(result.diagnostics.filter(d => /^Missing (skill|agent|flow) binding target/.test(d.message))).toEqual([]);
+    expect(result.summary).toMatchObject({ passed: true, errors: 0 });
+    expect(await readdir(join(dir, 'home'))).toEqual([]);
+  });
+  it('still reports a non-existent skill with an empty HOME and AIWG_CONFIG (#3643)', async () => {
+    vi.stubEnv('AIWG_ROOT', dir);
+    await writeFile(join(dir, 'rules/example.md'), '---\nactivation: bound\nsummary: Fix source.\nbound_to:\n  skills: [non-existent-lint-skill]\n---\nBody');
+    const result = await runLint(dir, [ruleActivationRuleset], { respectGitignore: false, ci: true });
+    expect(result.summary).toMatchObject({ passed: false, errors: 1 });
+    expect(result.diagnostics[0].message).toContain('Missing skill');
+    expect(result.diagnostics[0].message).toContain('non-existent-lint-skill');
   });
   it('validates behavior source contracts and excludes only generated structural indexes', async () => {
     await mkdir(join(dir, 'behaviors/daemon'), { recursive: true });
