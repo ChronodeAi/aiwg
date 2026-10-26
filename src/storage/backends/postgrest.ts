@@ -1,3 +1,5 @@
+import { resolveSensitiveInput, type SensitiveInputDependencies } from '../../auth/sensitive-input.js';
+import { credentialReferenceInput } from '../../mcp/credentials.mjs';
 import type { AtomicMutation, BatchReceipt, StorageBackendDescriptor, VersionedRecord } from '../backend-contract.js';
 import { STORAGE_BACKEND_CONTRACT } from '../backend-contract.js';
 import type { MigrationChangePage, MigrationEndpoint, MigrationEndpointIdentity, MigrationSnapshot } from '../migration-protocol.js';
@@ -94,7 +96,7 @@ export class PostgrestStorageBackend<T = unknown> implements MigrationEndpoint<T
   private readonly maxBatchSize: number;
   private readonly maxPageSize: number;
 
-  constructor(private readonly options: PostgrestBackendOptions) {
+  constructor(private readonly options: PostgrestBackendOptions, private readonly sensitiveInput: SensitiveInputDependencies = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     if (!this.fetchImpl) throw new PostgrestBackendError('AIWG_POSTGREST_FETCH_UNAVAILABLE', 'fetch is unavailable');
@@ -240,7 +242,7 @@ export class PostgrestStorageBackend<T = unknown> implements MigrationEndpoint<T
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (body) headers['Content-Type'] = options.contentType ?? 'application/json';
     if (options.prefer) headers.Prefer = options.prefer;
-    const authorization = this.authorization();
+    const authorization = await this.authorization();
     if (authorization) headers.Authorization = authorization;
     let response: Response;
     try {
@@ -248,24 +250,28 @@ export class PostgrestStorageBackend<T = unknown> implements MigrationEndpoint<T
         method: options.method ?? 'GET', headers, body,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
-    } catch (error) {
-      throw new PostgrestBackendError('AIWG_POSTGREST_TRANSPORT_FAILED', error instanceof Error ? error.message : String(error), true);
+    } catch {
+      throw new PostgrestBackendError('AIWG_POSTGREST_TRANSPORT_FAILED', 'PostgREST transport failed; check connectivity and authorization.', true);
     }
     if (response.status === 204) return undefined as R;
     const declaredLength = Number(response.headers.get('content-length') ?? '0');
     if (declaredLength > this.maxResponseBytes) {
       throw new PostgrestBackendError('AIWG_POSTGREST_RESPONSE_TOO_LARGE', `response exceeds ${this.maxResponseBytes} byte ceiling`);
     }
-    const responseBody = await response.text();
+    let responseBody: string;
+    try { responseBody = await response.text(); }
+    catch { throw new PostgrestBackendError('AIWG_POSTGREST_TRANSPORT_FAILED', 'PostgREST response could not be read.', true); }
     if (Buffer.byteLength(responseBody) > this.maxResponseBytes) {
       throw new PostgrestBackendError('AIWG_POSTGREST_RESPONSE_TOO_LARGE', `response exceeds ${this.maxResponseBytes} byte ceiling`);
     }
     if (!response.ok) {
-      const databaseError = parseDatabaseError(responseBody);
+      const secrets = authorization
+        ? [authorization, authorization.trim(), authorization.trim().replace(/^\S+\s+/, '')].filter(Boolean) : [];
+      const databaseError = parseDatabaseError(responseBody, secrets);
       const retryable = response.status === 408 || response.status === 425 || response.status === 429 ||
         response.status >= 500 || isRetryableDatabaseCode(databaseError.databaseCode);
-      const exposedCode = databaseError.message?.startsWith('AIWG_')
-        ? databaseError.message
+      const exposedCode = /^AIWG_[A-Z0-9_]+$/.test(databaseError.message ?? '')
+        ? databaseError.message!
         : retryable ? 'AIWG_POSTGREST_RETRYABLE' : 'AIWG_POSTGREST_REQUEST_FAILED';
       throw new PostgrestBackendError(
         exposedCode,
@@ -278,10 +284,13 @@ export class PostgrestStorageBackend<T = unknown> implements MigrationEndpoint<T
     catch { throw new PostgrestBackendError('AIWG_POSTGREST_RESPONSE_INVALID', 'PostgREST returned invalid JSON'); }
   }
 
-  private authorization(): string | undefined {
+  private async authorization(): Promise<string | undefined> {
     if (!this.options.authorizationEnv) return undefined;
-    const value = process.env[this.options.authorizationEnv];
-    if (!value) throw new PostgrestBackendError('AIWG_POSTGREST_CREDENTIAL_UNAVAILABLE', `authorization locator ${this.options.authorizationEnv} is not set`);
+    const input = credentialReferenceInput(this.options.authorizationEnv, 'PostgREST authorizationEnv');
+    let value: string | undefined;
+    try { value = input.env ? (this.sensitiveInput.environment ?? process.env)[input.env] : await resolveSensitiveInput(input, this.sensitiveInput); }
+    catch (error) { throw new PostgrestBackendError('AIWG_POSTGREST_CREDENTIAL_UNAVAILABLE', (error as Error).message); }
+    if (!value) throw new PostgrestBackendError('AIWG_POSTGREST_CREDENTIAL_UNAVAILABLE', 'PostgREST authorizationEnv is not set; use ENV_NAME, file:ABSOLUTE_PATH or store:NAME.');
     return value;
   }
 
@@ -332,12 +341,17 @@ function parseCsv(input: string): { header: string[]; rows: string[][] } {
   return { header, rows: output };
 }
 
-function parseDatabaseError(body: string): { databaseCode?: string; message?: string } {
+function parseDatabaseError(body: string, secrets: string[]): { databaseCode?: string; message?: string } {
   try {
     const parsed = JSON.parse(body) as { code?: unknown; message?: unknown };
+    // Decode JSON escapes before redaction: encoded echoes must not become codes.
+    const redact = (value: unknown): string | undefined => typeof value === 'string'
+      ? secrets.reduce((text, secret) => text.split(secret).join('[REDACTED]'), value) : undefined;
+    const databaseCode = redact(parsed.code);
+    const message = redact(parsed.message);
     return {
-      ...(typeof parsed.code === 'string' ? { databaseCode: parsed.code } : {}),
-      ...(typeof parsed.message === 'string' ? { message: parsed.message } : {}),
+      ...(databaseCode && /^[A-Z0-9]{5}$/.test(databaseCode) ? { databaseCode } : {}),
+      ...(message ? { message } : {}),
     };
   } catch { return {}; }
 }
