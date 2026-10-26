@@ -213,6 +213,29 @@ describe('Codex release comparison subject adapter', () => {
       stdout: { truncated: false }, stderr: { text: 'host diagnostic', truncated: false } });
     expect(failure.diagnostic.trace.completed).toBe(true);
   });
+  it('admits leftover Codex arg0 helper links that resolve to the declared executable and names any other symlink', async () => {
+    const { root, env, request } = setup();
+    const account = env.AIWG_RELEASE_CODEX_ACCOUNT_HOME;
+    const helpers = path.join(account, 'tmp', 'arg0-linux', 'codex-arg0kdwrIa'); fs.mkdirSync(helpers, { recursive: true });
+    fs.writeFileSync(path.join(helpers, '.lock'), '');
+    for (const name of ['apply_patch', 'applypatch', 'codex-linux-sandbox']) fs.symlinkSync(env.AIWG_RELEASE_CODEX_BINARY, path.join(helpers, name));
+    // A concurrent call creates another helper directory mid-run; both checks still pass.
+    const success = (_cmd, args) => {
+      const live = path.join(account, 'tmp', 'arg0-linux', 'codex-arg0Zq9'); fs.mkdirSync(live, { recursive: true });
+      fs.symlinkSync(env.AIWG_RELEASE_CODEX_BINARY, path.join(live, 'apply_patch'));
+      fs.writeFileSync(args[args.indexOf('-o') + 1], '{"action":"follow"}'); return { status: 0, stdout };
+    };
+    await codexAdapter(request, { env, cwd: root, spawn: success });
+    const outside = path.join(root, 'elsewhere'); fs.writeFileSync(outside, 'x');
+    fs.symlinkSync(outside, path.join(helpers, 'codex-execve-wrapper'));
+    await expect(codexAdapter(request, { env, cwd: root, spawn: success })).rejects.toThrow(/cannot contain symlinks \(arg0-linux\/codex-arg0kdwrIa\/codex-execve-wrapper\)/);
+    fs.unlinkSync(path.join(helpers, 'codex-execve-wrapper'));
+    fs.symlinkSync(env.AIWG_RELEASE_CODEX_BINARY, path.join(account, 'tmp', 'apply_patch'));
+    await expect(codexAdapter(request, { env, cwd: root, spawn: success })).rejects.toThrow(/cannot contain symlinks \(apply_patch\)/);
+    fs.unlinkSync(path.join(account, 'tmp', 'apply_patch'));
+    fs.symlinkSync(env.AIWG_RELEASE_CODEX_BINARY, path.join(helpers, 'not-a-helper'));
+    await expect(codexAdapter(request, { env, cwd: root, spawn: success })).rejects.toThrow(/not-a-helper/);
+  });
   it('fails on invalid settings, partial output, model errors, malformed output and binary mutation', async () => {
     const { root, env, request } = setup();
     await expect(codexAdapter(request, { env: { ...env, AIWG_RELEASE_CODEX_EFFORT: 'auto' }, cwd: root })).rejects.toThrow(/effort/);

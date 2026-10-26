@@ -11,6 +11,7 @@ const EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
 const ENV_KEYS = ['PATH', 'HOME', 'USERPROFILE', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'TMPDIR', 'AIWG_ROOT', 'AIWG_HOME', 'AIWG_CONFIG', 'AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH'];
 const WRITABLE_ENV_KEYS = ['XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'TMPDIR', 'AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH'];
 const RUNTIME_FILES = new Set(['.sandbox_migration', '.sqlite-maintenance.lock', 'installation_id', 'models_cache.json']);
+const CODEX_ARG0_HELPERS = new Set(['apply_patch', 'applypatch', 'codex-linux-sandbox', 'codex-execve-wrapper']);
 const RUNTIME_DATABASE = /^(?:goals_1|logs_2|memories_1|queue_1|state_5)\.sqlite(?:-(?:shm|wal))?$/;
 const DIAGNOSTIC_BYTES = 1024 * 1024;
 
@@ -105,12 +106,23 @@ export async function runCodexEvaluation({ cwd, prompt, model, effort, accountHo
   const isolationRoot = fs.realpathSync(path.dirname(env.HOME));
   for (const root of [account, authRoot]) if (within(root, isolationRoot) || within(isolationRoot, root)) throw new Error('Account home and canonical auth root must be separate from the fixture');
   if ([account, authRoot].some(root => within(root, executable))) throw new Error('Codex executable must be outside denied account and canonical auth roots');
-  const inventory = root => {
+  // Codex places per-process helper links in CODEX_HOME/tmp/arg0-linux/codex-arg0*/ and
+  // reaps stale directories on a later start, so they persist between calls. Admit only
+  // those exact helper names, and only when they resolve to the declared executable.
+  const codexHelperLink = (rel, entry) => {
+    const parts = rel.split(path.sep);
+    if (parts.length !== 3 || parts[0] !== 'arg0-linux' || !/^codex-arg0[A-Za-z0-9]+$/.test(parts[1]) || !CODEX_ARG0_HELPERS.has(parts[2])) return false;
+    try { return fs.realpathSync(entry) === executable; } catch { return false; }
+  };
+  const inventory = (root, { allowCodexHelpers = false } = {}) => {
     const found = [];
     const visit = (dir, relative = '') => {
       for (const name of fs.readdirSync(dir).sort()) {
         const rel = path.join(relative, name), entry = path.join(dir, name), stat = fs.lstatSync(entry);
-        if (stat.isSymbolicLink()) throw new Error('System skill inventory cannot contain symlinks');
+        if (stat.isSymbolicLink()) {
+          if (allowCodexHelpers && codexHelperLink(rel, entry)) { found.push([rel, 'codex-helper']); continue; }
+          throw new Error(`System skill inventory cannot contain symlinks (${rel})`);
+        }
         if (stat.isDirectory()) { found.push([rel, 'directory']); visit(entry, rel); }
         else if (stat.isFile()) found.push([rel, 'file', hash(fs.readFileSync(entry))]);
         else throw new Error('System skill inventory contains an unexpected file type');
@@ -136,7 +148,7 @@ export async function runCodexEvaluation({ cwd, prompt, model, effort, accountHo
       const target = path.join(account, entry), stat = fs.lstatSync(target);
       const owned = !process.getuid || stat.uid === process.getuid();
       if ((RUNTIME_FILES.has(entry) || RUNTIME_DATABASE.test(entry)) && stat.isFile() && !stat.isSymbolicLink() && owned && (stat.mode & 0o111) === 0) continue;
-      if (['tmp', 'shell_snapshots'].includes(entry) && stat.isDirectory() && !stat.isSymbolicLink() && owned) { inventory(target); continue; }
+      if (['tmp', 'shell_snapshots'].includes(entry) && stat.isDirectory() && !stat.isSymbolicLink() && owned) { inventory(target, { allowCodexHelpers: entry === 'tmp' }); continue; }
       if (entry === 'skills' && stat.isDirectory() && !stat.isSymbolicLink() && sealedSkills !== null) {
         const children = fs.readdirSync(target);
         if (children.length !== 1 || children[0] !== '.system' || !fs.lstatSync(path.join(target, '.system')).isDirectory() || inventory(path.join(target, '.system')) !== sealedSkills) throw new Error('Account system skills differ from sealed reference');
