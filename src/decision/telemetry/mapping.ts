@@ -2,10 +2,68 @@ import type { ArtifactPin, DecisionAdmissionEvidence, DecisionAttempt, DecisionR
 import type { CacheTelemetry } from '../compile-cache/types.js';
 import { sanitizeOpaqueValue } from './redaction.js';
 import type { TelemetryAttributes, TelemetryProvenance } from './types.js';
+import { createHash } from 'node:crypto';
+import { GEN_AI_SEMCONV_REVISION } from './types.js';
 
 export interface AttributeMapping {
   attributes: TelemetryAttributes;
   provenance: Record<string, TelemetryProvenance>;
+}
+
+/** Structural view of an existing dispatch receipt, never a new evidence contract. */
+export interface WorkerReceiptEvidence {
+  taskId?: unknown;
+  invocationId?: unknown;
+  transport?: unknown;
+  termination?: unknown;
+  identityConfidence?: unknown;
+  requested?: { model?: unknown } | null;
+  observed?: { model?: unknown } | null;
+  usage?: { quality?: unknown; inputTokens?: unknown; outputTokens?: unknown; costUsd?: unknown } | null;
+}
+
+/** Correlation is opaque on export, including when hostile content is planted in an ID. */
+function workerCorrelation(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 && value.length <= 1024
+    ? createHash('sha256').update(value).digest('hex') : null;
+}
+
+/** Only operator-listed model names, fixed enums and finite numbers leave this mapping. */
+export function mapWorkerReceipt(receipt: WorkerReceiptEvidence,
+  correlation: { conductorId: string; runId: string }, allowedModels: readonly string[] = []): AttributeMapping {
+  const out: AttributeMapping = { attributes: {}, provenance: {} };
+  const model = (value: unknown): string | null => typeof value === 'string' && value.length <= 128
+    && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(value)
+    && !/(?:sk[-_]|gh[pousr]_|github_pat_|AKIA|bearer|secret|password)/i.test(value)
+    && allowedModels.includes(value) ? value : null;
+  const confidence = ['unavailable', 'runtime-configured-only', 'backend-attested'].includes(String(receipt.identityConfidence))
+    ? String(receipt.identityConfidence) : 'unavailable';
+  const observed = confidence === 'unavailable' ? null : model(receipt.observed?.model);
+  const observedProvenance = observed === null ? 'unknown' : confidence === 'backend-attested' ? 'provider-fact' : 'client-derived';
+  const quality = receipt.usage?.quality === 'reported' || receipt.usage?.quality === 'estimated' ? receipt.usage.quality : 'unknown';
+  const usageProvenance = quality === 'reported' ? 'provider-fact' : quality === 'estimated' ? 'estimate' : 'unknown';
+  put(out, 'aiwg.otel.gen_ai_semconv_revision', GEN_AI_SEMCONV_REVISION, 'client-derived');
+  for (const [key, value] of Object.entries({ 'aiwg.conductor.id': correlation.conductorId,
+    'aiwg.run.id': correlation.runId, 'aiwg.task.id': receipt.taskId, 'aiwg.invocation.id': receipt.invocationId })) {
+    put(out, key, workerCorrelation(value), 'client-derived');
+  }
+  put(out, 'aiwg.worker.transport', receipt.transport === 'shell' || receipt.transport === 'mcp' ? receipt.transport : null, 'client-derived');
+  put(out, 'aiwg.worker.termination', receipt.termination === 'confirmed' || receipt.termination === 'uncertain' ? receipt.termination : null, 'client-derived');
+  put(out, 'aiwg.worker.identity_confidence', confidence, 'client-derived');
+  put(out, 'gen_ai.request.model', model(receipt.requested?.model), 'client-derived');
+  put(out, 'gen_ai.response.model', observed, observedProvenance);
+  put(out, 'aiwg.worker.observed_model_provenance', observedProvenance, 'client-derived');
+  put(out, 'aiwg.usage.quality', quality, 'client-derived');
+  for (const [key, value] of [['input_tokens', receipt.usage?.inputTokens], ['output_tokens', receipt.usage?.outputTokens]] as const) {
+    const count = quality !== 'unknown' && typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+    put(out, `gen_ai.usage.${key}`, count, usageProvenance);
+    put(out, `aiwg.usage.${key}_provenance`, count === null ? 'unknown' : usageProvenance, 'client-derived');
+  }
+  const cost = receipt.usage?.costUsd;
+  const knownCost = quality !== 'unknown' && typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : null;
+  put(out, 'aiwg.usage.cost_usd', knownCost, usageProvenance);
+  put(out, 'aiwg.usage.cost_provenance', knownCost === null ? 'unknown' : usageProvenance, 'client-derived');
+  return out;
 }
 
 function put(target: AttributeMapping, key: string, value: string | number | boolean | null, provenance: TelemetryProvenance): void {
