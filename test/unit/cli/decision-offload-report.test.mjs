@@ -12,9 +12,12 @@ describe('offline decision-offload reporting', () => {
   it('exposes the real shared snapshot without probing or creating a journal', async () => {
     const root = mkdtempSync(join(tmpdir(), 'aiwg-offload-report-'));
     const saved = process.env.AIWG_CONFIG;
+    // The host may set AIWG_DECISION_ENABLED, which overrides project config.
+    const savedEnabled = process.env.AIWG_DECISION_ENABLED;
     const network = vi.spyOn(globalThis, 'fetch').mockImplementation(() => { throw new Error('Network must not be used by offline reports'); });
     try {
       process.env.AIWG_CONFIG = join(root, 'user');
+      delete process.env.AIWG_DECISION_ENABLED;
       mkdirSync(join(root, '.aiwg'), { recursive: true });
       writeFileSync(join(root, '.aiwg', 'aiwg.config'), JSON.stringify({ decision: { enabled: false } }));
       const report = await collectDecisionOffloadReport(root);
@@ -35,6 +38,7 @@ describe('offline decision-offload reporting', () => {
     } finally {
       network.mockRestore();
       if (saved === undefined) delete process.env.AIWG_CONFIG; else process.env.AIWG_CONFIG = saved;
+      if (savedEnabled === undefined) delete process.env.AIWG_DECISION_ENABLED; else process.env.AIWG_DECISION_ENABLED = savedEnabled;
       rmSync(root, { recursive: true, force: true });
     }
   });
