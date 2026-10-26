@@ -1,3 +1,4 @@
+import { assertEnvironmentCredentialReferences } from './credentials.mjs';
 import { assertConfigDestination, assertNoSymlinkParents, writeConfigAtomic } from './config-file.mjs';
 import { readFile, mkdir, lstat, unlink, open } from 'node:fs/promises';
 import { dirname, parse, resolve } from 'node:path';
@@ -50,6 +51,7 @@ async function atomic(file, data, options) {
 }
 
 export function ompServerConfig(server) {
+  assertEnvironmentCredentialReferences(server, 'omp');
   const config = {};
   for (const field of ['command', 'args', 'env', 'cwd', 'url', 'headers', 'enabled', 'timeout', 'requestIdFormat', 'auth', 'oauth', 'type']) {
     if (server[field] !== undefined) config[field] = server[field];

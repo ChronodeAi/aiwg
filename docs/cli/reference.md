@@ -1916,7 +1916,7 @@ for general AIWG CLI execution, `AIWG_MCP_TOOLSETS=flows` with
 
 #### mcp install
 
-Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#mcp-registry-values).
 
 Generate MCP client configuration.
 
@@ -1991,7 +1991,7 @@ aiwg mcp info
 
 #### mcp add
 
-Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#mcp-registry-values).
 
 Register an MCP server in the AIWG server registry (`~/.aiwg/mcp-servers.json`).
 
@@ -2010,15 +2010,17 @@ aiwg mcp add <name> --type stdio --command <cmd> [--args <a,b>] [--env KEY=VAL]
 - `--type <type>` - Server type: `http` (default), `stdio`, `sse`
 - `--url <url>` - URL for http/sse servers
 - `--command <cmd>` - Executable for stdio servers
-- `--args <a,b>` - Comma-separated args for stdio command. `-flag value`,
+- `--args <a,b>` - Literal comma-separated args for stdio command. Values are
+  visible on process argv and saved in config; use env/header references for secrets. `-flag value`,
   `--flag value`, and `--flag=value` forms whose flag names a credential kind
   (`--token`, `--password`, `--api-key`, …) are scanned for literal secrets,
   including a value that itself starts with a hyphen (`--token -abc`); a
   following `--flag` with no value form is read as a bare flag, not a value.
-  Single-letter short flags (`-p secret`) and positional `KEY=value` forms are
-  never detected.
+  Single-letter short flags (`-p secret`) are not detected. Credential-named
+  `KEY=value` assignments are scanned.
 - `--env KEY=VAL` - Environment variable(s) for stdio servers
-- `--headers KEY=VAL` - HTTP headers for http/sse servers
+- `--headers KEY=VAL` or `--headers 'Name: value'` - Literal HTTP headers for http/sse servers.
+  Secret-looking `--env`/`--headers` literals print one stderr deprecation warning without values.
 
 Literal `--env`/`--headers` values are refused when injecting into a
 project-scope (shareable) provider file: only empty strings and supported
@@ -2026,9 +2028,14 @@ reference forms (`${VAR}`, `${env:VAR}`, `{env:VAR}`) may be committed.
 Store the real secret in the environment and use `--header-env`/`--env-from`
 references instead, or inject with `--scope user` for providers that document
 a private user destination.
-- `--header-env HEADER=ENV_VAR` - Resolve a remote HTTP/SSE header from an
-  environment variable at connection time. The registry stores only the
-  variable name. An `Authorization` reference is sent as a Bearer token.
+- `--header-env HEADER=SOURCE` / `--env-from KEY=SOURCE` - Repeatable per-value
+  references: `ENV_NAME`, `file:ABSOLUTE_PATH`, `store:NAME`, `stdin:STORE_NAME`, or
+  `interactive:STORE_NAME`. Stdin/explicit hidden entry save to the existing OS
+  store and persist only its reference; at most one stdin value per invocation.
+  Registration never prompts by default. File/store locators resolve through
+  AIWG's runtime client (currently Fortemi); native provider/profile config
+  writers refuse them and require `ENV_NAME`. See [source behavior and limits](sensitive-values.md#mcp-registry-values).
+  The AIWG runtime client sends an `Authorization` reference as a Bearer token.
 - `--description <text>` - Human-readable description
 
 **Example:**
@@ -2057,9 +2064,11 @@ Note: does not remove the server from already-injected provider configs. Re-run 
 
 #### mcp update
 
-Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#mcp-registry-values).
 
-Update a registered server's properties.
+Update a registered server's properties. Accepts the same literal and per-value
+reference flags as `mcp add`, including `--header-env Authorization=stdin:STORE_NAME`.
+Existing literal registry values are preserved; there is no automatic migration.
 
 ```bash
 aiwg mcp update <name> [--url <url>] [--type <type>] [--command <cmd>] [--description <text>]
@@ -2079,7 +2088,7 @@ Shows server name, type, URL or command, description, and which providers it has
 
 #### mcp inject
 
-Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#mcp-registry-values).
 
 Inject registered servers into a provider's config file.
 

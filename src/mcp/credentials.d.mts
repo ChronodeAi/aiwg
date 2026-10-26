@@ -21,6 +21,10 @@ export function isCredentialReferenceValue(value: unknown): boolean;
 export function credentialLikeArgs(args?: string[], options?: { includeReferences?: boolean }): string[];
 export function redactCredentialArgs(args?: string[]): string[] | undefined;
 export function validateEnvReferenceName(name: string): void;
+export function credentialReferenceInput(reference: string, flag?: string): { env?: string; file?: string; store?: string };
+export function validateCredentialReferences(server: Pick<CredentialBearingServer, 'headerEnv' | 'envFrom'>): void;
+export function assertEnvironmentCredentialReferences(server: CredentialBearingServer, provider: string): void;
+export function hasSecretLookingLiterals(server: CredentialBearingServer): boolean;
 export function renderCredentialMaps(
   server: CredentialBearingServer,
   provider: string,

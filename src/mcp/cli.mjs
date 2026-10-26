@@ -29,7 +29,7 @@ import {
   prepareClaudePermissions,
   resolveToolFilters,
 } from './tool-filters.mjs';
-import { assertCredentialPolicy, CREDENTIAL_POLICIES, installPolicyCheckedServer, redactCredentialArgs, redactCredentialText, redactCredentialRecord, resolveCredentialPolicy } from './credentials.mjs';
+import { assertCredentialPolicy, CREDENTIAL_POLICIES, credentialReferenceInput, validateCredentialReferences, hasSecretLookingLiterals, installPolicyCheckedServer, redactCredentialArgs, redactCredentialText, redactCredentialRecord, resolveCredentialPolicy } from './credentials.mjs';
 import { getMcpInjectionDefinition } from '../providers/provider-definitions.mjs';
 import { manageOmpMcp } from './omp-config.mjs';
 import { claudeDesktopConfigPath, resolveClaudeInstallTarget, legacyClaudeMigration } from './claude-install.mjs';
@@ -176,13 +176,15 @@ Server Options (for add/update):
   --url <url>          Server URL (for http/sse types)
   --type <type>        Server type: http (default), stdio, sse
   --command <cmd>      Command to run (for stdio type)
-  --args <a1,a2,...>   Command arguments (comma-separated, for stdio)
+  --args <a1,a2,...>   Literal command arguments (visible on argv; prefer env/header references)
   --env <K=V,...>      Environment variables (comma-separated K=V pairs)
   --headers <K=V,...>  HTTP headers (comma-separated K=V pairs)
-  --header-env <K=ENV,...>
-                       Resolve HTTP header values from environment variables
-  --env-from <K=ENV,...>
-                       Resolve stdio server variables from environment variables
+  --header-env <K=SOURCE,...>
+                       HTTP header references: ENV_NAME, file:ABSOLUTE_PATH, store:NAME
+  --env-from <K=SOURCE,...>
+                       Stdio variable references (same sources; repeatable)
+                       File/store require the AIWG runtime client; native configs use ENV_NAME
+                       stdin:STORE_NAME / interactive:STORE_NAME save one value to the OS store
   --description <text> Optional description
 
 Inject Options:
@@ -701,6 +703,83 @@ function parseKVPairs(str) {
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function parseHeaderPairs(str) {
+  if (!str) return undefined;
+  const entries = str.split(',').flatMap(pair => {
+    const delimiter = pair.search(/[=:]/);
+    return delimiter < 0 ? [] : [[pair.slice(0, delimiter).trim(), pair.slice(delimiter + 1).trim()]];
+  });
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+/** Validate every occurrence, retaining the existing comma-separated spelling. */
+function parseCredentialReferences(args, flag) {
+  let result;
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index];
+    if (token === '--') break;
+    if (token !== flag && !token.startsWith(`${flag}=`)) continue;
+    const value = token === flag ? args[++index] : token.slice(flag.length + 1);
+    if (!value || value.startsWith('--')) throw new Error(`${flag} requires KEY=ENV_NAME, KEY=file:ABSOLUTE_PATH, or KEY=store:NAME.`);
+    for (const pair of value.split(',')) {
+      const equals = pair.indexOf('=');
+      const key = pair.slice(0, equals).trim();
+      if (equals < 1 || !key) throw new Error(`${flag} requires KEY=ENV_NAME, KEY=file:ABSOLUTE_PATH, or KEY=store:NAME.`);
+      const reference = pair.slice(equals + 1).trim();
+      credentialReferenceInput(reference.replace(/^(?:stdin|interactive):/, 'store:'), flag);
+      result = { ...result, [key]: reference };
+    }
+  }
+  return result;
+}
+
+/** Transient input is saved by the existing raw-value store; registry receives only its name. */
+export async function persistCredentialInputs(server, dependencies) {
+  const inputs = [];
+  for (const field of ['envFrom', 'headerEnv']) {
+    for (const [key, reference] of Object.entries(server[field] || {})) {
+      const match = /^(stdin|interactive):(.+)$/.exec(reference);
+      if (match) {
+        credentialReferenceInput(`store:${match[2]}`, field === 'envFrom' ? '--env-from' : '--header-env');
+        inputs.push({ field, key, source: match[1], name: match[2] });
+      }
+    }
+  }
+  if (inputs.filter(input => input.source === 'stdin').length > 1) {
+    throw new Error('Only one --env-from/--header-env value may use stdin:STORE_NAME per invocation; use file:PATH or store:NAME for additional values.');
+  }
+  const persistent = Object.fromEntries(['envFrom', 'headerEnv'].map(field => [field,
+    Object.fromEntries(Object.entries(server[field] || {}).map(([key, reference]) => [key, reference.replace(/^(?:stdin|interactive):/, 'store:')]))]));
+  validateCredentialReferences(persistent);
+  if (!inputs.length) return;
+  const { resolveSensitiveInput, namedSensitiveStore } = dependencies
+    ?? await import(pathToFileURL(path.join(findOwnPackageRoot(), 'dist', 'src', 'auth', 'sensitive-input.js')).href);
+  // Read/validate all requested inputs before changing the store.
+  const pending = [];
+  for (const input of inputs) {
+    try {
+      const value = await resolveSensitiveInput({ prefix: 'value', [input.source]: true });
+      pending.push({ ...input, value });
+    } catch (error) {
+      const flag = input.field === 'envFrom' ? '--env-from' : '--header-env';
+      const message = error instanceof Error ? error.message : 'MCP credential input failed';
+      throw new Error(message.replace(/--value-(interactive|stdin|file|store|env)(?: <(?:path|name)>)?/g, (_, source) =>
+        `${flag} KEY=${['interactive', 'stdin'].includes(source) ? `${source}:STORE_NAME` : source === 'env' ? 'ENV_NAME' : source === 'file' ? 'file:ABSOLUTE_PATH' : 'store:NAME'}`));
+    }
+  }
+  for (const { field, key, name, value } of pending) {
+    try { await namedSensitiveStore(name).saveSecret(value); }
+    catch { throw new Error('MCP credential input could not be saved to the native store; use --env-from/--header-env with file:PATH or ENV_NAME instead.'); }
+    server[field][key] = `store:${name}`;
+  }
+}
+
+function warnLiteralCredentials(server) {
+  if (hasSecretLookingLiterals(server)) {
+    console.error('Warning: secret-bearing --env/--headers literals are deprecated; argv and saved config expose their values. Use --env-from/--header-env references. See docs/cli/sensitive-values.md.');
+  }
+}
+
 /**
  * Handle `aiwg mcp add <name> [opts]`
  */
@@ -718,8 +797,8 @@ async function handleAdd(args) {
   const argsStr = parseFlag(args, '--args');
   const envStr = parseFlag(args, '--env');
   const headersStr = parseFlag(args, '--headers');
-  const headerEnvStr = parseFlag(args, '--header-env');
-  const envFromStr = parseFlag(args, '--env-from');
+  const headerEnv = parseCredentialReferences(args, '--header-env');
+  const envFrom = parseCredentialReferences(args, '--env-from');
   const description = parseFlag(args, '--description');
 
   if (type === 'stdio' && !command) {
@@ -732,24 +811,28 @@ async function handleAdd(args) {
   }
 
   const registry = new McpServerRegistry();
-  await registry.add({
+  const definition = {
     name,
     type,
     url,
     command,
     args: argsStr ? argsStr.split(',') : undefined,
     env: parseKVPairs(envStr),
-    headers: parseKVPairs(headersStr),
-    headerEnv: parseKVPairs(headerEnvStr),
-    envFrom: parseKVPairs(envFromStr),
+    headers: parseHeaderPairs(headersStr),
+    headerEnv,
+    envFrom,
     description,
-  });
+  };
+  warnLiteralCredentials(definition);
+  if ([...Object.values(definition.envFrom || {}), ...Object.values(definition.headerEnv || {})].some(ref => /^(?:stdin|interactive):/.test(ref)) && await registry.get(name)) throw new Error(`MCP server "${name}" already exists`);
+  await persistCredentialInputs(definition);
+  await registry.add(definition);
 
   console.log(`Added MCP server: ${name}`);
   if (url) console.log(`  URL: ${redactUrlUserinfo(url)}`);
   if (command) console.log(`  Command: ${redactCredentialText(command)}`);
   console.log(`  Type: ${type}`);
-  for (const [key, values] of [['env', parseKVPairs(envStr)], ['headers', parseKVPairs(headersStr)]]) {
+  for (const [key, values] of [['env', definition.env], ['headers', definition.headers]]) {
     if (values) console.log(`  ${key}: ${Object.keys(values).join(', ')}`);
   }
   console.log(`\nUse "aiwg mcp inject --provider <name>" to inject into a provider config.`);
@@ -790,8 +873,8 @@ async function handleUpdate(args) {
   const argsStr = parseFlag(args, '--args');
   const envStr = parseFlag(args, '--env');
   const headersStr = parseFlag(args, '--headers');
-  const headerEnvStr = parseFlag(args, '--header-env');
-  const envFromStr = parseFlag(args, '--env-from');
+  const headerEnv = parseCredentialReferences(args, '--header-env');
+  const envFrom = parseCredentialReferences(args, '--env-from');
   const description = parseFlag(args, '--description');
 
   if (url !== undefined) updates.url = url;
@@ -799,9 +882,9 @@ async function handleUpdate(args) {
   if (command !== undefined) updates.command = command;
   if (argsStr !== undefined) updates.args = argsStr.split(',');
   if (envStr !== undefined) updates.env = parseKVPairs(envStr);
-  if (headersStr !== undefined) updates.headers = parseKVPairs(headersStr);
-  if (headerEnvStr !== undefined) updates.headerEnv = parseKVPairs(headerEnvStr);
-  if (envFromStr !== undefined) updates.envFrom = parseKVPairs(envFromStr);
+  if (headersStr !== undefined) updates.headers = parseHeaderPairs(headersStr);
+  if (headerEnv !== undefined) updates.headerEnv = headerEnv;
+  if (envFrom !== undefined) updates.envFrom = envFrom;
   if (description !== undefined) updates.description = description;
 
   if (Object.keys(updates).length === 0) {
@@ -810,6 +893,9 @@ async function handleUpdate(args) {
   }
 
   const registry = new McpServerRegistry();
+  warnLiteralCredentials(updates);
+  if ([...Object.values(updates.envFrom || {}), ...Object.values(updates.headerEnv || {})].some(ref => /^(?:stdin|interactive):/.test(ref)) && !(await registry.get(name))) throw new Error(`MCP server "${name}" not found`);
+  await persistCredentialInputs(updates);
   await registry.update(name, updates);
   console.log(`Updated MCP server: ${name}`);
   for (const [key, value] of Object.entries(updates)) {

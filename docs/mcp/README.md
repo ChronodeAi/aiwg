@@ -345,6 +345,19 @@ set both `HOME` and `CODEX_HOME` to the isolated runtime home.
 
 ## Credentials in Injected Servers
 
+See [Supplying sensitive values](../cli/sensitive-values.md#mcp-registry-values)
+for per-value MCP registration sources, private-file checks and argv exposure.
+`mcp add`/`mcp update` extend `--env-from`/`--header-env` with `file:ABSOLUTE_PATH`
+and `store:NAME`; `stdin:STORE_NAME` and `interactive:STORE_NAME` save through the
+existing native store and persist only `store:STORE_NAME`. Registration never
+prompts by default and accepts at most one stdin value. File/store references
+resolve in AIWG's runtime client (currently Fortemi), while native provider/profile
+config writers require environment names and refuse file/store locators.
+Secret-looking `--env`/`--headers` literals warn once without printing values;
+legacy registry entries keep loading unchanged. `--args` stays literal and is
+visible in process argv and saved config; use env/header references for secrets.
+
+
 A registry entry can carry a credential as a literal value (`--env`, `--headers`) or as a reference to an
 environment variable (`--header-env HEADER=VAR`, `--env-from NAME=VAR`). A reference writes only the
 variable name; the harness reads the value when it starts the server. Each harness spells a reference

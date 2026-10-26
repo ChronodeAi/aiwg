@@ -24,7 +24,7 @@ Local-executor input never prompts unless `--token-interactive` is selected. Wit
 
 Marketplace signing accepts multiline PEM (finish hidden terminal entry with an empty line); other values remain one line. Agentcard verification without a source remains unauthenticated. Git package fetches without a source retain their env/file lookup order and SSH-agent fallback. Live issue sync retains its provider environment lookups after terminal/source selection.
 
-An explicit source bypasses the terminal question. The shared resolver orders explicitly requested terminal entry, stdin, file, store, then environment. All adopted commands apply this precedence when several sources are selected. With no explicit source, a terminal selects entry, except for the optional and runtime behaviors above. A selected but missing, empty, invalid, or inaccessible source fails; it does not silently fall through to a less preferred source. Without a terminal and without an input source, the command errors and names its source flags. Piped data requires the stdin flag, so a headless command never guesses whether stdin is a credential or other input.
+An explicit source bypasses the terminal question. The shared resolver orders explicitly requested terminal entry, stdin, file, store, then environment. All adopted commands apply this precedence when several sources are selected. With no explicit source, a terminal selects entry, except for the optional and runtime behaviors above. MCP registration uses the explicit per-value locators described below and never prompts by default. A selected but missing, empty, invalid, or inaccessible source fails; it does not silently fall through to a less preferred source. Without a terminal and without an input source, the command errors and names its source flags. Piped data requires the stdin flag, so a headless command never guesses whether stdin is a credential or other input.
 
 For example, pipe a manager's output directly into either adopted command:
 
@@ -50,13 +50,69 @@ aiwg auth secret delete openai-production
 
 Do not type a value into an `export` statement or a command argument: shell history may retain it. Never enable shell tracing around credential-producing commands.
 
+## MCP registry values
+
+`aiwg mcp add` and `aiwg mcp update` accept per-value sources in the existing
+`--env-from KEY=SOURCE` and `--header-env HEADER=SOURCE` flags. Repeat either
+flag for independent values; the existing comma-separated form also works.
+A repeated target uses the last mapping. Paths containing commas cannot use this
+syntax. These flags save references, never resolved values, in the MCP registry.
+
+| Source | Registration and runtime behavior |
+| --- | --- |
+| `ENV_NAME` | Existing behavior: persist the shell variable name. A native harness resolves its own supported syntax when connecting. |
+| `file:/absolute/private/path` | Persist the absolute file path; AIWG's runtime client reads it with the shared private-file checks at connection time. The file must remain available. |
+| `store:NAME` | Persist the existing named OS-store entry; AIWG's runtime client reads it at connection time using the shared resolver. |
+| `stdin:STORE_NAME` | Explicitly read one value from piped stdin and save it to the named OS-store entry, replacing that entry if present. Persist only `store:STORE_NAME`. At most one value per invocation may use stdin. |
+| `interactive:STORE_NAME` | Explicitly request hidden terminal entry, save it to the named OS-store entry, and persist only `store:STORE_NAME`. Headless use fails and names the source options. |
+
+```bash
+# No secret bytes on argv or in the registry
+op read 'op://Engineering/Service/token' | aiwg mcp add service \
+  --url https://service.example/mcp --header-env Authorization=stdin:service-auth
+aiwg mcp update service --header-env Authorization=store:service-auth
+aiwg mcp add local-service --type stdio --command service-mcp \
+  --env-from API_KEY=file:/home/operator/.config/service/private-key
+aiwg mcp update service --header-env Authorization=interactive:service-auth
+```
+
+File/store references are supported by AIWG's registry-backed runtime client
+(currently the Fortemi storage adapter, for stdio, HTTP and SSE). They are
+**refused** by native provider config writers, including profile/session config
+writers: those clients cannot call AIWG's resolver. For `mcp inject`, `mcp install`
+and provider/profile sessions, keep using `--env-from KEY=ENV_NAME` or
+`--header-env HEADER=ENV_NAME`. AIWG never substitutes file/store values into
+provider config files. With `NODE_DEBUG=child_process` enabled, AIWG refuses
+stdio file/store credentials before spawning the server to prevent Node from
+printing its environment. The receiving MCP server can access its assigned
+values; its own handling of them remains part of the trust boundary.
+
+Registration never reads durable file/store/environment sources, prompts, or
+consumes stdin unless `stdin:` or `interactive:` is selected. Missing or invalid
+selected input fails without falling back. OS-store saves and registry writes
+are separate operations: if a later save or registry write fails, an entry
+already saved to the OS store remains there, as with `auth secret set`.
+
+Compatibility `--env KEY=VALUE` and `--headers 'Name: value'` (also `Name=value`)
+remain literal. Secret-looking names/values produce one stderr deprecation
+warning per add/update invocation, without echoing values. Ordinary values
+remain quiet. Existing literal registry entries load unchanged, and AIWG does
+not migrate or rewrite them during reads.
+
+`--args` remains literal: argument values are visible in process argv and are
+stored in the registry/provider config. Supply secrets through the env/header
+reference forms instead. Reference support does not protect a secret placed in
+`--args`, imported literal config, or a receiving server's own output.
+
 ## Child-process boundaries
 
 `NODE_DEBUG=child_process` can print spawn arguments and the complete child environment. A secret-free argv is insufficient if a helper inherits the shell environment. Adopted boundaries use an explicit allowed-variable list: native-store helpers, OAuth browser launch, Codex profile login, MCP nested AIWG calls, Muse version/Grok inspection probes, package and provenance Git probes, and the update notifier. Generic script-runner, refresh, Ralph/provider session children, and daemon workers still need separate recipient-specific review. AIWG deploy and CLI subprocesses retain their full environment. The MCP login key reaches `codex login --with-api-key` through stdin. Its output is bounded and redacted before AIWG displays it. Jev verification uses an in-process HTTP request. Private-file contents and resolved store values never belong in errors or status output.
 
 A provider or authenticated service may be the intended credential recipient. Its authentication channel is part of that command's contract; the short helper environment must not be confused with permission to forward every shell variable. The inventory's deferred rows do not yet promise the adopted commands' complete source or child-debug protections.
 
-## Sensitive-input inventory: #3079 slices 1–3b
+<a id="sensitive-input-inventory-3079-slice-1"></a>
+
+## Sensitive-input inventory: #3079 slices 1–3
 
 The “existing input” column records the implementation before this slice; the last column records adoption. A row covers all commands sharing the named owner, including aliases. Public keys, signing-key identifiers, credential reference names, and provider-presence checks are not secret values.
 
@@ -69,7 +125,7 @@ The “existing input” column records the implementation before this slice; th
 | `aiwg auth secret set <name>`; `--value-interactive`, `--value-stdin`, `--value-file`, `--value-store`, `--value-env`; `auth secret delete <name>` | Named raw values saved in the existing native store, separate from the OAuth entry. | `src/cli/handlers/auth.ts`, `src/auth/sensitive-input.ts`, `src/auth/credential-store.ts` | Adopted: same five sources and headless refusal; save/delete never prints the value. |
 | `aiwg discover`, `show`, `resource-versions`, `use`, and artifact web-resource resolution | Protected release bearer: `AIWG_RESOURCE_TOKEN_FILE`, then `AIWG_RESOURCE_TOKEN`, then the auth store access token. File checks regular/non-symlink and private mode. | `src/auth/config.ts`, `src/auth/resource-credentials.ts`, `src/artifacts/cli.ts` | Deferred: implicit/optional release lookup must preserve public/offline behavior while adding source arguments. |
 | `aiwg decision ask` and enabled live decision consumers | Jev key from `JEV_API_KEY` / `AIWG_DECISION_JEV_API_KEY`, otherwise `~/.config/aiwg/credentials/jev.json`; private file and directory modes checked. | `src/decision/jev-credentials.ts`, `src/decision/ask.ts` | Adopted: runtime keeps `JEV_API_KEY`, then `AIWG_DECISION_JEV_API_KEY`, then the existing `jev.json` record and directory checks. Shared descriptor validation rejects exposed, unowned, nonregular or linked files; no runtime prompt or new record format. Setup remains the source-entry owner. |
-| `aiwg mcp add`, `mcp update`; `--env`, `--headers`, `--args`, registry import/config; `--header-env`, `--env-from` | Literal environment/header/argument values can contain secrets; named environment references avoid literals in registry. Credential policy restricts persisted/rendered values. `mcp inject`, `mcp install`, `session --mcp` and profile launch consume that registry. | `src/mcp/cli.mjs`, `src/mcp/credentials.mjs`, `src/mcp/registry.mjs` | Deferred: multi-value registry migration; legacy literal flags expose values on argv. Prefer references and the existing credential policy. |
+| `aiwg mcp add`, `mcp update`; `--env`, `--headers`, `--args`, registry import/config; `--header-env`, `--env-from` | Literal environment/header/argument values can contain secrets; named environment references avoid literals in registry. Credential policy restricts persisted/rendered values. `mcp inject`, `mcp install`, `session --mcp` and profile launch consume that registry. | `src/mcp/cli.mjs`, `src/mcp/credentials.mjs`, `src/mcp/registry.ts`, `src/mcp/registry.mjs`, `src/storage/backends/fortemi.ts` | Adopted: repeatable `--env-from`/`--header-env` accept environment names, private-file and OS-store references; explicit `stdin:STORE_NAME`/`interactive:STORE_NAME` save through the existing OS store. AIWG runtime resolution uses the shared resolver; native provider/profile configs require environment references and refuse file/store locators. Secret-looking literal env/header inputs warn once. Remaining: `--args`, imported/configured literals and existing registry literals stay literal, without migration; their argv/at-rest exposure remains. |
 | `aiwg install <github:…\|gitea:…>` and `marketplace` Git adapter fetches | `GITHUB_TOKEN`, then `~/.aiwg/credentials/github`; `GITEA_TOKEN`, then `~/.config/gitea/token` / `~/.aiwg/credentials/gitea`; otherwise SSH agent. Token is embedded in HTTPS clone URL. | `src/packages/adapters/github.ts`, `src/packages/adapters/gitea.ts`, `src/packages/adapters/git.ts` | Adopted: standard `--token-*` sources precede the unchanged env/file lookup order and SSH-agent fallback. Private files use shared validation. Tokens stay outside serializable sources and clone URLs; a temporary mode-0600, origin-scoped Git config in a mode-0700 directory is included by path only and removed after fetch. Debug logs contain no token. Windows token fetches fail closed pending temporary-file ACL validation; use SSH there. |
 | `aiwg marketplace publish`; `--key <pem>` | Ed25519 private PEM read directly from the named file. `--public-key`, `--key-id`, and setup `--signing-key` are public material/identifiers. | `src/cli/handlers/marketplace.ts`, `src/marketplace/exchange.ts` | Adopted: standard `--key-*` sources support multiline PEM; `--key <path>` remains a private-file alias. Shared checks reject nonregular, unowned, exposed or linked files. Signing material stays in-process; Git probes receive an allowed environment. |
 | `aiwg effect` signed writes, `effect keys init\|rotate`; configured host key provider | Signing keys generated internally and loaded from native secret store, or explicitly selected private file. Test-only environment fixture is restricted to test context. | `src/cli/handlers/effect.ts`, `src/effects/` | Existing key lifecycle retained; native helper child environment hardened. No externally supplied raw-key option to migrate. |
@@ -77,7 +133,7 @@ The “existing input” column records the implementation before this slice; th
 | `aiwg issue import --live`, `issue export --live` | Tracker bearer from `AIWG_GITEA_TOKEN` / `GITEA_TOKEN`, or `AIWG_GITHUB_TOKEN` / `GITHUB_TOKEN`; passed to in-process HTTP client. | `src/issues/live.ts`, `src/issues/cli.ts` | Adopted: explicit `--token-*` sources (including `--token-interactive`) precede the established provider-specific environment lookups. With no source and no provider variable, requests stay unauthenticated, as before, for public repositories. The in-process HTTP client redacts reflected values and errors. |
 | `aiwg local-executor serve` | Optional `AIWG_EXECUTOR_TOKEN`; otherwise registration obtains and persists an executor bearer token for restarts. | `src/cli/handlers/local-executor.ts`, `tools/ralph-external/executor-shim.mjs` | Adopted: optional `--token-interactive`, `--token-stdin`, `--token-file`, `--token-store`, `--token-env` precede the legacy `AIWG_EXECUTOR_TOKEN` and restart cache. The same cache location persists registration-issued tokens in a 0600 file within a 0700 directory; restart reads use shared private-file checks. Tokens stay out of events and registration errors; no implicit prompt. Windows cache persistence fails closed pending native ACL validation. Host agent execution keeps its existing isolation contract. |
 | Daemon startup, web UI, inbound webhooks and messaging adapters | Web token from config or `AIWG_WEB_TOKEN`; webhook `secret_env` names a shell variable (default `AIWG_WEBHOOK_SECRET`); Telegram/Discord/Slack tokens and Slack webhook URL from adapter config or `AIWG_TELEGRAM_TOKEN`, `AIWG_DISCORD_TOKEN`, `AIWG_SLACK_BOT_TOKEN`, `AIWG_SLACK_WEBHOOK_URL`. | `tools/daemon/daemon-main.mjs`, `tools/daemon/config.mjs`, `tools/messaging/adapters/` | Deferred: daemon config has multiple independent secret recipients; migrate references through its existing loader. `daemon-init` scaffolds references only. |
-| `aiwg storage test\|migrate\|import-corpus` and every operation using configured remote storage | Logseq `LOGSEQ_API_TOKEN`; Fortemi MCP registry header/env references or legacy literal headers; PostgreSQL configured `connectionStringEnv` (default `AIWG_POSTGRES_URL`); PostgREST configured `authorizationEnv`. | `src/storage/backends/logseq.ts`, `fortemi.ts`, `postgres.ts`, `postgrest.ts` | Deferred: backend-specific multi-credential/configuration lookup must adopt resolver without changing storage routing. |
+| `aiwg storage test\|migrate\|import-corpus` and every operation using configured remote storage | Logseq `LOGSEQ_API_TOKEN`; Fortemi MCP registry header/env references or legacy literal headers; PostgreSQL configured `connectionStringEnv` (default `AIWG_POSTGRES_URL`); PostgREST configured `authorizationEnv`. | `src/storage/backends/logseq.ts`, `fortemi.ts`, `postgres.ts`, `postgrest.ts` | Deferred: Fortemi file/store MCP references use shared resolution; other backend-specific credential/configuration lookup still needs adoption without changing storage routing. |
 | `aiwg uhp harnesses\|models\|run` and authenticated UHP API consumers; `--profile` | Named profile's `credential.source: env` and `credential.name` resolved at request time. Inline profile credentials rejected. Discovery is unauthenticated. | `src/uhp/config.ts`, `src/uhp/client.ts` | Deferred: extend the existing credential locator owner. |
 | `aiwg agentcard verify`; `--bearer <token>` | Optional bearer supplied literally on argv, forwarded as an HTTP bearer for the card endpoint. | `src/cli/handlers/agentcard.ts`, `src/a2a/agent-card.ts` | Adopted: standard `--bearer-*` sources; no source keeps unauthenticated access. Compatibility `--bearer` warns that argv exposes the value. HTTP errors and reflected output redact the bearer. |
 | `aiwg diagnose`; `--include-secrets`, `--stdout` | Reads environment and local configuration/log files for a support bundle. Default sanitizes sensitive environment/config fields; `--include-secrets` intentionally disables sanitization and `--stdout` prints the bundle. | `src/cli/handlers/diagnose.ts` | Deferred diagnostic exposure surface: a resolver does not protect secret bytes already present in collected files/environment; preserve explicit opt-in and review output before sharing. |
