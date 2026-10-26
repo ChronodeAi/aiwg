@@ -1,8 +1,13 @@
 {
   "schema": "aiwg.grok-build.qualification-contract.v1",
   "releasedVersion": "1.0.38",
-  "publicSourceCommit": "4247f661689354b831191f11eeeac8424993fe3d",
-  "upstreamSourceRevision": "9bb727ccdff0a793ee73bcde4e2e09cbef6b5387",
+  "publicSourceCommit": "2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8",
+  "upstreamSourceRevision": "559751fdcec02d413e4c57c8832ab275e4f44980",
+  "reviewedAt": "2026-10-26T08:58:13Z",
+  "notes": [
+    "Public source contract review for #3609; releasedVersion remains 1.0.38. This is not binary build provenance or new live qualification evidence.",
+    "CLI flags and InspectReport fields remain compatible. Whole-turn usage frames and optional MCP bearer_token_file are additive. External auth with a custom models endpoint now owns the model catalog; automatic discovery for that configuration is deferred rather than reporting stale config aliases."
+  ],
   "surfaces": {
     "instructions": { "status": "native" },
     "skills": { "status": "native" },

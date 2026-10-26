@@ -96,17 +96,14 @@ if it exits zero or is followed by a clean-looking `end` — a later success
 never repairs an earlier failure. This grammar is read from the compiled
 binary's own bundled strings and is **never live-observed**.
 
-**This grammar is distinct from `--output-format json` and from the
-pre-existing legacy transport.** The bundled docs confirm `json` emits ONE
-object (`text`/`stopReason`/`sessionId`/`requestId`/`usage`/...), not NDJSON
-lines. Neither `json` nor `streaming-json` matches the `type: "message"` /
-`type: "result"` shape the separate, pre-existing
-`src/providers/grok-build-headless.ts` transport assumes — that legacy
-path, its tests, `tools/providers/grok-build-native-smoke.mjs`, and the
-generic `grok-build` branch in `tools/ralph-external/lib/worker-health.mjs`
-are untouched by this profile and keep using their own shape against their
-own fixtures under `test/fixtures/providers/grok-build/health/`. This
-direct-shell profile's ACP fixtures live separately under
+**This grammar is distinct from `--output-format json`.** The bundled docs
+confirm `json` emits ONE object
+(`text`/`stopReason`/`sessionId`/`requestId`/`usage`/...), not NDJSON lines.
+The current bounded `src/providers/grok-build-headless.ts` transport also
+parses these two formats separately and rejects legacy `type: "message"` /
+`type: "result"` frames. Its fixtures live under
+`test/fixtures/providers/grok-build/health/`. This direct-shell profile's
+ACP fixtures live separately under
 `test/fixtures/providers/grok-build/direct-health/`.
 
 **No flag disables a user/project-configured MCP server.** Grok has no
@@ -116,6 +113,15 @@ built-in external-network tool (`web_search`/`web_fetch`) so the AIWG
 `worker-invoke` bridge remains the one external route this profile
 authorizes. Whether a project's own `mcp.json` servers load regardless of
 this profile's flags is unqualified, not invented away.
+
+The 2026-10-26 source review of public commit
+`2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8` found one additive streaming
+change: whole-turn totals also emit `{"type":"usage","usage":{...}}`,
+without `messageId`, `stopReason`, or `signature`. These frames are activity,
+not completion proof. The existing parser preserves the final text through
+consecutive response/turn usage frames and still requires a successful `end`.
+This source review does not requalify the version-bound 1.0.50 direct profile
+or establish a live run.
 
 ### Manual smoke run
 

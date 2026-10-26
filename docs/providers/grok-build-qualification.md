@@ -2,11 +2,21 @@
 
 The contract is [grok-build-qualification.json](grok-build-qualification.json),
 pinned to released CLI **1.0.38**, public repository commit
-`4247f661689354b831191f11eeeac8424993fe3d`, and that commit's internal
-`SOURCE_REV` of `9bb727ccdff0a793ee73bcde4e2e09cbef6b5387`. AIWG remains
+`2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8`, and that commit's internal
+`SOURCE_REV` of `559751fdcec02d413e4c57c8832ab275e4f44980`. AIWG remains
 experimental. These source identifiers describe the reviewed public tree;
 neither proves that the released 1.0.38 binary was built from it. Use the
 official released binary on each host.
+
+Public source contracts were reviewed on 2026-10-26 for #3609. Relied-on CLI
+spellings and InspectReport fields remain compatible. The source adds whole-turn
+streaming `usage` frames and an optional MCP `bearer_token_file`. External auth
+with a custom models endpoint now ignores local model definitions and ordinary
+allowlists; AIWG withholds automatic discovery for that mode until an effective
+runtime catalog is available. See the [provider profile](../agents/providers/grok-build.md),
+[direct-worker profile](grok-build-direct.md), and [model discovery](grok-build-models.md).
+This review advances source identifiers only. Existing live receipts retain
+their original pins and do not qualify the newly reviewed tree.
 
 Run each provider-under-workflow (PUW) in a disposable project and home, with
 a second project that already contains operator-owned `.grok/config.toml`,

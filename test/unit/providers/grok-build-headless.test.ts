@@ -8,6 +8,19 @@ function fake(script: string) {
 }
 
 describe('Grok Build bounded headless transport', () => {
+  it.each([true, false])('accepts whole-turn usage without treating it as terminal (end present: %s)', async hasEnd => {
+    const frames = [
+      { type: 'text', data: 'ok' },
+      { type: 'usage', messageId: 'response-1', stopReason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } },
+      { type: 'usage', usage: { input_tokens: 2, output_tokens: 2 } },
+      ...(hasEnd ? [{ type: 'end', stopReason: 'end_turn' }] : []),
+    ];
+    const wire = frames.map(frame => JSON.stringify(frame)).join('\n') + '\n';
+    const run = runGrokHeadless({ ...fake(`process.stdout.write(${JSON.stringify(wire)})`), prompt: 'synthetic replay', env: {} });
+    if (hasEnd) expect((await run).events).toEqual(frames);
+    else await expect(run).rejects.toThrow(/without a terminal event/);
+  });
+
   it('replays every event and callback from the live 1.0.38 capture', async () => {
     const wire = readFileSync(new URL('../../fixtures/providers/grok-build/health/live-1.0.38-stream.ndjson', import.meta.url), 'utf8');
     const captured = wire.trim().split('\n').map(line => JSON.parse(line));

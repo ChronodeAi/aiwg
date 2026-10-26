@@ -852,9 +852,9 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
       source: 'https://github.com/xai-org/grok-build',
       version: '1.0.38',
       // Reviewed public tree (docs + inspect schema), not an all-zero placeholder.
-      revision: '4247f661689354b831191f11eeeac8424993fe3d',
+      revision: '2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8',
       runtime: 'Grok Build CLI',
-      lastVerified: '2026-09-20',
+      lastVerified: '2026-10-26',
     },
     surfaces: {
       primary: 'grok-build',
