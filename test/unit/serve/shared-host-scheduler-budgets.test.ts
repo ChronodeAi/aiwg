@@ -273,3 +273,81 @@ describe('T-OG-06 S3 synthetic multi-CLI quota recovery', () => {
     expect(reopened.snapshot().records.a!.accounting!.stopEvidence!.observerGeneration).toBe(1);
   });
 });
+
+describe('T-OG-05/06/08 diagnostic exclusions under sustained load (#2926)', () => {
+  function loadPolicy() {
+    const value = policy(); value.maxConcurrent = 1; value.starvationThresholdMs = 2000;
+    value.managed!.members['review/local'] = { cli: 'local' };
+    return value;
+  }
+  function peer(id: string, current: number) {
+    return request(id, { priority: 100, orchestratorId: id, submittedAt: new Date(current).toISOString(),
+      managed: { ...request(id).managed!, group: 'review', member: 'local', cli: 'local', quotaScope: 'other' },
+      allowance: { ...request(id).allowance!, runId: id, taskId: id } });
+  }
+
+  it('keeps exhausted budgets distinct from policy denial and service starvation', () => {
+    const { scheduler, advance } = setup(loadPolicy());
+    scheduler.submit(request('spent', { allowance: { ...request('spent').allowance!, reservation: { tokens: 80, costUsd: 8 } } }));
+    scheduler.settle('spent', 1, health(), usage());
+    const low = request('low', { allowance: { ...request('low').allowance!, taskId: 'new-task', reservation: { tokens: 30, costUsd: 1 } } });
+    expect(scheduler.submit(low).state).toBe('denied');
+    const excluded = next('excluded', 'spent', 'retry');
+    expect(scheduler.submit(excluded).state).toBe('denied');
+    scheduler.submit(peer('high-0', epoch));
+    for (let i = 1; i <= 3; i++) {
+      advance(1000); scheduler.submit(peer(`high-${i}`, epoch + i * 1000));
+      scheduler.settle(`high-${i - 1}`, 1, health(), usage());
+    }
+    const snapshot = scheduler.reconcileNow();
+    expect(snapshot.diagnostics!.findings).toContainEqual(expect.objectContaining({ requestId: 'low', kind: 'budget-denial',
+      blockingCause: 'cumulative tokens reservation exceeds allowance' }));
+    expect(snapshot.diagnostics!.findings).toContainEqual(expect.objectContaining({ requestId: 'excluded', kind: 'policy-exclusion',
+      blockingCause: 'previous failure does not permit automatic retry' }));
+    expect(snapshot.diagnostics!.findings.some(row => row.kind === 'service-starvation')).toBe(false);
+    expect(scheduler.submit(low).state).toBe('denied');
+    expect(scheduler.submit(excluded).state).toBe('denied');
+  });
+
+  it('separates cooldown and retry backoff from service gaps while other groups turn over', () => {
+    const { scheduler, advance } = setup(loadPolicy());
+    scheduler.submit(request('rate-limited'));
+    scheduler.settle('rate-limited', 1, health(), usage(), { class: 'rate-limit', retryable: true,
+      resetAt: new Date(epoch + 5000).toISOString() });
+    scheduler.submit(next('retry', 'rate-limited'));
+    scheduler.submit(request('low', { allowance: { ...request('low').allowance!, taskId: 'new-task' } }));
+    scheduler.submit(peer('high-0', epoch));
+    for (let i = 1; i <= 5; i++) {
+      advance(1000); scheduler.submit(peer(`high-${i}`, epoch + i * 1000));
+      scheduler.settle(`high-${i - 1}`, 1, health(), usage());
+      const findings = scheduler.snapshot().diagnostics!.findings;
+      if (i >= 2 && i < 5) {
+        expect(findings).toContainEqual(expect.objectContaining({ requestId: 'retry', kind: 'policy-exclusion', blockingCause: 'retry-backoff' }));
+        expect(findings).toContainEqual(expect.objectContaining({ requestId: 'low', kind: 'policy-exclusion', blockingCause: 'quota-cooldown' }));
+      }
+      expect(findings.some(row => row.kind === 'service-starvation')).toBe(false);
+    }
+    expect(scheduler.snapshot().diagnostics!.findings).toContainEqual(expect.objectContaining({ requestId: 'low', kind: 'capacity-wait', serviceWaitMs: 0 }));
+    for (let i = 6; i <= 7; i++) {
+      advance(1000); scheduler.submit(peer(`high-${i}`, epoch + i * 1000));
+      scheduler.settle(`high-${i - 1}`, 1, health(), usage());
+    }
+    expect(scheduler.snapshot().diagnostics!.findings).toContainEqual(expect.objectContaining({
+      kind: 'service-starvation', scope: 'group', group: 'coding', serviceWaitMs: 2000, thresholdMs: 2000 }));
+  });
+
+  it('preserves cumulative deadlines under load even when diagnostics reach threshold', () => {
+    const { scheduler, advance } = setup(loadPolicy());
+    scheduler.submit(peer('high-0', epoch));
+    scheduler.submit(request('deadline', { allowance: { ...request('deadline').allowance!, taskBudgets: { timeoutSeconds: 2 } } }));
+    for (let i = 1; i <= 3; i++) {
+      advance(1000); scheduler.submit(peer(`high-${i}`, epoch + i * 1000));
+      scheduler.settle(`high-${i - 1}`, 1, health(), usage());
+    }
+    expect(scheduler.snapshot().records.deadline).toMatchObject({ state: 'denied', reason: 'cumulative allowance deadline elapsed' });
+    expect(scheduler.snapshot().diagnostics!.findings.filter(row => row.requestId === 'deadline')
+      .every(row => row.kind === 'policy-exclusion')).toBe(true);
+    scheduler.settle('high-3', 1, health(), usage());
+    expect(scheduler.snapshot().records.deadline!.state).toBe('denied');
+  });
+});

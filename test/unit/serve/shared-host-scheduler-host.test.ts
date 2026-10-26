@@ -196,6 +196,34 @@ describe('T-OG-05 S4 trusted participating-project authority', () => {
     expect(() => bindTrustedHostAdmissionPolicy(new InMemoryAdmissionStore(), binding)).toThrow();
   });
 
+  it('projects host-wide competing service only into the affected project diagnostics', () => {
+    const s = setup();
+    s.target.transact(snapshot => {
+      snapshot.hostBinding!.policy.maxConcurrent = 1;
+      snapshot.hostBinding!.policy.starvationThresholdMs = 2000;
+    });
+    s.activate();
+    let current = epoch;
+    const a = new SharedHostScheduler(s.target, hostProjectAdmissionPolicy(s.target.read(), s.idA), () => current);
+    const b = new SharedHostScheduler(s.target, hostProjectAdmissionPolicy(s.target.read(), s.idB), () => current);
+    const peer = (id: string) => request(id, s.b, { priority: 100, submittedAt: new Date(current).toISOString() });
+    b.submit(peer('foreign-0'));
+    a.submit(request('local-wait', s.a));
+    for (let i = 1; i <= 3; i++) {
+      current += 1000; b.submit(peer(`foreign-${i}`));
+      b.settle(`foreign-${i - 1}`, 1, proof(), unknown);
+    }
+    const before = s.target.read();
+    const findings = a.snapshot().diagnostics!.findings;
+    expect(findings).toHaveLength(2);
+    expect(findings.every(row => row.projectId === s.idA && row.kind === 'service-starvation'
+      && row.thresholdMs === 2000 && row.competingAdmissions === 3)).toBe(true);
+    expect(JSON.stringify(findings)).not.toContain('foreign-');
+    expect(JSON.stringify(findings)).not.toContain(s.idB);
+    expect(b.snapshot().diagnostics!.findings).toEqual([]);
+    expect(s.target.read()).toEqual(before);
+  });
+
   it('shares upstream cooldowns without allowing a second project to shorten them', () => {
     const s = setup(); s.activate(); const a = s.scheduler(s.idA), b = s.scheduler(s.idB);
     a.submit(request('a', s.a));

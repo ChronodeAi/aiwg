@@ -673,6 +673,13 @@
               "minimum": 1,
               "default": 300
             },
+            "starvationSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400,
+              "default": 120,
+              "description": "Wait threshold for bounded group/run starvation diagnostics; does not change admission ordering."
+            },
             "leaseSeconds": {
               "type": "integer",
               "minimum": 1,

@@ -88,8 +88,9 @@ describe('T-OG-05 managed admission dimensions', () => {
   it('uses the minimum of group ceilings and admission caps', () => {
     const cfg = config();
     cfg.groups!.coding!.maxParallel = 1;
-    cfg.admission = { groupCaps: { coding: 3 } };
+    cfg.admission = { groupCaps: { coding: 3 }, starvationSeconds: 15 };
     const value = managedProjectAdmissionPolicy(temporary(), cfg, digest, 4);
+    expect(value.starvationThresholdMs).toBe(15_000);
     const { scheduler } = setup(value);
     expect(scheduler.submit(request('a')).state).toBe('admitted');
     expect(scheduler.submit(request('b')).state).toBe('queued');
@@ -260,5 +261,153 @@ describe('T-OG-05/06 managed queue and retained uncertainty', () => {
       expect(() => scheduler.submit(changed)).toThrow(/conflicts/);
     }
     expect(store.read()).toEqual(before);
+  });
+});
+
+const stopped = {
+  version: 1, state: 'completed', termination: 'confirmed', coverage: 'full', handshake: 'semantic',
+  lastObservedAt: new Date(now).toISOString(), lastActivityAt: null, lastProgressAt: null,
+  reasonCode: 'FINAL', transitionCount: 1, restartCount: 0, unavailableSignals: [], transitionRefs: [],
+  observerGeneration: 1, startupDeadlineAt: null, hardDeadlineAt: null, maxCheckGapSeconds: 1,
+  confidence: 'observed', handshakeAt: null, stalledAt: null,
+} as const;
+const unknownUsage = { quality: 'unknown', inputTokens: null, outputTokens: null, cacheTokens: null,
+  reasoningTokens: null, costUsd: null, reservedTokens: 0, reservedUsd: 0 } as const;
+
+function grouped(id: string, group: 'coding' | 'review', current: number, priority = 0): AdmissionRequest {
+  const cli = group === 'coding' ? 'first' : 'second';
+  return request(id, { orchestratorId: group, priority, submittedAt: new Date(current).toISOString(),
+    managed: { ...request(id).managed!, group, cli },
+    allowance: { runId: group, taskId: id },
+  });
+}
+function settle(scheduler: SharedHostScheduler, id: string) {
+  scheduler.settle(id, 1, { ...stopped, unavailableSignals: [], transitionRefs: [] }, unknownUsage);
+}
+
+describe('T-OG-05/06/08 sustained group/run starvation diagnostics (#2926)', () => {
+  it('reports repeated high-priority service without changing ordering, then clears on service', () => {
+    let current = now;
+    const value = policy(); value.maxConcurrent = 1; value.starvationThresholdMs = 3000;
+    const { scheduler, store } = setup(value, () => current);
+    scheduler.submit(grouped('high-0', 'review', current, 100));
+    scheduler.submit(grouped('low', 'coding', current));
+    for (let i = 1; i <= 4; i++) {
+      current += 1000;
+      scheduler.submit(grouped(`high-${i}`, 'review', current, 100));
+      settle(scheduler, `high-${i - 1}`);
+      expect(scheduler.snapshot().records[`high-${i}`]!.state).toBe('admitted');
+      expect(scheduler.snapshot().records.low!.state).toBe('queued');
+      if (i < 3) expect(scheduler.snapshot().diagnostics!.findings).toEqual([]);
+    }
+    const before = store.read();
+    const diagnostics = scheduler.snapshot().diagnostics!;
+    expect(store.read()).toEqual(before);
+    expect(diagnostics).toMatchObject({ truncated: 0, findings: [
+      { kind: 'service-starvation', scope: 'group', scopeId: 'coding', group: 'coding', runId: 'coding',
+        requestId: 'low', waitMs: 4000, thresholdMs: 3000, blockingCause: 'capacity-cap', dimension: 'global', competingAdmissions: 4 },
+      { kind: 'service-starvation', scope: 'run', scopeId: 'coding' },
+    ] });
+    settle(scheduler, 'high-4');
+    expect(scheduler.snapshot().records.low!.state).toBe('admitted');
+    expect(scheduler.snapshot().diagnostics!.findings).toEqual([]);
+    // Another queued task in the same scope starts a new service gap.
+    scheduler.submit(grouped('low-next', 'coding', current));
+    expect(scheduler.reconcileNow().diagnostics!.findings).toEqual([]);
+  });
+
+  it('distinguishes run starvation inside a group that continues to receive service', () => {
+    let current = now;
+    const value = policy(); value.maxConcurrent = 1; value.starvationThresholdMs = 2000;
+    const { scheduler } = setup(value, () => current);
+    const peer = (id: string) => grouped(id, 'coding', current, 100);
+    scheduler.submit(peer('high-0'));
+    const low = grouped('low', 'coding', current); low.orchestratorId = 'low-run'; low.allowance!.runId = 'low-run';
+    scheduler.submit(low);
+    for (let i = 1; i <= 3; i++) {
+      current += 1000; scheduler.submit(peer(`high-${i}`)); settle(scheduler, `high-${i - 1}`);
+    }
+    const findings = scheduler.snapshot().diagnostics!.findings;
+    expect(findings.find(row => row.scope === 'run')).toMatchObject({ kind: 'service-starvation', runId: 'low-run' });
+    expect(findings.find(row => row.scope === 'group')!.kind).toBe('capacity-wait');
+  });
+
+  it('keeps unequal caps authoritative and identifies an impossible lower bound', () => {
+    let current = now;
+    const value = policy(); value.starvationThresholdMs = 1000;
+    const groupKey = `project/${value.managed!.projectId}/group/coding`;
+    value.managed!.dimensionCaps[groupKey] = 1;
+    value.managed!.dimensionCaps[`project/${value.managed!.projectId}/group/review`] = 3;
+    const { scheduler } = setup(value, () => current);
+    scheduler.submit(grouped('coding-held', 'coding', current));
+    scheduler.submit(grouped('coding-wait', 'coding', current));
+    const impossible = grouped('too-large', 'coding', current); impossible.managed!.lowerBound = 2;
+    scheduler.submit(impossible);
+    scheduler.submit(grouped('review-held-one', 'review', current, 100));
+    scheduler.submit(grouped('review-held-two', 'review', current, 100));
+    scheduler.submit(grouped('high-0', 'review', current, 100));
+    for (let i = 1; i <= 3; i++) {
+      current += 1000; scheduler.submit(grouped(`high-${i}`, 'review', current, 100)); settle(scheduler, `high-${i - 1}`);
+    }
+    const snapshot = scheduler.reconcileNow();
+    expect(snapshot.records['too-large']!.state).toBe('queued');
+    expect(snapshot.records['coding-wait']!.state).toBe('queued');
+    expect(snapshot.diagnostics!.findings).toContainEqual(expect.objectContaining({ requestId: 'too-large', kind: 'policy-exclusion',
+      blockingCause: 'request-exceeds-cap', dimension: groupKey }));
+    expect(snapshot.diagnostics!.findings.some(row => row.kind === 'service-starvation')).toBe(false);
+  });
+
+  it.each(['expiry', 'cancel'] as const)('reports retained uncertain capacity after %s under continued arrivals', trigger => {
+    let current = now;
+    const value = policy(); value.maxConcurrent = 1; value.starvationThresholdMs = 1000; value.leaseTtlMs = 2000;
+    const { scheduler } = setup(value, () => current);
+    scheduler.submit(grouped('held', 'review', current));
+    scheduler.submit(grouped('low', 'coding', current));
+    if (trigger === 'cancel') scheduler.cancel('held', 1);
+    for (let i = 1; i <= 3; i++) {
+      current += 1000; scheduler.submit(grouped(`arrival-${i}`, 'review', current, 100));
+    }
+    const snapshot = scheduler.reconcileNow();
+    expect(snapshot.records.held!.state).toBe('uncertain');
+    expect(snapshot.records.low!.state).toBe('queued');
+    expect(snapshot.diagnostics!.findings.filter(row => row.requestId === 'low')).toEqual([
+      expect.objectContaining({ kind: 'safety-blocked', blockingCause: 'uncertain-lease', scope: 'group' }),
+      expect.objectContaining({ kind: 'safety-blocked', blockingCause: 'uncertain-lease', scope: 'run' }),
+    ]);
+  });
+
+  it('drops cancelled and expired queue findings without authorizing them', () => {
+    let current = now;
+    const value = policy(); value.maxConcurrent = 1; value.starvationThresholdMs = 1000;
+    const { scheduler } = setup(value, () => current);
+    scheduler.submit(grouped('held', 'review', current));
+    scheduler.submit(grouped('cancelled', 'coding', current));
+    scheduler.submit({ ...grouped('expired', 'coding', current), queueTimeoutMs: 2000 });
+    current += 1000;
+    expect(scheduler.reconcileNow().diagnostics!.findings.length).toBeGreaterThan(0);
+    scheduler.cancel('cancelled', 1); current += 1000;
+    expect(scheduler.snapshot().diagnostics!.findings).toEqual([]);
+    settle(scheduler, 'held');
+    expect(scheduler.snapshot().records.expired!.state).toBe('timed-out');
+    expect(scheduler.snapshot().records.cancelled!.state).toBe('cancelled');
+  });
+
+  it('bounds findings, deduplicates scopes and bounds long identifiers deterministically', () => {
+    let current = now;
+    const value = policy(); value.maxConcurrent = 1; value.starvationThresholdMs = 1000;
+    const { scheduler } = setup(value, () => current);
+    scheduler.submit(grouped('held', 'review', current));
+    for (let i = 0; i < 70; i++) {
+      const candidate = grouped(`wait-${i}`, 'coding', current);
+      candidate.orchestratorId = `run-${i}-${'x'.repeat(300)}`; candidate.allowance!.runId = candidate.orchestratorId;
+      scheduler.submit(candidate);
+    }
+    current += 1000;
+    const first = scheduler.reconcileNow().diagnostics!;
+    expect(first.findings).toHaveLength(64);
+    expect(first.truncated).toBe(7); // One group plus 70 runs.
+    expect(first.findings.filter(row => row.scope === 'group')).toHaveLength(1);
+    expect(first.findings.every(row => Buffer.byteLength(row.scopeId) <= 256 && Buffer.byteLength(row.runId) <= 256)).toBe(true);
+    expect(scheduler.snapshot().diagnostics).toEqual(first);
   });
 });

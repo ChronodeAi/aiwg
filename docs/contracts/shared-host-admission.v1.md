@@ -57,8 +57,26 @@ fleet workload record.
 
 The queue is ordered by effective priority, then submission time, then request
 ID. Effective priority is base priority plus one point per configured aging
-interval, so continuously arriving high-priority work cannot starve an older
-request indefinitely.
+interval. No weighted share or hard group/run service guarantee is implied.
+
+FR-OG-037 uses diagnostic mode: optional `parallelism.admission.starvationSeconds`
+(1–86400, default 120) maps to `SharedHostPolicy.starvationThresholdMs`.
+Host diagnostics use the smaller host/project threshold (default 120 seconds).
+Snapshots/reconciliation project `diagnostics.findings` (at most 64, with a
+`truncated` count), identifiers bounded to 256 UTF-8 bytes with digest suffixes,
+deduplicated by affected project/group or run and cause.
+Each finding identifies a witness request, group/run, queue wait, time since
+that scope last received service, threshold and blocking cause/dimension.
+`service-starvation` requires a threshold-long service gap and at least two
+competing admissions since the later of submission or that scope's last service.
+Ordinary capacity waits, uncertain leases (`safety-blocked`), cooldown/backoff,
+impossible slot demands and policy exclusions remain distinct from budget denial.
+Denials are reported immediately; current waits precede recent denied history.
+Findings are read-only projections: queued cancellations/expiry disappear,
+service resets the scope's service-gap clock, and findings never admit expired,
+over-cap, budget-denied or uncertain work. Host views expose only their project's
+findings; competing project identities are not projected. Direct launches keep
+their existing independent counting and have no managed starvation guarantee.
 
 Preemption is disabled unless policy enables it. Only an admitted request
 declared `preemptible` may be displaced, and only by a request with strictly
