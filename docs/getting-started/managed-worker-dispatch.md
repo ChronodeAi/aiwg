@@ -171,15 +171,19 @@ a copy whose rename may have completed before reporting an error. It checks the
 restored pair before reopening. Failed restoration, changed immutable inputs,
 interruption by process termination, or a guidance-regeneration failure leaves
 the durable block in place with a recovery diagnostic. After resolving the
-reported filesystem/guidance problem, restore the reviewed previous pair:
+reported filesystem/guidance problem, recover the reviewed pair:
 
 ```bash
 aiwg config set --project --recover --authorize 'sha256:<original-proposal-digest>'
 ```
 
-Recovery requires the original exact or scoped standing authority, restores and
-checks the retained bytes, regenerates guidance, and removes the block only after
-successful revalidation. Keep the recovery record until recovery succeeds.
+Recovery requires the original exact or scoped standing authority. Before the
+adoption revision commits, it restores and checks the retained previous bytes.
+After that durable commit marker, it preserves the adopted pair and verifies it
+against the proposal's after-state. Both paths regenerate guidance and remove the
+block only after successful revalidation. Unexpected input bytes keep dispatch
+blocked with a diagnostic; recovery never overwrites unrelated edits. Keep the
+recovery record until recovery succeeds.
 
 If apply or recovery is killed, wait for that process to exit, fix the reported
 problem, then retry the same recovery command (from any directory):
@@ -196,6 +200,11 @@ still has a reclaimable owner. No participating apply write precedes that record
 when it is absent, recovery validates the unchanged current pair and regenerates
 guidance instead of guessing restoration bytes. The same command supports this
 case. Do not manually delete lock directories or the revision record.
+
+Without an interrupted apply, recovery reports "No interrupted apply; nothing to
+recover", including a missing or dangling lock. On acquire, unpublished owner
+directories left by a crash are swept only when no lock points to them and their
+latest owner is provably dead under the same rules as recovery takeover.
 
 Reads remain blocked even for direct or disabled projects: an interrupted mode
 transition may have written only half the pair. The loader diagnostic identifies

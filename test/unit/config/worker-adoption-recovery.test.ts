@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { emptyConfig, writeAiwgConfig, readAiwgConfig } from '../../../src/config/aiwg-config.js';
+import { emptyConfig, writeAiwgConfig, readAiwgConfig, type AiwgConfig } from '../../../src/config/aiwg-config.js';
 import { applyWorkerAdoption, proposeWorkerAdoption, recoverWorkerAdoption } from '../../../src/config/worker-adoption.js';
 import { workerDispatchBlocked, workerWriteLock } from '../../../src/config/worker-write.js';
 import { assertWorkerActivationCurrent } from '../../../src/config/worker-activation-gate.js';
@@ -158,13 +158,67 @@ describe('T-OG-13 #2928 recovery ownership FR-OG-056', () => {
     }
   });
 
-  it('R10 preserves the consumed revision when recovering a crash after the commit marker', async () => {
+  it.each(['locked', 'blocked', 'models', 'config:0', 'config:1', 'activation', 'regenerated', 'committed'])('R10 recovers pair content and revision after a crash at %s', async step => {
     const f = await fixture();
-    await kill(await paused(f.root, 'apply', 'committed', f.proposal));
-    await recoverWorkerAdoption(f.root, f.authority, options);
+    // Change both halves so recovery cannot pass by checking only the activation revision.
+    f.proposal = await proposeWorkerAdoption(f.root, { parallelism: f.proposal.after.parallelism, workerSelection: { guards: { denySelfDelegation: true } } });
+    f.authority = { digest: f.proposal.digest };
+    await kill(await paused(f.root, 'apply', step, f.proposal));
+    const interrupted = await bytes(f.proposal.inputs.map(input => input.file));
+    const regenerate = vi.fn(async (_project: string, config: AiwgConfig) => {
+      expect(workerDispatchBlocked(f.root)).toBe(true);
+      expect(config.parallelism?.max_parallel_subagents).toBe(step === 'committed' ? 2 : undefined);
+    });
+    await recoverWorkerAdoption(f.root, f.authority, { regenerate });
     const next = await proposeWorkerAdoption(f.root, {});
-    expect(next.baseRevision).toBe(f.proposal.baseRevision + 1);
-    await expect(applyWorkerAdoption(f.root, f.proposal, f.authority, options)).rejects.toThrow(/Stale proposal/);
+    expect(regenerate).toHaveBeenCalledOnce();
+    expect(next.before).toEqual(step === 'committed' ? f.proposal.after : f.proposal.before);
+    expect(await bytes(f.proposal.inputs.map(input => input.file))).toEqual(step === 'committed' ? interrupted : f.proposal.inputs.map(input => input.bytes));
+    expect(next.baseRevision).toBe(f.proposal.baseRevision + (step === 'committed' ? 1 : 0));
+    expect((await readAiwgConfig(f.root))!.parallelism!.activation?.revision).toBe(step === 'committed' ? f.proposal.baseRevision + 1 : undefined);
+    expect(workerDispatchBlocked(f.root)).toBe(false);
+    if (step === 'committed') await expect(applyWorkerAdoption(f.root, f.proposal, f.authority, options)).rejects.toThrow(/Stale proposal/);
+  });
+
+  it.each(['blocked', 'committed'])('R12 preserves unrelated pair edits and stays blocked after %s', async step => {
+    const f = await fixture();
+    await kill(await paused(f.root, 'apply', step, f.proposal));
+    await writeFile(join(f.root, 'models.json'), JSON.stringify({ defaults: { workerSelection: { guards: { denySelfDelegation: true } } } }));
+    const edited = await bytes(f.proposal.inputs.map(input => input.file));
+    const regenerate = vi.fn();
+    await expect(recoverWorkerAdoption(f.root, f.authority, { regenerate })).rejects.toThrow(/pair.*match|unexpected.*bytes/i);
+    expect(await bytes(f.proposal.inputs.map(input => input.file))).toEqual(edited);
+    expect(regenerate).not.toHaveBeenCalled();
+    expect(workerDispatchBlocked(f.root)).toBe(true);
+  });
+
+  it.each([{ worker_dispatch: true, worker_mode: 'direct' as const }, { worker_dispatch: false }])('R13 finishes committed recovery without a managed activation: %j', async parallelism => {
+    const f = await fixture();
+    const proposal = await proposeWorkerAdoption(f.root, { parallelism });
+    await kill(await paused(f.root, 'apply', 'committed', proposal));
+    const committedBytes = await bytes(proposal.inputs.map(input => input.file));
+    await recoverWorkerAdoption(f.root, { digest: proposal.digest }, options);
+    const next = await proposeWorkerAdoption(f.root, {});
+    expect(next.before).toEqual(proposal.after);
+    expect(next.baseRevision).toBe(proposal.baseRevision + 1);
+    expect(await bytes(proposal.inputs.map(input => input.file))).toEqual(committedBytes);
+    expect(workerDispatchBlocked(f.root)).toBe(false);
+  });
+
+  it('R14 keeps the committed pair when a post-commit hook throws and retries guidance recovery', async () => {
+    const f = await fixture();
+    await expect(applyWorkerAdoption(f.root, f.proposal, f.authority, { ...options, checkpoint: async step => {
+      if (step === 'committed') throw new Error('post-commit failure');
+    } })).rejects.toThrow(/committed.*post-commit failure/);
+    const committedBytes = await bytes(f.proposal.inputs.map(input => input.file));
+    expect(JSON.parse((await readFile(f.proposal.inputs[0].file, 'utf8'))).parallelism.max_parallel_subagents).toBe(2);
+    await expect(recoverWorkerAdoption(f.root, f.authority, { regenerate: async () => { throw new Error('guidance failure'); } })).rejects.toThrow(/guidance failure/);
+    expect(workerDispatchBlocked(f.root)).toBe(true);
+    expect(await bytes(f.proposal.inputs.map(input => input.file))).toEqual(committedBytes);
+    await recoverWorkerAdoption(f.root, f.authority, options);
+    expect(await bytes(f.proposal.inputs.map(input => input.file))).toEqual(committedBytes);
+    expect((await proposeWorkerAdoption(f.root, {})).before).toEqual(f.proposal.after);
+    expect(workerDispatchBlocked(f.root)).toBe(false);
   });
 
   it('R11 refuses an unverifiable remote owner but distinguishes a reused local PID', async () => {

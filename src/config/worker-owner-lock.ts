@@ -1,8 +1,8 @@
 // Publishes complete owner identities atomically and fences dead-owner takeover by generation.
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
-import { basename, dirname, join } from 'node:path';
-import { mkdir, writeFile, symlink, readlink, unlink, rm } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
+import { mkdir, writeFile, symlink, readlink, unlink, rm, readdir } from 'node:fs/promises';
 import { readFileSync, readlinkSync } from 'node:fs';
 import { projectControlPath } from './project-artifacts.js';
 
@@ -29,7 +29,7 @@ function provablyDead(owner: Owner): boolean {
   if (owner.host !== hostname() || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) return false;
   try { process.kill(owner.pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
   const start = processStart(owner.pid);
-  return owner.start !== null && start !== null && owner.start !== start;
+  return typeof owner.start === 'string' && owner.start.length > 0 && start !== null && owner.start !== start;
 }
 function latest(directory: string): Owner {
   let owner = JSON.parse(readFileSync(join(directory, 'owner.json'), 'utf8')) as Owner;
@@ -38,6 +38,21 @@ function latest(directory: string): Owner {
     if (!/^[a-f0-9-]{36}$/.test(owner.generation)) throw new Error('Invalid worker lock generation');
     try { owner = JSON.parse(readlinkSync(join(directory, `next-${owner.generation}`))) as Owner; }
     catch (error) { if (missing(error)) return owner; throw error; }
+  }
+}
+async function sweepOrphanedOwners(path: string): Promise<void> {
+  const parent = dirname(path);
+  const prefix = `${basename(path)}.`;
+  for (const entry of await readdir(parent, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith(prefix) || !/^[a-f0-9-]{36}$/.test(entry.name.slice(prefix.length))) continue;
+    const directory = join(parent, entry.name);
+    let owner: Owner;
+    try { owner = latest(directory); } catch { continue; } // Incomplete or unreadable identities cannot prove death.
+    if (!provablyDead(owner)) continue;
+    try {
+      if (resolve(parent, await readlink(path)) === directory) continue;
+    } catch (error) { if (!missing(error)) throw error; }
+    await rm(directory, { recursive: true, force: true });
   }
 }
 function lease(path: string, directory: string, owner: Owner): WorkerWriteLease {
@@ -64,6 +79,7 @@ export async function acquireWorkerWriteLock(project: string, block = false, pro
   const owner = { ...identity(), ...(proposalDigest ? { proposalDigest } : {}) };
   const directory = `${path}.${owner.generation}`;
   await mkdir(dirname(path), { recursive: true });
+  await sweepOrphanedOwners(path);
   await mkdir(directory);
   try {
     await writeFile(join(directory, 'owner.json'), JSON.stringify(owner), { mode: 0o600 });
@@ -79,8 +95,15 @@ export async function acquireWorkerWriteLock(project: string, block = false, pro
 }
 export async function reclaimWorkerWriteLock(project: string): Promise<WorkerWriteLease> {
   const path = workerWriteLock(project);
-  const directory = join(dirname(path), await readlink(path));
-  const previous = latest(directory);
+  let directory: string;
+  let previous: Owner;
+  try {
+    directory = resolve(dirname(path), await readlink(path));
+    previous = latest(directory);
+  } catch (error) {
+    if (missing(error)) throw new Error(`No interrupted apply; nothing to recover at ${path}`);
+    throw error;
+  }
   if (!provablyDead(previous)) throw new Error(`Worker configuration is locked by a live or unverifiable owner (${previous.host}:${previous.pid}); ${path}`);
   const owner = identity();
   try { await symlink(JSON.stringify(owner), join(directory, `next-${previous.generation}`)); }

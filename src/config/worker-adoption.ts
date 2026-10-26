@@ -79,6 +79,16 @@ async function validate(project: string, config: AiwgConfig, models: UserProject
   await loader.load(config.parallelism);
   return { ...workerActivationDigests(config), ...loader.getInputDigests()! };
 }
+async function adoptedCandidate(proposal: WorkerProposal, options: AdoptionOptions) {
+  const next = candidate(proposal.inputs, proposal.after);
+  const digests = await validate(proposal.project, next.config, next.models, options);
+  const previous = candidate(proposal.inputs).config.parallelism?.activation;
+  if (next.config.parallelism?.worker_mode === 'managed') {
+    next.config.parallelism.activation = { ...digests, revision: proposal.baseRevision + 1,
+      snapshotRef: proposal.digest, ...(previous ? { previousRef: previous.snapshotRef } : {}) };
+  }
+  return { ...next, digests, configBytes: JSON.stringify(next.config, null, 2) + '\n', modelsBytes: JSON.stringify(next.models, null, 2) + '\n' };
+}
 export async function proposeWorkerAdoption(project: string, changes: Partial<WorkerPair>, options: AdoptionOptions = {}): Promise<WorkerProposal> {
   project = resolve(project);
   const inputs = await inventory(project, options);
@@ -156,8 +166,8 @@ export async function applyWorkerAdoption(project: string, proposal: WorkerPropo
       validateRetainedCopies(inputs);
       const previous = candidate(inputs);
       await validate(project, previous.config, previous.models, options);
-      const next = candidate(inputs, proposal.after);
-      const digests = await validate(project, next.config, next.models, options);
+      const next = await adoptedCandidate(proposal, options);
+      const { digests, configBytes, modelsBytes } = next;
       const configCopies = [inputs[0], ...inputs.slice(4)];
       // Keep the validated bytes durably before the first participating write.
       await write(join(lock.path, 'recovery.json'), JSON.stringify({ proposal, inputs }, null, 2));
@@ -165,12 +175,7 @@ export async function applyWorkerAdoption(project: string, proposal: WorkerPropo
       lock.assertOwned();
       options.signal?.throwIfAborted();
       await recheck(proposal, options);
-      if (next.config.parallelism?.worker_mode === 'managed') {
-        next.config.parallelism.activation = { ...digests, revision: proposal.baseRevision + 1,
-          snapshotRef: proposal.digest, ...(previous.config.parallelism?.activation ? { previousRef: previous.config.parallelism.activation.snapshotRef } : {}) };
-      }
-      const configBytes = JSON.stringify(next.config, null, 2) + '\n';
-      const modelsBytes = JSON.stringify(next.models, null, 2) + '\n';
+      let committed = false;
       try {
         await write(inputs[1].file, modelsBytes);
         await options.checkpoint?.('models');
@@ -198,9 +203,14 @@ export async function applyWorkerAdoption(project: string, proposal: WorkerPropo
         options.signal?.throwIfAborted();
         await check();
         await write(revisionPath(project), JSON.stringify({ revision: proposal.baseRevision + 1 }) + '\n');
+        committed = true;
         await options.checkpoint?.('committed');
         lock.assertOwned();
       } catch (error) {
+        if (committed) {
+          keepBlocked = true;
+          throw new Error(`Worker adoption committed: ${error}. Dispatch remains closed at ${lock.path}; finish with authorized recovery`);
+        }
         const failures: string[] = [];
         // Attempt EVERY owned copy, including a write that may have renamed then thrown.
         for (const input of [inputs[1], ...configCopies]) {
@@ -259,19 +269,37 @@ export async function recoverWorkerAdoption(project: string, authority: Adoption
         options.signal?.throwIfAborted();
         const previous = candidate(proposal.inputs);
         await validate(project, previous.config, previous.models, options);
-        const failures: string[] = [];
-        for (const input of [proposal.inputs[1], proposal.inputs[0], ...proposal.inputs.slice(4)]) {
-          try {
-            lock.assertOwned();
-            if (input.bytes === null) await rm(input.file, { force: true });
-            else await write(input.file, input.bytes);
-          } catch (error) { failures.push(`${input.file}: ${error}`); }
+        const next = await adoptedCandidate(proposal, options);
+        const expectedBytes = (index: number) => index === 1 ? next.modelsBytes : index === 0 || index >= 4 ? next.configBytes : proposal.inputs[index].bytes;
+        // The independent revision is the durable commit marker. Activation alone is
+        // insufficient: it is written before the pair has finished committing.
+        const committed = await adoptionRevision(project) > proposal.baseRevision;
+        if (committed) {
+          validateRetainedCopies(inputs);
+          const current = candidate(inputs);
+          if (workerConfigDigest(pair(current.config, current.models)) !== workerConfigDigest(proposal.after)
+            || inputs.some((input, index) => input.bytes !== expectedBytes(index))) throw new Error('Committed recovery pair does not match proposal.after; inspect the retained recovery record');
+          await validate(project, current.config, current.models, options);
+          lock.assertOwned();
+          await (options.regenerate ?? regenerateWorkerGuidance)(project, current.config);
+          if (workerConfigDigest(await inventory(project, options)) !== workerConfigDigest(inputs)) throw new Error('Committed recovery pair changed during guidance regeneration');
+          await validate(project, current.config, current.models, options);
+        } else {
+          if (inputs.some((input, index) => input.bytes !== proposal.inputs[index].bytes && input.bytes !== expectedBytes(index))) throw new Error('Recovery pair has unexpected input bytes matching neither before nor after; inspect the retained recovery record');
+          const failures: string[] = [];
+          for (const input of [proposal.inputs[1], proposal.inputs[0], ...proposal.inputs.slice(4)]) {
+            try {
+              lock.assertOwned();
+              if (input.bytes === null) await rm(input.file, { force: true });
+              else await write(input.file, input.bytes);
+            } catch (error) { failures.push(`${input.file}: ${error}`); }
+          }
+          if (failures.length) throw new Error(failures.join('; '));
+          await recheck(proposal, options, false);
+          lock.assertOwned();
+          await (options.regenerate ?? regenerateWorkerGuidance)(project, previous.config);
+          await recheck(proposal, options, false);
         }
-        if (failures.length) throw new Error(failures.join('; '));
-        await recheck(proposal, options, false);
-        lock.assertOwned();
-        await (options.regenerate ?? regenerateWorkerGuidance)(project, previous.config);
-        await recheck(proposal, options, false);
       }
       options.signal?.throwIfAborted();
       lock.assertOwned();

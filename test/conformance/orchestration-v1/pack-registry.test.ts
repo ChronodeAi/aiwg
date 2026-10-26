@@ -45,6 +45,7 @@ describe('T-OG registry wiring gate (partial coverage is not release acceptance)
       'test/unit/ralph-external/ralph-group-cycle.test.ts',
       'test/unit/config/worker-adoption.test.ts',
       'test/unit/config/worker-adoption-recovery.test.ts',
+      'test/unit/config/worker-owner-lock.test.ts',
       'test/unit/decision/worker-telemetry.test.ts',
       'test/unit/decision/worker-otlp.test.ts',
       'test/conformance/orchestration-v1/worker-telemetry.test.ts',
