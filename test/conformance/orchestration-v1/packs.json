@@ -302,7 +302,7 @@
         "test/unit/ralph-external/worker-installation.test.ts",
         "test/conformance/orchestration-v1/worker-status.test.ts"
       ],
-      "remaining": "S1 synthetic installation, registration and control mapping only; installed profiles remain unverified by these fixtures. Remaining package/platform assertions and managed S2+ runtime gates stay open. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+. #3002/#2998 add bounded private artifact delivery/cleanup and adapter stdin frames; 14 other bundled process profiles retain frozen argv/stdin rendering. P02 adds 1,000 cached synthetic resolves (p95 <=250ms); managed plan/admission timing remains open. Workspace-relative artifacts remain open; installed profiles stay unverified until operator manual smoke."
+      "remaining": "T-OG-15 synthetic PATH-prefix, shadow-executable, binary-byte and other-environment drift coverage; S1 synthetic installation, registration and control mapping only; installed profiles remain unverified by these fixtures. Remaining package/platform assertions and managed S2+ runtime gates stay open. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+. #3002/#2998 add bounded private artifact delivery/cleanup and adapter stdin frames; 14 other bundled process profiles retain frozen argv/stdin rendering. P02 adds 1,000 cached synthetic resolves (p95 <=250ms); managed plan/admission timing remains open. Workspace-relative artifacts remain open; installed profiles stay unverified until operator manual smoke."
     },
     "T-OG-16": {
       "name": "Conductor direct lifecycle",

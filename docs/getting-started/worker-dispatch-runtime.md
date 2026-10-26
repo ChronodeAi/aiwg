@@ -32,7 +32,7 @@ single document, including the qualification results and an
 Approval trusts the installed CLI and bundled argument renderer for direct shell
 operation. It records no live inference, backend identity, or negative sandbox
 test result. Existing host inspection binds the executable bytes/version,
-installed driver files, workspace, configured account scope label, environment
+installed driver files, workspace, configured account scope label, non-PATH environment
 and worker policy.
 The existing private `worker-installations.json` under `AIWG_CONFIG` (normally
 `~/.config/aiwg`) also stores the existing model observation records with only the
@@ -101,13 +101,13 @@ fixed `reason` identifiers (`invocation_build_failed`, `native_argv_invalid`, or
 `invocation_prepare_failed`) and pointers to the failing invocation stage, in both
 JSON plans and shell-mode refusals. Internal error text remains redacted.
 
-Shell commands clear the environment with `env -i` and pass only named variables
-from the qualified profile. Process profiles retain `PATH`; for Codex the rendered
-prefix includes `env -i CODEX_HOME="${CODEX_HOME-}" HOME="${HOME-}" PATH="${PATH-}"`.
-Values are expanded by the conductor's shell and never printed in the plan.
-Keeping `PATH` lets Codex find the system `bwrap` allowed by AppArmor on Ubuntu
-hosts that restrict unprivileged user namespaces. Requalify existing installations
-after updating these profiles.
+Shell commands use `env -i` and pass only names from the qualified profile.
+Process profiles retain PATH; Codex includes `env -i CODEX_HOME="${CODEX_HOME-}" HOME="${HOME-}" PATH="${PATH-}"`.
+The conductor expands values; plans never print them. PATH is pass-through host plumbing:
+its allowlisted name is recorded; its value is excluded from the pinned digest and launch equality check.
+PATH lets Codex find the system `bwrap` allowed by AppArmor on Ubuntu.
+Empty prepended directories preserve approval; another CLI realpath or SHA-256 blocks dispatch.
+Other values stay bound and private. Requalify once when upgrading PATH-bound approvals.
 
 Codex qualification also runs `codex sandbox` with a sandboxed `/bin/sh -c true`
 under the same cleared, allowlisted environment. A failed sandbox check blocks

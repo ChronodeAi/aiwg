@@ -208,11 +208,11 @@ export async function prepareInstalledWorkerInvocation(instance, invocation, qua
         || result.stdin !== qualification.adapter.invocation.stdin) {
         throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Worker argv/stdin differs from the authorized driver mapping');
       }
-      // Shell plans contain names, never credential values. Recheck the named
-      // launch environment now; the conductor must repeat preparation if it
-      // changes before copying the command into its shell.
+      // Shell plans contain names, never values. PATH is host plumbing; its
+      // allowlisted name stays bound, while the executable is pinned separately.
+      // Other launch values must still match qualification.
       if (JSON.stringify([...result.envNames].sort()) !== JSON.stringify(Object.keys(installation.environment ?? {}).sort())
-        || result.envNames.some(name => process.env[name] !== installation.environment[name])) {
+        || result.envNames.some(name => name !== 'PATH' && process.env[name] !== installation.environment[name])) {
         throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Worker launch environment differs from qualification');
       }
     }
@@ -346,7 +346,7 @@ export async function inspectWorkerInstallation(instance, request) {
   return { binary, cwd: canonicalCwd, inputRoots, outputRoots, scopeDigest: qualificationDigest({ metadata, profileId, cliVersion, platform, binary, modules, runtimeFiles,
     permissionRequirements, controlArgv, fixtureDigest: await workerNegativeFixtureDigest(),
     requiredControls: [...requiredControls].sort(), effectiveConfigDigest, accountScope, boundary, cwd: canonicalCwd,
-    workerWritableRoots: canonicalWritableRoots, inputRoots, outputRoots, environmentDigest: qualificationDigest(environment), endpoints, mcp: request.mcp ?? null,
+    workerWritableRoots: canonicalWritableRoots, inputRoots, outputRoots, environmentDigest: qualificationDigest(Object.fromEntries(Object.entries(environment).filter(([name]) => name !== 'PATH'))), endpoints, mcp: request.mcp ?? null,
     mcpServerDigest: request.mcpServerDigest ?? null }) };
 }
 

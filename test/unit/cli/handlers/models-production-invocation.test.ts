@@ -7,9 +7,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadWorkerInputs, modelsHandler } from '../../../../src/cli/handlers/models.js';
+import { createModelsHandler, loadWorkerInputs, modelsHandler } from '../../../../src/cli/handlers/models.js';
 import { ConfigLoader } from '../../../../src/models/config-loader.js';
-import { requiredWorkerControls } from '../../../../src/models/provider-policy.js';
+import { requiredWorkerControls, WORKER_OPERATOR_APPROVAL } from '../../../../src/models/provider-policy.js';
 import { resolveWorkerPlan } from '../../../../src/models/resolver.js';
 import { hasProvider as hasInstalledProvider, loadRecordedWorkerInstallations, registerProvider } from '../../../../src/models/worker-installation.mjs';
 import { qualificationDigest } from '../../../../src/models/qualification-digest.mjs';
@@ -98,16 +98,72 @@ async function productionFixture(adapterFrame = false) {
   const finalPath = path.join(workdir, 'final.json');
   const signing = await workerSigningFixture(root, cwd);
   const record = signing.sign({ cli: id, binding, adapter, installation });
-  const call = async () => {
+  const call = async (handler = modelsHandler) => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const args = ['resolve', '--role=coding', '--group=workers', '--task=implementation', `--brief=${brief}`, `--workdir=${workdir}`, `--final-output=${finalPath}`, '--format=json'];
-    const result = await modelsHandler.execute({ args, rawArgs: ['models', ...args], cwd, frameworkRoot });
+    const result = await handler.execute({ args, rawArgs: ['models', ...args], cwd, frameworkRoot });
     const output = String(log.mock.calls.at(-1)?.[0]); log.mockRestore(); return { result, output, plan: JSON.parse(output) };
   };
   return { ...f, call, record, configDir, finalPath, installed, owner, cwd, frameworkRoot, signing };
 }
 
 describe('models resolve production installation loading', () => {
+  it('T-OG-15 keeps PATH prefixes eligible while rejecting executable and other environment drift', async () => {
+    const f = await productionFixture();
+    const { adapter, installation, binding } = f.record;
+    const profile = adapter.invocationProfiles![binding.profile];
+    const extra = path.join(f.installed, 'extra');
+    await mkdir(extra);
+    const originalPath = f.installed;
+    const prefixedPath = `${extra}${path.delimiter}${originalPath}`;
+    vi.stubEnv('PATH', originalPath);
+    vi.stubEnv('AIWG_SYNTHETIC_SETTING', 'qualified-value');
+    adapter.qualification.evidenceRef = WORKER_OPERATOR_APPROVAL;
+    installation.requiredControls = [];
+    adapter.invocation.envAllowlist = profile.envAllowlist = ['PATH', 'AIWG_SYNTHETIC_SETTING'];
+    installation.environment = { PATH: originalPath, AIWG_SYNTHETIC_SETTING: 'qualified-value' };
+    const configPath = path.join(f.cwd, '.aiwg/aiwg.config');
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    config.parallelism.clis[f.record.cli].executable = path.basename(installation.executable);
+    await writeFile(configPath, JSON.stringify(config));
+    const scope = await f.owner.inspectWorkerInstallation(installation);
+    installation.evidence.scopeDigest = profile.installationQualification!.scopeDigest = scope.scopeDigest;
+    expect(await f.owner.recordWorkerInstallation({ ...f.record, projectDir: f.cwd })).toMatchObject({ status: 'ENABLED' });
+    const stored = await readFile(path.join(f.configDir, 'worker-installations.json'), 'utf8');
+    expect(stored).not.toContain('qualified-value');
+    expect(JSON.parse(stored).registrations[0].installation.environmentNames).toContain('PATH');
+    const baseline = await f.call();
+    expect(baseline.plan.status, JSON.stringify(baseline.plan.diagnostics)).toBe('eligible');
+    // Freeze the loaded environment too: preparation must tolerate host PATH plumbing.
+    const loaded = await loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] });
+    vi.stubEnv('PATH', prefixedPath);
+    const prepared = await f.call(createModelsHandler({ load: async () => loaded }));
+    expect(prepared.plan.status, JSON.stringify(prepared.plan.diagnostics)).toBe('eligible');
+    const prefixed = await f.call();
+    expect(prefixed.plan.status, JSON.stringify(prefixed.plan.diagnostics)).toBe('eligible');
+    expect(prefixed.plan.invocation.argv[0]).toBe(scope.binary.realpath);
+    expect(prefixed.plan.invocation.selected.qualificationDigest).toBe(scope.scopeDigest);
+    expect(prefixed.plan.invocation.shellCommand).toContain('PATH="${PATH-}"');
+    expect(prefixed.plan.invocation.shellCommand).not.toContain(prefixedPath);
+    vi.stubEnv('AIWG_SYNTHETIC_SETTING', 'changed-value');
+    expect((await f.call()).plan.status).toBe('blocked');
+    expect((await f.call(createModelsHandler({ load: async () => loaded }))).plan.status).toBe('blocked');
+    vi.stubEnv('AIWG_SYNTHETIC_SETTING', 'qualified-value');
+    // Same CLI name, different realpath and bytes; never import or execute the shadow.
+    await writeFile(path.join(extra, path.basename(installation.executable)), '#!/bin/sh\nexit 91\n', { mode: 0o755 });
+    const shadowed = await f.call();
+    expect(shadowed.plan.status).toBe('blocked');
+    expect(shadowed.plan.invocation).toBeUndefined();
+    expect(shadowed.output).toContain('OG_ADAPTER_UNQUALIFIED');
+    await expect(loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] }))
+      .rejects.toMatchObject({ details: { rejections: [{ registration: 0, reason: 'binary-identity' }] } });
+    await rm(path.join(extra, path.basename(installation.executable)));
+    // Preserve realpath but alter bytes: the pinned hash must still reject it.
+    await writeFile(installation.executable, '#!/bin/sh\nexit 92\n');
+    expect((await f.call()).plan.status).toBe('blocked');
+    await expect(readFile(f.finalPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it.each(['missing-file', 'missing-role', 'missing-field', 'null-effort'])('reports missing role effort before recorded policy digest and adapter loading (%s)', async kind => {
     const f = await productionFixture();
     // An existing approval lets policy diagnostics precede its now-stale
