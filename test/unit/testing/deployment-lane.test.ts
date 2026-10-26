@@ -5,12 +5,28 @@ import { parse as parseYaml } from 'yaml';
 import base from '../../../config/vitest.config.js';
 import deployment from '../../../config/vitest.deployment.config.js';
 import packaging from '../../../config/vitest.packaging.config.js';
+import releaseSlow from '../../../config/vitest.release-slow.config.js';
 import uatConfig from '../../../config/vitest.uat.config.js';
-import { deploymentFiles, packagingFiles } from '../../../config/test-lanes.mjs';
+import { deploymentFiles, packagingFiles, releaseSlowFiles } from '../../../config/test-lanes.mjs';
 
 const root = path.resolve(import.meta.dirname, '../../..');
 
 describe('required provider deployment lane', () => {
+  it('runs exhaustive deployment matrices only in the serial release lane', () => {
+    expect(releaseSlowFiles).toHaveLength(6);
+    expect(releaseSlow.test.include).toEqual(releaseSlowFiles);
+    expect(releaseSlow.test).toMatchObject({ pool: 'forks', maxWorkers: 1, fileParallelism: false });
+    for (const file of releaseSlowFiles) {
+      expect(base.test.exclude).toContain(file);
+      expect(deploymentFiles).not.toContain(file);
+    }
+    for (const name of ['project-local-deploy', 'use-b2-contract', 'use-b3-plumbing', 'omp-provider', 'model-worker-provider-matrix', 'provider-smoke-deployment']) {
+      const file = `test/integration/${name}.test.ts`;
+      expect(base.test.exclude).not.toContain(file);
+      expect(releaseSlowFiles).not.toContain(file);
+    }
+  });
+
   it('owns exactly the full-corpus deployment files and runs them serially', () => {
     // The guided-setup walkthrough (#3449 A6) applies a real `aiwg use`
     // deployment against the shared reviewed cache, so it runs in this lane.

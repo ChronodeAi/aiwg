@@ -166,6 +166,41 @@ For a direct Vitest run with a caller-owned private `TMPDIR`, run
 `npm run lint:tmpdir-leaks -- --dir "$TMPDIR"` afterward. This standalone
 checker reports entries and never removes them.
 
+## Default shard balance and release infrastructure tests
+
+The four default CI shards use Vitest's native `--shard=INDEX/COUNT` interface
+with `tools/testing/duration-sequencer.mjs`. It sorts files by measured duration
+(longest first, path order for ties) and places each file in the lightest shard
+(lowest shard index for ties). Each shard also starts its longest measured
+files first, avoiding a late heavy file after other workers finish. Unmeasured files use `defaultSeconds` from
+`config/test-durations.json`, so adding a file never excludes it. The inventory
+gate invokes the configured sequencer and proves a disjoint, complete partition:
+
+```bash
+node tools/testing/check-native-shards.mjs 4
+npm test -- --shard=1/4 --maxWorkers=4
+```
+
+Refresh the checked-in map after a representative full run. The extra reporter
+records file durations including module imports, setup and suite hooks; ordinary
+Vitest JSON reports are also accepted, but omit imports, setup, and leading and
+trailing suite hooks. Multiple reports can
+be supplied together when collecting CI shards. Refreshing preserves existing
+entries for files absent from the supplied reports.
+
+```bash
+npm test -- --maxWorkers=6 --reporter=default --reporter=./tools/testing/refresh-test-durations.mjs
+npm run test:durations -- test-results/file-durations.json
+node tools/testing/check-native-shards.mjs 4
+```
+
+`config/test-lanes.mjs` assigns exhaustive provider deployment matrices to
+`test:release-slow`; default shards exclude them. Small public CLI deployment
+smokes and focused CLI contracts remain on every merge. The existing
+`test:deployment` lane still owns its three independent suites. See
+[release validation](versioning.md#publication-surfaces-and-release-infrastructure-validation) for the
+required pre-tag/publication gates and manual workflow entry point.
+
 ## Minimum Test Coverage
 
 | Category | Minimum Coverage | Current |

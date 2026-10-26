@@ -240,4 +240,28 @@ describe('test runner registration gate', () => {
     expect(report.errors).toEqual(['Offline lane is not reachable from canonical CI: config/vitest.config.js']);
     expect(child.stderr.trim()).toBe(report.errors[0]);
   });
+  it.each(['valid', 'unreachable', 'missing-script', 'duplicate'])('enforces explicit release ownership (%s)', mode => {
+    const releaseConfig = 'config/vitest.release-slow.config.js';
+    const file = 'test/integration/release.test.ts';
+    const { child, report } = run(project({
+      scripts: {
+        test: 'vitest run --config config/vitest.config.js',
+        ...(mode === 'missing-script' ? {} : { 'test:release-slow': `vitest run --config ${releaseConfig}` }),
+      },
+      files: {
+        'config/test-lanes.mjs': `export const nodeFiles = []; export const releaseLaneWorkflows = ${JSON.stringify({ [releaseConfig]: '.gitea/workflows/release-slow.yml' })};`,
+        [releaseConfig]: `export default ${JSON.stringify({ test: { include: [file] } })};`,
+        '.gitea/workflows/release-slow.yml': JSON.stringify({ jobs: { release: { steps: [{ run: mode === 'unreachable' ? 'node --version' : 'npm run test:release-slow' }] } } }),
+        ...(mode === 'duplicate' ? { 'config/vitest.config.js': `export default ${JSON.stringify({ test: { include: [baseline, file] } })};` } : {}),
+        [file]: vitestSource,
+      },
+    }));
+    expect(child.status).toBe(mode === 'valid' ? 0 : 1);
+    expect(report.errors).toEqual(mode === 'valid' ? []
+      : mode === 'duplicate' ? [`${file}: release test has multiple owning lanes`]
+        : mode === 'missing-script' ? ['Release workflow references missing npm script test:release-slow', `Release lane is not reachable from its workflow: ${releaseConfig}`]
+          : [`Release lane is not reachable from its workflow: ${releaseConfig}`]);
+    if (mode === 'valid') expect(report.files.find(row => row.file === file).lanes).toEqual([{ id: releaseConfig, live: false }]);
+  });
+
 });

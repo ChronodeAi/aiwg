@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import path from 'path';
-import { artifactIndexFiles, packagingFiles, discoveryFiles, deploymentFiles, wasmFiles, nodeFiles, d29SlowFiles, d17SlowFiles, orchestrationConformanceFiles } from './test-lanes.mjs';
+import DurationSequencer from '../tools/testing/duration-sequencer.mjs';
+import { artifactIndexFiles, packagingFiles, discoveryFiles, deploymentFiles, releaseSlowFiles, wasmFiles, nodeFiles, d29SlowFiles, d17SlowFiles, orchestrationConformanceFiles } from './test-lanes.mjs';
 
 // Watch-service tests use polling so host-wide inotify quotas cannot make the
 // suite nondeterministic on shared development and CI machines.
@@ -39,7 +40,7 @@ export default defineConfig({
     // VS Code Extension Test Runner — never let vitest discover it (#1210).
     exclude: [
       // Required serial packaging and corpus lanes run separately in CI.
-      ...packagingFiles, ...artifactIndexFiles, ...discoveryFiles, ...deploymentFiles, ...nodeFiles, ...d29SlowFiles, ...d17SlowFiles, ...orchestrationConformanceFiles,
+      ...packagingFiles, ...artifactIndexFiles, ...discoveryFiles, ...deploymentFiles, ...releaseSlowFiles, ...nodeFiles, ...d29SlowFiles, ...d17SlowFiles, ...orchestrationConformanceFiles,
       // PGlite/WASM must use vitest.wasm.config.js: V8 can abort on thread
       // teardown (UnregisterWasmAllocation, #3073); no test can catch it.
       ...wasmFiles,
@@ -116,6 +117,9 @@ export default defineConfig({
     // Timeout configuration
     testTimeout: 30000,
     hookTimeout: 30000,
+
+    // Keep native --shard, assigning longest measured files to the lightest shard.
+    sequence: { sequencer: DurationSequencer },
 
     // Parallel execution for speed
     pool: 'threads',

@@ -95,6 +95,11 @@ export function validateRelease({ root = ROOT, output, profile = 'routine-releas
       const budget = lane === 'test:ci' ? '40m' : lane === 'test:deployment' ? '18m' : lane === 'test:d29-slow' ? '25m' : null;
       if (budget) command(process.execPath, [path.join(root, 'tools/ci/run-with-hang-report.mjs'), '--timeout', budget, '--', 'npm', 'run', lane], { cwd: root, env, spawn, stdio: 'inherit' });
       else command('npm', ['run', lane], { cwd: root, env, spawn, stdio: 'inherit' });
+      // Keep the exact 43-gate full profile: its provider deployment gate owns
+      // both the existing deployment lane and the release-only infrastructure
+      // lane. Mark this gate successful only after both commands pass. Routine
+      // RCs run the latter through test:release:routine-deployment instead.
+      if (lane === 'test:deployment') command(process.execPath, [path.join(root, 'tools/ci/run-with-hang-report.mjs'), '--timeout', '30m', '--', 'npm', 'run', 'test:release-slow'], { cwd: root, env, spawn, stdio: 'inherit' });
       record.status = 'success';
     }
     catch (error) { record.status = 'failure'; record.error = error.message; throw error; }

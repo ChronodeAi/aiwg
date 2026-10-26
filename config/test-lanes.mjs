@@ -29,6 +29,22 @@ export const deploymentFiles = [
   'test/integration/hermes-deployment.test.ts',
   'test/integration/guided-setup-walkthrough.test.ts',
 ];
+// Exhaustive provider deployment matrices run before releases, while focused
+// CLI contracts and a small provider smoke matrix remain in the default lane.
+// These do not overlap the required post-merge deploymentFiles lane above.
+export const releaseSlowFiles = [
+  'test/integration/provider-file-locations.test.ts',
+  'test/integration/kernel-deployment-conformance.test.ts',
+  'test/integration/deployment-completeness.test.ts',
+  'test/integration/factory-deployment.test.ts',
+  'test/integration/opencode-deployment.test.ts',
+  'test/integration/cursor-deployment.test.ts',
+];
+// Offline release-only configs have an explicit manual workflow owner instead
+// of requiring execution on every merge in the canonical CI workflow.
+export const releaseLaneWorkflows = {
+  'config/vitest.release-slow.config.js': '.gitea/workflows/release-slow.yml',
+};
 // PGlite's WebAssembly JIT teardown can abort V8 in worker threads (#3073,
 // runs 81094/90363). Required forks lane; keep coverage and the TMPDIR gate.
 // Runtime inventory: docs/contributing/testing-wasm-lane.md.

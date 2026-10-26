@@ -207,12 +207,14 @@ describe('signed RC identity and exact-artifact promotion foundation (#3201)', (
     expect(evidence.pass).toBe(true); expect(evidence.profile).toBe('routine-release-v1');
     expect(evidence.lanes.map(item => item.lane)).toEqual(ROUTINE_RC_LANES);
     expect(new Set(ROUTINE_RC_LANES).size).toBe(ROUTINE_RC_LANES.length);
+    expect(ROUTINE_RC_LANES).toHaveLength(24);
     expect(ROUTINE_RC_LANES).toContain('test:release:routine-deployment');
     expect(ROUTINE_RC_LANES).not.toContain('test:deployment');
     const quarterly = validateRelease({ root, profile: 'quarterly-full-v1', output: path.join(root, 'quarterly.json'),
       spawn(command) { return { status: 0, stdout: command === 'git' ? commit : '' }; } });
     expect(quarterly.lanes.map(item => item.lane)).toEqual(RC_LANES);
     expect(new Set(RC_LANES).size).toBe(RC_LANES.length);
+    expect(RC_LANES).toHaveLength(43);
     for (const lane of ['build', 'test:ci', 'test:deployment', 'test:conformance', 'test:packaging', 'test:d29-slow', 'ci:fortemi-index']) expect(RC_LANES).toContain(lane);
     expect(RC_LANES.indexOf('test:deployment')).toBe(RC_LANES.indexOf('test:ci') + 1);
     expect(RC_VALIDATION_PROFILES).toEqual({ 'routine-release-v1': ROUTINE_RC_LANES, 'quarterly-full-v1': RC_LANES });
@@ -229,6 +231,20 @@ describe('signed RC identity and exact-artifact promotion foundation (#3201)', (
     const evidence = JSON.parse(fs.readFileSync(output, 'utf8'));
     expect(evidence.pass).toBe(false);
     expect(evidence.lanes.at(-1)).toMatchObject({ lane: 'test:deployment', status: 'failure' });
+  });
+  it('fails the full provider gate if the release-only infrastructure lane fails', () => {
+    const root = temp(), output = path.join(root, 'validation.json'), calls = [];
+    expect(() => validateRelease({ root, output, profile: 'quarterly-full-v1', spawn(command, args) {
+      if (command === 'git') return { status: 0, stdout: commit };
+      calls.push({ command, args });
+      return { status: args.at(-1) === 'test:release-slow' ? 1 : 0 };
+    } })).toThrow(/failed/);
+    expect(calls.slice(-2).map(call => call.args.at(-1))).toEqual(['test:deployment', 'test:release-slow']);
+    expect(calls.at(-1).args.slice(-6)).toEqual(['--timeout', '30m', '--', 'npm', 'run', 'test:release-slow']);
+    const evidence = JSON.parse(fs.readFileSync(output, 'utf8'));
+    expect(evidence.pass).toBe(false);
+    expect(evidence.lanes.at(-1)).toMatchObject({ lane: 'test:deployment', status: 'failure' });
+    expect(evidence.lanes.at(-1).completed_at).toBeTruthy();
   });
   it('smoke-installs the exact packed tarballs with isolated HOME and checks installed identity', () => {
     const root = temp(), output = path.join(root, 'bundle'), calls = [], homes = [];
