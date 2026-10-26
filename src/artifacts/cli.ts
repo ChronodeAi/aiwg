@@ -39,11 +39,11 @@ import {
   type WebReleaseOptions,
 } from '../resources/web-release.js';
 import { findPackageRoot } from '../cli/find-package-root.js';
-import { createResourceCredentialProvider } from '../auth/resource-credentials.js';
+import { createResourceCredentialProvider, prepareResourceCredentials } from '../auth/resource-credentials.js';
 
 const MAX_RESOURCE_TRUST_ROOT_BYTES = 64 * 1024;
 
-function webReleaseOptionsFromEnvironment(): Omit<WebReleaseOptions, 'selector' | 'offline'> {
+function webReleaseOptionsFromEnvironment(credentialProvider = createResourceCredentialProvider(process.env)): Omit<WebReleaseOptions, 'selector' | 'offline'> {
   const baseUrl = process.env.AIWG_RESOURCE_BASE_URL;
   const cacheRoot = process.env.AIWG_RESOURCE_CACHE_ROOT;
   const trustRootFile = process.env.AIWG_RESOURCE_TRUST_ROOT_FILE;
@@ -63,7 +63,7 @@ function webReleaseOptionsFromEnvironment(): Omit<WebReleaseOptions, 'selector' 
   }
 
   return {
-    credentialProvider: createResourceCredentialProvider(process.env),
+    credentialProvider,
     ...(baseUrl === undefined ? {} : { baseUrl }),
     ...(cacheRoot === undefined ? {} : { cacheRoot }),
     ...(publicKeyPem === undefined ? {} : { publicKeyPem }),
@@ -1672,6 +1672,8 @@ const DISCOVER_VALUE_FLAGS = new Set([
  * @implements #1214
  */
 async function handleDiscover(args: string[]): Promise<void> {
+  const credentials = await prepareResourceCredentials(args);
+  args = credentials.args;
   const { discoverCapability } = await import('./query-engine.js');
   const cwd = process.cwd();
 
@@ -1739,7 +1741,7 @@ async function handleDiscover(args: string[]): Promise<void> {
   const offline = flags.includes('--offline');
   const webReleaseOptions = resourceSource === 'local'
     ? undefined
-    : webReleaseOptionsFromEnvironment();
+    : webReleaseOptionsFromEnvironment(credentials.credentialProvider);
 
   await discoverCapability(cwd, {
     phrase,
@@ -1793,6 +1795,8 @@ function showFlagValues(flags: string[], name: string): string[] {
 }
 
 async function handleShow(args: string[]): Promise<void> {
+  const credentials = await prepareResourceCredentials(args);
+  args = credentials.args;
   const { showArtifact, showMetadata } = await import('./query-engine.js');
   const cwd = process.cwd();
 
@@ -1893,7 +1897,7 @@ async function handleShow(args: string[]): Promise<void> {
   const offline = flags.includes('--offline');
   const webReleaseOptions = resourceSource === 'local'
     ? undefined
-    : webReleaseOptionsFromEnvironment();
+    : webReleaseOptionsFromEnvironment(credentials.credentialProvider);
 
   const params = {
     name,

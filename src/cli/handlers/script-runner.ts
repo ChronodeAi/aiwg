@@ -65,10 +65,12 @@ export class DefaultScriptRunner implements ScriptRunner {
       const stdio: StdioOptions = options.capture
         ? ['pipe', options.stdoutFd ?? 'pipe', 'pipe']
         : 'inherit';
+      const environment = { ...process.env, ...options.env };
+      for (const name of options.omitEnv ?? []) delete environment[name];
       const child = spawn('node', [fullPath, ...args], {
         stdio,
         cwd: options.cwd || process.cwd(),
-        env: { ...process.env, ...options.env },
+        env: environment,
       });
 
       // Always drain captured pipes, even after the diagnostic cap is reached.
@@ -151,10 +153,12 @@ export class DefaultScriptRunner implements ScriptRunner {
   ): Promise<HandlerResult> {
     const previousConsole = globalThis.console;
     const previousRoot = process.env.AIWG_ROOT;
+    const omitted = new Map((options.omitEnv ?? []).map(name => [name, process.env[name]]));
     const stderrLimit = 1024 * 1024;
     const diagnostics: Buffer[] = [];
     let diagnosticBytes = 0;
     try {
+      for (const name of omitted.keys()) delete process.env[name];
       if (options.env?.AIWG_ROOT !== undefined) process.env.AIWG_ROOT = options.env.AIWG_ROOT;
       if (options.capture) {
         const stdout = new Writable({ write(chunk, _encoding, done) {
@@ -184,6 +188,10 @@ export class DefaultScriptRunner implements ScriptRunner {
       return { exitCode: 1, message };
     } finally {
       globalThis.console = previousConsole;
+      for (const [name, value] of omitted) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
       if (previousRoot === undefined) delete process.env.AIWG_ROOT;
       else process.env.AIWG_ROOT = previousRoot;
     }

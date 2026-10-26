@@ -28,6 +28,8 @@ describe('UseHandler workspace-aware filtering (#1380)', () => {
 
   afterEach(async () => {
     await rm(tmpDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   it('deploys selected source directories directly instead of recursing through full framework use flow', async () => {
@@ -56,6 +58,27 @@ describe('UseHandler workspace-aware filtering (#1380)', () => {
       expect(args).toContain('--target');
       expect(args).toContain(tmpDir);
     }
+  });
+
+  it('consumes a release reference before deployment and withholds its variable from every helper', async () => {
+    const { UseHandler } = await import('../../../../src/cli/handlers/use.js');
+    const secret = 'synthetic-use-resource-bearer';
+    vi.stubEnv('RELEASE_FIXTURE', secret);
+    vi.stubEnv('AIWG_RESOURCE_TOKEN_FILE', '/must-not-read');
+    const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = await new UseHandler().execute({
+      args: ['--resource-token-env', 'RELEASE_FIXTURE', 'dfir', '--target', tmpDir, '--dry-run', '--provider', 'claude', '--no-utils', '--no-project-local'],
+      rawArgs: [], cwd: tmpDir, frameworkRoot: '/mock/aiwg',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(mockRun).toHaveBeenCalledTimes(1);
+    for (const [, args, options] of mockRun.mock.calls) {
+      expect(args).not.toContain('--resource-token-env');
+      expect(options.omitEnv).toEqual(['AIWG_RESOURCE_TOKEN', 'RELEASE_FIXTURE']);
+    }
+    expect(JSON.stringify({ result, calls: mockRun.mock.calls, logs: logs.mock.calls, errors: errors.mock.calls, warnings: warnings.mock.calls })).not.toContain(secret);
   });
 
   it('accepts dfir as an alias for the forensics framework', async () => {

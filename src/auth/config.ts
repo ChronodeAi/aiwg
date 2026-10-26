@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
+import { readPrivateValueFile } from "./sensitive-input.js";
 import type { AuthClientConfig } from "./types.js";
 
 export const DEFAULT_AUTH_BASE_URL = "https://releases.aiwg.io";
@@ -29,14 +29,9 @@ export function authConfigFromEnvironment(env: NodeJS.ProcessEnv = process.env):
   return { baseUrl, clientId, scopes, requestTimeoutMs: 30_000 };
 }
 
-export function explicitResourceToken(env: NodeJS.ProcessEnv = process.env): string | null {
+export async function explicitResourceToken(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
   if (env.AIWG_RESOURCE_TOKEN_FILE) {
-    const pathname = path.resolve(env.AIWG_RESOURCE_TOKEN_FILE);
-    const stat = fs.lstatSync(pathname);
-    if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
-      throw new Error("AIWG_RESOURCE_TOKEN_FILE must be a non-symlink regular file with mode 0600");
-    }
-    return fs.readFileSync(pathname, "utf8").trim() || null;
+    return await readPrivateValueFile(path.resolve(env.AIWG_RESOURCE_TOKEN_FILE), "AIWG_RESOURCE_TOKEN_FILE") || null;
   }
   return env.AIWG_RESOURCE_TOKEN?.trim() || null;
 }

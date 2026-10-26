@@ -147,6 +147,34 @@ describe("signed web release resolver", () => {
     expect(release.cacheDir).not.toContain(secret);
   });
 
+  it('redacts reflected bearer values in manifest and raw-resource request errors', async () => {
+    fixture.publishRelease();
+    const secret = 'synthetic-release-error-bearer';
+    const fail = async () => { throw new Error(`request failed with ${secret}`); };
+    await expect(resolveWebRelease({ ...options(), fetcher: fail, credentialProvider: async () => secret }))
+      .rejects.toThrow('request failed with [REDACTED]');
+    const release = await resolveWebRelease(options());
+    await expect(fetchVerifiedRawResource(release, TEST_RAW_PATH, { ...options(), fetcher: fail, credentialProvider: async () => secret }))
+      .rejects.toThrow('request failed with [REDACTED]');
+    const stream = createStreamingResourceResponse([Buffer.from('fixture')]).response;
+    stream.body!.getReader = () => ({ read: async () => { throw new Error(`stream failed with ${secret}`); } });
+    const streamFailure = async () => stream;
+    for (const selector of ['2026.7.23', 'stable', '^2026.7.0']) {
+      await expect(resolveWebRelease({ ...options(selector), fetcher: streamFailure, credentialProvider: async () => secret }))
+        .rejects.toThrow('stream failed with [REDACTED]');
+    }
+    await expect(fetchVerifiedRawResource(release, TEST_RAW_PATH, { ...options(), fetcher: streamFailure, credentialProvider: async () => secret }))
+      .rejects.toThrow('stream failed with [REDACTED]');
+  });
+
+  it('does not look up any credential on an offline resolution', async () => {
+    fixture.publishRelease();
+    const release = await resolveWebRelease(options());
+    const credentialProvider = vi.fn(async () => { throw new Error('must not read credentials'); });
+    expect((await resolveWebRelease({ ...options(), offline: true, credentialProvider })).manifestDigest).toBe(release.manifestDigest);
+    expect(credentialProvider).not.toHaveBeenCalled();
+  });
+
   it("resolves a signed channel and records its monotonic sequence", async () => {
     const published = fixture.publishRelease();
     fixture.publishChannel("stable", 7, published);

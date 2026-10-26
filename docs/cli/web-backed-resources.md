@@ -151,8 +151,28 @@ and removes local credentials; `--all` opens account-wide revocation controls.
 Credentials use macOS Keychain, Linux Secret Service, or Windows Credential
 Manager. A mode-0600 file is available only with `--store file` plus
 `--allow-file-store` (or `AIWG_AUTH_ALLOW_FILE_STORE=1`). For legacy automation,
-`AIWG_RESOURCE_TOKEN_FILE` (required mode 0600) takes precedence over
+`AIWG_RESOURCE_TOKEN_FILE` (private regular file owned by the current user;
+mode 0600 or 0400, no symlinks or extra hard links) takes precedence over
 `AIWG_RESOURCE_TOKEN`, and either takes precedence over login credentials.
+For `discover`, `show`, `versions`, `use`, and
+artifact `index discover`/`index show`, an explicit source takes priority over
+all three compatibility sources:
+
+- `--resource-token-interactive`: hidden terminal entry, only when requested
+- `--resource-token-stdin`: read one value from a pipe
+- `--resource-token-file <path>`: read a private file
+- `--resource-token-store <name>`: read a named raw value in the native OS store
+- `--resource-token-env <NAME>`: read the named shell variable
+
+When several are supplied, that order applies. An explicit invalid, empty or
+missing source errors without falling back, including in headless runs.
+Explicit input is read once per invocation before work begins. With no source,
+lookup remains optional, never prompts, and offline cache reads skip credential
+lookup. `use` applies this bearer to its existing signed release receipt lookup;
+these flags do not add web deployment support.
+See [Supplying sensitive values](sensitive-values.md) for private-file checks,
+store setup and input exposure boundaries.
+
 Tokens are sent only as HTTPS Authorization headers; they are never written to
 project configuration, resource locks, URLs, diagnostics, or cache keys.
 
@@ -316,11 +336,13 @@ install -m 600 /dev/null "$HOME/.config/aiwg/resource-token"
 # Write the token through your password manager or secret-management tool.
 export AIWG_RESOURCE_TOKEN_FILE="$HOME/.config/aiwg/resource-token"
 aiwg discover "premium capability" --resource-source web --aiwg-version pro
-aiwg use <component> --resource-source web --aiwg-version pro
+aiwg use <component> --resource-token-file "$HOME/.config/aiwg/resource-token"
 ```
 
 For ephemeral automation, `AIWG_RESOURCE_TOKEN` is also supported.
-Configure exactly one token source. The CLI sends it only as an HTTPS
+Prefer an explicit source, for example
+`--resource-token-file "$HOME/.config/aiwg/resource-token"` or
+`--resource-token-store release-production`. The CLI sends it only as an HTTPS
 `Authorization: Bearer` header to the configured release origin; it is not
 written to the lockfile, cache metadata, command line, or diagnostics.
 
