@@ -94,6 +94,30 @@ describe('DefaultScriptRunner', () => {
     expect(await runner.run(file, [], { ...options, capture: true })).toEqual({ exitCode: 5 });
   });
 
+  it('withholds selected resource variables from helpers, including embedded deployment, and restores the parent', async () => {
+    const previous = process.env.AIWG_RESOURCE_TOKEN;
+    process.env.AIWG_RESOURCE_TOKEN = 'synthetic-release-bearer';
+    const omission = { capture: true, omitEnv: ['AIWG_RESOURCE_TOKEN', 'RELEASE_FIXTURE'] };
+    try {
+      const file = script(`
+        if (process.env.AIWG_RESOURCE_TOKEN || process.env.RELEASE_FIXTURE) throw new Error('unexpected credential');
+        if (process.argv.some(arg => arg.includes('synthetic-release-bearer'))) throw new Error('unexpected argv');
+      `);
+      expect(await runner.run(file, [], { ...omission, env: { ...childEnv(), RELEASE_FIXTURE: 'synthetic-release-bearer' } })).toEqual({ exitCode: 0 });
+      const embedded = deployer(`
+        export async function main() {
+          if (process.env.AIWG_RESOURCE_TOKEN) throw new Error('unexpected credential');
+          return 0;
+        }
+      `);
+      expect(await runner.run(embedded, [], omission)).toEqual({ exitCode: 0 });
+      expect(process.env.AIWG_RESOURCE_TOKEN).toBe('synthetic-release-bearer');
+    } finally {
+      if (previous === undefined) delete process.env.AIWG_RESOURCE_TOKEN;
+      else process.env.AIWG_RESOURCE_TOKEN = previous;
+    }
+  });
+
   it('drains more than 1 MiB from both pipes and preserves the success contract', async () => {
     const file = script(`
       process.stdout.write('o'.repeat(2 * 1024 * 1024));

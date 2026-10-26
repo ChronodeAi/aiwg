@@ -16,7 +16,8 @@ vi.mock('../../../../src/resources/web-release.js', () => ({
   resolveWebRelease: state.resolveWebRelease,
 }));
 
-vi.mock('../../../../src/auth/resource-credentials.js', () => ({
+vi.mock('../../../../src/auth/resource-credentials.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../../../src/auth/resource-credentials.js')>(),
   createResourceCredentialProvider: vi.fn(() => state.credentialProvider),
 }));
 
@@ -84,4 +85,16 @@ describe('provider receipt source resolution', () => {
       .mockRejectedValueOnce(new Error('release manifest signature verification failed'));
     await expect(resolveProviderReceiptSource(options)).rejects.toThrow(/signature verification failed/);
   });
+  it('uses a supplied release credential only after an offline cache miss', async () => {
+    state.versionInfo = { version: '2026.8.16', channel: 'stable', devMode: false };
+    const credentialProvider = vi.fn(async () => 'synthetic-resource-bearer');
+    state.resolveWebRelease.mockRejectedValueOnce(new Error('offline cache miss')).mockRejectedValueOnce(new Error('request failed'));
+    await expect(resolveProviderReceiptSource({ ...options, credentialProvider })).rejects.toThrow('request failed');
+    expect(credentialProvider).toHaveBeenCalledTimes(1);
+    expect(state.credentialProvider).not.toHaveBeenCalled();
+    const onlineOptions = state.resolveWebRelease.mock.calls[1][0];
+    expect(await onlineOptions.credentialProvider()).toBe('synthetic-resource-bearer');
+    expect(JSON.stringify(onlineOptions)).not.toContain('synthetic-resource-bearer');
+  });
+
 });

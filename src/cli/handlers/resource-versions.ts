@@ -10,7 +10,7 @@ import { getProjectDir } from "../../config/aiwg-config.js";
 import { cleanWebResourceCache } from "../../resources/cache-cleanup.js";
 import { writeWebResourceLock } from "../../resources/lockfile.js";
 import type { CommandHandler, HandlerContext, HandlerResult } from "./types.js";
-import { createResourceCredentialProvider } from "../../auth/resource-credentials.js";
+import { createResourceCredentialProvider, prepareResourceCredentials } from "../../auth/resource-credentials.js";
 
 const MAX_RESOURCE_MANIFEST_BYTES = 4 * 1024 * 1024;
 const DEFAULT_CHANNELS = ["stable", "latest", "canary", "main"] as const;
@@ -40,6 +40,7 @@ function usage(): string {
   return [
     "Usage: aiwg versions <list|resolve|show|clean-cache> [selector] [--json] [--pretty] [--offline]",
     "",
+    "Protected releases: --resource-token-stdin, --resource-token-file <path>, --resource-token-store <name>, --resource-token-env <NAME>, --resource-token-interactive",
     "Examples:",
     "  aiwg versions list --json",
     "  aiwg versions resolve stable --json",
@@ -111,7 +112,7 @@ function parseArgs(args: string[]): ParsedVersionArgs {
   };
 }
 
-function webReleaseOptionsFromEnvironment(): Omit<WebReleaseOptions, "selector" | "offline"> {
+function webReleaseOptionsFromEnvironment(credentialProvider = createResourceCredentialProvider(process.env)): Omit<WebReleaseOptions, "selector" | "offline"> {
   const baseUrl = process.env.AIWG_RESOURCE_BASE_URL;
   const cacheRoot = process.env.AIWG_RESOURCE_CACHE_ROOT;
   const trustRootFile = process.env.AIWG_RESOURCE_TRUST_ROOT_FILE;
@@ -120,7 +121,7 @@ function webReleaseOptionsFromEnvironment(): Omit<WebReleaseOptions, "selector" 
     : loadResourceTrustRootFile(path.resolve(trustRootFile));
 
   return {
-    credentialProvider: createResourceCredentialProvider(process.env),
+    credentialProvider,
     ...(baseUrl === undefined ? {} : { baseUrl }),
     ...(cacheRoot === undefined ? {} : { cacheRoot }),
     ...(publicKeyPem === undefined ? {} : { publicKeyPem }),
@@ -215,14 +216,16 @@ export const versionsHandler: CommandHandler = {
     }
 
     let parsed: ParsedVersionArgs;
+    let credentials: Awaited<ReturnType<typeof prepareResourceCredentials>>;
     try {
-      parsed = parseArgs(ctx.args);
+      credentials = await prepareResourceCredentials(ctx.args);
+      parsed = parseArgs(credentials.args);
     } catch (error) {
       return { exitCode: 2, message: error instanceof Error ? error.message : String(error) };
     }
 
     try {
-      const baseOptions = webReleaseOptionsFromEnvironment();
+      const baseOptions = webReleaseOptionsFromEnvironment(credentials.credentialProvider);
       if (parsed.subcommand === "clean-cache") {
         const result = cleanWebResourceCache(getProjectDir(ctx, ctx.args), {
           cacheRoot: process.env.AIWG_RESOURCE_CACHE_ROOT,

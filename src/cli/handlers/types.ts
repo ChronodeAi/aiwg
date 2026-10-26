@@ -129,6 +129,9 @@ export interface ScriptRunnerOptions {
   /** Additional environment variables */
   env?: Record<string, string>;
 
+  /** Shell variables withheld from unrelated script recipients. */
+  omitEnv?: readonly string[];
+
   /** Timeout in milliseconds */
   timeout?: number;
 

@@ -124,7 +124,7 @@ import {
   resolveWebRelease,
   type WebReleaseOptions,
 } from '../../resources/web-release.js';
-import { createResourceCredentialProvider } from '../../auth/resource-credentials.js';
+import { createResourceCredentialProvider, prepareResourceCredentials } from '../../auth/resource-credentials.js';
 
 /**
  * Valid framework identifiers
@@ -160,6 +160,7 @@ export async function resolveProviderReceiptSource(options: {
   provider: string;
   scope: DeploymentScope;
   requestedBundles: string[];
+  credentialProvider?: () => Promise<string | null>;
 }): Promise<{
   sourceVerifications?: Readonly<Record<string, import('../../security/artifact-verifier.js').ArtifactVerificationResult>>;
   sourceDisposition?: 'local-source' | 'source-unavailable' | 'verification-failed';
@@ -172,7 +173,7 @@ export async function resolveProviderReceiptSource(options: {
   try {
     release = await resolveWebRelease({ ...releaseOptions, selector: versionInfo.version, offline: true });
   } catch {
-    const credentialProvider = createResourceCredentialProvider(process.env);
+    const credentialProvider = options.credentialProvider ?? createResourceCredentialProvider(process.env);
     const token = await credentialProvider();
     // Protected production resources require the authenticated release
     // credential. A configured alternate endpoint may intentionally be public.
@@ -1934,7 +1935,7 @@ async function generateDeploymentContextFiles(options: ContextPipelineOptions): 
   return result;
 }
 
-let useDeployment: { version: string; skipContextFiles: boolean; contextFiles: ContextPipelineResult[] } | undefined;
+let useDeployment: { resourceCredentials?: Awaited<ReturnType<typeof prepareResourceCredentials>>; version: string; skipContextFiles: boolean; contextFiles: ContextPipelineResult[] } | undefined;
 function useDeploymentArgs(args: string[]): string[] {
   const forwarded = [...args];
   if (useDeployment && !forwarded.includes('--deploy-version')) forwarded.push('--deploy-version', useDeployment.version);
@@ -1948,6 +1949,7 @@ function createUseScriptRunner(frameworkRoot: string) {
   const runner = createScriptRunner(frameworkRoot);
   return {
     async run(script: string, args: string[], options: Parameters<typeof runner.run>[2] = {}): Promise<HandlerResult> {
+      options = { ...options, omitEnv: useDeployment?.resourceCredentials?.omitEnv ?? ['AIWG_RESOURCE_TOKEN'] };
       if (script === 'tools/agents/deploy-agents.mjs') args = useDeploymentArgs(args);
       if (!usePreviewActions) return runner.run(script, args, options);
       const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-use-preview-'));
@@ -2788,6 +2790,9 @@ Bundles:
   <addon> | <extension>     Any installed addon or extension name
 
 Options:
+  --resource-token-stdin | --resource-token-file <path> | --resource-token-store <name>
+  --resource-token-env <NAME> | --resource-token-interactive
+                            Select the optional protected release bearer
   --provider <name>         Target provider (default: .aiwg/aiwg.config providers)
   --target <dir>            Deploy into <dir> instead of the current directory
   --scope project|user      Deploy to the project (default) or the user scope
@@ -2862,10 +2867,20 @@ export class UseHandler implements CommandHandler {
   }
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    let resourceCredentials = useDeployment?.resourceCredentials;
+    try {
+      if (!resourceCredentials) {
+        resourceCredentials = await prepareResourceCredentials(ctx.args);
+        ctx = { ...ctx, args: resourceCredentials.args };
+      }
+    } catch (error) {
+      return { exitCode: 2, message: error instanceof Error ? error.message : String(error) };
+    }
     const invalidOption = validateUseOptions(ctx.args, this.preparedProviderContinuations);
     if (invalidOption) return { exitCode: 2, message: invalidOption };
     const previousDeployment = useDeployment;
     useDeployment = {
+      resourceCredentials,
       version: previousDeployment?.version ?? resolveDeployVersion(ctx.frameworkRoot || await getFrameworkRoot()),
       skipContextFiles: previousDeployment?.skipContextFiles || ctx.args.includes('--no-context-files'),
       contextFiles: previousDeployment?.contextFiles ?? [],
@@ -3036,7 +3051,7 @@ export class UseHandler implements CommandHandler {
               scope: effectiveScope,
               requestedBundles: [requestedBundle],
             };
-            const sourceResolution = await resolveProviderReceiptSource(receiptOptions);
+            const sourceResolution = await resolveProviderReceiptSource({ ...receiptOptions, credentialProvider: useDeployment?.resourceCredentials?.credentialProvider });
             await finalizeProviderTransformationReceipt({ ...receiptOptions, ...sourceResolution });
           } catch (error) {
             await finalizeProviderTransformationReceipt({
