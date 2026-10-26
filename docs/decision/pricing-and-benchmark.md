@@ -86,8 +86,11 @@ for caller assumptions and legacy reporting.
 ## Opt-in live paired collection
 
 Build the CLI first. Supply credentials in the caller environment at run time:
-`JEV_API_KEY` (or `AIWG_DECISION_JEV_API_KEY`) and `OPENAI_API_KEY`. The benchmark
-reads no credential or token files. The default baseline uses the Responses API,
+`JEV_API_KEY` (or `AIWG_DECISION_JEV_API_KEY`) and the selected baseline key.
+`--baseline-provider openai` is the default and reads `OPENAI_API_KEY`;
+`--baseline-provider openrouter` reads `OPENROUTER_API_KEY`. Keys are accepted
+only from the caller environment, never argv or files. The default baseline uses
+the Responses API,
 with tools disabled, no stored response and no retries. Library callers inject a
 baseline client; tests inject both clients and the clock.
 
@@ -100,6 +103,21 @@ node tools/decision/benchmark.mjs --replay captures/paired.json --json
 node tools/decision/benchmark.mjs --live --max-calls 12 --max-usd 2 \
   --extend captures/paired.json --passes 5 --json
 ```
+
+For OpenRouter, with both keys already available in the caller environment, run
+the six-case synthetic dataset (24 calls with three Jev passes):
+
+```bash
+mkdir -p captures
+node tools/decision/benchmark.mjs --live \
+  --dataset test/fixtures/decision/benchmark-smoke.json --capture captures/paired-openrouter.json \
+  --baseline-provider openrouter --baseline-model openai/gpt-6.1-sol --baseline-effort low \
+  --passes 3 --max-calls 40 --max-usd 1 --json
+```
+
+OpenRouter uses Chat Completions with a strict decision JSON schema, required
+parameter support, reasoning effort, usage reporting and no tools. Both providers
+refuse redirects and use a 60-second timeout. Labels include provider/model/effort.
 
 Create the output directory before collection. New captures refuse to overwrite
 existing files; `--extend` appends observations in place, using atomic checkpoints.
@@ -146,7 +164,8 @@ including a baseline without Jev passes if that is where collection stopped.
 They validate as checkpoints; analysis requires complete observations for every
 case at each requested pass count. Increase the USD cap to resume a priced
 interrupted capture. If baseline rows are still missing, also supply the original
-`--baseline-model`, `--baseline-effort` and `--baseline-price` settings.
+`--baseline-provider`, `--baseline-model`, `--baseline-effort` and any
+`--baseline-price` settings.
 
 Live collection always uses `splitBenchmarkHoldout`, default fraction `0.3` and
 seed `3291`, before invoking either client. Both arms receive the same question,
@@ -155,8 +174,13 @@ same `--holdout` and `--seed` when extending a custom split. Only tuning cases
 select a policy; holdout cases assess it afterward.
 
 Each observation records the served model, token counts, measured latency,
-answered/fallback status and `cost: {usd, price}`. A known price includes the
-exact model, HTTPS source, checked date and existing `TokenPrice` fields. Jev
+answered/fallback status and `cost: {usd, price}`. OpenRouter's finite nonnegative
+`usage.cost` takes precedence over token rates and is captured as
+`cost: {usd, price: null, source: "provider-reported"}`. It contributes directly
+to known USD and the spend stop, including for fallback responses. When no valid
+provider cost is reported, `--baseline-price` still supplies sourced token rates.
+A known price includes the exact model, HTTPS source, checked date and existing
+`TokenPrice` fields. Jev
 uses complete sourced rates from `decision.ask.cost.*` when configured, otherwise
 the dated bundled TypeSafe snapshot. An unrecognized served version stays
 unknown. Supply baseline rates explicitly in a JSON file such as:
