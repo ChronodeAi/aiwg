@@ -7,6 +7,104 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.8] - 2026-10-26
+
+### Added
+
+- Per-value secret sources for `aiwg mcp add` and `mcp update` through the
+  existing repeatable `--env-from KEY=SOURCE` and `--header-env HEADER=SOURCE`:
+  bare environment names, `file:ABSOLUTE_PATH`, `store:NAME`,
+  `stdin:STORE_NAME` and `interactive:STORE_NAME`. Durable sources resolve only
+  when AIWG's runtime client connects; registration saves locators only.
+  Explicit stdin/interactive sources save through the existing OS store and
+  persist `store:STORE_NAME`; at most one value per invocation can use stdin,
+  and only `interactive:` prompts (#3079 slice 3a, #3615).
+- `aiwg cost-report --key <ref> --key-store <name>` and per-entry `key_store`
+  references in fleet YAML, using the existing native secret store. Without a
+  store selector, named environment variables and private key files retain
+  their lookup order. A failed selected reference never falls back to another
+  entry's credential; responses and errors redact keys (#3079 slice 3b, #3612).
+- Optional preexisting bearer input for `aiwg local-executor serve` through
+  `--token-interactive`, `--token-stdin`, `--token-file`, `--token-store` and
+  `--token-env`. **Compatibility:** no-source execution retains
+  `AIWG_EXECUTOR_TOKEN`, restart cache and registration-issued token behavior;
+  terminal entry requires the explicit interactive flag (#3079, #3612).
+- `aiwg decision rotate` archives older call-ledger records beneath
+  `archive/decision/` in the resolved artifact root. **Retention and upgrade
+  note:** the default keeps the last 90 days; `--keep-last <Nd|N>` selects a
+  duration or positive record count, and archiving everything requires `--all`.
+  `--to` must name a `.jsonl` file in that archive directory. `decision history`
+  and `decision stats` read the live ledger by default; use `--include-archives`
+  to include rotated records, still offline. Rotation is explicit, not scheduled
+  automatically (#3058, #3613).
+
+### Changed
+
+- **Deprecation and upgrade note:** secret-looking literal `mcp add/update`
+  `--env` or `--headers` values still work but emit one value-free stderr
+  warning per invocation. Existing literal registry entries load unchanged,
+  with no automatic migration. Move secrets to env/header references;
+  `--args` remains literal and exposes values in argv and saved config
+  (#3079, #3615).
+- **Behavior and upgrade note:** native provider/profile config writers,
+  including Codex, OMP and Grok Build, refuse `file:` and `store:` MCP locators
+  before writing because those clients cannot call AIWG's resolver. Use bare
+  environment-name references for native injection, installation and sessions;
+  file/store references are supported by AIWG's registry-backed Fortemi runtime
+  client for stdio, HTTP and SSE (#3079, #3615).
+- Grok Build source-contract review advances the reviewed public commit to
+  `2bdd1d6` (`SOURCE_REV 559751fd`), dated 2026-10-26. **Behavior change:** model
+  discovery withholds config-derived aliases and reports unresolved when
+  external auth and a custom models endpoint are combined, including across
+  active config layers or environment settings. It never runs the auth command
+  or queries the endpoint. The provider stays experimental and the released
+  qualification binary stays 1.0.38; this source review is not new live
+  qualification or binary build provenance (#3609, #3611).
+
+### Fixed
+
+- Decision ledger appends, rotation and readers share a cross-process directory
+  lock with dead-owner recovery and a bounded wait. Rotation writes private
+  archive/replacement files exclusively and renames the replacement under that
+  lock, preserving concurrent appends. Malformed lines retain their exact bytes
+  and stay in the live ledger unless `--all` is selected. Recording trouble
+  warns without failing the decision result (#3058, #3613).
+- Sandbox credential-loader remediation points installed users to `aiwg doctor`.
+  The Grok Build qualification page links to the repository copy of its provider
+  profile, fixing a strict-link failure caused by the public site's audience
+  exclusions (#3079, #3609, #3614).
+- The offline decision-offload report test clears and restores the host's
+  `AIWG_DECISION_ENABLED`, so an enabled workstation cannot override its
+  disabled-project fixture. Product enablement behavior is unchanged (#3616).
+- Shared-host admission reads no longer fail when another process atomically
+  replaces the host authority snapshot after the reader opened it. The durable
+  read check now refuses only extra hard links, not the zero link count of a
+  replaced file; mode, owner, regular-file and size checks are unchanged
+  (#3618).
+
+### Security
+
+- Sandbox management bearer files use the shared private-file validator;
+  `AIWG_SANDBOX_MANAGEMENT_TOKEN_STORE` selects an OS-store entry instead.
+  Files must be regular, user-owned, single-link, non-symlink and inaccessible
+  to group/others. Local-executor restart credentials use the same validation
+  in a private cache (0600 file, 0700 directory), and token values stay out of
+  events and registration errors. Windows cache persistence fails closed until
+  native ACL validation is available (#3079, #3612).
+- **Behavior and upgrade note:** Jev runtime now reads
+  `~/.config/aiwg/credentials/jev.json` through the shared descriptor validator.
+  A symlinked or hard-linked file is refused, as are exposed, unowned or
+  nonregular files. Replace linked records with a private regular single-link
+  file. The record format, directory checks and `JEV_API_KEY`, then
+  `AIWG_DECISION_JEV_API_KEY`, then credential-file precedence remain unchanged;
+  runtime lookup does not prompt (#3079, #3612).
+- Fortemi resolves MCP file/store references at connection time and redacts
+  resolved values from errors and results. Recipient stderr is drained
+  privately, and stdio connections with resolved credentials refuse Node
+  child-process debug logging before spawn. Missing/invalid selected sources
+  fail without fallback; a store entry saved before a later registration failure
+  remains in the store (#3079, #3615).
+
 ## [2026.10.7] - 2026-10-26
 
 ### Added

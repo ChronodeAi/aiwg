@@ -192,6 +192,7 @@
     "references/REF-003-agentic-development-antipatterns",
     "references/REF-066-mcp-specification-2025",
     "releases",
+    "releases/v2026.10.8-announcement",
     "releases/v2026.10.7-announcement",
     "releases/v2026.5.11-announcement",
     "releases/v2026.5.10-announcement",
@@ -1616,6 +1617,13 @@
       "title": "Releases",
       "summary": "Release notes and changelog",
       "collapsed": true
+    },
+    {
+      "id": "releases/v2026.10.8-announcement",
+      "title": "v2026.10.8 — Secret References + Decision Retention",
+      "summary": "Per-value MCP secret sources, private credential validation, decision ledger retention, Grok Build discovery and CI repairs.",
+      "file": "releases/v2026.10.8-announcement.md",
+      "parent": "releases"
     },
     {
       "id": "releases/v2026.10.7-announcement",
