@@ -190,7 +190,7 @@ export async function verifyModelWrapperDeployment(
   const missing: string[] = [];
   const mismatches: WrapperDeploymentMismatch[] = [];
   for (const [role, wrapper] of expected) {
-    const matches = files.filter(file => path.basename(file).replace(/\.(?:md|toml|json|yaml|yml)$/i, '') === wrapper);
+    const matches = files.filter(file => path.basename(file).replace(/(?:\.agent)?\.(?:md|toml|json|yaml|yml)$/i, '') === wrapper);
     if (matches.length === 0) {
       missing.push(wrapper);
       continue;
