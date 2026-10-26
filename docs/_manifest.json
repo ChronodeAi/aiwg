@@ -192,6 +192,7 @@
     "references/REF-003-agentic-development-antipatterns",
     "references/REF-066-mcp-specification-2025",
     "releases",
+    "releases/v2026.10.9-announcement",
     "releases/v2026.10.8-announcement",
     "releases/v2026.10.7-announcement",
     "releases/v2026.5.11-announcement",
@@ -1617,6 +1618,13 @@
       "title": "Releases",
       "summary": "Release notes and changelog",
       "collapsed": true
+    },
+    {
+      "id": "releases/v2026.10.9-announcement",
+      "title": "v2026.10.9 — Consistent Sensitive Values",
+      "summary": "Sensitive-value work complete: daemon and storage references, protected resource inputs, credential redaction and reliable SessionStart hooks.",
+      "file": "releases/v2026.10.9-announcement.md",
+      "parent": "releases"
     },
     {
       "id": "releases/v2026.10.8-announcement",

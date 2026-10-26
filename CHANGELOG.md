@@ -7,6 +7,100 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.9] - 2026-10-26
+
+### Added
+
+- Standard protected release bearer sources for `aiwg discover`, `show`,
+  `resource-versions` and `use`: `--resource-token-interactive`,
+  `--resource-token-stdin`, `--resource-token-file <path>`,
+  `--resource-token-store <name>` and `--resource-token-env <NAME>`. When several
+  are supplied, that order applies. Explicit sources precede the existing
+  optional file, environment and auth-store lookup; only the interactive flag
+  prompts. `use` applies the bearer to signed release receipt lookup.
+  Public/offline behavior stays unchanged when no source is selected (#3079 slice 4a, #3622).
+- Daemon startup and reload resolve `ENV_NAME`, `file:ABSOLUTE_PATH` and
+  `store:NAME` through the existing loader, without saving secret bytes or
+  prompting. Web authentication uses `interface.web.token_ref`; Telegram and
+  Discord use `botToken_ref` (alias `token_ref`); Slack uses `botToken_ref` and
+  `webhookUrl_ref`. The existing `webhook.secret_env` accepts the same sources,
+  and existing `${ENV_NAME}` templates still resolve. `daemon-init` writes
+  references only. **Limitation:** the webhook secret resolves, but the daemon
+  has no inbound webhook listener yet (#3079 slice 4b, #3623).
+- Logseq's `apiTokenEnv` selector accepts an environment name, private-file
+  locator or named OS-store entry; omitted selection retains `LOGSEQ_API_TOKEN`.
+  With `useApi: false`, no credential is read. Missing default input still warns
+  and keeps filesystem writes; an explicit missing source fails when API use
+  is enabled (#3079 slice 4c, #3625).
+- PostgreSQL `connectionStringEnv` and PostgREST `authorizationEnv` now accept
+  `file:ABSOLUTE_PATH` and `store:NAME` alongside environment names. PostgreSQL
+  keeps the `AIWG_POSTGRES_URL` default; omitted PostgREST authorization stays
+  unauthenticated. The selected PostgREST value supplies the whole Authorization
+  header, including any `Bearer ` prefix. No backend prompts or reads stdin;
+  missing selected sources fail without fallback (#3079, #3620, #3627).
+
+### Changed
+
+- **Sensitive-value work complete:** #3079, one consistent way to supply
+  sensitive values, is complete with this release. The final slices cover
+  resource access, daemon/messaging, storage, UHP profile validation and
+  diagnostic disclosure; documented provider-recipient exceptions and
+  developer-only live tooling retain their existing contracts
+  (#3079, #3622, #3623, #3625, #3627).
+- **Deprecation and upgrade note:** daemon literal config secrets and legacy
+  environment input still work. Literals warn once per config instance without
+  printing values and are not migrated. Prefer the recipient's `*_ref` field
+  (or existing `webhook.secret_env`); explicit references take precedence and
+  invalid selected input fails startup. An unset legacy webhook environment
+  variable stays optional. Without a web token, authentication
+  remains disabled; configure one deliberately (#3079, #3623).
+- Storage reference benchmarks were requalified locally on disposable loopback
+  containers with the pinned image digests and Node 24.22.1. The claims gate
+  also accepts a documented detached reference run bound to branch `HEAD`, a
+  public base commit, the exact modified sources within the claim scope and
+  their source digest; main evidence still comes from main.
+  `node tools/benchmarks/verify-storage-claims.mjs --import-server-run` imports
+  emitted reports and Vitest results into the existing evidence format.
+  These are reference-host envelopes, not production certification; the
+  PostgREST authenticated-RLS case remains skipped without a JWT authority
+  (#3620, #3627).
+
+### Fixed
+
+- The SessionStart hook retries late nonblocking stdin for up to 5 seconds
+  instead of treating `EAGAIN` as absent input and silently dropping the
+  decision-offload compact anchor. EOF, size bounds and invalid JSON behavior
+  are unchanged; the bundled hook copy is updated too (#3621).
+- `aiwg diagnose --include-secrets` emits a value-free stderr warning, including
+  with `--stdout`, and help explains that output contains secrets and needs
+  review before sharing. Default sanitization is unchanged
+  (#3079 slice 4d, #3625).
+
+### Security
+
+- `aiwg use` withholds the resource bearer environment variables from deploy
+  scripts. Resource requests and streamed errors redact reflected bearer
+  values; `AIWG_RESOURCE_TOKEN_FILE` now uses the shared private-file validator.
+  **Upgrade note:** replace linked or exposed bearer files with private,
+  user-owned, regular single-link files. Shared file validation refuses Windows
+  file input until native ACL validation is available; use stdin or the store
+  where supported (#3079, #3622).
+- Daemon agent, chat, maintenance and npm-watcher children no longer inherit
+  daemon secret names or resolved values; provider and npm configuration remain
+  available. Each web/messaging recipient receives its own resolved config,
+  and adapter errors and config parse failures avoid echoing credentials
+  (#3079, #3623).
+- Fortemi transport errors, logs and results redact registry header/environment
+  credentials, including legacy literal headers. Credential-bearing stdio
+  transports privately drain stderr and refuse Node child-process debug logging
+  before spawn. **Upgrade note:** UHP profiles reject extra inline credential
+  locator fields; keep only `credential.source: env` and `credential.name`.
+  UHP remains environment-reference-only (#3079 slices 4c–4d, #3625).
+- PostgreSQL driver failures and decoded PostgREST HTTP errors and logs no
+  longer expose connection strings, passwords or authorization values. The
+  credential-source changes ship with requalified reference evidence;
+  TLS policy and storage routing are unchanged (#3079, #3620, #3627).
+
 ## [2026.10.8] - 2026-10-26
 
 ### Added
