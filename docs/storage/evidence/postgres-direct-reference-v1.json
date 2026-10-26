@@ -1,20 +1,27 @@
 {
   "schemaVersion": "aiwg.storage-server-benchmark/v1",
   "evidenceId": "postgres-direct-reference-v1",
-  "observedAt": "2026-08-28T15:40:54.811Z",
-  "validUntil": "2026-11-26T15:40:54.811Z",
+  "observedAt": "2026-10-26T14:19:26.383Z",
+  "validUntil": "2027-01-24T14:19:26.383Z",
   "subject": {
-    "branch": "main",
-    "commit": "1c114ffea97f56c629bcabd9d025b9c0c8c04e6f",
+    "branch": "HEAD",
+    "commit": "13084ef2febb9b9805a980a40a98da8b9ce97b76",
     "sourceFiles": [
       "src/storage/backends/postgres.ts",
       "src/storage/qualification.ts",
       "test/integration/storage-postgres-live.test.ts"
     ],
-    "sourceDigest": "bf1d548ac4f590f2d4da5ed742c6c9d7d93faf1cedf943e5eb339c0309779ddb"
+    "sourceDigest": "8195ac10471877d53013b35b3e14241cba17dd75950616ac8dd35b4bfb6bc3b4",
+    "checkout": {
+      "kind": "detached-worktree",
+      "baseCommit": "13084ef2febb9b9805a980a40a98da8b9ce97b76",
+      "modifiedSourceFiles": [
+        "src/storage/backends/postgres.ts"
+      ]
+    }
   },
   "runtime": {
-    "node": "v24.12.0",
+    "node": "v24.22.1",
     "platform": "linux",
     "arch": "x64"
   },
@@ -31,13 +38,13 @@
   },
   "qualification": {
     "schemaVersion": "aiwg.storage-qualification/v1",
-    "runId": "a846b5ee4c99c65e0076f40d083f8e60e9982b76e6654252c90adb3c00e77582",
-    "startedAt": "2026-08-28T15:40:54.400Z",
-    "completedAt": "2026-08-28T15:40:54.811Z",
+    "runId": "525dd773b0583454ca56351f351d98b7a695fd34440bef655e1f31ed0a900562",
+    "startedAt": "2026-10-26T14:19:25.626Z",
+    "completedAt": "2026-10-26T14:19:26.383Z",
     "scope": {
       "backend": "postgres-direct",
-      "branch": "main",
-      "commit": "1c114ffea97f56c629bcabd9d025b9c0c8c04e6f",
+      "branch": "HEAD",
+      "commit": "13084ef2febb9b9805a980a40a98da8b9ce97b76",
       "datasetId": "postgres-envelope-v1",
       "declaredRecords": 128,
       "readers": 4,
@@ -51,28 +58,28 @@
       "missing": [],
       "unexpected": [],
       "corrupt": [],
-      "expectedDigest": "056e7800346a87d1d21d10d71328de76ec3c81eb9f464ca55b58442b1720946e",
-      "observedDigest": "056e7800346a87d1d21d10d71328de76ec3c81eb9f464ca55b58442b1720946e"
+      "expectedDigest": "ba22e33c3f376d37730b7a285baf77ef1b9068bfc88bdd2c0910fa44ee2d21a1",
+      "observedDigest": "ba22e33c3f376d37730b7a285baf77ef1b9068bfc88bdd2c0910fa44ee2d21a1"
     },
     "latencyMs": {
-      "p50": 5.132680000000164,
-      "p95": 49.981866999999966,
-      "p99": 111.65549600000008
+      "p50": 7.159198000001197,
+      "p95": 59.38422100000025,
+      "p99": 107.70932399999947
     },
-    "throughputPerSecond": 325.2071931366915,
-    "errors": 40,
-    "retries": 40,
-    "errorRate": 0.30303030303030304,
-    "retryRate": 0.30303030303030304,
+    "throughputPerSecond": 177.44294067840357,
+    "errors": 45,
+    "retries": 45,
+    "errorRate": 0.3409090909090909,
+    "retryRate": 0.3409090909090909,
     "resources": {
-      "cpuUserMicros": 264464,
-      "cpuSystemMicros": 71084,
-      "rssBytes": 247111680,
+      "cpuUserMicros": 324755,
+      "cpuSystemMicros": 83386,
+      "rssBytes": 295321600,
       "databaseBytes": 8410803,
-      "writeAmplification": 9.583554457559398,
-      "walBytes": 314216,
+      "writeAmplification": 10.239668161161436,
+      "walBytes": 335728,
       "lockWaits": 0,
-      "poolSaturation": 0.75,
+      "poolSaturation": 0.5,
       "migrationMs": null,
       "recoveryMs": null,
       "transportOverheadMs": null
@@ -80,11 +87,11 @@
     "sideEffectSummary": [
       {
         "outcome": "committed",
-        "count": 116
+        "count": 108
       },
       {
         "outcome": "replayed",
-        "count": 16
+        "count": 24
       }
     ]
   },
@@ -93,12 +100,12 @@
     "failed": 0,
     "skipped": 0,
     "coverage": [
-      "atomic replay, concurrent writes, bounded pool, snapshots, changes, query, traversal, and health",
-      "pg_dump and pg_restore record, receipt, and tombstone round trip",
-      "filesystem-shaped offline migration, semantic verification, and approval-bound cutover",
-      "schema upgrade and exact-count rollback",
-      "correctness-qualified operating envelope",
-      "pooled-session termination and reconnect"
+      "proves atomic replay, updates, tombstones, snapshots, cursors, query, traversal, and health",
+      "round-trips schema, records, receipts, and tombstones through pg_dump/pg_restore",
+      "passes the filesystem-shaped offline migration and approval-bound cutover gate",
+      "upgrades and explicitly rolls back an isolated schema with exact-count approval",
+      "emits a correctness-qualified direct-server operating-envelope record",
+      "reconnects after PostgreSQL terminates an established pooled session"
     ]
   },
   "interpretation": "Disposable loopback reference-host observation only; not a universal capacity limit or production certification."
