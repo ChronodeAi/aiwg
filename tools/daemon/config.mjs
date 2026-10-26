@@ -7,6 +7,8 @@ import { importImpl } from '../_resolve-impl.mjs';
 import { validateUpdatePolicy } from './update-policy.mjs';
 
 const { validateMemoryJobArgs } = await importImpl(import.meta.url, 'housekeeper/daemon-config.js');
+const { resolveSensitiveInput } = await importImpl(import.meta.url, 'auth/sensitive-input.js');
+const { credentialReferenceInput } = await importImpl(import.meta.url, 'mcp/credentials.mjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -93,6 +95,11 @@ const DEFAULT_CONFIG = {
 };
 
 export class Config {
+  #recipients = new Map();
+  #secretNames = new Set();
+  #secretValues = new Set();
+  #warnedLiteral = false;
+
   constructor(configPath = '.aiwg/daemon.json') {
     this.configPath = configPath;
     this.config = null;
@@ -120,11 +127,121 @@ export class Config {
         this.save();
       }
     } catch (error) {
-      console.error(`Failed to load config from ${this.configPath}:`, error.message);
+      // Parser errors can quote the input, including literal credentials.
+      console.error('Failed to load daemon config; using defaults. Check JSON/YAML syntax.');
       this.config = DEFAULT_CONFIG;
     }
 
     return this.config;
+  }
+
+  /** Resolve only active recipients, without replacing references in saved config. Never prompts. */
+  async resolveSecrets(dependencies = {}) {
+    const environment = dependencies.environment ?? process.env;
+    const recipients = new Map();
+    this.#secretNames = new Set(['AIWG_WEB_TOKEN', 'AIWG_WEBHOOK_SECRET', 'AIWG_TELEGRAM_TOKEN',
+      'AIWG_DISCORD_TOKEN', 'AIWG_SLACK_BOT_TOKEN', 'AIWG_SLACK_WEBHOOK_URL']);
+    this.#secretValues.clear();
+    const warnLiteral = () => {
+      if (this.#warnedLiteral) return;
+      this.#warnedLiteral = true;
+      (dependencies.warn ?? console.warn)('Warning: daemon config contains literal secrets; use ENV_NAME, file:ABSOLUTE_PATH, or store:NAME references in *_ref fields.');
+    };
+    for (const [section, fields] of [['interface.web', ['token']], ['messaging.telegram', ['botToken', 'token']],
+      ['messaging.discord', ['botToken', 'token']], ['messaging.slack', ['botToken', 'webhookUrl']]]) {
+      const settings = this.get(section) ?? {};
+      for (const field of fields) {
+        const value = settings[field];
+        const template = typeof value === 'string' && /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value);
+        const reference = settings[`${field}_ref`] ?? template?.[1];
+        if (typeof reference === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(reference)) this.#secretNames.add(reference);
+        if (value && !template && !(typeof value === 'string' && /^(?:file|store):/.test(value))) {
+          this.#secretValues.add(value);
+          warnLiteral();
+        }
+      }
+    }
+    const webhookRef = this.get('webhook.secret_env');
+    if (typeof webhookRef === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(webhookRef)) this.#secretNames.add(webhookRef);
+    const resolve = async (settings, field, legacyEnv, label, aliases = []) => {
+      const referenceField = label === 'webhook.secret_env' ? label : `${label}_ref`;
+      const fields = [field, ...aliases];
+      const refField = fields.find(key => settings[`${key}_ref`] !== undefined);
+      const literalField = fields.find(key => settings[key]);
+      const literal = literalField ? settings[literalField] : undefined;
+      // Existing profile templates use ${NAME}. Explicit *_ref fields avoid
+      // guessing whether an ordinary literal token is an environment name.
+      const template = typeof literal === 'string' && /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(literal);
+      const reference = refField ? settings[`${refField}_ref`]
+        : template ? template[1]
+          : typeof literal === 'string' && /^(?:file|store):/.test(literal) ? literal : undefined;
+      if (refField || reference !== undefined) {
+        let source;
+        try { source = credentialReferenceInput(reference); }
+        catch { throw new Error(`${label}: use ENV_NAME, file:ABSOLUTE_PATH, or store:NAME in ${referenceField}.`); }
+        if (source.env) this.#secretNames.add(source.env);
+        try {
+          const value = await resolveSensitiveInput({ prefix: 'value', ...source }, { ...dependencies, isTTY: false });
+          this.#secretValues.add(value);
+          return value;
+        } catch (error) {
+          // Shared resolver diagnostics contain source names/checks, never file/store bytes.
+          throw new Error(`${label}: ${error.message} Supply ENV_NAME, file:ABSOLUTE_PATH, or store:NAME via ${referenceField}.`);
+        }
+      }
+      if (literal) {
+        warnLiteral();
+        this.#secretValues.add(literal);
+        return literal;
+      }
+      // Implicit legacy input stays optional and keeps its original bytes.
+      const value = environment[legacyEnv];
+      if (value) this.#secretValues.add(value);
+      return value;
+    };
+    if (this.get('daemon.profile') !== 'housekeeper') {
+      const web = this.get('interface.web');
+      if (web?.enabled) recipients.set('web', { ...web,
+        token: await resolve(web, 'token', 'AIWG_WEB_TOKEN', 'interface.web.token') });
+      const webhook = this.get('webhook');
+      if (webhook?.enabled) {
+        // secret_env is the existing reference field; preserve the optional
+        // default variable while explicit missing references fail closed.
+        const legacyName = webhook.secret_env ?? 'AIWG_WEBHOOK_SECRET';
+        const legacyVariable = typeof legacyName === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(legacyName);
+        const selected = legacyVariable ? {} : { secret_ref: legacyName };
+        recipients.set('webhook', { ...webhook,
+          secret: await resolve(selected, 'secret', legacyVariable ? legacyName : 'AIWG_WEBHOOK_SECRET', 'webhook.secret_env') });
+      }
+      for (const [name, envName] of [['telegram', 'AIWG_TELEGRAM_TOKEN'], ['discord', 'AIWG_DISCORD_TOKEN'],
+        ['slack', 'AIWG_SLACK_WEBHOOK_URL']]) {
+        const settings = this.get(`messaging.${name}`) ?? {};
+        if (settings.enabled === false && !environment[envName]) continue;
+        // Keep legacy env discovery; a configured credential also enables its recipient.
+        const credential = (name === 'slack' ? ['webhookUrl'] : ['botToken', 'token'])
+          .some(field => settings[field] || settings[`${field}_ref`] !== undefined);
+        if (!credential && !environment[envName]) continue;
+        const resolved = { ...settings };
+        if (name === 'slack') {
+          resolved.webhookUrl = await resolve(settings, 'webhookUrl', envName, 'messaging.slack.webhookUrl');
+          resolved.botToken = await resolve(settings, 'botToken', 'AIWG_SLACK_BOT_TOKEN', 'messaging.slack.botToken');
+        } else {
+          resolved.botToken = await resolve(settings, 'botToken', envName, `messaging.${name}.botToken`, ['token']);
+          delete resolved.token;
+        }
+        recipients.set(name, resolved);
+      }
+    }
+    this.#recipients = recipients;
+  }
+
+  /** Each consumer asks for its own config, never the complete resolved secret set. */
+  recipientConfig(name) { return this.#recipients.get(name); }
+
+  /** Preserve worker/provider auth while excluding daemon-only credentials. */
+  workerEnvironment(environment = process.env) {
+    return Object.fromEntries(Object.entries(environment).filter(([name, value]) =>
+      !this.#secretNames.has(name) && !this.#secretValues.has(value)));
   }
 
   save() {

@@ -22,6 +22,7 @@ import { AutonomousEngine } from './autonomous-engine.mjs';
 import { MemoryManager } from './memory-manager.mjs';
 import { ProviderWatcher } from './provider-watcher.mjs';
 import { DaemonBehaviorLoader } from './behavior-loader.mjs';
+import { createMessagingHub } from '../messaging/index.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,6 +43,7 @@ class DaemonMain {
       AutonomousEngine,
       ProviderWatcher,
       WebServer,
+      createMessagingHub,
       ...deps,
     };
     this.config = null;
@@ -84,7 +86,7 @@ class DaemonMain {
       this.writePidFile();
       this.setupSignalHandlers();
       this.redirectLogs();
-      this.loadConfig();
+      await this.loadConfig();
       await this.initializeSubsystems();
       this.startHeartbeat();
       this.log('Daemon started successfully');
@@ -180,23 +182,25 @@ class DaemonMain {
     }
   }
 
-  loadConfig() {
-    this.config = new Config();
-    this.config.load();
+  async loadConfig() {
+    const config = new Config();
+    config.load();
 
-    const errors = this.config.validate();
+    const errors = config.validate();
     if (errors.length > 0) {
       this.log(`Configuration validation errors: ${errors.join(', ')}`);
       throw new Error('Invalid configuration');
     }
+    await config.resolveSecrets();
+    this.config = config;
   }
 
-  reloadConfig() {
+  async reloadConfig() {
     this.log('Reloading configuration (SIGHUP received)');
     try {
-      this.loadConfig();
-      this.stopSubsystems();
-      this.initializeSubsystems();
+      await this.loadConfig();
+      await this.stopSubsystems();
+      await this.initializeSubsystems();
       this.log('Configuration reloaded successfully');
     } catch (error) {
       this.log(`Failed to reload configuration: ${error.message}`);
@@ -232,6 +236,7 @@ class DaemonMain {
       maxConcurrency,
       taskStore: this.taskStore,
       taskTimeout: taskTimeoutMs,
+      environment: this.config.workerEnvironment?.(),
     });
     this.supervisor.on('task:started', (e) => this.log(`Agent task started: ${e.taskId} (PID ${e.pid})`));
     this.supervisor.on('task:completed', (e) => this.log(`Agent task completed: ${e.taskId} (${e.duration}ms)`));
@@ -324,7 +329,8 @@ class DaemonMain {
       this.roomManager = new RoomManager();
       const messagingConfig = this.config.get('messaging');
       if (messagingConfig) {
-        this.roomManager.loadFromConfig(messagingConfig);
+        this.roomManager.loadFromConfig(Object.fromEntries(Object.entries(messagingConfig)
+          .map(([name, settings]) => [name, { rooms: settings?.rooms }])));
         this.log(`RoomManager loaded ${this.roomManager.size} room(s)`);
       }
     } catch (error) {
@@ -333,11 +339,12 @@ class DaemonMain {
 
     // Initialize messaging subsystem if any adapters are configured
     try {
-      const { createMessagingHub } = await import('../messaging/index.mjs');
-      const messagingConfig = this.config.get('messaging');
-      this.messagingBus = await createMessagingHub({
+      const adapterConfigs = Object.fromEntries(['telegram', 'discord', 'slack']
+        .map(name => [name, this.config.recipientConfig?.(name)]).filter(([, value]) => value));
+      this.messagingBus = await this.deps.createMessagingHub({
         roomManager: this.roomManager,
-        messagingConfig,
+        adapterConfigs,
+        environment: this.config.workerEnvironment?.(),
       });
       if (this.messagingBus) {
         this.log(`Messaging hub initialized with ${this.messagingBus.adapterCount} adapter(s)`);
@@ -353,6 +360,7 @@ class DaemonMain {
         eventRouter: this.eventRouter,
         roomManager: this.roomManager,
         taskStore: this.taskStore,
+        environment: this.config.workerEnvironment?.(),
       });
       this.scheduledTaskRunner.on('recovery-required', ({ error }) => this.log(`Scheduled task recovery required: ${error.message}`));
       this.scheduledTaskRunner.start();
@@ -391,6 +399,7 @@ class DaemonMain {
         stateDir: '.aiwg/daemon/provider-watch',
         providers: providerWatchConfig.providers || undefined,
         intervalHours: providerWatchConfig.interval_hours || 6,
+        environment: this.config.workerEnvironment?.(),
       });
       this.providerWatcher.on('changes-detected', (e) => {
         this.log(`Provider changes detected: ${e.changes.length} change(s)`);
@@ -422,14 +431,14 @@ class DaemonMain {
     }
 
     // Start web server if configured
-    const webConfig = this.config.get('interface.web');
+    const webConfig = this.config.recipientConfig?.('web') ?? this.config.get('interface.web');
     if (webConfig?.enabled) {
       // In Docker mode, bind to 0.0.0.0 so port mapping works
       const webHost = process.env.AIWG_DOCKER === '1' ? '0.0.0.0' : (webConfig.host ?? '127.0.0.1');
       this.webServer = new this.deps.WebServer({
         port: webConfig.port ?? 7474,
         host: webHost,
-        token: webConfig.token || process.env.AIWG_WEB_TOKEN || null,
+        token: webConfig.token || null,
         daemonSupervisor: this.daemonSupervisor,
         opsHandlers: this.opsHandlersApi,
       });
@@ -508,6 +517,7 @@ class DaemonMain {
       eventRouter: this.eventRouter,
       taskStore: this.taskStore,
       resources,
+      environment: this.config.workerEnvironment?.(),
     });
     this.scheduledTaskRunner.on('recovery-required', ({ error }) => this.log(`Scheduled task recovery required: ${error.message}`));
     this.scheduledTaskRunner.start();

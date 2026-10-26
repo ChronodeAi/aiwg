@@ -32,6 +32,7 @@ export class SlackAdapter extends BaseAdapter {
 
     this.webhookUrl = config.webhookUrl || process.env.AIWG_SLACK_WEBHOOK_URL;
     this.botToken = config.botToken || process.env.AIWG_SLACK_BOT_TOKEN;
+    this._setSensitiveValues(this.webhookUrl, this.botToken);
     this.defaultChannel = config.defaultChannel || '#aiwg-notifications';
 
     /** @type {Map<string, Function>} */
@@ -85,6 +86,7 @@ export class SlackAdapter extends BaseAdapter {
 
       this._setConnected();
     } catch (error) {
+      error = this._redactError(error);
       this._recordError(error);
       throw new Error(`Failed to initialize Slack adapter: ${error.message}`);
     }
@@ -143,6 +145,7 @@ export class SlackAdapter extends BaseAdapter {
       const messageId = `slack_${Date.now()}`;
       return messageId;
     } catch (error) {
+      error = this._redactError(error);
       this._recordError(error);
       throw error;
     }
@@ -203,6 +206,7 @@ export class SlackAdapter extends BaseAdapter {
 
       this._recordSend();
     } catch (error) {
+      error = this._redactError(error);
       this._recordError(error);
       throw error;
     }

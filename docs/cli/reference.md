@@ -3128,6 +3128,9 @@ aiwg behavior info security-sentinel
 
 Initialize daemon config from a profile template.
 
+Scaffolds references only; credentials resolve at daemon startup. See
+[Supplying sensitive values](sensitive-values.md#daemon-startup-references).
+
 ```bash
 aiwg daemon-init [profile-name] [--force]
 ```

@@ -37,10 +37,10 @@ export function retryDelay(attempt, { baseMs = 1000, maxMs = 300000 } = {}, rng 
 }
 
 /** Await child exit, including on timeout: an uncertain exit is never safe to replay. */
-export function executeMaintenanceOwner(job, { cwd = process.cwd(), onSpawn = () => {}, niceness = null } = {}) {
+export function executeMaintenanceOwner(job, { cwd = process.cwd(), onSpawn = () => {}, niceness = null, environment = process.env } = {}) {
   return new Promise((resolve, reject) => {
     const child = fork(fileURLToPath(new URL('./maintenance-owner.mjs', import.meta.url)), [], {
-      cwd, env: { ...process.env, AIWG_MAINTENANCE_WORKER: '1', NO_UPDATE_NOTIFIER: '1' },
+      cwd, env: { ...environment, AIWG_MAINTENANCE_WORKER: '1', NO_UPDATE_NOTIFIER: '1' },
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     });
     if (niceness !== null && niceness !== undefined) applyChildNiceness(child.pid, { niceness });
@@ -126,6 +126,7 @@ export class ScheduledTaskRunner extends EventEmitter {
   #rng;
   #executeOwner;
   #cwd;
+  #environment;
   #listener;
   #recoveryListener;
 
@@ -143,6 +144,7 @@ export class ScheduledTaskRunner extends EventEmitter {
     this.#rng = options.rng || Math.random;
     this.#executeOwner = options.executeOwner || executeMaintenanceOwner;
     this.#cwd = options.cwd || process.cwd();
+    this.#environment = options.environment;
     const { config, errors } = normalizeResources(options.resources);
     if (errors.length > 0) throw new Error(`Invalid runner resources: ${errors.join('; ')}`);
     this.resources = config;
@@ -329,6 +331,7 @@ export class ScheduledTaskRunner extends EventEmitter {
         await this.acquireSlot();
         try {
           result = await this.#executeOwner(boundedJob, { cwd: this.#cwd,
+            environment: this.#environment,
             niceness: this.resources.jobNiceness,
             onSpawn: pid => {
               this.#taskStore.changeSchedule(job.id, record => ({ ...record, workerPid: pid }));

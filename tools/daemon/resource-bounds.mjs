@@ -9,6 +9,9 @@
 
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { helperEnvironment } = await importImpl(import.meta.url, 'process/cli-command.mjs');
 
 export const RESOURCE_DEFAULTS = Object.freeze({
   /** Max owner executions in flight at once; further runs wait in the queue. */
@@ -72,7 +75,9 @@ export function applyChildNiceness(pid, { niceness = RESOURCE_DEFAULTS.jobNicene
   }
   if (process.platform === 'linux') {
     try {
-      const probe = spawnSync('ionice', ['-c', '3', '-p', String(pid)], { timeout: 5000, killSignal: 'SIGKILL' });
+      const probe = spawnSync('ionice', ['-c', '3', '-p', String(pid)], {
+        timeout: 5000, killSignal: 'SIGKILL', env: helperEnvironment(),
+      });
       if (probe.error || probe.status !== 0) return { applied: true, ioIdle: false };
       return { applied: true, ioIdle: true };
     } catch {
