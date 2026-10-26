@@ -12,14 +12,18 @@ const registry = () => loadOrchestrationPackRegistry(root);
 const roots: string[] = [];
 afterEach(() => { for (const directory of roots.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
-describe('S0 T-OG registry wiring gate (partial coverage is not release acceptance)', () => {
+describe('T-OG registry wiring gate (partial coverage is not release acceptance)', () => {
   it('maps all requested S0/S1 packs to an issue/slice and existing tests', () => {
     const report = inspectPackRegistry(registry(), root);
     expect(Object.keys(report.packs)).toEqual(requiredPacks);
     expect(report.errors).toEqual([]);
     expect(report.result).toBe('wiring-valid');
     expect(report.releaseQualification).toBe('unqualified');
-    expect(Object.values(report.packs).some((pack: any) => pack.status === 'implemented')).toBe(false);
+    expect(report.checkpoint).toBe(registry().checkpoint);
+    expect(report.scopes.s1.result).toBe('partial');
+    expect(report.scopes.managed.result).toBe('partial');
+    expect(report.scopes.s1.acceptance).toBe('unverified');
+    expect(report.scopes.s5Audit).toEqual({ result: 'unverified', enforcement: 'not-enforced', dependsOn: ['S1', 'S2', 'S3', 'S4'] });
     // T-OG-04/05 carry Tier 0 fixtures (#2954); T-OG-06 now carries
     // S1 Muse quota/partial fixtures. Negative cases explicitly remove files.
     expect(report.packs['T-OG-04'].status).toBe('partial');
@@ -87,7 +91,7 @@ describe('S0 T-OG registry wiring gate (partial coverage is not release acceptan
       for (const file of pack.testFiles) {
         const destination = path.join(directory, file);
         mkdirSync(path.dirname(destination), { recursive: true });
-        writeFileSync(destination, "import { it } from 'vitest';\n");
+        writeFileSync(destination, readFileSync(path.join(root, file), 'utf8'));
       }
     }
     if (scenario === 'missing-qualification-pass') value.qualificationResults = [{ id: 'fake', qualification: 'missing', result: 'passed' }];
@@ -114,6 +118,129 @@ describe('S0 T-OG registry wiring gate (partial coverage is not release acceptan
     const offenders = Object.entries(base.packs as Record<string, any>)
       .flatMap(([id, pack]) => (pack.testFiles ?? []).filter((file: string) => /-direct\.test\.(ts|mjs)$/.test(file)).map((file: string) => `${id}::${file}`));
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('owned scenario content for implementation claims', () => {
+  const id = 'T-OG-16';
+  const file = 'test/conformance/owned.test.ts';
+  const title = 'T-OG-16 NFR-OG-001 P01 bounded fixture dispatch';
+  const valid = `import { it, expect } from 'vitest'; it('${title}', () => { expect(Math.max(1, 2)).toBe(2); });`;
+  const evidence = (source = valid) => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'aiwg-owned-pack-'));
+    roots.push(directory);
+    const value = registry();
+    Object.assign(value.packs[id], { status: 'implemented', testFiles: [file], requirements: ['NFR-OG-001'], scenarios: [{
+      id: 'P01', requirement: 'NFR-OG-001', mechanismOwner: 'B-OG-34', slice: 'S1', testFile: file, testName: title,
+    }] });
+    mkdirSync(path.dirname(path.join(directory, file)), { recursive: true });
+    writeFileSync(path.join(directory, file), source);
+    return { value, directory };
+  };
+  const ownErrors = (value: any, directory: string) => inspectPackRegistry(value, directory).errors.filter((error: string) => error.startsWith(`${id}:`));
+
+  it('accepts implemented only with owned requirements and runnable asserted scenarios', () => {
+    const { value, directory } = evidence();
+    expect(ownErrors(value, directory)).toEqual([]);
+    expect(inspectPackRegistry(value, directory).releaseQualification).toBe('unqualified');
+  });
+
+  it('requires explicit mappings even when existing asserted test files are present', () => {
+    const value = registry();
+    value.packs['T-OG-02'].status = 'implemented';
+    expect(inspectPackRegistry(value, root).errors).toContain('T-OG-02: implemented requires owned scenario/requirement mappings');
+  });
+
+  it.each([
+    ['empty', ''],
+    ['import only', "import { it, expect } from 'vitest';"],
+    ['comment only', `// ${valid}`],
+    ['string only', `const documentation = ${JSON.stringify(valid)};`],
+    ['no assertion', `import { it } from 'vitest'; it('${title}', () => {});`],
+    ['bare expect', `import { it, expect } from 'vitest'; it('${title}', () => { expect(2); });`],
+    ['skipped test', valid.replace('it(', 'it.skip(')],
+    ['todo test', valid.replace('it(', 'it.todo(')],
+    ['skipped suite', `import { describe, it, expect } from 'vitest'; describe.skip('suite', () => { ${valid.split('; ').slice(1).join('; ')} });`],
+    ['uncalled helper', `import { it, expect } from 'vitest'; it('${title}', () => { const helper = () => { expect(2).toBe(2); }; });`],
+    ['uncalled suite helper', `function unused() { ${valid.split('; ').slice(1).join('; ')} }\nimport { it, expect } from 'vitest';`],
+    ['node skip option', `import test from 'node:test'; import assert from 'node:assert/strict'; test('${title}', {skip: true}, () => assert.equal(2, 2));`],
+    ['invalid syntax', `${valid} !@invalid syntax`],
+  ])('rejects %s content', (_name, source) => {
+    const { value, directory } = evidence(source);
+    expect(ownErrors(value, directory)).toEqual(expect.arrayContaining([
+      `${id}: test file ${file} has no runnable asserted tests`,
+      `${id}: scenario P01: no matching runnable asserted test with pack/scenario/requirement title`,
+    ]));
+  });
+
+  it('rejects an unrelated asserted test even with matching metadata in comments', () => {
+    const { value, directory } = evidence(`${valid.replace(title, 'unrelated computation')}\n// ${title}`);
+    expect(ownErrors(value, directory)).toEqual([`${id}: scenario P01: no matching runnable asserted test with pack/scenario/requirement title`]);
+  });
+
+  it('accepts runnable node:test assertion evidence and imported aliases', () => {
+    for (const source of [
+      `import test from 'node:test'; import assert from 'node:assert/strict'; test('${title}', () => assert.equal(Math.max(1, 2), 2));`,
+      `import { it as scenario, expect as check } from 'vitest'; scenario('${title}', () => { check (Math.max(1, 2)).toBe(2); });`,
+    ]) {
+      const { value, directory } = evidence(source);
+      expect(ownErrors(value, directory)).toEqual([]);
+    }
+  });
+
+  it.each([
+    ['requirement', 'FR-OG-999', 'requirement is not declared by pack'],
+    ['mechanismOwner', 'B-OG-99', 'mechanism owner is not owned by pack'],
+    ['slice', 'S2', 'slice is not owned by pack'],
+    ['testFile', 'test/conformance/unrelated.test.ts', 'test file is not registered to pack'],
+  ])('rejects a scenario with an unowned %s', (field, value, message) => {
+    const f = evidence();
+    f.value.packs[id].scenarios[0][field] = value;
+    expect(ownErrors(f.value, f.directory)).toContain(`${id}: scenario P01: ${message}`);
+  });
+
+  it('rejects unregistered requirements, duplicate scenarios and unrelated registered files', () => {
+    const { value, directory } = evidence();
+    value.packs[id].requirements.push('FR-OG-083');
+    value.packs[id].scenarios.push({ ...value.packs[id].scenarios[0] });
+    const extra = 'test/conformance/unrelated.test.ts';
+    value.packs[id].testFiles.push(extra);
+    writeFileSync(path.join(directory, extra), valid.replace(title, 'unrelated'));
+    expect(ownErrors(value, directory)).toEqual(expect.arrayContaining([
+      `${id}: unmapped requirement FR-OG-083`, `${id}: scenario P01: invalid or duplicate ID`,
+      `${id}: unrelated test file ${extra} has no owned scenario`,
+    ]));
+  });
+
+  it('validates partial scenario mappings without promoting partial coverage', () => {
+    const value = registry();
+    expect(inspectPackRegistry(value, root).errors).toEqual([]);
+    expect(value.packs['T-OG-15'].status).toBe('partial');
+    expect(value.packs['T-OG-16'].status).toBe('partial');
+    value.packs['T-OG-15'].scenarios[0].mechanismOwner = 'B-OG-99';
+    expect(inspectPackRegistry(value, root).errors).toContain('T-OG-15: scenario P02: mechanism owner is not owned by pack');
+  });
+
+  it('separates S1/shared and managed/later verdicts without upgrading later slices', () => {
+    const value = registry();
+    for (const pack of Object.values(value.packs) as any[]) {
+      pack.testFiles = []; pack.status = 'planned';
+      delete pack.requirements; delete pack.scenarios;
+    }
+    Object.assign(value.packs['T-OG-05'], { status: 'implemented' });
+    const report = inspectPackRegistry(value, root);
+    expect(report.scopes.s1.errors).toContain('T-OG-05: implemented without test files'); // Shared S1 ownership.
+    expect(report.scopes.managed.errors).toContain('T-OG-05: implemented without test files');
+    expect(report.scopes.laterSlices.S4.packs).toContainEqual({ id: 'T-OG-05', slice: 'S4', relationship: 'later', status: 'unverified' });
+    expect(report.scopes.laterSlices.S5.result).toBe('unverified');
+    value.packs['T-OG-05'].status = 'planned';
+    Object.assign(value.packs['T-OG-08'], { status: 'implemented' }); // Managed-only pack.
+    const managedFailure = inspectPackRegistry(value, root);
+    expect(managedFailure.scopes.s1.result).toBe('unverified');
+    expect(managedFailure.scopes.s1.errors).toEqual([]);
+    expect(managedFailure.scopes.managed.result).toBe('failed');
+    value.packs['T-OG-08'].laterSlices = ['S6'];
+    expect(inspectPackRegistry(value, root).errors).toContain('T-OG-08: invalid laterSlices');
   });
 });
 
@@ -150,6 +277,20 @@ describe('loadOrchestrationPackRegistry fragment merge', () => {
       'test/conformance/orchestration-v1/alpha-direct.test.ts',
       'test/conformance/orchestration-v1/zeta-direct.test.ts',
     ]);
+  });
+
+  it('merges owned scenario metadata without allowing fragments to upgrade status', () => {
+    const directory = makeRoot();
+    const scenario = { id: 'P01', requirement: 'NFR-OG-001', mechanismOwner: 'B-OG-34' };
+    writeFragment(directory, 'mapping.json', { 'T-OG-01': { testFiles: [], requirements: ['NFR-OG-001'], scenarios: [scenario] } });
+    writeFragment(directory, 'shared-requirement.json', { 'T-OG-01': { testFiles: [], requirements: ['NFR-OG-001'], scenarios: [{ ...scenario, id: 'P02' }] } });
+    const pack = loadOrchestrationPackRegistry(directory).packs['T-OG-01'];
+    expect(pack.requirements).toEqual(['NFR-OG-001']);
+    expect(pack.scenarios).toEqual([scenario, { ...scenario, id: 'P02' }]);
+    writeFragment(directory, 'mapping.json', { 'T-OG-01': { testFiles: [], status: 'implemented' } });
+    expect(() => loadOrchestrationPackRegistry(directory)).toThrow(/unsupported fragment fields/);
+    writeFragment(directory, 'mapping.json', { 'T-OG-01': { testFiles: [], scenarios: 'invalid' } });
+    expect(() => loadOrchestrationPackRegistry(directory)).toThrow(/scenarios must be an array/);
   });
 
   it('throws on a fragment referencing an unknown pack ID', () => {

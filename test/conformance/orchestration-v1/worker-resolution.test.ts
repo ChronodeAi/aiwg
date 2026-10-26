@@ -6,6 +6,8 @@ import { ModelResolver, resolveWorkerPlan } from '../../../src/models/resolver.j
 import { PROVIDER_IDS } from '../../../src/providers/provider-definitions.js';
 import { workerConfigDigest } from '../../../src/config/aiwg-config.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
+import { performance } from 'node:perf_hooks';
+import { p95, timingReport } from '../../fixtures/orchestration-timing.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -15,6 +17,30 @@ afterEach(async () => {
     await expect(access(root)).rejects.toMatchObject({ code: 'ENOENT' });
   }
 });
+
+it('uses nearest-rank p95 rather than an average for timing gates', () => {
+  expect(p95(Array.from({ length: 100 }, (_, index) => 100 - index))).toBe(95);
+  expect(p95([...Array(94).fill(1), ...Array(6).fill(6_000)] )).toBe(6_000);
+  expect(() => p95([])).toThrow('Invalid timing samples');
+  expect(() => p95([NaN])).toThrow('Invalid timing samples');
+});
+
+it('T-OG-15 NFR-OG-001 P02 1000 cached resolve requests have p95 <= 250 ms', () => {
+  const f = workerResolutionFixture();
+  for (let index = 0; index < 10; index++) resolveWorkerPlan(f.snapshot, f.request);
+  const samples: number[] = [];
+  for (let index = 0; index < 1_000; index++) {
+    const start = performance.now();
+    const plan = resolveWorkerPlan(f.snapshot, f.request);
+    samples.push(performance.now() - start);
+    expect(plan.status).toBe('eligible');
+    expect(plan.selected?.member).toBe('primary');
+  }
+  const report = timingReport('P02', samples, ['cached snapshot policy/identity/freshness validation', 'selection and plan construction']);
+  console.info(JSON.stringify(report));
+  expect(report.samples).toBe(1_000);
+  expect(report.p95Ms).toBeLessThanOrEqual(250);
+}, 30_000);
 
 describe('T-OG-15 S1 resolution from current files without managed services', () => {
   it('D01 reloads user/project files and blocks stale decisions without creating managed state', async () => {

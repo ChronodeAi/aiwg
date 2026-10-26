@@ -1,0 +1,30 @@
+{
+  "T-OG-15": {
+    "testFiles": [],
+    "requirements": ["NFR-OG-001"],
+    "scenarios": [
+      {
+        "id": "P02",
+        "requirement": "NFR-OG-001",
+        "mechanismOwner": "B-OG-34",
+        "slice": "S1",
+        "testFile": "test/conformance/orchestration-v1/worker-resolution.test.ts",
+        "testName": "T-OG-15 NFR-OG-001 P02 1000 cached resolve requests have p95 <= 250 ms"
+      }
+    ]
+  },
+  "T-OG-16": {
+    "testFiles": ["test/conformance/orchestration-v1/direct-lifecycle-timing.test.ts"],
+    "requirements": ["NFR-OG-001"],
+    "scenarios": [
+      {
+        "id": "P01",
+        "requirement": "NFR-OG-001",
+        "mechanismOwner": "B-OG-34",
+        "slice": "S1",
+        "testFile": "test/conformance/orchestration-v1/direct-lifecycle-timing.test.ts",
+        "testName": "T-OG-16 NFR-OG-001 P01 100 warm unqueued fake launches have p95 dispatch-to-launch <= 5 seconds"
+      }
+    ]
+  }
+}
