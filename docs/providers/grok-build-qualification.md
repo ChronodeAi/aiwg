@@ -13,7 +13,7 @@ spellings and InspectReport fields remain compatible. The source adds whole-turn
 streaming `usage` frames and an optional MCP `bearer_token_file`. External auth
 with a custom models endpoint now ignores local model definitions and ordinary
 allowlists; AIWG withholds automatic discovery for that mode until an effective
-runtime catalog is available. See the [provider profile](../agents/providers/grok-build.md),
+runtime catalog is available. See the [provider profile](https://github.com/jmagly/aiwg/blob/main/docs/agents/providers/grok-build.md),
 [direct-worker profile](grok-build-direct.md), and [model discovery](grok-build-models.md).
 This review advances source identifiers only. Existing live receipts retain
 their original pins and do not qualify the newly reviewed tree.

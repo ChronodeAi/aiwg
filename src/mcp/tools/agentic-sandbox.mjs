@@ -42,7 +42,7 @@ async function sensitiveInputModule() {
     try { await access(location); } catch { continue; }
     return import(location.href);
   }
-  throw new Error('Sandbox credentials require the built CLI package; run npm run build:cli.');
+  throw new Error('Sandbox credentials require the compiled AIWG auth module, which this installation is missing. Run `aiwg doctor` to repair the installation.');
 }
 
 async function managementBearer(env = process.env, readStore) {
