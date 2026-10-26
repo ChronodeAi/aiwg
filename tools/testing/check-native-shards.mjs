@@ -2,7 +2,8 @@
 /** Verify native file discovery and sharding without importing test bodies. */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createVitest } from 'vitest/node';
+import { BaseSequencer, createVitest } from 'vitest/node';
+import { fileSeconds, readDurations } from './duration-sequencer.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -26,15 +27,25 @@ export async function inspectNativeShards(count, { root = repositoryRoot, config
     const name = spec => path.relative(root, spec.moduleId).split(path.sep).join('/');
     const inventory = specs.map(name).sort();
     const shards = [];
+    const nativeShards = [];
     // Use the installed runner's configured sequencer, not a copy of its hash
     // algorithm. Discovery does not run global setup or collect test bodies.
     for (let index = 1; index <= count; index++) {
       ctx.config.shard = { index, count };
       const sequencer = new ctx.config.sequence.sequencer(ctx);
-      shards.push((await sequencer.shard([...specs])).map(name).sort());
+      const selected = await sequencer.shard([...specs]);
+      shards.push((await sequencer.sort(selected)).map(name).sort());
+      nativeShards.push((await new BaseSequencer(ctx).shard([...specs])).map(name));
     }
     assertPartition(inventory, shards);
-    return { inventory, shards };
+    const durations = readDurations();
+    const totals = groups => groups.map(files => Math.round(files.reduce((sum, file) => sum + fileSeconds(file, durations), 0) * 1000) / 1000);
+    return { inventory, shards, prediction: {
+      nativeSeconds: totals(nativeShards),
+      configuredSeconds: totals(shards),
+      defaultSeconds: durations.defaultSeconds,
+      unmeasuredFiles: inventory.filter(file => durations.files[file] === undefined).length,
+    } };
   } finally {
     await ctx.close();
   }

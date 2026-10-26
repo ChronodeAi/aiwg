@@ -37,4 +37,38 @@ describe('required provider deployment release gates', () => {
     expect(job.needs).toBe('build');
     expect(jobs.validate.needs).toContain('deployment');
   });
+  it('requires the release-only lane before stable packages are packed or published', () => {
+    const steps = load('.github/workflows/npm-publish.yml').jobs['publish-to-npmjs-org'].steps;
+    const index = (name: string) => steps.findIndex((step: { name: string }) => step.name === name);
+    const gate = index('Require slow release infrastructure tests');
+    expect(gate).toBeGreaterThan(index('Validate and build stable release'));
+    expect(gate).toBeLessThan(index('Pack and smoke-test exact npm surfaces'));
+    expect(gate).toBeLessThan(index('Publish smoke-tested stable tarballs to npmjs.org'));
+    expect(steps[gate].run).toBe('node tools/ci/run-with-hang-report.mjs --timeout 30m -- npm run test:release-slow');
+    expect(steps[gate].if).toBeUndefined();
+    expect(steps[gate]['continue-on-error']).toBeUndefined();
+  });
+  it('offers a manual-only release lane after building the CLI', () => {
+    const workflow = load('.gitea/workflows/release-slow.yml');
+    expect(Object.keys(workflow.on)).toEqual(['workflow_dispatch']);
+    const job = workflow.jobs['release-slow'];
+    const gate = job.steps.findIndex((step: { name: string }) => step.name === 'Run release infrastructure lane');
+    expect(gate).toBeGreaterThan(job.steps.findIndex((step: { run: string }) => step.run === 'npm run build:cli'));
+    expect(job.steps[gate].run).toContain('--timeout 30m -- npm run test:release-slow');
+    expect(job.steps[gate].if).toBeUndefined();
+    expect(job.steps[gate]['continue-on-error']).toBeUndefined();
+    expect(job['timeout-minutes']).toBeGreaterThan(30);
+  });
+  it('requires slow release coverage in the existing routine RC deployment script', () => {
+    const { scripts } = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+    expect(scripts['test:release:routine-deployment']).toBe('npm run test:release-slow && vitest run --config config/vitest.config.js --maxWorkers=1 --fileParallelism=false test/integration/use-self-verification.test.ts');
+  });
+  it('requires release tests before the tag helper opens signing keys or writes refs', () => {
+    const source = readFileSync(resolve(root, 'tools/release/cut-tag.sh'), 'utf8');
+    const gate = source.indexOf('\nnode tools/ci/run-with-hang-report.mjs --timeout 30m -- npm run test:release-slow');
+    expect(gate).toBeGreaterThan(source.indexOf('\nnpm run build:cli'));
+    expect(gate).toBeLessThan(source.indexOf('\nif [ "$AIWG_RELEASE_SIGN_FROM_VAULT" = "1" ]'));
+    expect(gate).toBeLessThan(source.indexOf('\ngit "${GIT_TAG_GPG_OPTS[@]}" tag -s'));
+    expect(source).toContain('set -euo pipefail');
+  });
 });

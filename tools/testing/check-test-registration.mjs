@@ -11,7 +11,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 // Inspect declarations and owning lanes without executing test source bodies.
 export async function inspectTestRegistration(root = repositoryRoot) {
   root = path.resolve(root);
-  const { nodeFiles } = await import(pathToFileURL(path.join(root, 'config/test-lanes.mjs')).href);
+  const { nodeFiles, releaseLaneWorkflows = {} } = await import(pathToFileURL(path.join(root, 'config/test-lanes.mjs')).href);
   const configs = globSync('config/vitest*.config.js', { cwd: root }).sort();
   const lanes = [];
   for (const config of configs) {
@@ -46,8 +46,31 @@ export async function inspectTestRegistration(root = repositoryRoot) {
   for (const pattern of invokedNodePatterns) {
     if (!nodeFiles.includes(pattern)) errors.push(`Unclassified Node CLI argument/pattern in canonical CI: ${pattern}`);
   }
+  const releaseReachable = new Map();
+  for (const [config, workflowFile] of Object.entries(releaseLaneWorkflows)) {
+    if (!fs.existsSync(path.join(root, workflowFile))) {
+      errors.push(`Release lane workflow is missing: ${workflowFile}`);
+      releaseReachable.set(config, '');
+      continue;
+    }
+    const releaseWorkflow = parseYaml(fs.readFileSync(path.join(root, workflowFile), 'utf8'));
+    let commands = Object.values(releaseWorkflow.jobs ?? {}).flatMap(job => (job.steps ?? []).map(step => step.run ?? '')).join('\n');
+    const expanded = new Set();
+    for (;;) {
+      const names = [...commands.matchAll(/npm run ([\w:-]+)/g)].map(m => m[1]).filter(name => !expanded.has(name));
+      if (!names.length) break;
+      for (const name of names) {
+        expanded.add(name);
+        if (!scripts[name]) errors.push(`Release workflow references missing npm script ${name}`);
+        else commands += '\n' + scripts[name];
+      }
+    }
+    releaseReachable.set(config, commands);
+  }
   for (const lane of lanes) {
-    if (lane.id === 'node') {
+    if (releaseReachable.has(lane.id)) {
+      if (!releaseReachable.get(lane.id).includes(`--config ${lane.id}`)) errors.push(`Release lane is not reachable from its workflow: ${lane.id}`);
+    } else if (lane.id === 'node') {
       for (const pattern of nodeFiles) if (!reachable.includes(pattern)) errors.push(`Node ownership pattern is absent from canonical CI: ${pattern}`);
     } else if (!lane.live && !reachable.includes(`--config ${lane.id}`)) errors.push(`Offline lane is not reachable from canonical CI: ${lane.id}`);
   }
@@ -62,6 +85,11 @@ export async function inspectTestRegistration(root = repositoryRoot) {
     const owners = lanes.filter(lane => lane.files.has(file));
     if (runner === 'unknown') errors.push(`${file}: unknown test API; declare an explicit owning runner`);
     if (!owners.length) errors.push(`${file}: unassigned test file`);
+    // Coverage overlays predate this gate; release-only files must have exactly
+    // one owner so neither default CI nor another lane repeats their full deploys.
+    if (owners.length > 1 && owners.some(owner => releaseReachable.has(owner.id))) {
+      errors.push(`${file}: release test has multiple owning lanes`);
+    }
     for (const owner of owners) {
       if (owner.runner !== (runner === 'node-file-harness' ? 'node' : runner)) errors.push(`${file}: ${runner} handed to ${owner.runner} in ${owner.id}`);
     }

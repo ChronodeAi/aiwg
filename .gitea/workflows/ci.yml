@@ -273,8 +273,10 @@ jobs:
           AIWG_SERVE_HTTP_TIMEOUT_MS: "30000"
         run: npm run test:integration:serve
 
-  # Split the default Vitest file set with Vitest's native deterministic shard
-  # assignment. All four required legs retain the production build, optional
+  # Split the default Vitest file set with the duration-balanced native sequencer
+  # (config/test-durations.json; refresh with npm run test:durations).
+  # Exhaustive deployment matrices run in the pre-release test:release-slow lane.
+  # All four required legs retain the production build, optional
   # SQLite backend, provider sandbox capability gate, owned TMPDIR/leak check,
   # performance environment and the existing 20-minute watchdog. Four workers
   # leave headroom for the child CLIs used by deployment-heavy test files on

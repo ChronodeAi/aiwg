@@ -22,6 +22,9 @@ interface CliResult {
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const SOURCE_CLI = path.join(REPO_ROOT, "test", "fixtures", "source-aiwg-cli.ts");
 const TSX = path.join(REPO_ROOT, "node_modules", ".bin", "tsx");
+// These cases run three source CLI processes sequentially. Keep the default
+// 30-second allowance per cold import on shared runners, rather than per chain.
+const SOURCE_CHAIN_TIMEOUT_MS = 90_000;
 
 describe("artifact CLI signed web resources", () => {
   let cacheRoot: string;
@@ -227,7 +230,7 @@ describe("artifact CLI signed web resources", () => {
     expect(warmShow.stdout).toEqual(TEST_SKILL_BODY);
     expect(warmShow.stdout.toString("utf8")).not.toContain("LOCAL FALLBACK");
     expect(fixture.requestPaths).toHaveLength(requestsBeforeOffline);
-  });
+  }, SOURCE_CHAIN_TIMEOUT_MS);
 
   it("resolves, shows, and lists signed web resource versions through the source CLI", async () => {
     const resolved = await runCli(["versions", "resolve", "stable", "--json"]);
@@ -268,7 +271,7 @@ describe("artifact CLI signed web resources", () => {
       version: TEST_VERSION,
       channelSequence: 7,
     });
-  });
+  }, SOURCE_CHAIN_TIMEOUT_MS);
 
   it("writes a project resource lockfile from a signed web version resolution", async () => {
     const result = await runCli(["versions", "resolve", "stable", "--json", "--write-lock"]);

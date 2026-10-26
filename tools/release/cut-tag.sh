@@ -34,6 +34,7 @@
 #   6. Verifies package-lock.json version matches (CI check:versions / npm ci gate)
 #   7. Verifies CHANGELOG.md has an entry for [<version>]
 #   8. Verifies docs/releases/v<version>-announcement.md exists
+#  8b. Builds the CLI and requires the release infrastructure test lane to pass
 #   9. Verifies the AIWG release-signing key is available locally
 #  10. Verifies the release-signing key is published in .gitea/keys/maintainers.asc
 #  11. Creates the signed tag with `git tag -s -u <release-key-fingerprint>`
@@ -222,6 +223,12 @@ EOF
   exit 1
 fi
 echo "  [8/13] Announcement file OK"
+
+# Required before either an RC or stable tag can be created. Run before any
+# signing-key lookup so failed infrastructure checks do not open the keyring.
+npm run build:cli
+node tools/ci/run-with-hang-report.mjs --timeout 30m -- npm run test:release-slow
+echo "  [8b/13] Release infrastructure lane passed"
 
 # ---------------------------------------------------------------------------
 # 7b. Source the signing key from the configured vault into an ephemeral keyring.

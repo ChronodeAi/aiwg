@@ -134,6 +134,7 @@ describe('Muse discovery through the public sessions handler', () => {
     await expect(readDiscoveryManifest(manifestPath)).rejects.toThrow('identity');
   });
 
+  // This fixture imports 10,001 records, twice the adjacent 5,000-record cases.
   itWithSqlite('imports a session attributed from tail evidence into the workspace catalog', async () => {
     const count = MUSE_WORKSPACE_SCAN_LIMITS.maxRecords + 1;
     await writeMuseLog(join(root, 'sessions'), 'tail-import', count, workspace, count - 1);
@@ -152,7 +153,7 @@ describe('Muse discovery through the public sessions handler', () => {
     } finally {
       repository.close();
     }
-  });
+  }, 60_000);
 
   itWithSqlite.each([false, true])('imports a 5000-record session (retained evidence: %s)', async (retained) => {
     const locator = await writeMuseLog(join(root, 'sessions'), 'long-session', 5000, workspace);

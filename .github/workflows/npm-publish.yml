@@ -281,6 +281,9 @@ jobs:
           npm run test:packaging
           npm run test:sessions:feature-install
 
+      - name: Require slow release infrastructure tests
+        run: node tools/ci/run-with-hang-report.mjs --timeout 30m -- npm run test:release-slow
+
       - name: Pack and smoke-test exact npm surfaces
         run: node tools/release/release-candidate.mjs pack --output "${RUNNER_TEMP}/stable-package"
 

@@ -607,6 +607,45 @@ the post-publication Socket audit. The release candidate and cross-provider
 comparison workflows remain optional diagnostics and are not publication gates.
 The historical RC promotion policy and helpers do not authorize this direct path.
 
+### Publication surfaces and release infrastructure validation
+
+GitHub's [npm publication workflow](../../.github/workflows/npm-publish.yml)
+publishes the public npmjs.org packages. Gitea's
+[npm publication workflow](../../.gitea/workflows/npm-publish.yml) mirrors the
+already published packages into Gitea's bundled registry. A green mirror run
+does not prove public publication succeeded.
+
+The slow provider deployment and CLI infrastructure suites belong to
+`test:release-slow`, declared in [the lane inventory](../../config/test-lanes.mjs)
+and selected by [its Vitest config](../../config/vitest.release-slow.config.js).
+They run before releases instead of on every merge. Fast provider deployment
+smokes remain in the default test lane. Run the release lane locally with:
+
+```bash
+npm run build:cli
+npm run test:release-slow
+```
+
+[cut-tag.sh](../../tools/release/cut-tag.sh) runs that build and requires the lane
+to pass before accessing signing keys or creating either an RC or stable tag.
+The GitHub publication workflow independently requires the same lane in
+`Require slow release infrastructure tests`, before packing or publishing.
+Both use the existing hang reporter with a 30-minute deadline; failure stops
+the release. The manual-only Gitea
+[Release infrastructure tests workflow](../../.gitea/workflows/release-slow.yml)
+provides `workflow_dispatch` retries without running on main pushes.
+
+The optional [RC workflow](../../.github/workflows/release-candidate.yml) and
+[quarterly comparison workflow](../../.github/workflows/release-comparison.yml)
+also require these suites through
+[release-candidate.mjs](../../tools/release/release-candidate.mjs). The
+`routine-release-v1` profile keeps its 24 gates: its existing
+`test:release:routine-deployment` script runs `test:release-slow` followed by the
+fast `use-self-verification` contract. The `quarterly-full-v1` profile keeps all
+43 existing gates: its `test:deployment` gate runs the existing deployment lane,
+then `test:release-slow`, and succeeds only after both pass. The exact lane
+inventory and failed-gate diagnostics remain in `validation.json`.
+
 The optional Gitea mirror is a manual tag-bound dispatch after npmjs publication.
 It verifies all three public package identities before mirroring the same bytes.
 For GitHub recovery, dispatch the same signed tag:

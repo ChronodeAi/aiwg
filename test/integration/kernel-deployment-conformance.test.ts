@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   providerNeedsCommands,
   providerUsesSkillsNatively,
@@ -156,45 +156,51 @@ describe('kernel deployment conformance', () => {
   }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
 
   for (const provider of PROVIDERS) {
-    it(`${provider.id} deploys every canonical kernel skill and no standard skills`, () => {
-      const { project, home } = deploy(provider.id);
-      const deployedRoot = provider.root(project, home);
-      const deployed = skillDirs(deployedRoot)
-        .map(dir => dir.split('/').at(-1)!)
-        .sort();
+    describe(provider.id, () => {
+      let baseline: { project: string; home: string };
+      beforeAll(() => {
+        baseline = deploy(provider.id, { suffix: 'baseline' });
+      }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
+      it(`${provider.id} deploys every canonical kernel skill and no standard skills`, () => {
+        const { project, home } = baseline;
+        const deployedRoot = provider.root(project, home);
+        const deployed = skillDirs(deployedRoot)
+          .map(dir => dir.split('/').at(-1)!)
+          .sort();
 
-      expect(deployed).toEqual(EXPECTED_KERNEL);
-      expect(existsSync(join(deployedRoot, 'harness-memory-maintenance', 'SKILL.md'))).toBe(false);
-      expect(existsSync(join(provider.standardRoot(project, home), 'harness-memory-maintenance', 'SKILL.md'))).toBe(false);
-      for (const name of deployed) {
-        const content = readFileSync(join(deployedRoot, name, 'SKILL.md'), 'utf8');
-        // Provider translators may intentionally remove AIWG-only routing
-        // metadata such as `kernel` and `platforms`. The portable contract is
-        // a valid named skill with a substantive body at the kernel location.
-        expect(content, `${provider.id}/${name}`).toMatch(/^---\n[\s\S]*\n---\n/m);
-        expect(content, `${provider.id}/${name}`).toMatch(
-          new RegExp(`^name:\\s*["']?${name}["']?\\s*$`, 'm'),
-        );
-        expect(content.length, `${provider.id}/${name}`).toBeGreaterThan(100);
-      }
-    }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
+        expect(deployed).toEqual(EXPECTED_KERNEL);
+        expect(existsSync(join(deployedRoot, 'harness-memory-maintenance', 'SKILL.md'))).toBe(false);
+        expect(existsSync(join(provider.standardRoot(project, home), 'harness-memory-maintenance', 'SKILL.md'))).toBe(false);
+        for (const name of deployed) {
+          const content = readFileSync(join(deployedRoot, name, 'SKILL.md'), 'utf8');
+          // Provider translators may intentionally remove AIWG-only routing
+          // metadata such as `kernel` and `platforms`. The portable contract is
+          // a valid named skill with a substantive body at the kernel location.
+          expect(content, `${provider.id}/${name}`).toMatch(/^---\n[\s\S]*\n---\n/m);
+          expect(content, `${provider.id}/${name}`).toMatch(
+            new RegExp(`^name:\\s*["']?${name}["']?\\s*$`, 'm'),
+          );
+          expect(content.length, `${provider.id}/${name}`).toBeGreaterThan(100);
+        }
+      }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
 
-    it(`${provider.id} copies the standard tier only with --copy-all`, () => {
-      const defaultDeploy = deploy(provider.id, { suffix: 'no-copy' });
-      const defaultStandardRoot = provider.standardRoot(defaultDeploy.project, defaultDeploy.home);
-      expect(existsSync(join(defaultStandardRoot, 'voice-apply', 'SKILL.md'))).toBe(false);
+      it(`${provider.id} copies the standard tier only with --copy-all`, () => {
+        const defaultDeploy = baseline;
+        const defaultStandardRoot = provider.standardRoot(defaultDeploy.project, defaultDeploy.home);
+        expect(existsSync(join(defaultStandardRoot, 'voice-apply', 'SKILL.md'))).toBe(false);
 
-      const fullDeploy = deploy(provider.id, { copyAll: true, suffix: 'copy-all' });
-      const fullRoot = provider.root(fullDeploy.project, fullDeploy.home);
-      const fullStandardRoot = provider.standardRoot(fullDeploy.project, fullDeploy.home);
-      expect(existsSync(join(fullStandardRoot, 'voice-apply', 'SKILL.md'))).toBe(true);
-      for (const kernelName of EXPECTED_KERNEL) {
-        expect(
-          existsSync(join(fullRoot, kernelName, 'SKILL.md')),
-          `${provider.id}/${kernelName}`,
-        ).toBe(true);
-      }
-    }, DOUBLE_DEPLOY_TEST_TIMEOUT_MS);
+        const fullDeploy = deploy(provider.id, { copyAll: true, suffix: 'copy-all' });
+        const fullRoot = provider.root(fullDeploy.project, fullDeploy.home);
+        const fullStandardRoot = provider.standardRoot(fullDeploy.project, fullDeploy.home);
+        expect(existsSync(join(fullStandardRoot, 'voice-apply', 'SKILL.md'))).toBe(true);
+        for (const kernelName of EXPECTED_KERNEL) {
+          expect(
+            existsSync(join(fullRoot, kernelName, 'SKILL.md')),
+            `${provider.id}/${kernelName}`,
+          ).toBe(true);
+        }
+      }, DOUBLE_DEPLOY_TEST_TIMEOUT_MS);
+    });
   }
 
   it('repeat deploy prunes stale managed skills while preserving operator-owned skills', () => {

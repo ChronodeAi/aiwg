@@ -20,7 +20,7 @@ import { mkdtempSync } from '../helpers/temp-dir.js';
  * - Windsurf: .windsurf/workflows/, .windsurf/skills/, .windsurf/rules/, .agents/skills/ + AGENTS.md (aggregated agents), .windsurfrules (deprecated stub)
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import fs from 'fs/promises';
 import { rmSync } from 'fs';
 import path from 'path';
@@ -234,19 +234,18 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
     let projectDir: string;
     let homeDir: string;
 
-    beforeEach(async () => {
+    beforeAll(async () => {
       const env = await createTestEnv(providerName);
       projectDir = env.projectDir;
       homeDir = env.homeDir;
-    });
+      runDeploy(config.name, projectDir, homeDir);
+    }, 75_000);
 
-    afterEach(async () => {
+    afterAll(async () => {
       await cleanupTestEnv(projectDir, homeDir);
     });
 
     it(`deploys to correct project directories`, async () => {
-      runDeploy(config.name, projectDir, homeDir);
-
       for (const expectedPath of config.projectPaths) {
         const fullPath = path.join(projectDir, expectedPath);
         const exists = await pathExists(fullPath);
@@ -256,8 +255,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
 
     if (config.homePaths && config.homePaths.length > 0) {
       it(`deploys to correct home directories`, async () => {
-        runDeploy(config.name, projectDir, homeDir);
-
         for (const expectedPath of config.homePaths!) {
           const resolvedPath = expectedPath.replace('~/', '');
           const fullPath = path.join(homeDir, resolvedPath);
@@ -269,8 +266,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
 
     if (config.rootFiles && config.rootFiles.length > 0) {
       it(`creates correct root files`, async () => {
-        runDeploy(config.name, projectDir, homeDir);
-
         for (const rootFile of config.rootFiles!) {
           const fullPath = path.join(projectDir, rootFile);
           const exists = await pathExists(fullPath);
@@ -281,8 +276,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
 
     if (config.forbiddenPaths && config.forbiddenPaths.length > 0) {
       it(`does NOT create forbidden paths`, async () => {
-        runDeploy(config.name, projectDir, homeDir);
-
         for (const forbiddenPath of config.forbiddenPaths!) {
           const fullPath = path.join(projectDir, forbiddenPath);
           const exists = await pathExists(fullPath);
@@ -293,8 +286,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
 
     if (config.minArtifacts > 0) {
       it(`deploys at least ${config.minArtifacts} artifacts`, async () => {
-        runDeploy(config.name, projectDir, homeDir);
-
         let totalArtifacts = 0;
 
         for (const projectPath of config.projectPaths) {
@@ -312,8 +303,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
     }
 
     it(`does NOT place unexpected files in project root`, async () => {
-      runDeploy(config.name, projectDir, homeDir);
-
       const rootContents = await fs.readdir(projectDir);
 
       // Filter to only unexpected items

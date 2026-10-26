@@ -121,7 +121,8 @@ jobs:
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 (see ci/digests.txt)
     needs: build
-    # Each native shard keeps the existing 10-minute command watchdog.
+    # Each half of the default lane gets the same 20-minute command watchdog as a
+    # ci.yml shard; 10 minutes timed out on a busy runner at v2026.10.9.
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -160,7 +161,7 @@ jobs:
           AIWG_PERF_SAMPLE_COUNT: "7"
         # Bound workers as in source CI; retain all per-test deadlines and
         # the owned TMPDIR/leak gate supplied by npm test.
-        run: node tools/ci/run-with-hang-report.mjs --timeout 10m -- npm test -- --shard=${{ matrix.shard }}/2 --maxWorkers=4
+        run: node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test -- --shard=${{ matrix.shard }}/2 --maxWorkers=4
 
   deployment:
     name: Provider deployment integration

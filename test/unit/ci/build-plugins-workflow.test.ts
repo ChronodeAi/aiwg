@@ -35,7 +35,7 @@ describe('required plugin tag validation', () => {
     expect(shards.strategy).toEqual({ 'fail-fast': false, matrix: { shard: [1, 2] } });
     expect(shards.needs).toBe('build');
     expect(shards['timeout-minutes']).toBe(40);
-    expect(lane.run).toBe('node tools/ci/run-with-hang-report.mjs --timeout 10m -- npm test -- --shard=${{ matrix.shard }}/2 --maxWorkers=4');
+    expect(lane.run).toBe('node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test -- --shard=${{ matrix.shard }}/2 --maxWorkers=4');
     expect(lane.env).toEqual({
       AIWG_PERF_BUDGET_VERSION_MS: '300', AIWG_PERF_BUDGET_HELP_MS: '750', AIWG_PERF_SAMPLE_COUNT: '7',
     });

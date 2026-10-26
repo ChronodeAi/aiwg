@@ -98,6 +98,7 @@ describe('required WebAssembly forks lane (#3073)', () => {
     ]) expect(imports('fixture.ts', body).loadsWasm, body).toBe(false);
   });
 
+  // Parse the full source inventory and its local dependency graph under load.
   it('moves every runtime WASM importer, including transitive local imports, out of threads exactly once', async () => {
     const beforeSplit = globSync(base.test.include, {
       cwd: root, ignore: base.test.exclude.filter((entry: string) => !wasmFiles.includes(entry)),
@@ -120,7 +121,7 @@ describe('required WebAssembly forks lane (#3073)', () => {
     expect(wasm.test).toMatchObject({ pool: 'forks', maxWorkers: 1, isolate: true });
     expect(wasm.test.reporters).toEqual(base.test.reporters);
     expect(wasm.test.globalSetup).toEqual(base.test.globalSetup);
-  });
+  }, 90_000);
 
   it('runs once in required CI through the shared TMPDIR and hang gates', () => {
     const workflow = parseYaml(readFileSync(path.join(root, '.gitea/workflows/ci.yml'), 'utf8'));

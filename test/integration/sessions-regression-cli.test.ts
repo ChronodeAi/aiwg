@@ -38,6 +38,7 @@ describe.skipIf(!sqliteAvailable).each(['source router', 'compiled bin'] as cons
     rmSync(temporaryRoot, { recursive: true, force: true });
   });
 
+  // The source-router leg cold-loads TypeScript in nine separate processes.
   it.skipIf(entry === 'compiled bin' && missingBuild)('imports and replays the corpus through the CLI', () => {
     for (const [provider, fixture] of sources) {
       const args = [
@@ -89,7 +90,7 @@ describe.skipIf(!sqliteAvailable).each(['source router', 'compiled bin'] as cons
     });
     expect(new Set(output.data.items.map((item: { provider: string }) => item.provider)))
       .toEqual(new Set(sources.map(([provider]) => provider)));
-  }, 60_000);
+  }, entry === 'source router' ? 180_000 : 60_000);
 });
 
 function runCli(args: string[], entry: 'source router' | 'compiled bin') {
