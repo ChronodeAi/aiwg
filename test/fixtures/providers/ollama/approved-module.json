@@ -7,7 +7,7 @@
     "packageVersion": "1",
     "modulePath": "lib/ollama-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:1343ce9da5ace5377990e01b1012e05ec40b7c585642fe060b464fffdf241c0b",
+    "sha256": "sha256:f3d09ac35948dd1c2c080d4fb8816f4501a3e310ea9edd424b38d9b92d209ad2",
     "adapterIds": ["local-http"],
     "platforms": ["linux"]
   }

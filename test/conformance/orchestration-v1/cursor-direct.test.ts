@@ -82,7 +82,7 @@ async function installCursorPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.cursor.workerAdapter = structuredClone(registry.providers.cursor.workerHealthAdapter);
   return registry;
 }

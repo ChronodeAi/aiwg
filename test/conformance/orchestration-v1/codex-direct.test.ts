@@ -84,7 +84,7 @@ async function installCodexPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   // Inactive health metadata becomes a loader candidate only in this copy;
   // the bundled runtimeDriver is already the installed reference.
   registry.providers.codex.workerAdapter = structuredClone(registry.providers.codex.workerHealthAdapter);

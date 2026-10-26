@@ -53,7 +53,7 @@ async function installPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   // Inactive health metadata becomes a loader candidate only in this copy.
   registry.providers.openhuman.workerAdapter = structuredClone(registry.providers.openhuman.workerHealthAdapter);
   return registry;

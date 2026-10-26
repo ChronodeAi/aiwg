@@ -7,6 +7,7 @@ export function register(factory) {
     getName: () => id,
     buildWorkerArgs: (input, _profile, permissions) => [cli, '--model', input.selected.model, '--effort', input.selected.effort.value,
       '--sandbox', permissions.sandbox, '--approval', permissions.approval, '--final-output', input.finalPath],
-    ...(adapterFrame ? { buildWorkerStdinFrame: brief => JSON.stringify({ message: brief.toString() }) } : {}),
+    ...(adapterFrame ? { buildWorkerStdinFrame: (brief, invocation) => JSON.stringify({ message: brief.toString(),
+      ...(invocation?.selected?.model ? { model: invocation.selected.model } : {}) }) } : {}),
   }));
 }

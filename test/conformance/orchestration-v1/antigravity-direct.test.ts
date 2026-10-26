@@ -78,7 +78,7 @@ async function installAntigravityPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.antigravity.workerAdapter = structuredClone(registry.providers.antigravity.workerHealthAdapter);
   return registry;
 }

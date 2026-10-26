@@ -60,7 +60,7 @@ async function installPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.copilot.workerAdapter = structuredClone(registry.providers.copilot.workerHealthAdapter);
   return registry;
 }

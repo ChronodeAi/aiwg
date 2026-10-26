@@ -77,7 +77,7 @@ async function installPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.openclaw.workerAdapter = structuredClone(registry.providers.openclaw.workerHealthAdapter);
   return registry;
 }

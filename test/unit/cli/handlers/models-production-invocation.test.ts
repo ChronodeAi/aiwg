@@ -174,9 +174,10 @@ describe('models resolve production installation loading', () => {
     await writeFile(path.join(invocation.cwd, 'models.json'), '{broken worker model config');
     const input = { filename: invocation.briefPath, workspace: invocation.cwd, cli: invocation.selected.cli,
       adapterId: f.record.adapter.id, scopeDigest: invocation.selected.qualificationDigest,
-      briefDigest: invocation.briefDigest, storePath, storeDigest, policy: f.record.installation.policy };
+      briefDigest: invocation.briefDigest, storePath, storeDigest, policy: f.record.installation.policy, model: invocation.selected.model };
     vi.stubEnv('AIWG_CONFIG', invocation.cwd);
-    expect((await recordedWorkerStdinBytes(input))!.toString()).toBe(JSON.stringify({ message: await readFile(invocation.briefPath, 'utf8') }));
+    expect((await recordedWorkerStdinBytes(input))!.toString()).toBe(JSON.stringify({ message: await readFile(invocation.briefPath, 'utf8'), model: invocation.selected.model }));
+    expect(invocation.shellCommand).toContain(`'${invocation.selected.model}'`);
     await expect(recordedWorkerStdinBytes({ ...input, policy: {} })).rejects.toThrow(/qualification/);
     await expect(recordedWorkerStdinBytes({ ...input, adapterId: 'changed' })).rejects.toThrow(/binding changed/);
     await expect(recordedWorkerStdinBytes({ ...input, scopeDigest: qualificationDigest('changed') })).rejects.toThrow(/binding changed/);

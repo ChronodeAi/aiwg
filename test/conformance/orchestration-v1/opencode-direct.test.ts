@@ -85,7 +85,7 @@ async function installOpenCodePackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.opencode.workerAdapter = structuredClone(registry.providers.opencode.workerHealthAdapter);
   return registry;
 }

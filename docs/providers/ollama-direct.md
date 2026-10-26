@@ -1,9 +1,10 @@
 # local-http direct profile (Ollama backend; local text-only HTTP transport)
 
 roctinam/aiwg#2899 (B-OG-09). Status: **unqualified**. Registered under the
-registry's generic, pre-reserved worker-adapter slot `workerAdapters.
-local-http` (`agentic/code/providers/model-capabilities.v1.json`), the Ollama
-backend of `$defs/http`'s `protocol: 'ollama'|'llama-cpp'|'openai-compatible'`.
+registry's active `workerAdapters.local-http` entry
+(`agentic/code/providers/model-capabilities.v1.json`), using the existing
+process launcher with `curl` and `stdin: 'adapter-frame'`. Host installation
+approval is still required; activation alone does not authorize a dispatch.
 Evidence captured on titan, ollama client/server **0.33.3**, shared systemd
 service bound to `172.17.0.1:11434` (the Docker bridge, not loopback):
 `.aiwg/working/s1-scratch/cli-help/ollama-titan.txt` (client/server version,
@@ -81,7 +82,7 @@ control-character value.
 | Effort is null/not-applicable | met — any explicit effort throws (`capabilities.effort: 'not-applicable'`) |
 | Text-only (no tools, no coding role) | met — the `coding` role is refused with a clear error and no tool-calling surface is implemented anywhere in this adapter |
 | Non-interactive | met — one-shot HTTP POST, no prompts |
-| Brief via stdin, never argv | **blocked in production** — see "Known gap: stdin framing" |
+| Brief via stdin, never argv | met — the resolver/attached launcher use the installed adapter-frame hook (LH03) |
 | Brief bounded | met — empty/whitespace briefs refused; brief UTF-8 bytes capped at 262144 (256 KiB, aligned with the shared brief bound in `src/serve/worker-stdin-frame.mjs` / `src/serve/worker-invocation.ts`) |
 | Explicit local-only endpoint, no cloud destination | met syntactically — canonical IPv4 loopback/RFC1918 only; local inference stays **unqualified** |
 | Curl ambient configuration | met — `-q`, `--max-redirs 0`, `--proto =http`, `--noproxy '*'`, `--connect-timeout`, `--max-filesize` (OL09 proves proxy env + hostile curlrc do not redirect the request) |
@@ -92,22 +93,33 @@ control-character value.
 | Never pull weights / no cloud fallback | **unqualified** — the HTTP transport narrows the surface (no CLI pull path), but no evidence shows every server path avoids downloads |
 | Model digest binding ("changed model/runtime/template invalidates role") | **unavailable** at argv-render time — see "Known gap: model digest" |
 
-## Known gap: stdin framing — production dispatch is blocked
+## Stdin framing and dispatch
 
-The frozen `src/serve/worker-stdin-frame.mjs` vocabulary (`stdin: 'closed' |
-'brief-text' | 'brief-json'`) has no adapter-pluggable envelope that frames
-an arbitrary brief into Ollama's `{model, prompt, stream}` body shape —
-`'brief-json'` is hardcoded to OpenHuman's `{message, model_override, cwd}`
-shape. The registry declares the closest existing fail-closed value,
-`stdin: 'closed'`, with the `stdin` control `unqualified`, pointing at
-roctinam/aiwg#2998 and #3002 (provider-supplied stdin frames / generated
-artifacts). **This is proven through the real production resolver**, not
-just asserted: `test/conformance/orchestration-v1/ollama-direct.test.ts`'s
-LH03 case resolves a fully-qualified-except-stdin invocation and asserts
-`resolveWorkerInvocation` refuses it with `Required worker control is
-unqualified: stdin`. The adapter owns a pure request-body builder,
-`buildOllamaGenerateBody({model, brief})`, exercised directly by tests to
-prove the rendered `curl` argv is launchable once #2998/#3002 land.
+The existing #3021 `adapter-frame` primitive in
+`src/serve/worker-stdin-frame.mjs` calls the installed adapter's
+`buildWorkerStdinFrame(brief, invocation)` hook. It passes the resolved model
+per invocation, including through the recorded-installation shell pipeline.
+The adapter keeps no mutable selected-model state. The hook strictly decodes
+UTF-8 and uses `buildOllamaGenerateBody` to produce only
+`{model, prompt, stream:false}`. Both the shared 256 KiB brief bound and
+1 MiB encoded-frame bound apply before a child can start.
+
+LH03 loads the approved module, resolves an efficiency task through the
+production resolver, and runs the attached launcher against the test-owned
+fake HTTP server. It checks the selected model, null effort, exact body,
+strict final parsing and absence of the brief marker in argv and metadata.
+LH04 refuses disabled members before transport construction and refuses
+coding before transmission. No Ollama process or download command is used.
+
+The executable version is **curl 8.18.0**, normalized from `curl --version`;
+**Ollama 0.33.3** is the captured server API reference, not the process
+version. The registry records these separately. Sandbox support is external:
+the host must supply and bind an enforcing OS/executor boundary. Workdir,
+stdout capture and structured claims validation are host controls. This
+profile exposes no native sandbox, approvals, output-file target, schema
+constraint, model step cap, resume or cancellation mapping. Unsupported
+controls remain explicit. The retained `workerHealthAdapters.local-http`
+entry is historical descriptive health data; dispatch uses `workerAdapters`.
 
 ## Known gap: model digest binding
 
@@ -120,21 +132,6 @@ titan in the capture's models section), and the registry's generic
 digest` mechanism already exists for catalog-level staleness detection, but
 wiring "changed digest invalidates role" into dispatch needs a
 qualification/health step outside `buildWorkerArgs`, out of scope here.
-
-## Known gap: declared vs. implemented invocation shape
-
-The registry's descriptive `workerHealthAdapters.local-http` placeholder
-(pre-seeded ahead of this issue) declares `invocation.kind: 'http'`
-(`protocol`, `healthPath`, `modelsPath`, `generatePath`) — a native HTTP
-fetch shape with no `executable`/`argv`/`stdin`, and no fetcher exists in
-`session-launcher.mjs` to execute it. The bundled registry has **no active**
-`workerAdapters.local-http` entry (the LH02 conformance case proves the
-bundled file stays undispatchable): only the test-locally promoted copy
-used by LH01/LH03 declares `invocation.kind: 'process'`
-(`executable: 'curl'`, templated `argv`, `stdin: 'closed'`) — what is
-actually implemented and dispatchable through the existing process-spawn
-launcher today, modulo the stdin gap above. Nothing in this issue writes an
-active entry back to the bundled registry file.
 
 ## Manual smoke run (after review, by the conductor)
 
@@ -158,3 +155,7 @@ Read pass/fail: the command must exit `0`, and `$d/response.json` must
 parse as one JSON object with `"done":true`, `"done_reason":"stop"`, and a
 non-empty `"response"`. Any `"error"` field, any non-zero exit, or a
 `done_reason` other than `"stop"` is a fail.
+
+Record the installed curl and Ollama versions, response and pass/fail in
+#3005/#2899. This smoke is deferred to the conductor; no real server was
+started or queried by this implementation slice.

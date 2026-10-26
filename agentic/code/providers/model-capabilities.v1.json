@@ -3326,6 +3326,200 @@
       }
     }
   },
+  "workerAdapters": {
+    "local-http": {
+      "version": 1,
+      "id": "local-http",
+      "provider": "ollama",
+      "adapterVersion": "1",
+      "supportedVersions": "8.18.0",
+      "runtimeDriver": "installed:local-http",
+      "catalogAdapter": {
+        "kind": "http",
+        "locator": "/api/tags",
+        "parser": "ollama-model-list-v1",
+        "timeoutSeconds": 10,
+        "maxBytes": 65536
+      },
+      "invocation": {
+        "kind": "process",
+        "executable": "curl",
+        "argv": [
+          "-q",
+          "-sS",
+          "--max-redirs",
+          "0",
+          "--proto",
+          "=http",
+          "--noproxy",
+          "*",
+          "--connect-timeout",
+          "10",
+          "--max-time",
+          "300",
+          "--max-filesize",
+          "10485760",
+          "--fail-with-body",
+          "-H",
+          "Content-Type: application/json",
+          "-X",
+          "POST",
+          "http://${endpoint}/api/generate",
+          "--data-binary",
+          "@-"
+        ],
+        "stdin": "adapter-frame",
+        "cwd": "${workspace}",
+        "envAllowlist": [
+          "OLLAMA_HOST"
+        ],
+        "versionArgv": [
+          "--version"
+        ],
+        "versionPattern": "^curl ([0-9A-Za-z.+-]{1,128}) [\\s\\S]{1,4096}$",
+        "maxOutputBytes": 10485760
+      },
+      "capabilities": {
+        "output": "validated-file",
+        "modelPin": "requested",
+        "effort": "not-applicable",
+        "cancel": "process-group",
+        "resume": false,
+        "sandboxModes": [
+          "external"
+        ],
+        "nestedAgentsControllable": true,
+        "nativeFallbackControllable": true,
+        "hardBudget": []
+      },
+      "qualification": {
+        "status": "unqualified"
+      },
+      "invocationProfiles": {
+        "direct-http": {
+          "transport": "shell",
+          "supportedVersions": "8.18.0",
+          "controls": {
+            "model": {
+              "support": "native",
+              "mapping": "[\"--data-binary\",\"@-\"]",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "effort": {
+              "support": "not-applicable",
+              "mapping": "unavailable: explicit effort is refused; null effort and empty effort lists only",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "sandbox": {
+              "support": "external",
+              "mapping": "unavailable natively: requires a host OS/executor boundary; local endpoint does not prove local inference",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "approval": {
+              "support": "external",
+              "mapping": "unavailable natively: curl has no approval or permission system; the host authorizes the single text-only POST",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "workdir": {
+              "support": "external",
+              "mapping": "host spawns curl in the resolved absolute workspace; no server-side workspace control",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "finalOutput": {
+              "support": "external",
+              "mapping": "host captures stdout and validates the original envelope and extracted worker claims; no server output-file control",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "stdin": {
+              "support": "native",
+              "mapping": "[\"--data-binary\",\"@-\"]",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "structuredOutput": {
+              "support": "external",
+              "mapping": "unavailable server schema control; host strict claims parser validates the extracted response",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "stepCap": {
+              "support": "unqualified",
+              "mapping": "unavailable: no model step cap; curl time and size bounds are not a step cap",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "trust": {
+              "support": "native",
+              "mapping": "-q",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "children": {
+              "support": "native",
+              "mapping": "[\"--data-binary\",\"@-\"]",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "fallback": {
+              "support": "native",
+              "mapping": "[\"--max-redirs\",\"0\"]",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            }
+          },
+          "envAllowlist": [
+            "OLLAMA_HOST"
+          ],
+          "pitfalls": [
+            "One text-only POST /api/generate, stream:false, explicit model and no tools, child-agent API or fallback request. Coding and explicit effort are refused.",
+            "The model control binds the resolved model in the adapter-frame JSON body; argv contains no model or brief.",
+            "No Ollama CLI, server start or weight-download command is invoked, including for disabled members. Server-side downloads, inference locality and backend identity remain unqualified.",
+            "curl 8.18.0 is the executable version; Ollama 0.33.3 response fields and done_reason=stop remain provisional pending the conductor smoke.",
+            "No native sandbox or approval system exists; external workspace/capture/validation controls require an enforcing host boundary.",
+            "No streaming health grammar, progress, session log, server cancellation, resume or model step cap is available. Owned curl exit is not proof of remote server stop."
+          ],
+          "health": {
+            "version": 1,
+            "handshake": "process-only",
+            "outputFraming": "final-json",
+            "signalParser": "unavailable",
+            "sessionLogLocator": null,
+            "progressEvidence": [],
+            "stopEvidence": "owned curl process identity and observed exit only; remote server cancellation unavailable",
+            "fixtureRef": "test/fixtures/providers/local-http/health/manifest.json",
+            "qualifiedAt": null,
+            "statusOperation": null,
+            "cancelOperation": null,
+            "coverage": "degraded",
+            "qualificationTarget": "unobserved",
+            "evidenceGrades": [
+              "H",
+              "R"
+            ],
+            "provenance": [
+              {
+                "kind": "help",
+                "ref": "docs/providers/ollama-direct.md",
+                "observedAt": "2026-10-09T00:00:00Z",
+                "cliVersion": "8.18.0"
+              },
+              {
+                "kind": "repository",
+                "ref": "tools/ralph-external/lib/ollama-adapter.mjs",
+                "observedAt": "2026-10-26T00:00:00Z",
+                "cliVersion": null
+              }
+            ],
+            "qualificationOwner": "B-OG-09",
+            "qualification": {
+              "status": "unqualified",
+              "scopeDigest": null,
+              "cliVersion": null,
+              "accountScope": null,
+              "profileRef": null,
+              "modelKey": null,
+              "effort": null,
+              "authorizedLive": false
+            }
+          }
+        }
+      }
+    }
+  },
   "workerHealthAdapters": {
     "local-http": {
       "version": 1,
