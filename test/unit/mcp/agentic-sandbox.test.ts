@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtempSync } from 'node:fs';
+import { chmod, link, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,7 +31,7 @@ describe('Agentic Sandbox MCP toolset', () => {
   let tools: Map<string, any>;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'aiwg-sandbox-mcp-'));
+    root = mkdtempSync(join(tmpdir(), 'aiwg-sandbox-mcp-'));
     tokenFile = join(root, 'management.token');
     await writeFile(tokenFile, 'management-bearer-canary\n', { mode: 0o600 });
     await chmod(tokenFile, 0o600);
@@ -60,6 +61,88 @@ describe('Agentic Sandbox MCP toolset', () => {
     expect(headers.get('authorization')).toBe('Bearer management-bearer-canary');
     expect(JSON.stringify(result)).not.toContain('management-bearer-canary');
     expect(JSON.stringify(result)).not.toContain('executor.token');
+  });
+
+  it('resolves a named OS-store entry only when the legacy file is not configured', async () => {
+    const readStore = vi.fn(async () => 'store-management-canary');
+    const stored = new AgenticSandboxMcpClient({ env: {
+      AIWG_SANDBOX_MANAGEMENT_URL: 'https://sandbox.example',
+      AIWG_SANDBOX_MANAGEMENT_TOKEN_STORE: 'sandbox-production',
+    }, readStore, fetch: client.fetch });
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      const result = await stored.request('/api/v2/fleet/workloads');
+      expect(readStore).toHaveBeenCalledWith('sandbox-production');
+      expect(new Headers(calls[0].init.headers).get('authorization')).toBe('Bearer store-management-canary');
+      expect(JSON.stringify(result)).not.toContain('store-management-canary');
+      expect(stdout).not.toHaveBeenCalled();
+      expect(stderr).not.toHaveBeenCalled();
+    } finally { stdout.mockRestore(); stderr.mockRestore(); }
+    client.env.AIWG_SANDBOX_MANAGEMENT_TOKEN_STORE = 'unused-store';
+    client.readStore = readStore;
+    await client.request('/api/v2/fleet/workloads');
+    expect(readStore).toHaveBeenCalledTimes(1);
+    expect(new Headers(calls.at(-1)!.init.headers).get('authorization')).toBe('Bearer management-bearer-canary');
+  });
+
+  it.each([0o640, 0o604])('refuses an exposed legacy file (%o), without store fallback or a request', async (mode) => {
+    await chmod(tokenFile, mode);
+    const readStore = vi.fn(async () => 'unused-store-canary');
+    client.env.AIWG_SANDBOX_MANAGEMENT_TOKEN_STORE = 'unused-store';
+    client.readStore = readStore;
+    const result = await tools.get('sandbox-fleet-list').handler({});
+    expect(body(result).error).toMatch(/AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE.*group or other access/);
+    expect(JSON.stringify(result)).not.toContain('management-bearer-canary');
+    expect(readStore).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+  });
+
+  it.each(['symlink', 'hardlink'])('refuses a %s token file', async (kind) => {
+    const alias = join(root, 'alias.token');
+    if (kind === 'symlink') await symlink(tokenFile, alias);
+    else await link(tokenFile, alias);
+    client.env.AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE = alias;
+    const result = await tools.get('sandbox-fleet-list').handler({});
+    expect(body(result).error).toMatch(kind === 'symlink' ? /symlink/ : /hard link/);
+    expect(JSON.stringify(result)).not.toContain('management-bearer-canary');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('refuses another owner without reading or exposing the value', async () => {
+    const uid = process.getuid!();
+    const getuid = vi.spyOn(process, 'getuid').mockReturnValue(uid + 1);
+    try {
+      const result = await tools.get('sandbox-fleet-list').handler({});
+      expect(body(result).error).toMatch(/not owned by the current user/);
+      expect(JSON.stringify(result)).not.toContain('management-bearer-canary');
+      expect(calls).toHaveLength(0);
+    } finally { getuid.mockRestore(); }
+  });
+
+  it('names both configuration options when headless credentials are absent', async () => {
+    delete client.env.AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE;
+    const result = await tools.get('sandbox-fleet-list').handler({});
+    expect(body(result).error).toMatch(/AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE or AIWG_SANDBOX_MANAGEMENT_TOKEN_STORE/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('does not expose store diagnostics, reflected HTTP tokens, or transport errors', async () => {
+    delete client.env.AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE;
+    client.env.AIWG_SANDBOX_MANAGEMENT_TOKEN_STORE = 'sandbox-production';
+    client.readStore = vi.fn(async () => { throw new Error('store-management-canary'); });
+    const denied = await tools.get('sandbox-fleet-list').handler({});
+    expect(body(denied).error).toMatch(/native store entry could not be read/);
+    expect(JSON.stringify(denied)).not.toContain('store-management-canary');
+    client.readStore = vi.fn(async () => 'store-management-canary');
+    response = { status: 503, body: { error: 'upstream store-management-canary' } };
+    const reflected = await tools.get('sandbox-fleet-list').handler({});
+    expect(JSON.stringify(reflected)).not.toContain('store-management-canary');
+    expect(body(reflected).details.error).toContain('[REDACTED]');
+    client.fetch = vi.fn(async () => { throw new Error('transport store-management-canary'); });
+    const failed = await tools.get('sandbox-fleet-list').handler({});
+    expect(JSON.stringify(failed)).not.toContain('store-management-canary');
+    expect(body(failed).error).toContain('[REDACTED]');
   });
 
   it.each([404, 405])('returns typed capability absence for HTTP %s', async (status) => {

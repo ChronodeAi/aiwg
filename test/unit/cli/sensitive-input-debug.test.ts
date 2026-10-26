@@ -76,4 +76,43 @@ describe.skipIf(process.platform === 'win32')('adopted commands with NODE_DEBUG=
     expect(fs.readFileSync(path.join(capture, 'stdin'), 'utf8')).toBe(fake);
     expect(fs.existsSync(path.join(capture, 'children'))).toBe(true);
   });
+  it.each(['stdin', 'file', 'store', 'env', 'legacy'] as const)('local-executor %s keeps bearer out of helper argv, environments and output', source => {
+    const file = path.join(root, 'executor-input'); fs.writeFileSync(file, fake, { mode: 0o600 });
+    const args = source === 'legacy' ? [] : [`--token-${source}`, ...(source === 'file' ? [file] : source === 'store' ? ['fixture'] : source === 'env' ? ['EXAMPLE_VALUE'] : [])];
+    run(`import {resolveLocalExecutorToken} from ${moduleUrl('cli/handlers/local-executor.js')};\n` +
+      `const value=await resolveLocalExecutorToken(${JSON.stringify(args)});\n` +
+      `if(!value) throw new Error('No executor bearer resolved');\n` +
+      `import {defaultCommandRunner} from ${moduleUrl('auth/credential-store.js')};\n` +
+      `await defaultCommandRunner('secret-tool',['clear','service','fixture','account','fixture']);`,
+      source === 'stdin' ? fake : '', source === 'legacy' ? { AIWG_EXECUTOR_TOKEN: fake } : {});
+    expect(fs.existsSync(path.join(capture, 'children'))).toBe(true);
+  });
+
+  it.each(['file', 'store'] as const)('sandbox management %s keeps bearer out of helper argv, environments and output', source => {
+    const file = path.join(root, 'management-input'); fs.writeFileSync(file, fake, { mode: 0o600 });
+    run(`import {AgenticSandboxMcpClient} from ${moduleUrl('mcp/tools/agentic-sandbox.mjs')};\n` +
+      `const client=new AgenticSandboxMcpClient({fetch:async (_url,init)=> {\n` +
+      `if(!new Headers(init.headers).get('authorization')?.startsWith('Bearer ')) throw new Error('Bearer missing');\n` +
+      `return new Response(JSON.stringify({ok:true}),{status:200});}});\n` +
+      `console.log(JSON.stringify(await client.request('/api/v2/fleet/workloads')));\n` +
+      `import {defaultCommandRunner} from ${moduleUrl('auth/credential-store.js')};\n` +
+      `await defaultCommandRunner('secret-tool',['clear','service','fixture','account','fixture']);`, '', {
+      AIWG_SANDBOX_MANAGEMENT_URL: 'https://sandbox.example',
+      ...(source === 'file' ? { AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE: file } : { AIWG_SANDBOX_MANAGEMENT_TOKEN_STORE: 'fixture' }),
+    });
+    expect(fs.existsSync(path.join(capture, 'children'))).toBe(true);
+  });
+
+  it.each(['env', 'alias', 'file'] as const)('Jev runtime %s keeps value out of helper argv, environments and output', source => {
+    const directory = path.join(root, 'aiwg/credentials'); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(directory, 'jev.json'), JSON.stringify({ token: fake, enabled: true }), { mode: 0o600 });
+    run(`import {lookupJevCredential,inspectJevCredential} from ${moduleUrl('decision/jev-credentials.js')};\n` +
+      `const value=await lookupJevCredential();if(!value?.token) throw new Error('Jev key missing');\n` +
+      `console.log(JSON.stringify(await inspectJevCredential()));\n` +
+      `import {defaultCommandRunner} from ${moduleUrl('auth/credential-store.js')};\n` +
+      `await defaultCommandRunner('secret-tool',['clear','service','fixture','account','fixture']);`, '',
+      source === 'env' ? { JEV_API_KEY: fake } : source === 'alias' ? { AIWG_DECISION_JEV_API_KEY: fake } : {});
+    expect(fs.existsSync(path.join(capture, 'children'))).toBe(true);
+  });
+
 });

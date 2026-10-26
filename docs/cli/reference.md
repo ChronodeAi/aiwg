@@ -1458,7 +1458,7 @@ Fetch and verify an executor AgentCard using `aiwg agentcard verify --host <url>
 
 ### local-executor
 
-Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md).
 
 Start a no-sandbox host-process executor that boots `DaemonSupervisor` + `ExecutorShim` and registers with `aiwg serve` for mission dispatch. Implements `executor.aiwg.io/v1` Core + HITL conformance with `isolation: none` (#1181).
 
@@ -1475,6 +1475,9 @@ aiwg local-executor serve --max-concurrency 4 --executor-id <uuid>
 - `--aiwg-serve <url>` - URL of the parent `aiwg serve` to register with (default: `http://127.0.0.1:7337`)
 - `--max-concurrency <n>` - Max concurrent missions (default: `2`)
 - `--executor-id <uuid>` - Stable executor ID for re-registration (default: generated)
+- `--token-interactive`, `--token-stdin`, `--token-file <path>`, `--token-store <name>`, `--token-env <NAME>` - Optional preexisting bearer, using the [standard source precedence and private-file requirements](sensitive-values.md).
+
+Without a token source, the executor retains `AIWG_EXECUTOR_TOKEN`, then the existing token cache scoped to its executor ID and serve URL, then registration. It prompts only with `--token-interactive`. Registration-issued tokens are persisted at the existing artifact location under `local-executor/tokens/` in a 0600 file inside a 0700 directory; insecure restart files are refused. Tokens never appear in status output. Windows cache persistence fails closed until native ACL validation is available.
 
 **Conformance:** `executor-contract` v1 — Core + HITL profiles, `isolation: none`.
 

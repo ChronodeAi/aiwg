@@ -43,7 +43,7 @@ Setup uses hidden terminal entry or explicit `--token-interactive`, `--token-std
 Headless setup without a source errors with these options; existing shell tokens
 need `--token-env JEV_API_KEY` or `--token-env AIWG_DECISION_JEV_API_KEY`.
 See [Supplying sensitive values](../cli/sensitive-values.md) for exposure guidance,
-manager pipes, named-store setup and the remaining runtime lookup inventory.
+manager pipes, named-store setup and shared private-file requirements.
 It stores the credential and records `"enabled": true` in the credential file.
 Pipe the token through stdin so it never appears in shell history:
 
@@ -58,7 +58,9 @@ Token lookup order when running `ask`:
 3. the user credential file
    `${XDG_CONFIG_HOME:-~/.config}/aiwg/credentials/jev.json`
    (`{"token":"...","region":"us","endpoint"?:...}`, mode 0600, parent dir
-   0700 — a group- or world-readable file is refused).
+   0700). Runtime uses the shared private-file checks: files owned by another
+   user, group/other access, symlinks, nonregular files, and multiple hard links
+   are refused. Existing JSON records, including optional `enabled`, remain valid.
 
 `setup` prints `aiwg-decision-jev-setup/v1` JSON:
 `{ configured, credentialSource: "file"|"env", region, verified?, model?,

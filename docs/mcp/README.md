@@ -69,7 +69,12 @@ only after independently establishing that the worker stopped.
 The `sandbox` toolset exposes revisioned fleet inventory/admission/observation/
 reconciliation and governed activity coverage/timeline/export. Configure it with
 `AIWG_SANDBOX_MANAGEMENT_URL` and a mode-`0600` bearer file named by
-`AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE`. Credentials are server configuration,
+`AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE`, or set
+`AIWG_SANDBOX_MANAGEMENT_TOKEN_STORE` to a named OS-store entry. The legacy file
+takes precedence; an invalid selected file never falls through to the store.
+Files must be regular, owned by the current user, private, and neither symlinks
+nor multiply linked. See [Supplying sensitive values](../cli/sensitive-values.md)
+for named-store setup and private-file requirements. Credentials are server configuration,
 never tool inputs or outputs. Non-loopback endpoints must use HTTPS. Mutations
 and evidence export require `confirmed: true`; unsupported upstream endpoints
 return a typed `supported: false` result for HTTP 404/405.

@@ -2,6 +2,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
+import { sensitiveInputOptions } from '../../auth/sensitive-input.js';
 import {
   FleetConfigMissingError,
   formatFleetSpendReport,
@@ -17,10 +18,11 @@ function option(args: string[], name: string): string | undefined {
 
 function usage(): string {
   return [
-    'Usage: aiwg cost-report (--fleet | --key <key_ref>) [--source openrouter] [--config <fleet.yaml>] [--json]',
+    'Usage: aiwg cost-report (--fleet | --key <key_ref> [--key-store <name>]) [--source openrouter] [--config <fleet.yaml>] [--json]',
     '',
     'Reads bot-to-key references from ~/.config/aiwg/fleet.yaml and credentials from',
     '~/.config/aiwg/keys/<key_ref> or AIWG_OPENROUTER_KEY_<KEY_REF>.',
+    'Use --key-store <name> for one key, or per-entry key_store references in fleet YAML.',
     '',
     'AIWG observes and correlates spend; OpenRouter enforces all key limits and caps.',
   ].join('\n');
@@ -47,6 +49,8 @@ export const costReportHandler: CommandHandler = {
       ? path.resolve(ctx.cwd, configuredPath)
       : path.join(os.homedir(), '.config', 'aiwg', 'fleet.yaml');
     try {
+      const keyStore = sensitiveInputOptions(ctx.args, 'key').store;
+      if (keyStore !== undefined && !keyRef) return { exitCode: 2, message: '--key-store requires --key <key_ref>; use per-entry key_store references for --fleet.' };
       const capValue = option(ctx.args, '--monthly-cap');
       const cap = capValue === undefined ? 0 : Number(capValue);
       if (!Number.isFinite(cap) || cap < 0) return { exitCode: 2, message: '--monthly-cap must be a non-negative number.' };
@@ -59,6 +63,7 @@ export const costReportHandler: CommandHandler = {
             bot: option(ctx.args, '--bot') ?? keyRef,
             machine: option(ctx.args, '--machine') ?? os.hostname(),
             key_ref: keyRef,
+            ...(keyStore !== undefined ? { key_store: keyStore } : {}),
             monthly_cap: cap,
           }],
         } : {}),
