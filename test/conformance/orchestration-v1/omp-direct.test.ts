@@ -90,7 +90,7 @@ async function installOmpPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.omp.workerAdapter = structuredClone(registry.providers.omp.workerHealthAdapter!);
   return registry;
 }

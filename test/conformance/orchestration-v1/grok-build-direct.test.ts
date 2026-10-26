@@ -92,7 +92,7 @@ async function installPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers['grok-build'].workerAdapter = structuredClone(registry.providers['grok-build'].workerHealthAdapter);
   return registry;
 }

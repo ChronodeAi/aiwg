@@ -213,7 +213,7 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
       const framer = fileURLToPath(new URL('./worker-stdin-frame.mjs', import.meta.url));
       const frame = [process.execPath, framer, '--adapter-frame', result.briefPath, result.cwd,
         result.selected.cli, qualification.adapterId, result.selected.qualificationDigest, result.briefDigest!,
-        binding.storePath, binding.storeDigest, JSON.stringify(qualification.policy ?? null)].map(quote).join(' ');
+        binding.storePath, binding.storeDigest, JSON.stringify(qualification.policy ?? null), result.selected.model].map(quote).join(' ');
       result.shellCommand = `cd ${quote(result.cwd)} && env -i${environment ? ` ${environment}` : ''} ${frame} | ${worker} ${outputs}`;
     } else if (result.stdin === 'closed' || result.stdin === 'brief-text') {
       const stdin = result.stdin === 'closed' ? '< /dev/null' : `< ${quote(result.briefPath)}`;
@@ -258,7 +258,7 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
 /** Trusted #2885 installation owner supplies driver bindings, never task input. */
 export interface WorkerInvocationDriver {
   /** Pure installed-adapter framing; called only to deliver stdin. */
-  buildWorkerStdinFrame?(brief: string | Buffer): string | Uint8Array;
+  buildWorkerStdinFrame?(brief: string | Buffer, invocation?: { selected?: { model?: string } }): string | Uint8Array;
   /** Existing adapter extraction; raw stream remains separate and untrusted. */
   extractFinal?(stdout: string): unknown;
   parseWorkerFinal?(output: string | Uint8Array, options: Record<string, unknown>): Promise<unknown>;
@@ -274,7 +274,7 @@ export interface WorkerInvocationDriver {
     selected: WorkerResolvedInvocation['selected']; permissions: WorkerExecution;
     cwd: string; briefPath: string; brief: string; finalPath: string;
     limits: WorkerResolvedInvocation['limits'];
-    health: WorkerEffectiveHealth;
+    health: WorkerEffectiveHealth; role?: string;
   }): Promise<Pick<WorkerResolvedInvocation, 'argv' | 'stdin' | 'envNames' | 'mcp' | 'artifacts'>>;
 }
 
@@ -588,7 +588,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
     let effectiveHealth = resolveWorkerEffectiveHealth(healthConfig, healthInput);
     const transport = await buildWorkerInvocationTransport(driver, { selected: structuredClone(selected), permissions: structuredClone(tuple.permissions),
       cwd: request.workdir, briefPath: request.brief, brief: bytes?.toString('utf8') ?? '', finalPath, limits: structuredClone(limits),
-      health: structuredClone(effectiveHealth) });
+      health: structuredClone(effectiveHealth), role: request.role });
     pointer = '/invocation/buildInvocation';
     if (transport.stdin === 'adapter-frame' && typeof driver.buildWorkerStdinFrame !== 'function') throw new Error('Installed adapter stdin framer is required');
     if (transport.mcp?.timeoutSeconds !== undefined) effectiveHealth = resolveWorkerEffectiveHealth(healthConfig,

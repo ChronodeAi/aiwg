@@ -85,7 +85,7 @@ const server = createServer((req, res) => {
       return;
     }
     // success
-    const response = body?.prompt ?? '';
+    const response = config.response ?? body?.prompt ?? '';
     sendJson(200, { model, created_at: '2026-10-11T00:00:00Z', response,
       done: true, done_reason: 'stop', total_duration: 1, load_duration: 1, prompt_eval_count: 1,
       prompt_eval_duration: 1, eval_count: 1, eval_duration: 1 });

@@ -70,7 +70,7 @@ async function installPiPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.pi.workerAdapter = structuredClone(registry.providers.pi.workerHealthAdapter!);
   return registry;
 }

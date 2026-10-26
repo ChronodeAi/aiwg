@@ -351,7 +351,7 @@ export async function inspectWorkerInstallation(instance, request) {
 
 /** Restricted whole-banner regex: one capture, no branching, assertions,
  * backreferences, wildcards, unbounded repetition or repeated groups. Bounded
- * at most two atom repetitions, each capped at 128; banners are capped at 4096 bytes. */
+ * at most two atom repetitions capped at 128, or a final [\s\S] banner tail capped at 4096 bytes. */
 export function compileWorkerVersionPattern(pattern) {
   if (typeof pattern !== 'string' || pattern.length > 256 || !pattern.startsWith('^') || !pattern.endsWith('$')) throw new Error('Invalid worker version pattern');
   let captures = 0, depth = 0, repetitions = 0, atom = false;
@@ -376,7 +376,7 @@ export function compileWorkerVersionPattern(pattern) {
       depth--; atom = false; // groups cannot be repeated
     } else if (c === '{') {
       const match = /^\{([0-9]+),([0-9]+)\}/.exec(pattern.slice(i));
-      if (++repetitions > 2 || !atom || !match || +match[1] < 1 || +match[2] < +match[1] || +match[2] > 128) throw new Error('Unsafe worker version repetition');
+      if (++repetitions > 2 || !atom || !match || +match[1] < 1 || +match[2] < +match[1] || +match[2] > (captures === 1 && depth === 0 && pattern.slice(i - 6) === '[\\s\\S]{1,4096}$' ? 4096 : 128)) throw new Error('Unsafe worker version repetition');
       i += match[0].length - 1; atom = false;
     } else {
       if ('.*+?|^$}'.includes(c)) throw new Error('Unsafe worker version pattern');
@@ -1141,7 +1141,7 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, p
           platform: process.platform, installation, stdinFramerBinding: { storePath: filename, storeDigest: digest },
           ...(profile.transport === 'mcp' ? { mcp: binding.mcp, mcpSchemas: record.mcpSchemas } : {}) },
         ...(typeof instance.buildWorkerStdinFrame === 'function'
-          ? { buildWorkerStdinFrame: brief => instance.buildWorkerStdinFrame(brief) } : {}),
+          ? { buildWorkerStdinFrame: (brief, invocation) => instance.buildWorkerStdinFrame(brief, invocation) } : {}),
         buildInvocation: async input => profile.transport === 'shell' ? {
           argv: [scope.binary.realpath, ...instance.buildWorkerArgs(input, profile, input.permissions)],
           stdin: adapter.invocation.stdin, envNames: Object.keys(installation.environment),

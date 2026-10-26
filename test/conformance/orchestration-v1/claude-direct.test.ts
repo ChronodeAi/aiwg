@@ -26,7 +26,7 @@ let installed: { owner: any; ids: string[] };
 
 function metadata() { return structuredClone(loadProviderModelCapabilities().providers.claude.workerHealthAdapter!); }
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.claude.workerAdapter = metadata();
   return registry;
 }

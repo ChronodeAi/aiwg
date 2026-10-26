@@ -78,7 +78,7 @@ async function installFactoryPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.factory.workerAdapter = structuredClone(registry.providers.factory.workerHealthAdapter);
   return registry;
 }

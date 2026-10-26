@@ -74,7 +74,7 @@ async function installWarpPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.warp.workerAdapter = structuredClone(registry.providers.warp.workerHealthAdapter);
   return registry;
 }
