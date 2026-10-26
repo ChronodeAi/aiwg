@@ -2648,6 +2648,22 @@
         "JEV-16",
         "#3291"
       ]
+    },
+    {
+      "id": "DEC-TELEMETRY-03",
+      "path": "test/fixtures/decision/worker-telemetry.json",
+      "origin": "repository-authored",
+      "author": "Joseph Magly",
+      "date": "2026-10-26",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "unversioned-json",
+      "digest": "sha256:1563b52daadff72aaa4b38d9d070a101843b39bc0b956173ba671471c71f615e",
+      "expectedOutcome": "synthetic worker receipt projected to allowlisted worker.attempt spans (#2929)",
+      "links": [
+        "FR-014",
+        "JEV-16"
+      ]
     }
   ]
 }

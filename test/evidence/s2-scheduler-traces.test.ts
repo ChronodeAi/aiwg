@@ -131,7 +131,11 @@ function context(gate: string, mode: string, boundary: Trace['boundary'] = 'B-OG
   let prior = scheduler.snapshot();
   function record(operation: string, input: unknown, outcome: Step['outcome'], result: unknown, caller?: unknown) {
     const snapshot = scheduler.snapshot();
-    expect(snapshot).toEqual(new FileAdmissionStore(storePath).read());
+    // `diagnostics` is a derived read-only projection (#2926), never persisted;
+    // every durable field must still match the store exactly.
+    const { diagnostics, ...durable } = snapshot;
+    expect(durable).toEqual(new FileAdmissionStore(storePath).read());
+    expect(diagnostics).toEqual(expect.objectContaining({ findings: expect.any(Array), truncated: expect.any(Number) }));
     const changes: Step['changes'] = {};
     for (const id of new Set([...Object.keys(prior.records), ...Object.keys(snapshot.records)])) {
       const from = prior.records[id]?.state ?? null;
