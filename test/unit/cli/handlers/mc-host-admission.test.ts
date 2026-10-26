@@ -28,12 +28,13 @@ beforeEach(async () => {
   registry.shutdown();
   roots = [join(root, 'a'), join(root, 'b')];
   const { mkdirSync } = await import('node:fs'); roots.forEach(path => mkdirSync(path));
-  configs = roots.map(() => {
+  configs = roots.map(project => {
     const cfg: AiwgConfig = { version: '1', providers: ['codex'], installed: {}, scripts: {},
       parallelism: { worker_dispatch: true, worker_mode: 'managed', max_parallel_subagents: 1,
         admission: { authorityRef: 'host:synthetic' }, clis: { first: { adapter: 'providers:codex', accountScope: 'local', quotaScope: 'local' } },
         groups: { coding: { members: [{ id: 'spark', cli: 'first', model: 'model', roles: ['coding'] }] } } } } as AiwgConfig;
     cfg.parallelism!.activation = { revision: 1, ...workerActivationDigests(cfg), snapshotRef: 'synthetic:activation' };
+    mkdirSync(join(project, '.aiwg')); writeFileSync(join(project, '.aiwg/aiwg.config'), JSON.stringify(cfg));
     return cfg;
   });
   policies = configs.map((cfg, index) => {

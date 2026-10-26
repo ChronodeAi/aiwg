@@ -1,3 +1,5 @@
+import { normalizeAiwgConfigCandidate } from './config-normalization.js';
+import { atomicConfigWrite, withWorkerWriteLock } from './worker-write.js';
 import { workerConfigDigest } from './worker-config-digest.js';
 export { workerConfigDigest } from './worker-config-digest.js';
 import { validateParallelismConfig, type WorkerMember, type WorkerGroup, type WorkerActivation, type WorkerParallelism } from './worker-parallelism.js';
@@ -31,9 +33,9 @@ export type { RulesConfig } from '../rules/inline-budget.mjs';
 import { loadRulePinConfigs, installedRuleCapabilities, validateRulePinCapabilities } from '../rules/pins.mjs';
 
 import { readFileSync, existsSync } from 'node:fs';
-import { readFile, writeFile, mkdir, access, readdir, rename, unlink } from 'fs/promises';
-import { createHash, randomBytes } from 'crypto';
-import { resolve, join, dirname, isAbsolute } from 'path';
+import { readFile, access, readdir } from 'fs/promises';
+import { createHash } from 'crypto';
+import { resolve, join, isAbsolute } from 'path';
 import type { ProjectLocalType } from '../extensions/manifest.js';
 import { normalizeNamedCaptures } from '../artifacts/index-builder.js';
 import {
@@ -1816,9 +1818,7 @@ export async function readAiwgConfigCandidate(projectDir: string): Promise<AiwgC
   const parsed = JSON.parse(content) as AiwgConfig;
 
   // Ensure required fields exist (forward-compat)
-  if (!parsed.providers) parsed.providers = ['claude'];
-  if (!parsed.installed) parsed.installed = {};
-  if (!parsed.scripts) parsed.scripts = {};
+  normalizeAiwgConfigCandidate(parsed);
 
   if (parsed.sessions !== undefined && (
     parsed.sessions === null || typeof parsed.sessions !== 'object' || Array.isArray(parsed.sessions)
@@ -1920,6 +1920,9 @@ export async function readAiwgConfig(projectDir: string, options?: { aiwgHome?: 
  * sync so split-root health remains deterministic.
  */
 export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): Promise<void> {
+  return withWorkerWriteLock(projectDir, () => writeAiwgConfigUnlocked(projectDir, config));
+}
+async function writeAiwgConfigUnlocked(projectDir: string, config: AiwgConfig): Promise<void> {
   // Uninstall is an explicit capability change. Retire project selectors for
   // removed capabilities before strict validation, and tell the operator.
   const previousFile = getConfigPath(projectDir);
@@ -1969,26 +1972,7 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
   const artifactPath = join(artifactDir, CONFIG_FILENAME);
   const content = JSON.stringify(config, null, 2) + '\n';
 
-  const writeAtomic = async (filePath: string): Promise<void> => {
-    await mkdir(dirname(filePath), { recursive: true });
-    // Atomic write: emit to a temp sibling, fsync-ish via rename. Prevents a
-    // crash or kill mid-write from corrupting the config file. Rename is
-    // atomic on POSIX and on NTFS when both paths are on the same volume.
-    // The random suffix avoids collisions if two concurrent writers run.
-    const tmpPath = `${filePath}.${randomBytes(6).toString('hex')}.tmp`;
-    try {
-      await writeFile(tmpPath, content, 'utf-8');
-      await rename(tmpPath, filePath);
-    } catch (err) {
-      // Best-effort cleanup of the temp file on failure, ignoring ENOENT.
-      try {
-        await unlink(tmpPath);
-      } catch {
-        /* ignore */
-      }
-      throw err;
-    }
-  };
+  const writeAtomic = (file: string) => atomicConfigWrite(file, content);
 
   await writeAtomic(localPath);
   if (artifactPath !== localPath) {

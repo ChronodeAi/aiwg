@@ -33,7 +33,7 @@ describe('T-OG registry wiring gate (partial coverage is not release acceptance)
     expect(report.packs['T-OG-13']).toMatchObject({ name: 'P2/P3 extensions', ownerIssue: 'roctinam/aiwg#2875', status: 'partial' });
     expect(report.packs['T-OG-13'].remaining).toContain('#2925: direct/shared group templates');
     // Shared P2/P3 pack: #2925 templates, #2926 diagnostics, #2927 continuation and #2929 telemetry.
-    expect(report.packs['T-OG-13'].mechanismOwners).toEqual(['B-OG-22', 'B-OG-23', 'B-OG-25', 'B-OG-21']);
+    expect(report.packs['T-OG-13'].mechanismOwners).toEqual(['B-OG-22', 'B-OG-23', 'B-OG-25', 'B-OG-21', 'B-OG-24']);
     expect(report.packs['T-OG-13'].testFiles).toEqual([
       'test/unit/serve/shared-host-scheduler-managed.test.ts',
       'test/unit/serve/shared-host-scheduler-budgets.test.ts',
@@ -43,6 +43,7 @@ describe('T-OG registry wiring gate (partial coverage is not release acceptance)
       'test/unit/smiths/parallelism-templates.test.ts',
       'test/unit/ralph-external/session-attempt.test.ts',
       'test/unit/ralph-external/ralph-group-cycle.test.ts',
+      'test/unit/config/worker-adoption.test.ts',
       'test/unit/decision/worker-telemetry.test.ts',
       'test/unit/decision/worker-otlp.test.ts',
       'test/conformance/orchestration-v1/worker-telemetry.test.ts',

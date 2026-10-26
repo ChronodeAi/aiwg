@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import {
@@ -100,9 +101,7 @@ const schedulerEvidence = [
 const mappingSource = 'test/conformance/orchestration-v1/worker-health-lease-mapping.test.ts';
 
 function tempDir(): string {
-  const parent = join(root, '.tmp-s2-evidence');
-  mkdirSync(parent, { recursive: true });
-  const dir = mkdtempSync(join(parent, 'case-'));
+  const dir = mkdtempSync(join(tmpdir(), 'aiwg-s2-evidence-'));
   dirs.push(dir);
   return dir;
 }
@@ -606,6 +605,7 @@ describe('B-OG-16 managed real MC caller binding', () => {
       cfg = worker.cfg;
       vi.mocked(loadWorkerInputs).mockResolvedValue({ snapshot: worker.snapshot, drivers: worker.drivers });
     }
+    mkdirSync(join(dir, '.aiwg'), { recursive: true }); writeFileSync(join(dir, '.aiwg/aiwg.config'), JSON.stringify(cfg));
     const parallelism = resolveParallelism(cfg.parallelism, 'codex');
     const policy = managedProjectAdmissionPolicy(dir, parallelism, workerConfigDigest(parallelism.activation), parallelism.max_parallel_subagents);
     const c = context(`mc-${event}`, 'managed real handler with synthetic Ralph state', 'B-OG-16', storePath, true, policy);
@@ -790,7 +790,7 @@ afterAll(() => {
     instrumentation: 'MC scheduler methods have pass-through observers calling their original implementations; snapshots include each internal scheduler operation and the enclosing command.',
     fixtureSources: [source(mappingSource, 'const baseHealth:'), source(mappingSource, 'const confirmedTerminal'), source(mappingSource, 'const uncertainTermination'), source(mappingSource, 'const terminalUnconfirmed'), 'test/conformance/mission-v1/fixtures/worker-contracts/mission-vectors.json#dispatch-health-feature'],
     sourceDigests: Object.fromEntries([
-      'src/serve/shared-host-scheduler.ts', 'src/cli/handlers/mc.ts', 'src/models/resolver.ts', 'src/serve/worker-invocation.ts', 'test/fixtures/managed-mc-worker.ts', mappingSource,
+      'src/serve/shared-host-scheduler.ts', 'src/cli/handlers/mc.ts', 'src/cli/handlers/mc-admission.ts', 'src/config/worker-activation-gate.ts', 'src/models/resolver.ts', 'src/serve/worker-invocation.ts', 'test/fixtures/managed-mc-worker.ts', mappingSource,
       'test/conformance/mission-v1/fixtures/worker-contracts/mission-vectors.json',
     ].map(file => [file, `sha256:${createHash('sha256').update(readFileSync(join(root, file))).digest('hex')}`])),
     healthVectors: { baseHealth, currentProof: confirmed(3), staleProof: confirmed(2), futureProof: confirmed(4), uncertain: uncertain(3), terminalUnconfirmed: terminalUnconfirmed(3), nullGeneration: confirmed(null) },
@@ -800,5 +800,4 @@ afterAll(() => {
   };
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
-  rmSync(join(root, '.tmp-s2-evidence'), { recursive: true, force: true });
 });

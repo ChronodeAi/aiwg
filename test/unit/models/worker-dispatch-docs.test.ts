@@ -88,8 +88,9 @@ describe('managed operator guide configuration', () => {
   it('loads the documented two groups with quota/budget policy and requires trusted activation', async () => {
     const doc = await readFile(path.join(frameworkRoot, 'docs/getting-started/managed-worker-dispatch.md'), 'utf8');
     const examples = [...doc.matchAll(/```json\n([\s\S]*?)\n```/g)].map(match => JSON.parse(match[1]));
-    expect(examples).toHaveLength(2);
-    const [config, models] = examples;
+    expect(examples).toHaveLength(3);
+    const [config, models, authorization] = examples;
+    expect(authorization).toEqual({ project: '/absolute/path/to/project', revision: 3, fields: ['/parallelism/max_parallel_subagents', '/workerSelection/roleGuidance/coding'] });
     root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-managed-docs-'));
     await mkdir(path.join(root, '.aiwg'));
     vi.stubEnv('AIWG_CONFIG', path.join(root, 'user-config'));

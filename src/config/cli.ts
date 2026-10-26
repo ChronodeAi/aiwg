@@ -1,3 +1,4 @@
+import { printUsage } from './cli-help.js';
 /**
  * Config CLI — Subcommand router for `aiwg config`
  *
@@ -20,9 +21,8 @@
 
 import { fileURLToPath } from 'url';
 import path from 'path';
-import { isDeepStrictEqual } from 'node:util';
-import { normalizeProviderDefinitionId } from '../providers/provider-definitions.js';
-import type { AiwgConfig } from './aiwg-config.js';
+import { warnStaleParallelism } from './worker-guidance-warning.js';
+import { handleWorkerAdoptionArgs } from './worker-adoption-cli.js';
 import { UserConfig } from './user-config.js';
 import { AiwgError, EXIT_CODES } from '../cli/errors.js';
 import { isInteractive } from '../cli/env.js';
@@ -32,31 +32,12 @@ import { projectControlPath, resolveProjectAiwgDir } from './project-artifacts.j
 
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
-function warnStaleParallelism(cfg: AiwgConfig, projectDir: string, key: string, before: unknown): void {
-  if (key !== 'parallelism' && !key.startsWith('parallelism.')) return;
-  if (isDeepStrictEqual(before, getDottedPath(cfg as unknown as Record<string, unknown>, key))) return;
-  const configured = (cfg.providers ?? []).map(normalizeProviderDefinitionId).filter((id): id is NonNullable<typeof id> => !!id);
-  const recorded = Object.values(cfg.installed ?? {}).flatMap(entry => Object.keys(entry.deployedTo ?? {}))
-    .map(normalizeProviderDefinitionId).filter((id): id is NonNullable<typeof id> => !!id).sort();
-  const providers = [...new Set([...configured, ...recorded])];
-  const targets = providers.length ? providers : ['<provider>'];
-  const lines = [
-    `WARNING: ${key} changed project configuration; generated workspace/provider guidance may now be stale.`,
-    `From project root ${path.resolve(projectDir)}, preview and refresh every configured or recorded provider context:`,
-    ...targets.flatMap(provider => [
-      `  aiwg regenerate --workspace --provider ${provider} --dry-run`,
-      `  aiwg regenerate --workspace --provider ${provider}`,
-    ]),
-    '  aiwg workspace-context doctor',
-    `Shared parallelism defaults and labels use primary provider '${cfg.providers?.[0] ?? 'unknown'}' (providers[0]); --provider selects the adapter/context target.`,
-  ];
-  console.error(lines.join('\n'));
-}
 
 /**
  * Main CLI entry point for `aiwg config <subcommand> [args]`
  */
 export async function main(args: string[]): Promise<void> {
+  if (await handleWorkerAdoptionArgs(args, process.cwd(), 'config')) return;
   // Extract --config-dir flag before routing
   let configDir: string | undefined;
   const filteredArgs: string[] = [];
@@ -986,51 +967,6 @@ async function handleGitignore(args: string[]): Promise<void> {
   }
 }
 
-function printUsage(): void {
-  console.log(`Usage: aiwg config <subcommand> [options]
-
-Subcommands:
-  get <key>                       Read a user config value
-  get --project <key>             Read a project config value or merged defaults.workerSelection
-    [--origins]                  Include model policy sources, pointers and input digests
-  set <key> <value>               Write a user config value
-  set --project <key> <value>     Write a project config value (validates enums)
-  list                Show all user config
-  show --project      Show resolved project config and artifact root
-  validate            Validate user config files
-  validate --project  Validate resolved project config taxonomy/index semantics
-    [--provider gitea|github|local] [--available-label NAME ...]
-  reset [<key>]       Reset key or all config to defaults
-  path                Print config directory path
-  edit                Open config in $EDITOR/$VISUAL (requires a terminal)
-  edit --print-path   Print the config file path instead of opening an editor
-  gitignore           Show/check/fix .gitignore AIWG entries
-
-Global flags:
-  --config-dir <path> Override config directory
-
-Examples:
-  aiwg config get defaults.provider
-  aiwg config set defaults.verbosity quiet
-  aiwg config set updates.channel next
-  aiwg config list
-  aiwg config show --project
-  aiwg config show --project --json
-  aiwg config get --project delivery.mode
-  aiwg config set --project delivery.mode pr-required
-  aiwg config set --project delivery.merge_style squash
-  aiwg config get --project parallelism
-  aiwg config get --project defaults.workerSelection --origins
-  aiwg config set --project parallelism.max_parallel_subagents 6
-  aiwg config reset --project parallelism
-  aiwg config validate
-  aiwg config path
-  aiwg config reset defaults.provider
-  aiwg config --config-dir /custom/path list
-  aiwg config gitignore
-  aiwg config gitignore --fix
-  aiwg config gitignore --check`);
-}
 
 /** Same configuration owner and validation used by the rules command wrappers. */
 export async function setRuleConfigKey(cwd: string, source: 'project' | 'user', key: string, raw: string, userConfigDir?: string): Promise<void> {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, promises as fs, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, mkdtempSync, promises as fs, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import {
@@ -30,7 +30,9 @@ function session() {
   return { id: 'mc-synthetic', name: 'synthetic', state: 'active', maxMissions: 4,
     createdAt: submittedAt, updatedAt: submittedAt, missions: [mission()] };
 }
+function persistConfig() { mkdirSync(join(root, '.aiwg'), { recursive: true }); writeFileSync(join(root, '.aiwg/aiwg.config'), JSON.stringify(cfg)); }
 function activate() {
+  persistConfig();
   const parallelism = resolveParallelism(cfg.parallelism, 'codex');
   const policy = managedProjectAdmissionPolicy(root, parallelism, workerConfigDigest(parallelism.activation), parallelism.max_parallel_subagents);
   const store = new FileAdmissionStore(projectAdmissionAuthority(root).path);
@@ -57,6 +59,7 @@ beforeEach(() => {
   cfg.parallelism!.activation = {
     revision: 1, ...workerActivationDigests(cfg), snapshotRef: 'synthetic:activation',
   };
+  persistConfig();
   mocks.readConfig.mockResolvedValue(cfg);
   mocks.readCandidate.mockResolvedValue(cfg);
   mocks.launch.mockResolvedValue({ loopId: 'loop-synthetic', pid: 12345, execution: { pid: 12345, startedAt: 'synthetic-boot:123:1000' } });

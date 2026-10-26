@@ -33,7 +33,6 @@ import type { CanonicalMission, WorkerExecution, WorkerHealthSummary, WorkerUsag
 import { attemptBlock, capacityBlock, type AdmissionBlock } from './shared-host-admission-checks.js';
 import { projectAdmissionDiagnostics, type AdmissionDiagnostics } from './shared-host-starvation.js';
 import { resolveParallelism, type ParallelismConfig } from '../config/aiwg-config.js';
-
 export type AdmissionState =
   | 'queued'
   | 'admitted'
@@ -43,9 +42,7 @@ export type AdmissionState =
   | 'cancelled'
   | 'timed-out'
   | 'preempted';
-
 export type RuntimeKind = 'host' | 'container' | 'vm' | 'microvm' | 'custom';
-
 export interface ManagedWorkerReservation {
   kind: 'native' | 'external';
   group?: string;
@@ -409,6 +406,7 @@ export class SharedHostScheduler {
     private readonly store: AdmissionStore,
     private readonly policy: SharedHostPolicy,
     private readonly clock: () => number = Date.now,
+    private readonly checkActivation?: () => void,
   ) {
     if (!Number.isInteger(policy.maxConcurrent) || policy.maxConcurrent < 1) {
       throw new Error('maxConcurrent must be a positive integer');
@@ -957,6 +955,7 @@ export class SharedHostScheduler {
   }
 
   private assertSubmissionsOpen(snapshot: AdmissionSnapshot): void {
+    this.checkActivation?.();
     if (snapshot.migration || snapshot.authorityRedirect) throw new Error('admission authority is frozen for migration');
   }
 

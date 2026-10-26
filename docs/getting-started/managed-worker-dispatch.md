@@ -109,33 +109,78 @@ including Codex, Muse, Claude, Hermes and local inference. Local synthesis needs
 whole-path local qualification and egress controls; a text endpoint does not
 provide coding tools, and local-only tasks cannot fall back to cloud providers.
 
-Managed activation is a trusted embedding/config-owner operation. There is no
-`mc activate`, host-install, migration, or forced-settlement CLI. The generic
-config setter validates and synchronizes an existing compatibility copy; it
-does **not** implement a coherent activation transaction. A JSON example without
-an activation marker is deliberately unable to launch managed work.
+Review and activate the pair through the existing setters. Put the proposed
+`parallelism` block in `parallelism.json` (without an activation marker) and the
+`defaults.workerSelection` value in `worker-selection.json`. Preserve unrelated
+project settings; the proposal changes only these two policy fields.
 
-The trusted owner must serialize writers and pause submissions while it:
+```bash
+aiwg config set --project --parallelism parallelism.json \
+  --worker-selection worker-selection.json --propose worker-review.json
+# Read worker-review.json: before/after, input bytes/digests, base revision, digest.
+aiwg config set --project --apply worker-review.json --authorize 'sha256:<reviewed-digest>'
+```
 
-1. Inventories canonical config, existing compatibility copies, project/user/bundled
-   model inputs (`workerActivationCopyInventory`), and retains the previous pair.
-2. Validates the complete pair and current restrictions with `ConfigLoader`.
-   Builds a revisioned marker from `workerActivationDigests(config)` plus the
-   loader's exact `getInputDigests()`, and a retained immutable `snapshotRef`.
-3. Writes and checks the same marker and candidate bytes in all inventoried config
-   copies. Rechecks inputs before binding the authority. An interrupted or mismatched
-   activation stays closed; a partially written pair is never a legacy fallback.
-4. Builds `managedProjectAdmissionPolicy(root, resolvedParallelism,
-   workerConfigDigest(activation), resolvedParallelism.max_parallel_subagents)` and
-   initializes the existing project store with `bindManagedAdmissionPolicy`.
-   A nonempty authority requires reconciliation, not rebinding over its history.
+`aiwg models set` and `aiwg models set-default` accept the same pair-review flags.
+Use `--target <project>` for another project. Every input has a flag; these flows
+never prompt, including with non-TTY stdin. Ordinary `config set` and model edits
+remain available without proposals or activation markers for direct dispatch.
+Artifact tier edits and `defaults.tier` remain ordinary edits; pair proposals use
+`--worker-selection` for model preferences.
 
-`createMcAdmissionScheduler(root, config)` opens that same authority at canonical
-`<project>/.aiwg/ralph-external/mc/admission.json`. Both conductors must use the
-same current binding. Editing config, user defaults or an installation can
-invalidate activation; obtain a reviewed new pair rather than fabricating hashes.
-An operator without a trusted activation/bootstrap integration should remain in
-direct mode until that integration is provided.
+For standing authorization, supply an operator-reviewed JSON file separately
+from the proposal, using `--standing-authorization authorization.json` in place
+of `--authorize`. For example:
+
+```json
+{
+  "project": "/absolute/path/to/project",
+  "revision": 3,
+  "fields": ["/parallelism/max_parallel_subagents", "/workerSelection/roleGuidance/coding"]
+}
+```
+
+Revision means the reviewed **base** activation revision (zero before the first
+activation). Fields are JSON pointers within the displayed pair; a named object
+permits its descendants. Every changed field must fit the scope. Changed input
+bytes, copy inventory or revision require a fresh proposal and review. Model
+catalog refresh only updates facts: it never supplies adoption authority or
+applies a pending proposal.
+
+Apply serializes config/model writers, closes worker reads plus managed
+submissions and launch claims, and retains validated bytes of canonical and compatibility config copies
+plus project/user/bundled model inputs under the existing config owner's sibling
+`.aiwg/aiwg.config.apply-lock/recovery.json`. It
+writes the project models and every participating config copy with atomic
+replacement, publishes a revisioned activation marker, and checks all copies and
+input digests. It then regenerates workspace/provider guidance for every
+configured or recorded provider and revalidates before reopening dispatch.
+A competing apply is refused. Already-running work keeps its supervision owner.
+
+On a write failure, apply attempts restoration of **every** owned copy, including
+a copy whose rename may have completed before reporting an error. It checks the
+restored pair before reopening. Failed restoration, changed immutable inputs,
+interruption by process termination, or a guidance-regeneration failure leaves
+the durable block in place with a recovery diagnostic. After resolving the
+reported filesystem/guidance problem, restore the reviewed previous pair:
+
+```bash
+aiwg config set --project --recover --authorize 'sha256:<original-proposal-digest>'
+```
+
+Recovery requires the original exact or scoped standing authority, restores and
+checks the retained bytes, regenerates guidance, and removes the block only after
+successful revalidation. Keep the recovery record until recovery succeeds.
+
+Admission bootstrap remains owned by the existing trusted deployment: build
+`managedProjectAdmissionPolicy(root, resolvedParallelism,
+workerConfigDigest(activation), resolvedParallelism.max_parallel_subagents)` and
+initialize the existing store with `bindManagedAdmissionPolicy`. A nonempty
+authority requires reconciliation, not rebinding over its history. There is no
+`mc activate`, host-install, migration, or forced-settlement CLI.
+`createMcAdmissionScheduler(root, config)` opens the same authority at canonical
+`<project>/.aiwg/ralph-external/mc/admission.json`; both conductors must use its
+current binding. A reviewed config activation does not replace admission history.
 
 ## Dispatch through the existing owner
 
