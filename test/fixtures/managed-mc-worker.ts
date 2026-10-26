@@ -11,7 +11,7 @@ import { workerInputSchema } from './ralph-worker-protocol.mjs';
 
 /** Offline managed task with real artifact bytes and a nonspawning renderer. */
 export async function managedMcWorkerFixture(root: string, options: {
-  sessionId?: string; missionId?: string; objective?: string; now?: string; parentKind?: 'mission' | 'flow'; transport?: 'shell' | 'mcp';
+  sessionId?: string; missionId?: string; objective?: string; now?: string; parentKind?: 'mission' | 'flow' | 'ralph'; transport?: 'shell' | 'mcp';
 } = {}) {
   const f = workerResolutionFixture();
   const now = options.now ?? f.request.now;

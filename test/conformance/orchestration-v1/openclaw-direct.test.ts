@@ -1,3 +1,4 @@
+import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2907 (B-OG-42) OpenClaw promotion: offline S1 profile work.
  *
@@ -52,11 +53,7 @@ async function installPackage(bytes: Buffer) {
   await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: APPROVED.entry.packageName,
     version: APPROVED.entry.packageVersion, type: 'module' }), { mode: 0o644 });
   await writeFile(path.join(packageRoot, 'lib', 'openclaw-adapter.mjs'), bytes, { mode: 0o644 });
-  for (const name of ['provider-adapter.mjs', 'worker-health.mjs']) {
-    const dest = path.join(packageRoot, 'lib', name);
-    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-    await chmod(dest, 0o644);
-  }
+  await copyWorkerAdapterRuntime(base, packageRoot);
   // Mirrors the repo layout (tools/ralph-external/lib -> tools/): from
   // pkg/lib, '../../_resolve-impl.mjs' resolves to the install base.
   const resolveImpl = path.join(base, '_resolve-impl.mjs');

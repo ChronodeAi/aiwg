@@ -33,7 +33,7 @@ describe('T-OG-14 packaged managed one-shot entry point', () => {
     await symlink(join(source, 'node_modules'), join(root, 'node_modules'), 'dir');
     const toolFiles = ['tools/_resolve-impl.mjs', 'tools/ralph-external/session-launcher.mjs',
       'tools/ralph-external/process-monitor.mjs', 'tools/scripts/resource-preflight.mjs',
-      ...['worker-health', 'consecutive-failure-circuit-breaker', 'session-environment', 'launcher-recovery-evidence',
+      ...['managed-worker-attempt', 'session-attempt', 'worker-health', 'consecutive-failure-circuit-breaker', 'session-environment', 'launcher-recovery-evidence',
         'worker-isolation', 'systemd-client', 'recovery-probe'].map(file => `tools/ralph-external/lib/${file}.mjs`)];
     for (const file of toolFiles) {
       expect(manifest.files.includes('tools/') || manifest.files.includes(file), file).toBe(true);
@@ -47,7 +47,7 @@ describe('T-OG-14 packaged managed one-shot entry point', () => {
     await mkdir(dirname(join(root, capabilities)), { recursive: true });
     await copyFile(join(source, capabilities), join(root, capabilities));
     // These runtime sources are already ESM; stage their published dist locations without a build.
-    for (const file of ['process/signal-child.mjs', 'process/bounded-child-process.mjs', 'models/worker-installation.mjs',
+    for (const file of ['process/signal-child.mjs', 'process/bounded-child-process.mjs', 'models/worker-installation.mjs', 'models/qualification-digest.mjs',
       'config/dispatch-thresholds-runtime.mjs', 'config/project-artifacts-runtime.mjs']) {
       await mkdir(dirname(join(root, 'dist/src', file)), { recursive: true });
       await copyFile(join(source, 'src', file), join(root, 'dist/src', file));

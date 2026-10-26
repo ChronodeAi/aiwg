@@ -1,3 +1,4 @@
+import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2897 (B-OG-07) Codex promotion: offline S1 profile work.
  *
@@ -66,11 +67,7 @@ async function installCodexPackage(bytes: Buffer) {
   // The approved adapter installs byte-for-byte; the tamper case installs
   // modified bytes and must fail the digest check.
   await writeFile(path.join(packageRoot, 'lib', 'codex-adapter.mjs'), bytes, { mode: 0o644 });
-  for (const name of ['provider-adapter.mjs', 'worker-health.mjs']) {
-    const dest = path.join(packageRoot, 'lib', name);
-    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-    await chmod(dest, 0o644);
-  }
+  await copyWorkerAdapterRuntime(base, packageRoot);
   // Mirrors the repo layout (tools/ralph-external/lib -> tools/): from
   // pkg/lib, '../../_resolve-impl.mjs' resolves to the install base.
   const resolveImpl = path.join(base, '_resolve-impl.mjs');

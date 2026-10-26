@@ -1,0 +1,17 @@
+{
+  "T-OG-03": [
+    "test/unit/ralph-external/session-attempt.test.ts"
+  ],
+  "T-OG-08": [
+    "test/unit/ralph-external/session-attempt.test.ts",
+    "test/unit/ralph-external/ralph-group-cycle.test.ts",
+    "test/unit/ralph-external/managed-worker-admission.test.ts"
+  ],
+  "T-OG-13": [
+    "test/unit/ralph-external/session-attempt.test.ts",
+    "test/unit/ralph-external/ralph-group-cycle.test.ts"
+  ],
+  "T-OG-14": [
+    "test/unit/ralph-external/managed-worker-package.test.ts"
+  ]
+}

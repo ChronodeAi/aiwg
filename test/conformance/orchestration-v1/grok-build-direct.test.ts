@@ -1,3 +1,4 @@
+import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2906 (B-OG-41) Grok Build CLI promotion: offline S1 profile work.
  *
@@ -68,11 +69,7 @@ async function installPackage(bytes: Buffer) {
   // grok-build-adapter.mjs imports classifyWorkerHealthFailure/
   // healthEventMatchesBinding from ./worker-health.mjs and ProviderAdapter
   // from ./provider-adapter.mjs: copy both siblings alongside.
-  for (const name of ['worker-health.mjs', 'provider-adapter.mjs']) {
-    const dest = path.join(packageRoot, 'lib', name);
-    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-    await chmod(dest, 0o644);
-  }
+  await copyWorkerAdapterRuntime(base, packageRoot);
   const resolveImpl = path.join(base, '_resolve-impl.mjs');
   await copyFile(path.resolve('tools/_resolve-impl.mjs'), resolveImpl);
   await chmod(resolveImpl, 0o644);
