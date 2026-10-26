@@ -34,7 +34,8 @@ export class DecisionOtlpHttpSink implements DecisionTraceSink {
 
   async export(trace: DecisionTelemetryTrace, signal: AbortSignal): Promise<void> {
     const safe = sanitizedTelemetryExport(trace);
-    const payload = JSON.stringify({ resourceSpans: [{ scopeSpans: [{ scope: { name: 'aiwg.decision', version: '1' },
+    const payload = JSON.stringify({ resourceSpans: [{ scopeSpans: [{ ...(safe.schemaUrl ? { schemaUrl: safe.schemaUrl } : {}),
+      scope: { name: safe.spans.every(span => span.name === 'worker.attempt') ? 'aiwg.worker' : 'aiwg.decision', version: '1' },
       spans: safe.spans.map(toOtlpSpan) }] }] });
     if (Buffer.byteLength(payload, 'utf8') > this.maxPayloadBytes) throw new Error('OTLP payload exceeds configured bound');
     let response: Response;
@@ -161,7 +162,9 @@ function toOtlpSpan(span: DecisionTelemetrySpan) {
     name: span.name,
     startTimeUnixNano: String(Math.trunc(span.startTimeUnixMs * 1_000_000)),
     endTimeUnixNano: String(Math.trunc(span.endTimeUnixMs * 1_000_000)),
-    attributes: Object.entries(span.attributes).map(([key, value]) => toOtlpAttribute(key, value)),
+    // GenAI unknowns have no measurement; never serialize a token count as zero or a string.
+    attributes: Object.entries(span.attributes).filter(([key, value]) => value !== null || !key.startsWith('gen_ai.'))
+      .map(([key, value]) => toOtlpAttribute(key, value)),
     links: span.links.map(link => ({ traceId: link.traceId, spanId: link.spanId,
       attributes: Object.entries(link.attributes ?? {}).map(([key, value]) => toOtlpAttribute(key, value)) })),
     events: span.events.map(event => ({ name: event.name, timeUnixNano: String(Math.trunc(event.timeUnixMs * 1_000_000)),

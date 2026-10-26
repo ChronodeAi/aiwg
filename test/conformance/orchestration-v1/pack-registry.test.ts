@@ -31,11 +31,15 @@ describe('T-OG registry wiring gate (partial coverage is not release acceptance)
     expect(report.packs['T-OG-05'].status).toBe('partial');
     expect(report.packs['T-OG-05'].testFiles.length).toBeGreaterThan(0);
     expect(report.packs['T-OG-13'].status).toBe('partial');
-    expect(report.packs['T-OG-13'].mechanismOwners).toEqual(['B-OG-22']);
+    // Shared P2/P3 pack: #2926 scheduler diagnostics plus #2929 telemetry (packs.d fragment).
+    expect(report.packs['T-OG-13'].mechanismOwners).toEqual(['B-OG-22', 'B-OG-25']);
     expect(report.packs['T-OG-13'].testFiles).toEqual([
       'test/unit/serve/shared-host-scheduler-managed.test.ts',
       'test/unit/serve/shared-host-scheduler-budgets.test.ts',
       'test/unit/serve/shared-host-scheduler-host.test.ts',
+      'test/unit/decision/worker-telemetry.test.ts',
+      'test/unit/decision/worker-otlp.test.ts',
+      'test/conformance/orchestration-v1/worker-telemetry.test.ts',
     ]);
     expect(report.packs['T-OG-06'].status).toBe('partial');
     expect(report.packs['T-OG-06'].testFiles).toEqual([

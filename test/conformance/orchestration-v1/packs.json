@@ -243,16 +243,17 @@
     },
     "T-OG-13": {
       "name": "P2/P3 extensions",
-      "ownerIssue": "roctinam/aiwg#2926",
+      "ownerIssue": "roctinam/aiwg#2875",
       "slice": "S5",
-      "mechanismOwners": ["B-OG-22"],
+      "sharedSlices": ["S1"],
+      "mechanismOwners": ["B-OG-22", "B-OG-25"],
       "status": "partial",
       "testFiles": [
         "test/unit/serve/shared-host-scheduler-managed.test.ts",
         "test/unit/serve/shared-host-scheduler-budgets.test.ts",
         "test/unit/serve/shared-host-scheduler-host.test.ts"
       ],
-      "remaining": "FR-OG-037 diagnostic mode only. Other P2/P3 extensions remain with their owners; no weighted fair-share or hard direct-launch guarantee."
+      "remaining": "Shared P2/P3 extension pack. #2926: FR-OG-037 starvation diagnostic mode only; no weighted fair-share or hard direct-launch guarantee. #2929: optional worker OTel receipt projection only (pinned GenAI mapping, correlation, redaction, unknown usage, no-egress and bounded outage fixtures; tests in packs.d/worker-telemetry.json); direct traces need no managed services. Managed integration and other P2/P3 extensions remain with their owners."
     },
     "T-OG-14": {
       "name": "Package/platform/extension",

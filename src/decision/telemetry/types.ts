@@ -1,5 +1,8 @@
 /** OpenTelemetry-compatible, dependency-free decision telemetry contract. */
 export const DECISION_TELEMETRY_SCHEMA_VERSION = 'decision-telemetry/v1' as const;
+/** Adopted GenAI attributes from semantic-conventions v1.37.0 (development). */
+export const GEN_AI_SEMCONV_REVISION = '1.37.0' as const;
+export const GEN_AI_SCHEMA_URL = `https://opentelemetry.io/schemas/${GEN_AI_SEMCONV_REVISION}` as const;
 
 export type TelemetryAttribute = string | number | boolean | null;
 export type TelemetryAttributes = Record<string, TelemetryAttribute>;
@@ -9,7 +12,7 @@ export type DecisionSpanName =
   | 'decision.workflow' | 'decision.resolve' | 'decision.validate' | 'decision.project'
   | 'decision.admit' | 'decision.batch.request' | 'decision.attempt' | 'decision.normalize'
   | 'decision.accept' | 'decision.compose' | 'decision.persist' | 'decision.review'
-  | 'decision.cache' | 'decision.job' | 'decision.action';
+  | 'decision.cache' | 'decision.job' | 'decision.action' | 'worker.attempt';
 
 export interface DecisionTelemetryContext {
   traceId: string;
@@ -47,6 +50,7 @@ export interface DecisionTelemetrySpan {
 
 export interface DecisionTelemetryTrace {
   schemaVersion: typeof DECISION_TELEMETRY_SCHEMA_VERSION;
+  schemaUrl?: typeof GEN_AI_SCHEMA_URL;
   traceId: string;
   spans: DecisionTelemetrySpan[];
   tombstones?: DecisionTelemetryTombstone[];

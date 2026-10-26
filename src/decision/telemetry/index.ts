@@ -10,3 +10,4 @@ export * from './retention.js';
 export * from './runtime.js';
 export * from './trace.js';
 export * from './types.js';
+export * from './worker.js';
