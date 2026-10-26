@@ -3,9 +3,9 @@
  *
  * A registry entry carries credentials in two ways:
  *   - literal values in `env` / `headers` (and OMP `auth` / `oauth` secrets)
- *   - references: `headerEnv` (header -> variable) and `envFrom`
- *     (server variable -> variable), which name a variable the harness
- *     resolves when it starts the server. Only the variable name is written.
+ *   - references: `headerEnv` and `envFrom` name a variable the harness
+ *     resolves, or a file:/store: locator resolved only by AIWG's runtime
+ *     client. Only the locator is written.
  *
  * Each harness spells a reference differently; ENV_REFERENCE_SYNTAX holds the
  * documented form. `null` means the harness documents no interpolation in its
@@ -48,6 +48,39 @@ export function validateEnvReferenceName(name) {
   }
 }
 
+/** Durable locators only: the CLI saves ephemeral stdin/terminal input to the named store. */
+export function credentialReferenceInput(reference, flag = '--env-from/--header-env') {
+  if (typeof reference === 'string') {
+    if (ENV_REFERENCE_NAME.test(reference)) return { env: reference };
+    if (/^store:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(reference)) return { store: reference.slice(6) };
+    // Absolute paths keep resolution independent of the consuming process's cwd.
+    if (/^file:(?:\/|[A-Za-z]:[\\/])[^\u0000-\u001f\u007f]+$/.test(reference)) return { file: reference.slice(5) };
+  }
+  throw new Error(`${flag} requires KEY=ENV_NAME, KEY=file:ABSOLUTE_PATH, or KEY=store:NAME.`);
+}
+
+export function validateCredentialReferences(server) {
+  for (const [field, flag] of [['headerEnv', '--header-env'], ['envFrom', '--env-from']]) {
+    for (const [key, reference] of Object.entries(server[field] || {})) {
+      if (field === 'headerEnv' ? !key.trim() : !ENV_REFERENCE_NAME.test(key)) {
+        throw new Error(`${flag} requires a valid ${field === 'headerEnv' ? 'header' : 'variable'} name.`);
+      }
+      credentialReferenceInput(reference, flag);
+    }
+  }
+}
+
+/** Native provider configs cannot call AIWG's private-file/native-store resolver. */
+export function assertEnvironmentCredentialReferences(server, provider) {
+  for (const [field, flag] of [['envFrom', '--env-from'], ['headerEnv', '--header-env']]) {
+    for (const reference of Object.values(server[field] || {})) {
+      if (!credentialReferenceInput(reference, flag).env) {
+        throw new Error(`${provider} cannot resolve MCP file/store references. Use ${flag} KEY=ENV_NAME for provider configs; file/store references require the AIWG runtime client.`);
+      }
+    }
+  }
+}
+
 function hasEntries(value) {
   return value !== null && typeof value === 'object' && Object.keys(value).length > 0;
 }
@@ -62,6 +95,7 @@ function hasReferences(server) {
  * harness has no documented syntax for them.
  */
 export function renderCredentialMaps(server, provider) {
+  assertEnvironmentCredentialReferences(server, provider);
   const env = server.env ? { ...server.env } : undefined;
   const headers = server.headers ? { ...server.headers } : undefined;
   if (!hasReferences(server)) return { env, headers };
@@ -114,6 +148,13 @@ function credentialName(key) {
     !/(?:^|[-_])(?:file|path|dir|directory|name|mode|type|location|url|uri)$/.test(part)
     && ((/^(?:key|sig)$/.test(part) && !parts.slice(0, index).some(parent => /^(?:sort|order|cache)$/.test(parent)))
       || CREDENTIAL_QUERY_NAME.test(part.replace(/[_\s]+/g, '-'))));
+}
+
+/** Reuse policy scanner/name rules for the compatibility CLI warning. Never returns values. */
+export function hasSecretLookingLiterals(server) {
+  return ['env', 'headers'].some(field => Object.entries(server[field] || {}).some(([key, value]) =>
+    typeof value === 'string' && literalValue(value, false)
+      && (credentialName(key) || /^(?:cookie|set-cookie)$/i.test(key) || scanCredentialText(value).some(hit => hit.credential))));
 }
 
 function literalValue(value, includeReferences) {

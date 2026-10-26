@@ -1,3 +1,4 @@
+import { assertEnvironmentCredentialReferences } from './credentials.mjs';
 import { writeConfigAtomic } from './config-file.mjs';
 import { constants } from 'node:fs';
 import { access, lstat, readFile } from 'node:fs/promises';
@@ -20,6 +21,7 @@ function inline(values = {}) {
 }
 
 export function renderGrokMcpServer(server) {
+  assertEnvironmentCredentialReferences(server, 'grok-build');
   if (!server?.name) throw new Error('Grok MCP server name is required');
   const lines = [`[mcp_servers.${key(server.name)}]`];
   if (server.type === 'stdio') {

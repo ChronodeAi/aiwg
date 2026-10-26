@@ -232,7 +232,7 @@ describe.each(registryImplementations)("$implementation McpServerRegistry", ({ c
           url: "https://memory.example.internal/mcp",
           headerEnv: { Authorization: "../credentials.json" },
         }),
-      ).rejects.toThrow(/Invalid MCP header environment variable reference/);
+      ).rejects.toThrow(/--header-env requires KEY=/);
       expect(existsSync(registry.getPath())).toBe(false);
     });
 
@@ -299,7 +299,7 @@ describe.each(registryImplementations)("$implementation McpServerRegistry", ({ c
       const before = await readFile(registry.getPath(), "utf-8");
       await expect(registry.update("original", {
         url: "https://wrong.example", headerEnv: { Authorization: "invalid-reference" },
-      })).rejects.toThrow('Invalid MCP header environment variable reference "invalid-reference"');
+      })).rejects.toThrow('--header-env requires KEY=');
       expect(await readFile(registry.getPath(), "utf-8")).toBe(before);
       expect(await registry.load()).toEqual(JSON.parse(before));
     });
