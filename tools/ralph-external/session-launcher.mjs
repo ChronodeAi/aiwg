@@ -428,6 +428,9 @@ async function launchOneWorker(owner, options) {
     if (stat.uid !== process.getuid() || (stat.mode & 0o077) || (await readdir(runDir)).length) {
       throw new Error('Worker run directory must be fresh, empty, private and owned');
     }
+  } else if (!(await inspect(dirname(runDir), 'directory'))) {
+    // Each attempt directory is created exclusively; its parent is the conductor's job.
+    throw new Error(`Worker run directory parent does not exist: ${dirname(runDir)}; create it (mode 0700) before launch`);
   }
   const writableRoots = inputs.drivers[invocation.selected.cli].qualification.installation?.workerWritableRoots ?? [invocation.cwd];
   let writableRootsContainRunDir = await realBeneath(invocation.cwd, runDir);
