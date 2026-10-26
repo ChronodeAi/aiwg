@@ -77,6 +77,21 @@ describe('model wrapper deployment verification', () => {
     expect(result.valid).toBe(true);
   });
 
+  it('finds Copilot wrappers deployed with the .agent.md suffix', async () => {
+    const target = await root();
+    await Promise.all(Object.keys(models).map(role => {
+      const wrapper = `aiwg-model-${role}-worker`;
+      return writeFile(join(target, `${wrapper}.agent.md`), [
+        '---', `name: ${wrapper}`, `description: AIWG ${role} worker`, '---', '# Wrapper', '',
+      ].join('\n'));
+    }));
+    const result = await verifyModelWrapperDeployment(target, { provider: 'copilot', models });
+    expect(result.missing).toEqual([]);
+    expect(result.found).toHaveLength(3);
+    expect(result.mismatches).toEqual([]);
+    expect(result.valid).toBe(true);
+  });
+
   it('reports an agent-less provider as unsupported without false pinning', async () => {
     const result = await verifyModelWrapperDeployment(null);
     expect(result.supported).toBe(false);
