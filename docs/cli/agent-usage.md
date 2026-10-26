@@ -183,12 +183,18 @@ conflict guidance.
 aiwg issue init --prefix PROJECT
 aiwg issue new --title "Fix import flow" --body-file issue.md
 aiwg issue import --from gitea --snapshot-file gitea-1463.json
-aiwg issue import --from github --live --repo org/repo --external-id 42
+aiwg issue import --from github --live --repo org/repo --external-id 42 --token-store github-production
 aiwg issue export PROJECT-0001 --to github --out project-0001.github.json
-aiwg issue export PROJECT-0001 --to gitea --live --repo org/repo
+aiwg issue export PROJECT-0001 --to gitea --live --repo org/repo --token-store gitea-production
 aiwg issue sync conflicts PROJECT-0001 --snapshot-file gitea-1463.json --out conflicts.json
 aiwg issue sync map-comments PROJECT-0001 --map-file comment-map.json
 ```
+
+Live import/export supports `--token-interactive`, `--token-stdin`,
+`--token-file`, `--token-store`, and `--token-env`. See
+[Supplying sensitive values](sensitive-values.md) for source precedence and
+private-file requirements. With no source, terminal entry takes priority;
+headless calls retain provider-specific token environment compatibility.
 
 ### effect
 

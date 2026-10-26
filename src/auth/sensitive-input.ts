@@ -1,7 +1,7 @@
 import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import { isInteractive } from '../cli/env.js';
-import { askString, createSecretPromptInterface } from '../cli/prompt-utils.js';
+import { askMultilineSecret, askString, createSecretPromptInterface } from '../cli/prompt-utils.js';
 import { createSecretStore, type SecretStore } from './credential-store.js';
 
 /** Named raw values share the native store used by auth login, in a separate service. */
@@ -14,6 +14,8 @@ export function namedSensitiveStore(name: string): SecretStore {
 }
 
 export interface SensitiveInputOptions {
+  /** Signing material may contain line breaks; tokens remain single-line. */
+  multiline?: boolean;
   prefix?: string;
   interactive?: boolean;
   stdin?: boolean;
@@ -110,8 +112,8 @@ export async function resolveSensitiveInput(options: SensitiveInputOptions = {},
     else {
       const rl = createSecretPromptInterface();
       try {
-        process.stderr.write(`Enter ${prefix} (hidden): `);
-        value = await askString(rl, '', '', options.signal);
+        process.stderr.write(`Enter ${prefix} (hidden${options.multiline ? '; finish with an empty line' : ''}): `);
+        value = options.multiline ? await askMultilineSecret(rl, options.signal) : await askString(rl, '', '', options.signal);
       } finally { rl.close(); process.stderr.write('\n'); }
     }
   } else if (options.stdin) {
@@ -134,6 +136,7 @@ export async function resolveSensitiveInput(options: SensitiveInputOptions = {},
   }
   const trimmed = value?.trim();
   if (!trimmed) throw new Error(`${source} received no key (input is empty or not set${options.env && source.endsWith('-env') ? `: ${options.env}` : ''}).`);
-  if (trimmed.length > 16384 || /[\u0000-\u001f\u007f]/.test(trimmed)) throw new Error(`${source} requires one non-empty line (at most 16384 characters).`);
+  const controls = options.multiline ? /[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f]/ : /[\u0000-\u001f\u007f]/;
+  if (trimmed.length > 16384 || controls.test(trimmed)) throw new Error(`${source} requires ${options.multiline ? 'non-empty text without control characters' : 'one non-empty line'} (at most 16384 characters).`);
   return trimmed;
 }

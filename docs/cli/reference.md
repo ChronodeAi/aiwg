@@ -1170,6 +1170,17 @@ aiwg install <ref> [--ref <tag-or-sha>] [--package <id>] [--verify]
 - `--global` - Store package state in the user AIWG directory (default)
 
 Mutable refs are resolved to immutable commits and cached by commit. Direct
+Git authentication accepts `--token-interactive`, `--token-stdin`,
+`--token-file <path>`, `--token-store <name>`, and `--token-env <NAME>`;
+see [Supplying sensitive values](sensitive-values.md). Without an explicit
+source, GitHub keeps `GITHUB_TOKEN` then its existing private credential file;
+Gitea keeps `GITEA_TOKEN` then its existing private credential files. Otherwise
+SSH-agent access is used. Tokens stay out of clone URLs, arguments, persisted
+Git configuration, and child-process debug output. A temporary private config
+file scopes the header to the HTTPS origin and is removed after the operation.
+Windows token fetches fail closed pending temporary-file ACL validation; use
+SSH-agent access there.
+
 Git installs support root bundles and validated standalone
 `.aiwg/plugins/<id>` wrappers. Without `--verify`, an unsigned but digest-valid
 package is reported as `integrity-only`.
@@ -1194,7 +1205,7 @@ aiwg marketplace install <git-url|package> [--ref <tag-or-sha>] [--verify]
 aiwg marketplace verify <package|lock-id> [--require-signature]
 aiwg marketplace export <package> --output <archive.json>
 aiwg marketplace import <archive.json> [--verify]
-aiwg marketplace publish <source> --key <pem> --publisher <id>
+aiwg marketplace publish <source> --publisher <id> [--key-file <pem> | --key-stdin]
 aiwg marketplace remove <catalog-id>
 aiwg marketplace list [--json]
 ```
@@ -1233,6 +1244,12 @@ aiwg marketplace verify team/auth-tools --project-local
 aiwg marketplace export team/auth-tools --output auth-tools.aiwg.json
 aiwg marketplace list --json
 ```
+
+Publish accepts multiline private PEM through `--key-interactive`, `--key-stdin`,
+`--key-file <path>`, `--key-store <name>`, or `--key-env <NAME>`. `--key <path>`
+is a compatibility alias for private-file input. With no source, terminal entry
+is used; headless use must select a source. See [supplying sensitive values](sensitive-values.md)
+for private-file checks and source precedence.
 
 See [Git-Native Package Exchange](../providers/git-native-marketplace.md) for
 the envelope, lock, W3C PROV, trust, catalog, mirror, recovery, and key-rotation
@@ -1435,7 +1452,7 @@ aiwg serve --no-open --read-only
 
 ### agentcard
 
-Fetch and verify an executor AgentCard using `aiwg agentcard verify --host <url> --instance <id> --jwks <path|url>`. The legacy optional `--bearer <token>` places a credential directly on argv and is pending migration; see [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+Fetch and verify an executor AgentCard using `aiwg agentcard verify --host <url> --instance <id> --jwks <path|url>`. For authenticated endpoints, select `--bearer-interactive`, `--bearer-stdin`, `--bearer-file <path>`, `--bearer-store <name>`, or `--bearer-env <NAME>`; see [Supplying sensitive values](sensitive-values.md). No source keeps unauthenticated access. The compatibility `--bearer <token>` option warns that it exposes the value on argv.
 
 ---
 

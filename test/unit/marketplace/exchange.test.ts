@@ -703,6 +703,53 @@ describe('marketplace exchange', () => {
     expect(fs.existsSync(published.shardPath)).toBe(true);
   });
 
+  it.each(['interactive', 'stdin', 'file', 'store', 'env'] as const)('publishes multiline PEM from %s without persisting private material', async source => {
+    const privateKeyPath = path.join(root, 'key.pem');
+    fs.writeFileSync(privateKeyPath, key.privatePem, { mode: 0o600 });
+    const published = await publishLocalPackage({
+      sourceDir: repo, outputDir: path.join(root, 'published'), publisher: 'acme',
+      keyInput: source === 'interactive' ? { interactive: true } : source === 'stdin' ? { stdin: true }
+        : source === 'file' ? { file: privateKeyPath } : source === 'store' ? { store: 'fixture' } : { env: 'FIXTURE_PEM' },
+    }, {
+      isTTY: source === 'interactive', stdinIsTTY: false,
+      prompt: async () => key.privatePem, readStdin: async () => key.privatePem,
+      readStore: async () => key.privatePem, environment: { FIXTURE_PEM: key.privatePem },
+    });
+    expect(published.envelope.signatures).toHaveLength(1);
+    const serialized = JSON.stringify(published) + [published.envelopePath, published.lockPath, published.receiptPath]
+      .map(file => fs.readFileSync(file, 'utf8')).join('');
+    expect(serialized).not.toContain(key.privatePem.trim());
+    expect(serialized).not.toContain(key.privatePem.split('\n')[1]);
+  });
+
+  it.each(['public-mode', 'symlink', 'hardlink', 'directory'] as const)('refuses %s legacy key paths before inspecting a Git checkout', async kind => {
+    const file = path.join(root, 'private.pem');
+    fs.writeFileSync(file, key.privatePem, { mode: 0o600 });
+    let selected = file;
+    if (kind === 'public-mode') fs.chmodSync(file, 0o644);
+    if (kind === 'symlink') { selected = path.join(root, 'linked.pem'); fs.symlinkSync(file, selected); }
+    if (kind === 'hardlink') fs.linkSync(file, path.join(root, 'other.pem'));
+    if (kind === 'directory') selected = root;
+    const failure = await publishLocalPackage({
+      sourceDir: path.join(root, 'does-not-exist'), outputDir: path.join(root, 'output'),
+      privateKeyPath: selected, publisher: 'acme',
+    }).catch(error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toMatch(/--key-file:.*(?:group or other|symlink|hard link|regular file)/);
+    expect(failure.message).not.toContain(key.privatePem.trim());
+  });
+
+  it('requires a named source headlessly and hides invalid multiline signing material', async () => {
+    const options = { sourceDir: repo, outputDir: path.join(root, 'output'), publisher: 'acme' };
+    await expect(publishLocalPackage(options, { isTTY: false })).rejects.toThrow(/--key-stdin.*--key-file.*--key-store.*--key-env/);
+    const invalid = 'fixture-private-material\nsecond-line';
+    const error = await publishLocalPackage({ ...options, keyInput: { stdin: true } }, {
+      isTTY: false, readStdin: async () => invalid,
+    }).catch(error => error);
+    expect(error.message).toMatch(/Marketplace signing failed/);
+    expect(error.message).not.toContain('fixture-private-material');
+  });
+
   it('uses the catalog digest as an observation while package signatures remain publisher-owned', async () => {
     const lock = createPackageLock(envelope, envelope.publication.publishedAt);
     expect(lock.envelopeSha256).toBe(sha256(canonicalJson(envelope)));

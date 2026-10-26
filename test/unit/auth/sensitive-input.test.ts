@@ -56,6 +56,14 @@ describe('standard sensitive input', () => {
     await expect(resolveSensitiveInput({ store: 'entry' }, { isTTY: false, readStore: async () => { throw new Error('fixture-sensitive-value'); } })).rejects.toThrow('--value-store: native store entry could not be read.');
   });
 
+  it('allows explicit multiline signing material but still rejects control characters and oversized input', async () => {
+    const material = '-----BEGIN PRIVATE KEY-----\nsynthetic\r\n-----END PRIVATE KEY-----';
+    expect(await resolveSensitiveInput({ stdin: true, multiline: true }, { isTTY: false, readStdin: async () => material })).toBe(material);
+    for (const value of [material + '\u0000', 'a'.repeat(16385)]) {
+      await expect(resolveSensitiveInput({ stdin: true, multiline: true }, { isTTY: false, readStdin: async () => value })).rejects.toThrow('at most 16384');
+    }
+  });
+
   it('reads a private regular file and refuses group or other access', async () => {
     const file = fixture();
     writeFileSync(file, 'fixture-file-value\n', { mode: 0o600 });

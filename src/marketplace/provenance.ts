@@ -9,6 +9,7 @@
  */
 
 import { execFile } from 'node:child_process';
+import { helperEnvironment } from '../process/cli-command.mjs';
 import {
   createHash,
   createPrivateKey,
@@ -199,7 +200,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
     cwd,
     encoding: 'utf8',
     timeout: 120_000,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    env: { ...helperEnvironment(), GIT_TERMINAL_PROMPT: '0' },
   });
   return stdout.trim();
 }
@@ -209,7 +210,7 @@ async function gitBytes(cwd: string, args: string[]): Promise<Buffer> {
     cwd,
     encoding: 'buffer',
     timeout: 120_000,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    env: { ...helperEnvironment(), GIT_TERMINAL_PROMPT: '0' },
   });
   return stdout as Buffer;
 }

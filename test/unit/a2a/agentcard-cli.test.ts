@@ -10,7 +10,7 @@ import {
   generateKeyPairSync,
   sign as cryptoSign,
 } from 'node:crypto';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -18,6 +18,8 @@ import { agentcardHandler } from '../../../src/cli/handlers/agentcard.js';
 import { canonicalizeJson } from '../../../src/a2a/jcs.js';
 import type { JsonValue } from '../../../src/a2a/types.js';
 import { EXIT_CODES } from '../../../src/cli/errors.js';
+import * as cliEnv from '../../../src/cli/env.js';
+import * as promptUtils from '../../../src/cli/prompt-utils.js';
 
 function makeKey(kid: string): { jwkJson: string; sign: (p: Uint8Array) => string } {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -85,6 +87,8 @@ describe('agentcardHandler', () => {
     logSpy.mockRestore();
     errSpy.mockRestore();
     globalThis.fetch = realFetch;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('verifies a signed card via JWKS file', async () => {
@@ -178,6 +182,96 @@ describe('agentcardHandler', () => {
     const parsed = JSON.parse(out) as Record<string, unknown>;
     expect(parsed['ok']).toBe(true);
     expect(parsed['kid']).toBe('cli-kid');
+  });
+
+  const verifyArgs = ['verify', '--host', 'https://exec.test', '--instance', 'inst-1', '--skip-verify'];
+  const secret = 'fixture-agentcard-bearer';
+  const unsignedCard = { protocolVersion: '0.3.0', name: 'public', url: 'https://exec.test', version: '1' };
+
+  it('keeps no-source access unauthenticated even at a terminal', async () => {
+    vi.spyOn(cliEnv, 'isInteractive').mockReturnValue(true);
+    const request = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      expect(init?.headers).not.toHaveProperty('authorization');
+      return new Response(JSON.stringify(unsignedCard));
+    });
+    globalThis.fetch = request as typeof fetch;
+    expect((await agentcardHandler.execute(ctxOf(verifyArgs))).exitCode).toBe(0);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('uses explicit hidden terminal entry before lower priority sources', async () => {
+    vi.spyOn(cliEnv, 'isInteractive').mockReturnValue(true);
+    const close = vi.fn();
+    vi.spyOn(promptUtils, 'createSecretPromptInterface').mockReturnValue({ close } as unknown as ReturnType<typeof promptUtils.createSecretPromptInterface>);
+    vi.spyOn(promptUtils, 'askString').mockResolvedValue(secret);
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    globalThis.fetch = (async (_url, init) => {
+      expect(init?.headers).toHaveProperty('authorization', `Bearer ${secret}`);
+      return new Response(JSON.stringify(unsignedCard));
+    }) as typeof fetch;
+    const result = await agentcardHandler.execute(ctxOf([...verifyArgs, '--bearer-interactive', '--bearer-env', 'UNSET_FIXTURE']));
+    expect(result.exitCode).toBe(0);
+    expect(close).toHaveBeenCalledOnce();
+    expect(stderr.mock.calls.flat().join('')).not.toContain(secret);
+  });
+
+  it.skipIf(process.platform === 'win32')('validates a private file and never falls back after a selected source fails', async () => {
+    vi.stubEnv('FIXTURE_BEARER', secret);
+    const file = path.join(tmpDir, 'private');
+    writeFileSync(file, secret, { mode: 0o600 });
+    const request = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      expect(init?.headers).toHaveProperty('authorization', `Bearer ${secret}`);
+      return new Response(JSON.stringify(unsignedCard));
+    });
+    globalThis.fetch = request as typeof fetch;
+    expect((await agentcardHandler.execute(ctxOf([...verifyArgs, '--bearer-file', file]))).exitCode).toBe(0);
+    request.mockClear();
+    if (process.platform !== 'win32') {
+      chmodSync(file, 0o644);
+      const result = await agentcardHandler.execute(ctxOf([...verifyArgs, '--bearer-file', file, '--bearer-env', 'FIXTURE_BEARER']));
+      expect(result.exitCode).toBe(1);
+      expect(result.message).toContain('group or other access');
+      expect(result.message).not.toContain(secret);
+      expect(request).not.toHaveBeenCalled();
+      symlinkSync(file, `${file}.link`);
+      expect((await agentcardHandler.execute(ctxOf([...verifyArgs, '--bearer-file', `${file}.link`]))).message).toContain('symlink');
+    }
+  });
+
+  it('names standard sources when terminal entry is requested headlessly', async () => {
+    vi.spyOn(cliEnv, 'isInteractive').mockReturnValue(false);
+    const result = await agentcardHandler.execute(ctxOf([...verifyArgs, '--bearer-interactive']));
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toMatch(/--bearer-interactive.*--bearer-stdin.*--bearer-file.*--bearer-store.*--bearer-env/);
+  });
+
+  it.each([false, true])('redacts reflected remote card fields and transport errors (json=%s)', async json => {
+    vi.stubEnv('FIXTURE_BEARER', secret);
+    const args = [...verifyArgs, '--bearer-env', 'FIXTURE_BEARER', ...(json ? ['--json'] : [])];
+    globalThis.fetch = (async (_url, init) => {
+      expect(init?.headers).toHaveProperty('authorization', `Bearer ${secret}`);
+      return new Response(JSON.stringify({ ...unsignedCard, name: secret, skills: [{ id: secret, name: secret }] }));
+    }) as typeof fetch;
+    expect((await agentcardHandler.execute(ctxOf(args))).exitCode).toBe(0);
+    expect(logSpy.mock.calls.flat().join('')).toContain('[REDACTED]');
+    expect(logSpy.mock.calls.flat().join('')).not.toContain(secret);
+    globalThis.fetch = (async () => { throw new Error(`request failed: Authorization: Bearer ${secret}`); }) as typeof fetch;
+    const result = await agentcardHandler.execute(ctxOf(args));
+    expect(result.exitCode).toBe(1);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect([...logSpy.mock.calls, ...errSpy.mock.calls].flat().join('')).not.toContain(secret);
+  });
+
+  it('retains literal bearer compatibility with an argv deprecation warning', async () => {
+    globalThis.fetch = (async (_url, init) => {
+      expect(init?.headers).toHaveProperty('authorization', `Bearer ${secret}`);
+      return new Response(JSON.stringify(unsignedCard));
+    }) as typeof fetch;
+    expect((await agentcardHandler.execute(ctxOf([...verifyArgs, '--bearer', secret]))).exitCode).toBe(0);
+    const errors = errSpy.mock.calls.flat().join('');
+    expect(errors).toContain('deprecated');
+    expect(errors).toContain('exposes the value on argv');
+    expect(errors).not.toContain(secret);
   });
 
   it('returns USAGE when --host is missing', async () => {

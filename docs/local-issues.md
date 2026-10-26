@@ -99,11 +99,20 @@ aiwg issue export PROJECT-0001 --to github --out project-0001.github.json
 Use `--live` when the CLI should read from or write to the provider API directly instead of a snapshot file:
 
 ```bash
-AIWG_GITEA_TOKEN=... aiwg issue import --from gitea --live --repo org/repo --external-id 1463
-GITHUB_TOKEN=... aiwg issue import --from github --live --repo org/repo --external-id 42
-AIWG_GITEA_TOKEN=... aiwg issue export PROJECT-0001 --to gitea --live --repo org/repo
-GITHUB_TOKEN=... aiwg issue export PROJECT-0001 --to github --live --repo org/repo
+aiwg issue import --from gitea --live --repo org/repo --external-id 1463 --token-store gitea-production
+aiwg issue import --from github --live --repo org/repo --external-id 42 --token-file "$HOME/.config/aiwg/github-token"
+aiwg issue export PROJECT-0001 --to gitea --live --repo org/repo --token-store gitea-production
+op read 'op://Engineering/GitHub/token' | aiwg issue export PROJECT-0001 --to github --live --repo org/repo --token-stdin
 ```
+
+Live commands support `--token-interactive`, `--token-stdin`, `--token-file <path>`,
+`--token-store <name>`, and `--token-env <NAME>` through the shared
+[sensitive-value input guidance](cli/sensitive-values.md). Without a source flag,
+an interactive terminal prompts without echo. Headless calls retain the existing
+environment order (`AIWG_GITEA_TOKEN` then `GITEA_TOKEN`, or `AIWG_GITHUB_TOKEN`
+then `GITHUB_TOKEN`); a missing token errors and lists the source flags. Private
+files must be owned regular files without group/other access or links. The bearer
+reaches only the in-process HTTP client; response and transport errors redact it.
 
 Live export creates an external issue when the local issue has no matching `source.external_id`. If the local issue already points at the target provider, live export fetches the remote issue first and refuses to mutate when conflicts are present. Review conflicts with `aiwg issue sync conflicts` or pass `--force` only after choosing the local version as the winner. Posted comments are mapped back to local event metadata automatically.
 

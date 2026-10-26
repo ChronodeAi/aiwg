@@ -11,42 +11,20 @@
  *
  * Authentication:
  *   - SSH clone: uses default SSH agent (recommended for teams)
- *   - HTTPS clone: reads token from GITEA_TOKEN env or ~/.config/gitea/token
+ *   - HTTPS clone: resolves explicit sources, otherwise reads token from GITEA_TOKEN env or ~/.config/gitea/token
  *
  * @implements #557
  */
 
-import { existsSync } from 'fs';
-import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
-import { GitAdapter } from './git.js';
+import { GitAdapter, resolvePackageToken } from './git.js';
 import type { PackageRef, PackageSource, FetchOptions } from '../types.js';
 
 /**
  * Regex for "owner/name" or "owner/name@version" (no scheme prefix)
  */
 const GITEA_SHORTHAND = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(@[a-zA-Z0-9._/-]+)?$/;
-
-/**
- * Read Gitea token from standard file path (same as global CLAUDE.md convention)
- */
-async function readGiteaToken(): Promise<string | undefined> {
-  if (process.env.GITEA_TOKEN) return process.env.GITEA_TOKEN;
-
-  const tokenPaths = [
-    join(homedir(), '.config', 'gitea', 'token'),
-    join(homedir(), '.aiwg', 'credentials', 'gitea'),
-  ];
-
-  for (const p of tokenPaths) {
-    if (existsSync(p)) {
-      return (await readFile(p, 'utf-8')).trim();
-    }
-  }
-
-  return undefined;
-}
 
 /**
  * Resolve the Gitea host
@@ -74,26 +52,26 @@ export class GiteaAdapter extends GitAdapter {
     return GITEA_SHORTHAND.test(ref);
   }
 
-  override async resolve(ref: PackageRef): Promise<PackageSource | null> {
+  override async resolve(ref: PackageRef, options: FetchOptions = {}): Promise<PackageSource | null> {
     if (!ref.owner || !ref.name) return null;
 
     const host = resolveGiteaHost();
-    const token = await readGiteaToken();
+    const token = await resolvePackageToken(options.tokenInput, 'GITEA_TOKEN', [join(homedir(), '.config', 'gitea', 'token'), join(homedir(), '.aiwg', 'credentials', 'gitea')]);
 
     let gitUrl: string;
     if (token) {
-      // HTTPS with token
-      gitUrl = `https://${token}@${host}/${ref.owner}/${ref.name}.git`;
+      // HTTPS; credential is held outside the serializable source
+      gitUrl = `https://${host}/${ref.owner}/${ref.name}.git`;
     } else {
       // SSH (relies on SSH agent)
       gitUrl = `git@${host}:${ref.owner}/${ref.name}.git`;
     }
 
-    return {
+    return this.withToken({
       gitUrl,
       ref: ref.version,
       label: `${host}/${ref.owner}/${ref.name}${ref.version ? `@${ref.version}` : ''}`,
-    };
+    }, token);
   }
 
   override async fetch(source: PackageSource, options: FetchOptions = {}): Promise<string> {
