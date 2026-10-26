@@ -21,6 +21,7 @@
  * standalone `type:"error"` line: errors here write plain text and a
  * non-zero exit code, matching the real CLI's evidenced behavior.
  */
+import { ignoreTermUntilKilled } from '../ignore-term.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const SESSION = 'cursor-fixture-session';
@@ -196,8 +197,7 @@ switch (scenario) {
     break;
   }
   case 'ignore-term':
-    process.on('SIGTERM', () => {});
-    setInterval(() => {}, 1000);
+    ignoreTermUntilKilled();
     break;
   case 'hang':
   case 'stdin-wait':

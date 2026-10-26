@@ -1,3 +1,4 @@
+import { termAfterReady, TERM_READY } from '../../helpers/term-escalation.js';
 import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2902 (B-OG-37) Factory (Droid) promotion: offline S1 profile work.
@@ -460,14 +461,10 @@ describe('T-OG-03/20/21/23 Factory run identity, stall and security signals', ()
   it('FD10 TERM ignored requires KILL; the exit records the signal, never zero', async () => {
     const { root, workdir } = await scratch();
     const { file } = await fakeConfig(root, 'ignore-term');
-    let child: ReturnType<typeof spawn> | undefined;
     const result = await run(process.execPath, argv().slice(0, 1).concat(argv().slice(1).map(a => a === '/w' ? workdir : a)),
       { cwd: workdir, stdinData: 'brief', env: { AIWG_FAKE_WORKER_CONFIG: file }, timeoutMs: 8_000,
-        onStart: started => { child = started; setTimeout(() => {
-          started.kill('SIGTERM');
-          setTimeout(() => { if (started.exitCode === null && started.signalCode === null) started.kill('SIGKILL'); }, 500);
-        }, 600); } });
-    expect(child).toBeDefined();
+        onStart: termAfterReady });
+    expect(result.stdout).toContain(TERM_READY);
     expect(result.signal).toBe('SIGKILL');
     expect(result.code).toBeNull();
   });

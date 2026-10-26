@@ -41,6 +41,11 @@ describe('network-analysis addon deployment (#2272)', () => {
 
   for (const provider of ['claude', 'codex']) {
     it(`round-trips governed content for ${provider}`, async () => {
+      const home = inject('basePackageHome');
+      // The deployment's home resolver and Codex override must use the isolated fixture.
+      expect(os.homedir()).toBe(home);
+      expect(process.env.HOME).toBe(home);
+      expect(process.env.CODEX_HOME).toBe(path.join(home, '.codex'));
       const project = await mkdtemp(path.join(os.tmpdir(), `aiwg-network-${provider}-`));
       projects.push(project);
       const result = await new UseHandler().execute(context(project, provider));

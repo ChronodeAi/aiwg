@@ -27,6 +27,7 @@
  * (including quote characters), which fails the effort/approval enum check
  * with a non-zero exit, just like the real CLI refuses the invalid value.
  */
+import { ignoreTermUntilKilled } from '../ignore-term.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const THREAD = 'codex-fixture-thread';
@@ -304,8 +305,7 @@ switch (scenario) {
     break;
   }
   case 'ignore-term':
-    process.on('SIGTERM', () => {});
-    setInterval(() => {}, 1000);
+    ignoreTermUntilKilled();
     break;
   case 'hang':
   case 'stdin-wait':
