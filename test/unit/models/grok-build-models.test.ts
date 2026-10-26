@@ -31,6 +31,42 @@ async function fixture() {
 }
 
 describe('Grok Build model discovery', () => {
+  it.each(['auth', 'grok_com_config', 'environment', 'split-layers'])('withholds stale config aliases for external endpoint catalogs (%s)', async mode => {
+    const f = await fixture();
+    const stale = '[models]\ndefault = "stale"\nallowed_models = ["stale"]\n[model.stale]\nmodel = "stale-api-id"\n';
+    const auth = '[auth]\nauth_provider_command = "private-helper"\n';
+    const endpoint = '[endpoints]\nmodels_list_url = "https://private-endpoint.invalid/models"\n';
+    await writeFile(f.user, stale + (mode === 'environment' ? '' : mode === 'split-layers' ? endpoint
+      : `[${mode}]\nauth_provider_command = "private-helper"\n` + endpoint));
+    if (mode === 'split-layers') await writeFile(f.managed, auth);
+    const catalog = await discoverGrokBuildModels({
+      env: mode === 'environment' ? { GROK_AUTH_PROVIDER_COMMAND: 'private-helper', GROK_MODELS_BASE_URL: 'https://private-endpoint.invalid' } : {},
+      inspectReport: { configSources: { layers: [
+        ...(mode === 'split-layers' ? [{ role: 'managed', path: f.managed }] : []),
+        { role: 'user', path: f.user },
+      ] } },
+      runner: async () => { throw new Error('No runtime or endpoint calls expected'); },
+    });
+    expect(catalog.errorKind).toBe('invalid-output');
+    expect(catalog.error).toContain('runtime catalog');
+    expect(catalog.models).toEqual([]);
+    expect(resolveGrokBuildRoleModel(catalog, 'coding', {}, 'stale').source).toBe('unresolved');
+    expect(JSON.stringify(catalog)).not.toMatch(/private-helper|private-endpoint|stale-api-id/);
+  });
+
+  it.each(['auth-only', 'endpoint-only', 'project'])('preserves config discovery outside external endpoint catalogs (%s)', async mode => {
+    const f = await fixture();
+    const auth = '[auth]\nauth_provider_command = "helper"\n';
+    const endpoint = '[endpoints]\nmodels_base_url = "https://endpoint.invalid"\n';
+    await writeFile(f.user, '[models]\ndefault = "local"\n' + (mode === 'auth-only' ? auth : mode === 'endpoint-only' ? endpoint : ''));
+    await writeFile(f.projectConfig, auth + endpoint);
+    const catalog = await discoverGrokBuildModels({ env: {}, inspectReport: { configSources: { layers: [
+      { role: 'user', path: f.user }, { role: 'project', path: f.projectConfig },
+    ] } } });
+    expect(catalog.errorKind).toBeUndefined();
+    expect(catalog.models.map(model => model.id)).toEqual(['local']);
+  });
+
   it('keeps runtime-observed default xAI aliases separate from API model IDs', async () => {
     const catalog = await discoverGrokBuildModels({ inspectReport: {
       configSources: { layers: [] },

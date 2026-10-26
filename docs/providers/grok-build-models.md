@@ -41,6 +41,16 @@ URLs into audit output. Native command stderr is classified without echoing it.
 If Grok reports no model aliases or defaults, AIWG reports unresolved rather
 than claiming its built-in catalog or a marketing model ID is installed.
 
+In public source commit `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8`, an
+external `auth_provider_command` combined with `endpoints.models_base_url` or
+`endpoints.models_list_url` makes the endpoint's catalog authoritative.
+Grok ignores `[model.*]` and ordinary `[models].allowed_models` in this mode;
+requirements allowlists still apply. AIWG conservatively returns unresolved
+model discovery when active config layers or environment variables name this
+combination. It does not execute the auth command or query the endpoint to fill
+the missing runtime catalog. This also applies when the two settings come from
+different layers; project settings remain subject to the restrictions below.
+
 The Grok configuration order is compiled defaults, system managed, user
 managed, user config, project config, environment config overlay, user
 requirements, system requirements, environment variables, then CLI flags.

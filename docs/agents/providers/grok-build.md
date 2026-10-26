@@ -13,6 +13,17 @@ has four-platform evidence. Install the released CLI using the reviewed
 [upstream installation instructions](https://github.com/xai-org/grok-build#installing-the-released-binary),
 then confirm `grok --version` before deploying AIWG.
 
+The 2026-10-26 public-source review covers commit
+`2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8`. The relied-on CLI flags,
+instruction/skill paths, and InspectReport fields remain compatible.
+Streaming JSON adds whole-turn `usage` frames without `messageId` or
+`stopReason`; successful completion still requires `end.stopReason = end_turn`.
+MCP adds an optional `bearer_token_file`; AIWG continues rendering its existing
+environment/header configuration. External auth with a custom models endpoint
+now ignores local model definitions and ordinary model allowlists. AIWG
+withholds automatic discovery for that configuration until a runtime catalog
+is available; see [model discovery](../../providers/grok-build-models.md).
+
 | Surface | AIWG location or behavior |
 |---|---|
 | Canonical project context | `WORKSPACE.md`; `AGENTS.md` is a generated bridge to it and `AIWG.md` |

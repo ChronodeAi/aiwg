@@ -481,6 +481,17 @@ describe('GB12 parseDirectFinal: latching, ordering and malformed-anywhere rejec
   const ev = (obj: Record<string, unknown>) => JSON.stringify(obj);
   const owner = () => installed.owner;
 
+  it('keeps final text through response and whole-turn usage while requiring end', () => {
+    const frames = [
+      { type: 'text', data: 'final answer' },
+      { type: 'usage', messageId: 'response-1', stopReason: 'end_turn', usage: { input_tokens: 1 } },
+      { type: 'usage', usage: { input_tokens: 2 } },
+    ];
+    expect(owner().parseDirectFinal(frames.map(ev).join('\n'))).toBeNull();
+    const stdout = [...frames, { type: 'end', stopReason: 'end_turn', sessionId: 's1' }].map(ev).join('\n');
+    expect(owner().parseDirectFinal(stdout)).toEqual({ text: 'final answer', stopReason: 'end_turn', sessionId: 's1' });
+  });
+
   it('a bare end with no text fails (empty final content)', () => {
     const stdout = `${ev({ type: 'end', stopReason: 'end_turn', sessionId: 's1' })}\n`;
     expect(owner().parseDirectFinal(stdout)).toBeNull();
