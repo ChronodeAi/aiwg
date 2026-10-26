@@ -393,9 +393,11 @@ const directStartupCorrectionContext = new WeakMap();
 
 async function launchOneWorker(owner, options) {
   const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validatePlan } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
-  const validate = async (plan, snapshot, drivers, now) => {
-    if (plan.mode !== 'managed' || !options.managedAdmission) return validatePlan(plan, snapshot, drivers, now);
-    const checked = await validateManagedAttempt(options, plan, { snapshot, drivers }, now, validatePlan,
+  // Forward the saved-plan path: invocation identity is verified against it (#2905).
+  const validate = async (plan, snapshot, drivers, now, planPath = options.invocationPath) => {
+    const validateAt = (p, s, d, n) => validatePlan(p, s, d, n, planPath);
+    if (plan.mode !== 'managed' || !options.managedAdmission) return validateAt(plan, snapshot, drivers, now);
+    const checked = await validateManagedAttempt(options, plan, { snapshot, drivers }, now, validateAt,
       attempt => publishWorkerRecord(dirname(options.invocationPath), `${basename(options.invocationPath)}.attempt.json`, attempt, inspect));
     options.attempt = checked.attempt;
     return checked.invocation;
