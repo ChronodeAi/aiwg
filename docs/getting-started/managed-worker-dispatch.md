@@ -140,9 +140,13 @@ of `--authorize`. For example:
 }
 ```
 
-Revision means the reviewed **base** activation revision (zero before the first
-activation). Fields are JSON pointers within the displayed pair; a named object
-permits its descendants. Every changed field must fit the scope. Changed input
+Revision means the reviewed **base** adoption revision (zero before the first
+adoption, or the retained activation revision for an existing managed project).
+The project-local `.aiwg/aiwg.config.apply-lock.revision.json` advances on every
+successful adoption, including direct, disabled and unchanged pairs. It survives
+mode changes and recovery; an applied proposal or its standing authority cannot
+be reused after returning to the same policy bytes. Fields are JSON pointers
+within the displayed pair; a named object permits its descendants. Every changed field must fit the scope. Changed input
 bytes, copy inventory or revision require a fresh proposal and review. Model
 catalog refresh only updates facts: it never supplies adoption authority or
 applies a pending proposal.
@@ -155,7 +159,12 @@ writes the project models and every participating config copy with atomic
 replacement, publishes a revisioned activation marker, and checks all copies and
 input digests. It then regenerates workspace/provider guidance for every
 configured or recorded provider and revalidates before reopening dispatch.
-A competing apply is refused. Already-running work keeps its supervision owner.
+Apply and recovery share one exclusive owner lock. Each owner records its host,
+PID, process start identity where available, and a random lock generation.
+A competing apply or recovery is refused while that owner is live; an owner on
+another host or with unverifiable liveness also fails closed. Every apply write
+and rollback checks ownership, and only the current generation can release the
+lock. Already-running work keeps its supervision owner.
 
 On a write failure, apply attempts restoration of **every** owned copy, including
 a copy whose rename may have completed before reporting an error. It checks the
@@ -171,6 +180,28 @@ aiwg config set --project --recover --authorize 'sha256:<original-proposal-diges
 Recovery requires the original exact or scoped standing authority, restores and
 checks the retained bytes, regenerates guidance, and removes the block only after
 successful revalidation. Keep the recovery record until recovery succeeds.
+
+If apply or recovery is killed, wait for that process to exit, fix the reported
+problem, then retry the same recovery command (from any directory):
+
+```bash
+aiwg config set --project --target '/absolute/path/to/project' --recover --authorize 'sha256:<original-proposal-digest>'
+```
+
+The retry proves the previous owner has exited or explicitly relinquished its
+generation, then exclusively claims a successor generation without removing the
+dispatch block. Interrupted recovery can be retried repeatedly. Lock publication
+includes its owner identity atomically: a crash before `recovery.json` is written
+still has a reclaimable owner. No participating apply write precedes that record;
+when it is absent, recovery validates the unchanged current pair and regenerates
+guidance instead of guessing restoration bytes. The same command supports this
+case. Do not manually delete lock directories or the revision record.
+
+Reads remain blocked even for direct or disabled projects: an interrupted mode
+transition may have written only half the pair. The loader diagnostic identifies
+the absolute project and recovery record paths and prints the recovery command.
+The initial owner record retains the proposal digest, so the diagnostic also
+prints the exact authorization command before `recovery.json` exists.
 
 Admission bootstrap remains owned by the existing trusted deployment: build
 `managedProjectAdmissionPolicy(root, resolvedParallelism,

@@ -1,13 +1,13 @@
 import { normalizeAiwgConfigCandidate } from './config-normalization.js';
 // Reviews and atomically activates the existing worker policy pair with full-copy recovery.
-import { readFile, writeFile, rm, access } from 'node:fs/promises';
+import { readFile, rm, access } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { ConfigLoader } from '../models/config-loader.js';
 import { validateUserProjectModelConfig } from '../models/provider-policy.js';
 import type { UserProjectConfig } from '../models/types.js';
 import { emptyConfig, getConfigPath, workerActivationDigests, workerConfigDigest, validateParallelismConfig, type AiwgConfig, type ParallelismConfig } from './aiwg-config.js';
-import { resolveProjectAiwgDir } from './project-artifacts.js';
-import { acquireWorkerWriteLock, atomicConfigWrite, runWorkerMaintenance } from './worker-write.js';
+import { projectControlPath, resolveProjectAiwgDir } from './project-artifacts.js';
+import { acquireWorkerWriteLock, reclaimWorkerWriteLock, atomicConfigWrite, runWorkerMaintenance } from './worker-write.js';
 
 interface Input { file: string; bytes: string | null; digest: string }
 export interface WorkerPair { parallelism: ParallelismConfig | null; workerSelection: unknown }
@@ -34,6 +34,13 @@ async function capture(file: string): Promise<Input> {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   return { file: resolve(file), bytes, digest: workerConfigDigest(bytes) };
+}
+const revisionPath = (project: string) => projectControlPath(project, 'aiwg.config.apply-lock.revision.json');
+async function adoptionRevision(project: string, activationRevision = 0): Promise<number> {
+  const input = await capture(revisionPath(project));
+  const revision = input.bytes === null ? 0 : json(input).revision;
+  if (!Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER) throw new Error('Invalid adoption revision');
+  return Math.max(revision, activationRevision);
 }
 async function inventory(project: string, options: AdoptionOptions): Promise<Input[]> {
   const locations = new ConfigLoader(project, options).getLocations();
@@ -83,7 +90,7 @@ export async function proposeWorkerAdoption(project: string, changes: Partial<Wo
   if (after.parallelism?.activation !== undefined) throw new Error('Activation markers are produced by apply, never by proposals');
   const next = candidate(inputs, after);
   await validate(project, next.config, next.models, options);
-  const proposal = { project, baseRevision: config.parallelism?.activation?.revision ?? 0, inputs, before, after };
+  const proposal = { project, baseRevision: await adoptionRevision(project, config.parallelism?.activation?.revision), inputs, before, after };
   return { ...proposal, digest: workerConfigDigest(proposal) };
 }
 function changedFields(before: any, after: any, pointer = ''): string[] {
@@ -111,11 +118,11 @@ function validateRetainedCopies(inputs: Input[]) {
     if (copy.bytes !== null && workerConfigDigest(json(copy)) !== workerConfigDigest(canonical && json(canonical))) throw new Error(`Compatibility config diverges from the canonical validated copy: ${copy.file}`);
   }
 }
-async function recheck(proposal: WorkerProposal, options: AdoptionOptions) {
+async function recheck(proposal: WorkerProposal, options: AdoptionOptions, checkRevision = true) {
   const current = await inventory(proposal.project, options);
   if (workerConfigDigest(current) !== workerConfigDigest(proposal.inputs)) throw new Error('Stale proposal: input bytes/digests or participating copies changed');
   const { config, models } = candidate(current);
-  if ((config.parallelism?.activation?.revision ?? 0) !== proposal.baseRevision || workerConfigDigest(pair(config, models)) !== workerConfigDigest(proposal.before)) throw new Error('Stale proposal: base revision or reviewed pair changed');
+  if ((checkRevision && await adoptionRevision(proposal.project, config.parallelism?.activation?.revision) !== proposal.baseRevision) || workerConfigDigest(pair(config, models)) !== workerConfigDigest(proposal.before)) throw new Error('Stale proposal: base revision or reviewed pair changed');
   return current;
 }
 export async function regenerateWorkerGuidance(project: string, config: AiwgConfig): Promise<void> {
@@ -137,11 +144,13 @@ export async function applyWorkerAdoption(project: string, proposal: WorkerPropo
   if (proposal.after.parallelism?.activation !== undefined || workerConfigDigest(Object.keys(proposal.after).sort()) !== workerConfigDigest(['parallelism', 'workerSelection'])) throw new Error('Proposal exceeds the worker policy pair');
   // Reject staleness before writing even the lock or recovery record.
   await recheck(proposal, options);
-  const lock = await acquireWorkerWriteLock(project);
+  const lock = await acquireWorkerWriteLock(project, true, proposal.digest);
+  const write = (file: string, content: string) => atomicConfigWrite(file, content, lock.assertOwned);
   let keepBlocked = false;
-  let writesStarted = false;
   let regenerationStarted = false;
   try {
+    await options.checkpoint?.('locked');
+    lock.assertOwned();
     await runWorkerMaintenance(async () => {
       const inputs = await recheck(proposal, options);
       validateRetainedCopies(inputs);
@@ -151,9 +160,9 @@ export async function applyWorkerAdoption(project: string, proposal: WorkerPropo
       const digests = await validate(project, next.config, next.models, options);
       const configCopies = [inputs[0], ...inputs.slice(4)];
       // Keep the validated bytes durably before the first participating write.
-      await atomicConfigWrite(join(lock, 'recovery.json'), JSON.stringify({ proposal, inputs }, null, 2));
-      await writeFile(join(lock, 'blocked'), 'Worker policy apply in progress; recovery.json retains validated input bytes.\n', { flag: 'wx' });
+      await write(join(lock.path, 'recovery.json'), JSON.stringify({ proposal, inputs }, null, 2));
       await options.checkpoint?.('blocked');
+      lock.assertOwned();
       options.signal?.throwIfAborted();
       await recheck(proposal, options);
       if (next.config.parallelism?.worker_mode === 'managed') {
@@ -163,16 +172,16 @@ export async function applyWorkerAdoption(project: string, proposal: WorkerPropo
       const configBytes = JSON.stringify(next.config, null, 2) + '\n';
       const modelsBytes = JSON.stringify(next.models, null, 2) + '\n';
       try {
-        writesStarted = true;
-        await atomicConfigWrite(inputs[1].file, modelsBytes);
+        await write(inputs[1].file, modelsBytes);
         await options.checkpoint?.('models');
         options.signal?.throwIfAborted();
         for (const [index, input] of configCopies.entries()) {
-          await atomicConfigWrite(input.file, configBytes);
+          await write(input.file, configBytes);
           await options.checkpoint?.(`config:${index}`);
           options.signal?.throwIfAborted();
         }
         const check = async () => {
+          lock.assertOwned();
           const current = await inventory(project, options);
           const expected = inputs.map(input => ({ ...input, bytes: input.file === inputs[1].file ? modelsBytes : configCopies.some(copy => copy.file === input.file) ? configBytes : input.bytes }));
           if (current.length !== expected.length || current.some((input, index) => input.file !== expected[index].file || input.bytes !== expected[index].bytes)) throw new Error('Activation copies or model inputs changed during apply');
@@ -182,72 +191,98 @@ export async function applyWorkerAdoption(project: string, proposal: WorkerPropo
         await check();
         await options.checkpoint?.('activation');
         options.signal?.throwIfAborted();
+        lock.assertOwned();
         regenerationStarted = true;
         await (options.regenerate ?? regenerateWorkerGuidance)(project, next.config);
         await options.checkpoint?.('regenerated');
         options.signal?.throwIfAborted();
         await check();
+        await write(revisionPath(project), JSON.stringify({ revision: proposal.baseRevision + 1 }) + '\n');
+        await options.checkpoint?.('committed');
+        lock.assertOwned();
       } catch (error) {
         const failures: string[] = [];
         // Attempt EVERY owned copy, including a write that may have renamed then thrown.
         for (const input of [inputs[1], ...configCopies]) {
           try {
+            lock.assertOwned();
             if (input.bytes === null) await rm(input.file, { force: true });
-            else await atomicConfigWrite(input.file, input.bytes);
+            else await write(input.file, input.bytes);
           } catch (restoreError) { failures.push(`${input.file}: ${restoreError}`); }
         }
         try { await recheck(proposal, options); await validate(project, previous.config, previous.models, options); }
         catch (restoreError) { failures.push(`restored pair validation: ${restoreError}`); }
         // Regenerated guidance may be partial; keep submissions closed until explicit recovery.
         keepBlocked = failures.length > 0 || regenerationStarted;
-        throw new Error(`Worker adoption failed: ${error}. ${keepBlocked ? `Dispatch remains closed at ${lock}; ${failures.join('; ') || 'guidance consistency requires recovery'}` : 'All participating copies restored and revalidated.'}`);
+        throw new Error(`Worker adoption failed: ${error}. ${keepBlocked ? `Dispatch remains closed at ${lock.path}; ${failures.join('; ') || 'guidance consistency requires recovery'}` : 'All participating copies restored and revalidated.'}`);
       }
     });
-  } catch (error) {
-    if (!writesStarted) keepBlocked = false;
-    throw error;
   } finally {
-    if (!keepBlocked) await rm(lock, { recursive: true });
+    // A displaced owner must neither restore bytes nor remove a successor's exclusion.
+    let owned = true;
+    try { lock.assertOwned(); } catch { owned = false; }
+    if (owned) await lock.release(keepBlocked);
   }
 }
 
 /** Recover an interrupted apply from its retained, authorized bytes; never infer approval. */
 export async function recoverWorkerAdoption(project: string, authority: AdoptionAuthority, options: AdoptionOptions = {}): Promise<void> {
-  const { mkdir } = await import('node:fs/promises');
-  const { workerWriteLock } = await import('./worker-write.js');
-  const lock = workerWriteLock(project);
-  const recoveryLock = join(lock, 'recover-lock');
-  await mkdir(recoveryLock);
+  const lock = await reclaimWorkerWriteLock(project);
+  const write = (file: string, content: string) => atomicConfigWrite(file, content, lock.assertOwned);
   let recovered = false;
   try {
+    await options.checkpoint?.('recovery:owned');
     await runWorkerMaintenance(async () => {
-      const retained = JSON.parse(await readFile(join(lock, 'recovery.json'), 'utf8')) as { proposal: WorkerProposal; inputs: Input[] };
-      const proposal = retained.proposal;
-      if (proposal.project !== resolve(project)) throw new Error('Recovery belongs to a different project');
-      authorize(proposal, authority);
-      if (workerConfigDigest(retained.inputs) !== workerConfigDigest(proposal.inputs)) throw new Error('Recovery bytes do not match the reviewed inputs');
-      const inputs = await inventory(project, options);
-      if (workerConfigDigest(inputs.map(input => input.file)) !== workerConfigDigest(proposal.inputs.map(input => input.file))) throw new Error('Recovery copy inventory changed');
-      validateRetainedCopies(proposal.inputs);
-      options.signal?.throwIfAborted();
-      const previous = candidate(proposal.inputs);
-      await validate(project, previous.config, previous.models, options);
-      const failures: string[] = [];
-      for (const input of [proposal.inputs[1], proposal.inputs[0], ...proposal.inputs.slice(4)]) {
-        try {
-          if (input.bytes === null) await rm(input.file, { force: true });
-          else await atomicConfigWrite(input.file, input.bytes);
-        } catch (error) { failures.push(`${input.file}: ${error}`); }
+      lock.assertOwned();
+      const record = await capture(join(lock.path, 'recovery.json'));
+      if (record.bytes === null) {
+        // Publication precedes recovery.json, and recovery.json precedes every pair write.
+        // A missing record therefore needs validation, never speculative restoration.
+        const inputs = await inventory(project, options);
+        validateRetainedCopies(inputs);
+        const current = candidate(inputs);
+        await validate(project, current.config, current.models, options);
+        options.signal?.throwIfAborted();
+        lock.assertOwned();
+        await (options.regenerate ?? regenerateWorkerGuidance)(project, current.config);
+        if (workerConfigDigest(await inventory(project, options)) !== workerConfigDigest(inputs)) throw new Error('Inputs changed during incomplete-initialization recovery');
+        await validate(project, current.config, current.models, options);
+      } else {
+        const retained = json(record) as { proposal: WorkerProposal; inputs: Input[] };
+        const proposal = retained.proposal;
+        if (proposal.project !== resolve(project)) throw new Error('Recovery belongs to a different project');
+        authorize(proposal, authority);
+        if (workerConfigDigest(retained.inputs) !== workerConfigDigest(proposal.inputs)) throw new Error('Recovery bytes do not match the reviewed inputs');
+        const inputs = await inventory(project, options);
+        if (workerConfigDigest(inputs.map(input => input.file)) !== workerConfigDigest(proposal.inputs.map(input => input.file))) throw new Error('Recovery copy inventory changed');
+        validateRetainedCopies(proposal.inputs);
+        options.signal?.throwIfAborted();
+        const previous = candidate(proposal.inputs);
+        await validate(project, previous.config, previous.models, options);
+        const failures: string[] = [];
+        for (const input of [proposal.inputs[1], proposal.inputs[0], ...proposal.inputs.slice(4)]) {
+          try {
+            lock.assertOwned();
+            if (input.bytes === null) await rm(input.file, { force: true });
+            else await write(input.file, input.bytes);
+          } catch (error) { failures.push(`${input.file}: ${error}`); }
+        }
+        if (failures.length) throw new Error(failures.join('; '));
+        await recheck(proposal, options, false);
+        lock.assertOwned();
+        await (options.regenerate ?? regenerateWorkerGuidance)(project, previous.config);
+        await recheck(proposal, options, false);
       }
-      if (failures.length) throw new Error(failures.join('; '));
-      await recheck(proposal, options);
-      await (options.regenerate ?? regenerateWorkerGuidance)(project, previous.config);
-      await recheck(proposal, options);
+      options.signal?.throwIfAborted();
+      lock.assertOwned();
+      await options.checkpoint?.('recovery:verified');
+      lock.assertOwned();
       recovered = true;
     });
-  } catch (error) { throw new Error(`Recovery failed; dispatch remains closed at ${lock}: ${error}`); }
+  } catch (error) { throw new Error(`Recovery failed; dispatch remains closed at ${lock.path}: ${error}`); }
   finally {
-    if (recovered) await rm(lock, { recursive: true });
-    else await rm(recoveryLock, { recursive: true, force: true });
+    let owned = true;
+    try { lock.assertOwned(); } catch { owned = false; }
+    if (owned) await lock.release(!recovered);
   }
 }

@@ -1,4 +1,4 @@
-import { workerDispatchBlocked, isWorkerMaintenance } from '../config/worker-write.js';
+import { workerDispatchBlocked, isWorkerMaintenance, workerRecoveryDiagnostic } from '../config/worker-write.js';
 /**
  * Model Configuration Loader
  * Loads and merges model configurations from multiple sources with proper precedence
@@ -75,7 +75,7 @@ export class ConfigLoader {
    */
   async load(parallelism?: ParallelismConfig): Promise<MergedModelConfig> {
     if (!isWorkerMaintenance() && workerDispatchBlocked(dirname(this.locations.projectConfig))) {
-      throw new Error('Worker dispatch is closed during configuration apply/recovery; inspect aiwg.config.apply-lock/recovery.json');
+      throw new Error(workerRecoveryDiagnostic(dirname(this.locations.projectConfig)));
     }
     const expansion = expandWorkerGroupTemplates(parallelism, getConfigPath(dirname(this.locations.projectConfig)));
     const errors = validateParallelismConfig(parallelism);
