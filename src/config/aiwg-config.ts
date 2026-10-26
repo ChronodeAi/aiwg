@@ -1012,7 +1012,7 @@ export interface WorkerParallelism {
   admission?: {
     groupCaps?: Record<string, number>; cliCaps?: Record<string, number>;
     memberCaps?: Record<string, number>; modelCaps?: Record<string, number>; quotaCaps?: Record<string, number>;
-    queueTimeoutSeconds?: number; leaseSeconds?: number; maxQueued?: number; authorityRef?: string;
+    queueTimeoutSeconds?: number; leaseSeconds?: number; starvationSeconds?: number; maxQueued?: number; authorityRef?: string;
     /**
      * Live host-resource thresholds (FR-OG-107, #2954). Tightens
      * `build.resource_preflight.dispatch` field-by-field; unset fields fall back to
@@ -1298,7 +1298,7 @@ export function resolveParallelism(
       for (const member of group.members) { member.enabled ??= true; member.priority ??= 50; }
     }
     for (const cli of Object.values(resolved.clis ?? {})) cli.enabled ??= true;
-    if (resolved.admission) resolved.admission = { maxQueued: 128, queueTimeoutSeconds: 300, leaseSeconds: 60, authorityRef: 'project', ...resolved.admission };
+    if (resolved.admission) resolved.admission = { maxQueued: 128, queueTimeoutSeconds: 300, leaseSeconds: 60, starvationSeconds: 120, authorityRef: 'project', ...resolved.admission };
     if (resolved.budgets) resolved.budgets = { enforcement: 'observed', unknownCost: 'deny', ...resolved.budgets };
     if (resolved.retry) resolved.retry = { maxAttempts: 3, on: ['rate-limit', 'unavailable', 'timeout'], baseDelaySeconds: 2, maxDelaySeconds: 60, ...resolved.retry };
   }

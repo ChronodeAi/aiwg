@@ -110,9 +110,12 @@
       "status": "partial",
       "testFiles": [
         "test/unit/tools/resource-preflight.test.js",
-        "test/unit/config/dispatch-thresholds.test.ts"
+        "test/unit/config/dispatch-thresholds.test.ts",
+        "test/unit/serve/shared-host-scheduler-managed.test.ts",
+        "test/unit/serve/shared-host-scheduler-budgets.test.ts",
+        "test/unit/serve/shared-host-scheduler-host.test.ts"
       ],
-      "remaining": "Tier 0 dispatch gating against synthetic /proc fixtures only; shared enforced admission, budgets, and S4 host scope remain with the owning B-OG-10/12/32 checkpoints.",
+      "remaining": "#2926 adds managed group/run diagnostic-mode sustained-load, budget, cooldown, cap and uncertainty fixtures. Tier 0 dispatch gating against synthetic /proc fixtures only; shared enforced admission, budgets, and S4 host scope remain with the owning B-OG-10/12/32 checkpoints.",
       "laterSlices": [
         "S4"
       ]
@@ -127,8 +130,12 @@
         "B-OG-12"
       ],
       "status": "partial",
-      "testFiles": [],
-      "remaining": "#2898 adds S1 synthetic Muse quota/partial mapping only; managed cooldown and recovery remain B-OG-11 in S2+. Synthetic fixtures do not verify installed profiles."
+      "testFiles": [
+        "test/unit/serve/shared-host-scheduler-managed.test.ts",
+        "test/unit/serve/shared-host-scheduler-budgets.test.ts",
+        "test/unit/serve/shared-host-scheduler-host.test.ts"
+      ],
+      "remaining": "#2926 adds managed group/run diagnostic-mode sustained-load, budget, cooldown, cap and uncertainty fixtures. #2898 adds S1 synthetic Muse quota/partial mapping only; managed cooldown and recovery remain B-OG-11 in S2+. Synthetic fixtures do not verify installed profiles."
     },
     "T-OG-07": {
       "name": "Guidance/lineage",
@@ -156,9 +163,12 @@
       ],
       "status": "partial",
       "testFiles": [
-        "test/conformance/mission-v1/worker-contracts.test.ts"
+        "test/conformance/mission-v1/worker-contracts.test.ts",
+        "test/unit/serve/shared-host-scheduler-managed.test.ts",
+        "test/unit/serve/shared-host-scheduler-budgets.test.ts",
+        "test/unit/serve/shared-host-scheduler-host.test.ts"
       ],
-      "remaining": "Owning checkpoint mechanism assertions remain; existing files prove only the scoped contracts or fixture mechanics.",
+      "remaining": "#2926 adds managed group/run diagnostic-mode sustained-load, budget, cooldown, cap and uncertainty fixtures. Owning checkpoint mechanism assertions remain; existing files prove only the scoped contracts or fixture mechanics.",
       "laterSlices": [
         "S3"
       ]
@@ -230,6 +240,19 @@
         "test/unit/cli/handlers/steward.test.ts"
       ],
       "remaining": " #2913 adds S1 synthetic worker status/health readiness coverage; #2894 adds S1 direct onboarding readiness (install/version via fake CLIs with opt-in probes, resolver-reported dispatch eligibility, unqualified until smoke run #3005); managed ownership, shared breakers and remediation remain S2+."
+    },
+    "T-OG-13": {
+      "name": "P2/P3 extensions",
+      "ownerIssue": "roctinam/aiwg#2926",
+      "slice": "S5",
+      "mechanismOwners": ["B-OG-22"],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/serve/shared-host-scheduler-managed.test.ts",
+        "test/unit/serve/shared-host-scheduler-budgets.test.ts",
+        "test/unit/serve/shared-host-scheduler-host.test.ts"
+      ],
+      "remaining": "FR-OG-037 diagnostic mode only. Other P2/P3 extensions remain with their owners; no weighted fair-share or hard direct-launch guarantee."
     },
     "T-OG-14": {
       "name": "Package/platform/extension",

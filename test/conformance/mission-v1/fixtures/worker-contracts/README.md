@@ -53,6 +53,15 @@ extension round trips; other consumers advertise no worker support in
 
 ## Disposition and consumer ownership
 
+### #2926 diagnostic threshold amendment
+
+The parallelism fragment and manifest digest add optional admission
+`starvationSeconds` (1–86400, default 120). This configures bounded group/run
+service diagnostics only; priority/FIFO/aging, budgets, deadlines and fencing
+remain authoritative. The existing schema owner and strict exact-match checks
+are preserved. No new schema family or live qualification is introduced.
+
+
 ### #2913 S1 health resolution amendment
 
 The existing effective-health definition permits bounded optional `origins` and

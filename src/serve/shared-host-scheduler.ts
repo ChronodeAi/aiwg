@@ -30,6 +30,8 @@ import { createHash } from 'node:crypto';
 import { advanceProgressWatermark, assertMissionWorkerHandoff, assertValidWorkerPayload, decideLeaseMapping, projectHealthTrace } from '../mission-protocol/codecs.js';
 import { isCanonicalWorkerModelKey } from '../models/provider-policy.js';
 import type { CanonicalMission, WorkerExecution, WorkerHealthSummary, WorkerUsage } from '../mission-protocol/types.js';
+import { attemptBlock, capacityBlock, type AdmissionBlock } from './shared-host-admission-checks.js';
+import { projectAdmissionDiagnostics, type AdmissionDiagnostics } from './shared-host-starvation.js';
 import type { ParallelismConfig } from '../config/aiwg-config.js';
 
 export type AdmissionState =
@@ -177,6 +179,7 @@ export function managedProjectAdmissionPolicy(
   for (const [quotaScope, cap] of Object.entries(admission?.quotaCaps ?? {})) add({ kind: 'native', quotaScope }, cap);
   return {
     maxConcurrent, leaseTtlMs: (admission?.leaseSeconds ?? 60) * 1000,
+    starvationThresholdMs: (admission?.starvationSeconds ?? 120) * 1000,
     agingIntervalMs: 30_000, allowPreemption: false, defaultHostQuota: maxConcurrent,
     managed: {
       authorityRef: 'project', projectId, policyDigest, maxQueued: admission?.maxQueued ?? 128,
@@ -212,6 +215,7 @@ export interface AdmissionRecord extends AdmissionRequest {
   state: AdmissionState;
   revision: number;
   reason: string;
+  denial?: AdmissionBlock;
   admittedAt?: string;
   leaseExpiresAt?: string;
   finishedAt?: string;
@@ -240,6 +244,7 @@ export interface SharedHostPolicy {
   maxConcurrent: number;
   leaseTtlMs: number;
   agingIntervalMs: number;
+  starvationThresholdMs?: number;
   allowPreemption: boolean;
   environmentQuotas?: Record<string, number>;
   providerQuotas?: Record<string, number>;
@@ -250,6 +255,7 @@ export interface SharedHostPolicy {
 }
 
 export interface AdmissionSnapshot {
+  diagnostics?: AdmissionDiagnostics;
   revision: number;
   records: Record<string, AdmissionRecord>;
   /** Written by the config/authority owner, never selected by a transaction caller. */
@@ -410,6 +416,9 @@ export class SharedHostScheduler {
     if (policy.leaseTtlMs < 1 || policy.agingIntervalMs < 1) {
       throw new Error('leaseTtlMs and agingIntervalMs must be positive');
     }
+    if (!Number.isSafeInteger(policy.starvationThresholdMs ?? 120_000) || (policy.starvationThresholdMs ?? 120_000) < 1) {
+      throw new Error('starvationThresholdMs must be a positive safe integer');
+    }
     if (policy.managed) this.policy = structuredClone(policy);
     const managed = this.policy.managed;
     if (managed) {
@@ -479,6 +488,7 @@ export class SharedHostScheduler {
         const record = snapshot.records[requestKey]!;
         record.state = 'denied';
         record.reason = 'managed admission queue is full';
+        record.denial = { kind: 'policy-exclusion', cause: record.reason, terminal: true };
         record.finishedAt = new Date(this.clock()).toISOString();
         record.revision += 1;
       }
@@ -723,6 +733,8 @@ export class SharedHostScheduler {
       snapshot.allowances = Object.fromEntries(Object.entries(snapshot.allowances ?? {})
         .filter(([key]) => JSON.parse(key)[0] === projectId));
     }
+    snapshot.diagnostics = projectAdmissionDiagnostics(value, record => this.policyFor(value, record), this.clock(),
+      this.policy.managed?.authorityRef.startsWith('host:') ? this.policy.managed.projectId : undefined);
     return snapshot;
   }
 
@@ -829,50 +841,13 @@ export class SharedHostScheduler {
   }
 
   private allowAttempt(snapshot: AdmissionSnapshot, candidate: AdmissionRecord, now: number): boolean {
-    const accounting = candidate.accounting!;
-    const deny = (reason: string): false => {
-      candidate.state = 'denied'; candidate.reason = reason;
+    const block = attemptBlock(snapshot, candidate, this.policyFor(snapshot, candidate), now);
+    if (!block) return true;
+    if (block.terminal) {
+      candidate.state = 'denied'; candidate.reason = block.cause; candidate.denial = block;
       candidate.finishedAt = new Date(now).toISOString(); candidate.revision += 1;
-      return false;
-    };
-    const attempts = Object.values(snapshot.records).filter(record => record.accounting?.attemptNumber !== undefined);
-    const taskAttempts = attempts.filter(record => record.accounting!.taskKey === accounting.taskKey);
-    if (taskAttempts.length) {
-      const previous = taskAttempts.sort((a, b) => a.accounting!.attemptNumber! - b.accounting!.attemptNumber!).at(-1)!;
-      if (candidate.allowance?.previousRequestId !== previous.requestId) return deny('new attempt must reference the latest task attempt');
-      if (previous.state !== 'settled') return deny('previous attempt requires proof-checked reconciliation before replacement');
-      const failure = previous.accounting!.failure;
-      const purpose = candidate.allowance?.purpose ?? 'retry';
-      if (purpose === 'retry' || purpose === 'fallback' || failure?.class === 'rate-limit') {
-        if (!failure || !failure.retryable || !['rate-limit', 'unavailable', 'timeout'].includes(failure.class)) return deny('previous failure does not permit automatic retry');
-        if (!(this.policyFor(snapshot, candidate).managed!.retry?.on ?? ['rate-limit', 'unavailable', 'timeout']).includes(failure.class as 'rate-limit' | 'unavailable' | 'timeout')) return deny(`${failure.class} retries are disabled`);
-      }
-    } else if (candidate.allowance?.previousRequestId) return deny('unknown previous task attempt');
-    for (const key of [accounting.runKey, accounting.taskKey]) {
-      const scope = snapshot.allowances![key]!;
-      if (Date.parse(scope.deadlineAt ?? '') <= now) return deny('cumulative allowance deadline elapsed');
-      const prior = attempts.filter(record => record.accounting!.runKey === key || record.accounting!.taskKey === key);
-      if (scope.limits.maxAttempts !== undefined && prior.reduce((sum, record) => sum + record.accounting!.attemptCount, 0) + accounting.attemptCount > scope.limits.maxAttempts) return deny('cumulative attempt allowance exhausted');
-      for (const [dimension, limit] of [['tokens', scope.limits.maxTokens], ['costUsd', scope.limits.maxCostUsd]] as const) {
-        if (limit === undefined) continue;
-        let used = 0;
-        for (const record of prior) {
-          const value = chargedUsage(record, dimension);
-          if (value === null) return deny(`unknown ${dimension} charge has no finite reservation`);
-          used += value;
-        }
-        const reserved = accounting.reservation[dimension];
-        if (reserved === null || reserved === 0 || used + reserved > limit) return deny(`cumulative ${dimension} reservation exceeds allowance`);
-      }
     }
-    if (taskAttempts.some(record => Date.parse(record.accounting!.notBefore ?? '') > now)) return false;
-    if (this.policyFor(snapshot, candidate).managed!.budgets?.unknownCost === 'deny' && accounting.reservation.costUsd === null) return deny('unknown cost is denied by policy');
-    const quotaScope = candidate.managed?.cli && snapshot.hostBinding
-      ? this.policyFor(snapshot, candidate).managed!.upstream![candidate.managed.cli]!.quotaScope : candidate.managed?.quotaScope;
-    const quotas = quotaScope ? [`quota/${encodeURIComponent(quotaScope)}`]
-      : Object.keys(snapshot.cooldowns ?? {});
-    if (quotas.some(key => Date.parse(snapshot.cooldowns?.[key]?.until ?? '') > now)) return false;
-    return true;
+    return false;
   }
 
   private tryPreempt(snapshot: AdmissionSnapshot, candidate: AdmissionRecord, now: number): void {
@@ -896,26 +871,7 @@ export class SharedHostScheduler {
   }
 
   private hasCapacity(snapshot: AdmissionSnapshot, candidate: AdmissionRecord): boolean {
-    const policy = this.policyFor(snapshot, candidate);
-    const active = Object.values(snapshot.records).filter(record => record.state === 'admitted' || (policy.managed && record.state === 'uncertain'));
-    const slots = policy.managed ? candidate.reservedSlots ?? 1 : 1;
-    if (active.reduce((sum, record) => sum + (policy.managed ? record.reservedSlots ?? 1 : 1), 0) + slots > policy.maxConcurrent) return false;
-    if (policy.managed) {
-      for (const key of candidate.dimensions ?? []) {
-        const cap = policy.managed.dimensionCaps[key];
-        if (cap === undefined) continue;
-        const used = active.filter(record => !record.dimensions || record.dimensions.includes(key))
-          .reduce((sum, record) => sum + (record.reservedSlots ?? 1), 0);
-        if (used + slots > cap) return false;
-      }
-    }
-    if (!belowQuota(active, 'environment', candidate.environment, policy.environmentQuotas, slots, !!policy.managed)) return false;
-    if (!belowQuota(active, 'provider', candidate.provider, policy.providerQuotas, slots, !!policy.managed)) return false;
-    const runtimeQuotas = {
-      host: policy.defaultHostQuota ?? 1,
-      ...policy.runtimeQuotas,
-    };
-    return belowQuota(active, 'runtimeKind', candidate.runtimeKind, runtimeQuotas, slots, !!policy.managed);
+    return !capacityBlock(snapshot, candidate, this.policyFor(snapshot, candidate));
   }
 
   private effectivePriority(record: AdmissionRecord, now: number): number {
@@ -1130,6 +1086,7 @@ export function hostProjectAdmissionPolicy(snapshot: AdmissionSnapshot, projectI
   return {
     ...structuredClone(host.policy),
     leaseTtlMs: Math.min(host.policy.leaseTtlMs, project.policy.leaseTtlMs),
+    starvationThresholdMs: Math.min(host.policy.starvationThresholdMs ?? 120_000, project.policy.starvationThresholdMs ?? 120_000),
     managed: {
       ...structuredClone(managed), authorityRef: host.authorityRef, hostPolicyRevision: host.revision,
       authorityGeneration: generation, maxQueued: Math.min(host.maxQueued, managed.maxQueued),
@@ -1339,26 +1296,11 @@ function isCanonicalManagedDimension(projectId: string, key: string): boolean {
 }
 
 function sameManagedRequest(record: AdmissionRecord, request: AdmissionRequest): boolean {
-  const { state: _state, revision: _revision, reason: _reason, admittedAt: _admittedAt,
+  const { state: _state, revision: _revision, reason: _reason, denial: _denial, admittedAt: _admittedAt,
     leaseExpiresAt: _leaseExpiresAt, finishedAt: _finishedAt, preemptedBy: _preemptedBy,
     projectId: _project, attemptGeneration: _attempt, leaseGeneration: _lease, dimensions: _dimensions, reservedSlots: _slots, accounting: _accounting,
     launchClaimedAt: _launch, execution: _execution, health: _health, lastProgressAt: _progress, finalEvidence: _final, ...original } = record;
   return canonical(original) === canonical(request);
-}
-
-function belowQuota<K extends 'environment' | 'provider' | 'runtimeKind'>(
-  active: AdmissionRecord[],
-  field: K,
-  value: AdmissionRecord[K],
-  quotas: Partial<Record<string, number>> | undefined,
-  slots = 1,
-  managed = false,
-): boolean {
-  const quota = quotas?.[String(value)];
-  if (quota === undefined) return true;
-  if (!managed) return active.filter(record => record[field] === value).length < quota;
-  return active.filter(record => record[field] === value)
-    .reduce((sum, record) => sum + (record.reservedSlots ?? 1), 0) + slots <= quota;
 }
 
 function sameRequest(record: AdmissionRecord, request: AdmissionRequest): boolean {
@@ -1388,20 +1330,6 @@ function intersectBudgets(...budgets: Array<ManagedBudgets | undefined>): Manage
     if (value !== undefined) result[key] = Math.min(result[key] ?? value, value);
   }
   return result;
-}
-
-function chargedUsage(record: AdmissionRecord, dimension: 'tokens' | 'costUsd'): number | null {
-  const accounting = record.accounting!;
-  const usage = accounting.usage;
-  const measured = !usage || usage.quality === 'unknown' ? null : dimension === 'costUsd' ? usage.costUsd
-    : usage.inputTokens === null || usage.outputTokens === null || usage.cacheTokens === null || usage.reasoningTokens === null ? null
-      : usage.inputTokens + usage.outputTokens + usage.cacheTokens + usage.reasoningTokens;
-  const reservation = accounting.reservation[dimension];
-  // Uncertain execution can still accrue spend; estimates never refund a reserve.
-  if (record.state !== 'settled' || usage?.quality !== 'reported') {
-    return reservation === null || measured === null ? reservation : Math.max(reservation, measured);
-  }
-  return measured ?? reservation;
 }
 
 function canRefineUsage(previous: WorkerUsage, next: WorkerUsage): boolean {

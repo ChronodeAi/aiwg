@@ -25,13 +25,23 @@ describe('T-OG registry wiring gate (partial coverage is not release acceptance)
     expect(report.scopes.s1.acceptance).toBe('unverified');
     expect(report.scopes.s5Audit).toEqual({ result: 'unverified', enforcement: 'not-enforced', dependsOn: ['S1', 'S2', 'S3', 'S4'] });
     // T-OG-04/05 carry Tier 0 fixtures (#2954); T-OG-06 now carries
-    // S1 Muse quota/partial fixtures. Negative cases explicitly remove files.
+    // S1 Muse quota/partial and managed scheduler diagnostic fixtures. Negative cases explicitly remove files.
     expect(report.packs['T-OG-04'].status).toBe('partial');
     expect(report.packs['T-OG-04'].testFiles.length).toBeGreaterThan(0);
     expect(report.packs['T-OG-05'].status).toBe('partial');
     expect(report.packs['T-OG-05'].testFiles.length).toBeGreaterThan(0);
+    expect(report.packs['T-OG-13'].status).toBe('partial');
+    expect(report.packs['T-OG-13'].mechanismOwners).toEqual(['B-OG-22']);
+    expect(report.packs['T-OG-13'].testFiles).toEqual([
+      'test/unit/serve/shared-host-scheduler-managed.test.ts',
+      'test/unit/serve/shared-host-scheduler-budgets.test.ts',
+      'test/unit/serve/shared-host-scheduler-host.test.ts',
+    ]);
     expect(report.packs['T-OG-06'].status).toBe('partial');
     expect(report.packs['T-OG-06'].testFiles).toEqual([
+      'test/unit/serve/shared-host-scheduler-managed.test.ts',
+      'test/unit/serve/shared-host-scheduler-budgets.test.ts',
+      'test/unit/serve/shared-host-scheduler-host.test.ts',
       'test/conformance/orchestration-v1/muse-direct.test.ts',
       'test/unit/ralph/muse-direct.test.mjs',
     ]);
