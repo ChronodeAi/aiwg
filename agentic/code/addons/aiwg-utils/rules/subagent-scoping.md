@@ -237,12 +237,12 @@ in conductor context even when receipts are off.
    proves neither startup nor completion. The launcher remains alive to supervise
    this attempt; it does not create a daemon or managed session.
 
-   Use absolute paths. Create the private `runs/` parent first; the launcher creates
-   a missing `attempt-N` directory itself and accepts an existing one only if it is
-   empty, private (0700) and conductor-owned.
+   Use absolute paths. Create the private `runs/` parent first
+   (`mkdir -p -m 700 /absolute/private/conductor/runs`); the launcher creates a missing
+   `attempt-N` directory itself and accepts an existing one only if it is empty, private
+   (0700) and conductor-owned.
 
    ```sh
-   mkdir -p -m 700 /absolute/private/conductor/runs
    aiwg ralph-external --launch-worker --invocation /absolute/private/conductor/plan-1.json \
      --run-dir /absolute/private/conductor/runs/attempt-1 \
      > /absolute/private/conductor/launch-1.json 2> /absolute/private/conductor/launch-1.err &
