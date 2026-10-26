@@ -77,6 +77,10 @@ export function validateUhpConfig(config: unknown): string[] {
     if (!profile.credential || profile.credential.source !== 'env' || !/^[A-Z_][A-Z0-9_]*$/.test(profile.credential.name ?? '')) {
       errors.push(`${where}.credential: must be an env secret reference with an uppercase variable name`);
     }
+    if (profile.credential && typeof profile.credential === 'object'
+      && Object.keys(profile.credential).some(key => key !== 'source' && key !== 'name')) {
+      errors.push(`${where}.credential: must contain only source and name; inline credentials are forbidden`);
+    }
     if (profile.defaultHarness !== undefined && !OBJECT_ID.test(profile.defaultHarness)) errors.push(`${where}.defaultHarness: malformed UHP harness id`);
     if (profile.defaultModel !== undefined && !MODEL_ID.test(profile.defaultModel)) errors.push(`${where}.defaultModel: malformed model id`);
     if (profile.limits) {

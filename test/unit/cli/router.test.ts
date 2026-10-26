@@ -210,6 +210,19 @@ describe('router', () => {
         }
       });
 
+      it.each(['--help', '-h'])('warns about diagnose secrets in public command help: %s', async flag => {
+        const registry = await initRouter();
+        const handler = registry.handlerMap.get('diagnose')!;
+        const execute = vi.spyOn(handler, 'execute');
+        try {
+          await run(['diagnose', flag]);
+          const output = consoleLogCalls.flat().join(' ');
+          expect(output).toContain('Output contains secrets; review it before sharing');
+          expect(output).not.toContain('No detailed help');
+          expect(execute).not.toHaveBeenCalled();
+        } finally { execute.mockRestore(); }
+      });
+
       it('should show help when called with no arguments', async () => {
         await run([]);
 

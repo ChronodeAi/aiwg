@@ -15,6 +15,7 @@
  */
 
 import { existsSync } from 'fs';
+import { credentialReferenceInput } from '../mcp/credentials.mjs';
 import { readFile } from 'fs/promises';
 import { resolve, isAbsolute, join } from 'path';
 import { homedir } from 'os';
@@ -206,8 +207,12 @@ function validateBackendConfig(raw: unknown, source: string): BackendConfig {
       requireString(obj, 'vault', source);
       return obj as unknown as BackendConfig;
     case 'logseq':
-      rejectUnknownKeys(obj, ['type', 'graph', 'apiUrl', 'useApi'], source, 'backend');
+      rejectUnknownKeys(obj, ['type', 'graph', 'apiUrl', 'apiTokenEnv', 'useApi'], source, 'backend');
       requireString(obj, 'graph', source);
+      if (obj['apiTokenEnv'] !== undefined) {
+        requireString(obj, 'apiTokenEnv', source);
+        credentialReferenceInput(obj['apiTokenEnv'] as string, 'Logseq apiTokenEnv');
+      }
       return obj as unknown as BackendConfig;
     case 'notion': {
       rejectUnknownKeys(obj, ['type', 'parent', 'externalIdProperty'], source, 'backend');

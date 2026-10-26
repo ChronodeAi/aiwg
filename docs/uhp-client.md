@@ -40,7 +40,8 @@ before deployment.
 Add UHP configuration to the project artifact-root `aiwg.config` (normally
 `.aiwg/aiwg.config`). Store only a secret locator. Never put a bearer value in
 the config, a command argument, a committed file, a transcript, or a shell
-assignment that will be retained in history.
+assignment that will be retained in history. Inline profile credentials, endpoint
+userinfo, and fields other than `source` / `name` inside `credential` are rejected.
 
 ```json
 {

@@ -590,7 +590,7 @@ aiwg diagnose [--stdout] [--include-secrets]
 **Options:**
 
 - `--stdout` - Emit a single-file JSON manifest to stdout instead of writing a tarball
-- `--include-secrets` - Skip log sanitization (inspect the bundle before sharing)
+- `--include-secrets` - Disable sanitization: output contains secrets and must be reviewed before sharing
 
 **Capabilities:** cli, diagnostics, troubleshooting, support, bundle
 **Platforms:** All
@@ -598,7 +598,7 @@ aiwg diagnose [--stdout] [--include-secrets]
 
 By default writes `aiwg-diagnose-YYYYMMDDHHMMSS.tar.gz` in the current directory
 containing logs, environment info, config snapshot, and recent git activity.
-Secrets in logs are sanitized unless `--include-secrets` is passed.
+Secrets in logs are sanitized unless `--include-secrets` is passed. That explicit opt-in writes a warning to stderr, including with `--stdout`; review the secret-containing output before sharing.
 
 ---
 

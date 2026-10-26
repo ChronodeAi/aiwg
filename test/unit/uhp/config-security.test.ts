@@ -16,6 +16,15 @@ describe('UHP configuration security', () => {
     expect(validateUhpConfig({ enabled: true, profiles: { prod: { ...profile, token: 'secret' } } })).toContain('uhp.profiles.prod.token: inline credentials are forbidden');
   });
 
+  it.each(['value', 'token', 'bearer', 'apiKey', 'authorization'])('rejects inline %s inside a valid credential locator without echoing it', (field) => {
+    const secret = 'synthetic-inline-uhp-secret';
+    const errors = validateUhpConfig({ enabled: true, profiles: { prod: {
+      ...profile, credential: { ...profile.credential, [field]: secret },
+    } } });
+    expect(errors).toContain('uhp.profiles.prod.credential: must contain only source and name; inline credentials are forbidden');
+    expect(errors.join('\n')).not.toContain(secret);
+  });
+
   it.each([
     ['http://example.com', 'requires TLS'], ['https://user:pass@example.com', 'inline credentials'],
     ['file:///etc/passwd', 'must use HTTPS'], ['https://127.0.0.1', 'private network'],
