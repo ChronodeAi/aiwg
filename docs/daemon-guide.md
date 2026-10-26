@@ -649,7 +649,13 @@ aiwg daemon start
 open http://localhost:7474
 ```
 
-Authentication uses a Bearer token. On first start, a token is generated and written to `~/.config/aiwg/daemon-token`. Alternatively, set the `AIWG_WEB_TOKEN` environment variable to supply a token at startup.
+Authentication uses a Bearer token from `interface.web.token` or `AIWG_WEB_TOKEN`.
+With neither configured, authentication remains disabled. Prefer
+`interface.web.token_ref` with `ENV_NAME`, `file:ABSOLUTE_PATH`, or `store:NAME`.
+The existing config loader resolves references separately for the web UI,
+webhook configuration and each messaging adapter at startup. See
+[Supplying sensitive values](cli/sensitive-values.md#daemon-startup-references)
+for fields, precedence, private-file requirements and remaining limitations.
 
 The web UI is localhost-only by default. Remote access requires a TLS-terminating reverse proxy; the daemon does not enforce TLS itself.
 

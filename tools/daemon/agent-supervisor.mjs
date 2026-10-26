@@ -23,6 +23,7 @@ export class AgentSupervisor extends EventEmitter {
     this.shutdownInProgress = false;
     this.agentCommand = options.agentCommand || 'claude';
     this.agentArgs = options.agentArgs || [];
+    this.environment = options.environment;
     this.taskTimeout = options.taskTimeout || 120 * 60 * 1000; // 2 hours default
   }
 
@@ -199,7 +200,7 @@ export class AgentSupervisor extends EventEmitter {
 
     const proc = spawn(this.agentCommand, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: { ...(this.environment ?? process.env) },
     });
 
     // Track start time

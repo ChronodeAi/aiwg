@@ -106,9 +106,66 @@ stored in the registry/provider config. Supply secrets through the env/header
 reference forms instead. Reference support does not protect a secret placed in
 `--args`, imported literal config, or a receiving server's own output.
 
+## Daemon startup references
+
+The existing daemon config loader resolves each active recipient's references at
+startup and reload, without prompting or replacing references in JSON/YAML:
+
+| Recipient | Reference field | Legacy input, when no reference is selected |
+| --- | --- | --- |
+| Web UI | `interface.web.token_ref` | `interface.web.token`, then `AIWG_WEB_TOKEN`; absent means no authentication, as before. |
+| Inbound webhook configuration | `webhook.secret_env` | Existing variable name, default `AIWG_WEBHOOK_SECRET`; an unset legacy variable stays optional. |
+| Telegram | `messaging.telegram.botToken_ref` (alias `token_ref`) | `botToken`, then `token`, then `AIWG_TELEGRAM_TOKEN`. |
+| Discord | `messaging.discord.botToken_ref` (alias `token_ref`) | `botToken`, then `token`, then `AIWG_DISCORD_TOKEN`. |
+| Slack bot | `messaging.slack.botToken_ref` | `botToken`, then `AIWG_SLACK_BOT_TOKEN`. |
+| Slack webhook | `messaging.slack.webhookUrl_ref` | `webhookUrl`, then `AIWG_SLACK_WEBHOOK_URL`. |
+
+Each reference accepts `ENV_NAME`, `file:ABSOLUTE_PATH`, or `store:NAME`, with
+the same private-file checks and named OS store described above. For example:
+
+```yaml
+interface:
+  web:
+    enabled: true
+    token_ref: store:daemon-web
+webhook:
+  enabled: true
+  secret_env: file:/home/operator/.config/aiwg/webhook-secret
+messaging:
+  telegram:
+    botToken_ref: AIWG_TELEGRAM_TOKEN
+    defaultChatId: "123456789"
+  slack:
+    webhookUrl_ref: store:daemon-slack-webhook
+    botToken_ref: store:daemon-slack-bot
+```
+
+Explicit reference fields take precedence over literals and default environment
+variables. Selected missing/invalid file, store or `*_ref` environment input
+fails startup without fallback. Existing `${ENV_NAME}` profile placeholders and
+`file:`/`store:` locators in token/URL fields also resolve as references. Bare
+strings in legacy token/URL fields stay literal, including strings that look
+like variable names. Literal config secrets warn once per config instance,
+without printing values; they remain on disk and are not migrated.
+
+Config credentials enable their messaging adapter; existing environment-based
+discovery remains. Disabled adapters without their legacy enable variable, and
+the housekeeper profile's conversational settings, are not resolved. Slack's
+bot token is optional and resolves only when its webhook adapter is active.
+`daemon-init` copies profile references only and never reads credentials.
+Adapters receive their own secrets; worker environments exclude daemon secret
+variables and resolved values, while retaining provider authentication.
+
+Remaining: this daemon has no inbound webhook listener. The loader resolves
+`webhook.secret_env` into recipient-local startup config, but does not add an
+HTTP receiver or change webhook delivery behavior. Standalone adapter
+constructors retain literal/environment input; reference resolution belongs to
+the daemon loader. Receiving services' own handling and legacy environment
+exposure at the daemon launch boundary remain part of the trust boundary.
+
 ## Child-process boundaries
 
-`NODE_DEBUG=child_process` can print spawn arguments and the complete child environment. A secret-free argv is insufficient if a helper inherits the shell environment. Adopted boundaries use an explicit allowed-variable list: native-store helpers, OAuth browser launch, Codex profile login, MCP nested AIWG calls, Muse version/Grok inspection probes, package and provenance Git probes, and the update notifier. Generic script-runner, refresh, Ralph/provider session children, and daemon workers still need separate recipient-specific review. AIWG deploy and CLI subprocesses retain their full environment. The MCP login key reaches `codex login --with-api-key` through stdin. Its output is bounded and redacted before AIWG displays it. Jev verification uses an in-process HTTP request. Private-file contents and resolved store values never belong in errors or status output.
+`NODE_DEBUG=child_process` can print spawn arguments and the complete child environment. A secret-free argv is insufficient if a helper inherits the shell environment. Adopted boundaries use an explicit allowed-variable list: native-store helpers, OAuth browser launch, Codex profile login, MCP nested AIWG calls, Muse version/Grok inspection probes, package and provenance Git probes, and the update notifier. Generic script-runner, refresh and Ralph/provider session children still need separate recipient-specific review. Daemon workers exclude the daemon credentials described above; their broader provider environment contract is unchanged. AIWG deploy and CLI subprocesses retain their full environment. The MCP login key reaches `codex login --with-api-key` through stdin. Its output is bounded and redacted before AIWG displays it. Jev verification uses an in-process HTTP request. Private-file contents and resolved store values never belong in errors or status output.
 
 A provider or authenticated service may be the intended credential recipient. Its authentication channel is part of that command's contract; the short helper environment must not be confused with permission to forward every shell variable. The inventory's deferred rows do not yet promise the adopted commands' complete source or child-debug protections.
 
@@ -134,7 +191,7 @@ The “existing input” column records the implementation before this slice; th
 | `aiwg cost-report`; `--key <key_ref>`, `--fleet`, `--config` | OpenRouter API key from `AIWG_OPENROUTER_KEY_<KEY_REF>` first, otherwise owner-only regular file in private `~/.config/aiwg/keys/`; fleet YAML contains references only. | `src/cost/fleet-report.ts`, `src/cli/handlers/cost-report.ts` | Adopted: implicit named environment then the same private key file use shared resolution and file checks. Optional `--key-store <name>` for `--key`, or per-fleet-entry `key_store`, selects a named OS store entry. Each ref is isolated; a selected missing source errors without another ref fallback. No terminal prompting or general raw-key argument is added. |
 | `aiwg issue import --live`, `issue export --live` | Tracker bearer from `AIWG_GITEA_TOKEN` / `GITEA_TOKEN`, or `AIWG_GITHUB_TOKEN` / `GITHUB_TOKEN`; passed to in-process HTTP client. | `src/issues/live.ts`, `src/issues/cli.ts` | Adopted: explicit `--token-*` sources (including `--token-interactive`) precede the established provider-specific environment lookups. With no source and no provider variable, requests stay unauthenticated, as before, for public repositories. The in-process HTTP client redacts reflected values and errors. |
 | `aiwg local-executor serve` | Optional `AIWG_EXECUTOR_TOKEN`; otherwise registration obtains and persists an executor bearer token for restarts. | `src/cli/handlers/local-executor.ts`, `tools/ralph-external/executor-shim.mjs` | Adopted: optional `--token-interactive`, `--token-stdin`, `--token-file`, `--token-store`, `--token-env` precede the legacy `AIWG_EXECUTOR_TOKEN` and restart cache. The same cache location persists registration-issued tokens in a 0600 file within a 0700 directory; restart reads use shared private-file checks. Tokens stay out of events and registration errors; no implicit prompt. Windows cache persistence fails closed pending native ACL validation. Host agent execution keeps its existing isolation contract. |
-| Daemon startup, web UI, inbound webhooks and messaging adapters | Web token from config or `AIWG_WEB_TOKEN`; webhook `secret_env` names a shell variable (default `AIWG_WEBHOOK_SECRET`); Telegram/Discord/Slack tokens and Slack webhook URL from adapter config or `AIWG_TELEGRAM_TOKEN`, `AIWG_DISCORD_TOKEN`, `AIWG_SLACK_BOT_TOKEN`, `AIWG_SLACK_WEBHOOK_URL`. | `tools/daemon/daemon-main.mjs`, `tools/daemon/config.mjs`, `tools/messaging/adapters/` | Deferred: daemon config has multiple independent secret recipients; migrate references through its existing loader. `daemon-init` scaffolds references only. |
+| Daemon startup, web UI, inbound webhooks and messaging adapters | Web token from config or `AIWG_WEB_TOKEN`; webhook `secret_env` names a shell variable (default `AIWG_WEBHOOK_SECRET`); Telegram/Discord/Slack tokens and Slack webhook URL from adapter config or `AIWG_TELEGRAM_TOKEN`, `AIWG_DISCORD_TOKEN`, `AIWG_SLACK_BOT_TOKEN`, `AIWG_SLACK_WEBHOOK_URL`. | `tools/daemon/daemon-main.mjs`, `tools/daemon/config.mjs`, `tools/messaging/adapters/` | Adopted: existing loader resolves independent environment/private-file/OS-store references at startup without prompting or persisting bytes; literal config warns once. Web and messaging recipients receive only their own values; daemon worker environments exclude these credentials. `daemon-init` remains references-only. Remaining: legacy literals stay on disk; standalone constructors retain literal/env input; daemon launch retains legacy environment exposure. Inbound webhook config resolves, but no inbound listener exists in this daemon. |
 | `aiwg storage test\|migrate\|import-corpus` and every operation using configured remote storage | Logseq `LOGSEQ_API_TOKEN`; Fortemi MCP registry header/env references or legacy literal headers; PostgreSQL configured `connectionStringEnv` (default `AIWG_POSTGRES_URL`); PostgREST configured `authorizationEnv`. | `src/storage/backends/logseq.ts`, `fortemi.ts`, `postgres.ts`, `postgrest.ts` | Deferred: Fortemi file/store MCP references use shared resolution; other backend-specific credential/configuration lookup still needs adoption without changing storage routing. |
 | `aiwg uhp harnesses\|models\|run` and authenticated UHP API consumers; `--profile` | Named profile's `credential.source: env` and `credential.name` resolved at request time. Inline profile credentials rejected. Discovery is unauthenticated. | `src/uhp/config.ts`, `src/uhp/client.ts` | Deferred: extend the existing credential locator owner. |
 | `aiwg agentcard verify`; `--bearer <token>` | Optional bearer supplied literally on argv, forwarded as an HTTP bearer for the card endpoint. | `src/cli/handlers/agentcard.ts`, `src/a2a/agent-card.ts` | Adopted: standard `--bearer-*` sources; no source keeps unauthenticated access. Compatibility `--bearer` warns that argv exposes the value. HTTP errors and reflected output redact the bearer. |
