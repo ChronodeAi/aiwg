@@ -776,7 +776,15 @@ Subsequent installation qualification also compares the captured raw version
 text with the recorded banner: added leading zeros cannot reuse a normalized
 version pin, including `2026.010.1` versus `2026.10.1`.
 Artifacts are bounded private launcher files with argv placeholders, never
-preview writes. Workspace-relative artifacts remain deferred to S2+ (#2905).
+preview writes. #2905 now permits one workspace-relative artifact under an installed adapter's
+fixed prefix, with an optional resolved invocation ID and required workspace
+prefix/path fields. The frozen invocation fragment and its manifest digest are
+amended together with the Mission compatibility baseline; exact equality and
+strict compilation remain required. Runtime checks
+bind the path to that ID, bound UTF-8 bytes, reject symlink components, create
+exclusively, preserve collisions and clean up on failure, completion or stop.
+Warp delivery is wired, while authenticated envelope capture and smoke remain
+deferred and the profile remains unqualified.
 Antigravity frames are computed by the installed driver and delivered only
 on stdin, must be nonempty, and shell framing binds the trusted host store bytes
 and conductor policy explicitly under `env -i`, without cwd config resolution.

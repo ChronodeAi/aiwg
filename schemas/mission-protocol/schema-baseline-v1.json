@@ -1830,11 +1830,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "invocationId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,51}(?![\\s\\S])" },
         "isolation": {
-          "enum": [
-            "systemd-unit",
-            "native-sandbox"
-          ]
+          "enum": ["systemd-unit", "native-sandbox"]
         },
         "version": {
           "const": 1
@@ -1893,28 +1891,24 @@
           ]
         },
         "artifacts": {
-          "type": "array",
-          "maxItems": 16,
+          "type": "array", "maxItems": 16,
+          "contains": { "type": "object", "required": ["location"], "properties": { "location": { "const": "workspace-relative" } } },
+          "minContains": 0, "maxContains": 1,
           "items": {
-            "type": "object",
-            "additionalProperties": false,
+            "type": "object", "additionalProperties": false,
             "properties": {
-              "name": {
-                "type": "string",
-                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\\s\\S])"
-              },
-              "content": {
-                "type": "string",
-                "maxLength": 1048576
-              },
-              "location": {
-                "const": "run-directory"
-              }
+              "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\\s\\S])" },
+              "content": { "type": "string", "maxLength": 1048576 },
+              "location": { "enum": ["run-directory", "workspace-relative"] },
+              "prefix": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "relativePath": { "type": "string", "minLength": 1, "maxLength": 4096 }
             },
-            "required": [
-              "name",
-              "content"
-            ]
+            "required": ["name", "content"],
+            "allOf": [{
+              "if": { "required": ["location"], "properties": { "location": { "const": "workspace-relative" } } },
+              "then": { "required": ["prefix", "relativePath"] },
+              "else": { "not": { "anyOf": [{ "required": ["prefix"] }, { "required": ["relativePath"] }] } }
+            }]
           }
         },
         "briefPath": {
@@ -2061,6 +2055,10 @@
         "controlEvidence"
       ],
       "allOf": [
+        {
+          "if": { "required": ["artifacts"], "properties": { "artifacts": { "type": "array", "contains": { "type": "object", "required": ["location"], "properties": { "location": { "const": "workspace-relative" } } } } } },
+          "then": { "required": ["invocationId"], "properties": { "transport": { "const": "shell" } } }
+        },
         {
           "if": {
             "properties": {

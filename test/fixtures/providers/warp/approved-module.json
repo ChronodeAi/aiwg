@@ -7,7 +7,7 @@
     "packageVersion": "1",
     "modulePath": "lib/warp-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:86446dfa08e33b0d0d231d6a9edceeea3bfeae1a819357bb1f0bfd9af231bd16",
+    "sha256": "sha256:8407acdf69bbb48b45d12183c7a5605fcedbc194d35518cb7c5d8f9855e6c5f2",
     "adapterIds": ["warp"],
     "platforms": ["linux"]
   }

@@ -332,55 +332,8 @@ function checkDispatchGuard(dispatchGuard) {
   }
 }
 
-/** Execution-time files in the launcher's private directory. Content producers
- * are pure; preview paths remain ${artifact:name}. Workspace locations are a
- * future declaration kind and are refused here. */
-export async function materializeWorkerArtifacts(invocation, runDir) {
-  const artifacts = invocation.artifacts ?? [];
-  if (!Array.isArray(artifacts) || artifacts.length > 16) throw new Error('Worker artifact count exceeds bound');
-  const names = new Set();
-  let total = 0;
-  for (const artifact of artifacts) {
-    if (!artifact || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(artifact.name)
-      || /[^A-Za-z0-9_-]/.test(artifact.name) || names.has(artifact.name) || typeof artifact.content !== 'string'
-      || artifact.location !== undefined && artifact.location !== 'run-directory') throw new Error('Invalid worker artifact declaration');
-    names.add(artifact.name);
-    const size = Buffer.byteLength(artifact.content);
-    total += size;
-    if (size > 1048576 || total > 4194304) throw new Error('Worker artifact bytes exceed bound');
-  }
-  const paths = new Map(artifacts.map(artifact => [artifact.name, join(runDir, `artifact-${artifact.name}`)]));
-  const argv = invocation.argv.map(token => {
-    if (!token.includes('${artifact:')) return token;
-    const match = /^\$\{artifact:([A-Za-z0-9][A-Za-z0-9_-]{0,63})\}$/.exec(token);
-    if (!match || !paths.has(match[1])) throw new Error('Undeclared worker artifact placeholder');
-    return paths.get(match[1]);
-  });
-  const { inspectWorkerPath } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
-  await inspectWorkerPath(runDir, 'directory');
-  const stat = await lstat(runDir);
-  if (stat.uid !== process.getuid() || (stat.mode & 0o077)) throw new Error('Worker artifact directory must be private and owned');
-  const created = [];
-  const cleanup = async () => {
-    const results = await Promise.allSettled(created.map(filename =>
-      withWorkerPath(filename, target => unlink(target)).catch(error => {
-        if (error.code !== 'ENOENT') throw error;
-      })));
-    const failed = results.find(result => result.status === 'rejected');
-    if (failed) throw failed.reason;
-  };
-  try {
-    for (const artifact of artifacts) {
-      const filename = paths.get(artifact.name);
-      const handle = await withWorkerPath(filename, target => open(target,
-        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
-      created.push(filename);
-      try { await handle.writeFile(artifact.content); await handle.sync(); }
-      finally { await handle.close(); }
-    }
-    return { argv, cleanup };
-  } catch (error) { await cleanup(); throw error; }
-}
+import { materializeWorkerArtifacts } from './lib/worker-artifacts.mjs';
+export { materializeWorkerArtifacts } from './lib/worker-artifacts.mjs';
 
 const _workerRecoverySubscriptions = new WeakMap();
 const _workerRecoveryReporters = new WeakMap();
@@ -578,7 +531,7 @@ async function launchOneWorker(owner, options) {
   // themselves; pre-spawn refusals above never reach this point. Global
   // dispatch AND per-CLI enablement are checked inside `admitDirectWorker`
   // before any breaker construction (#2915 final review, finding 1).
-  const invocationId = randomUUID();
+  const invocationId = invocation.invocationId ?? randomUUID();
   // #2915 review 4 (finding 8): computed ONCE, before admission, so the
   // SAME digest both gates the allowance reservation here and is published
   // into invocation.json below — never recomputed from a possibly-stale
@@ -1623,7 +1576,8 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
   if (runStat.uid !== process.getuid()) throw new Error('Worker run directory must be conductor-owned');
   await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     try { await handle.chmod(0o700); } finally { await handle.close(); } });
-  const invocationId = options.managedAdmission ? options.managedInvocationId : randomUUID();
+  const invocationId = invocation.invocationId ?? (options.managedAdmission ? options.managedInvocationId : randomUUID());
+  if (options.managedAdmission && invocationId !== options.managedInvocationId) throw new Error('Worker artifact invocation id differs from managed admission');
   const reservation = await withWorkerPath(join(runDir, '.launch-owner'), target => open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
   try { await reservation.writeFile(invocationId); await reservation.sync(); } finally { await reservation.close(); }
   const supervisor = sampleWorkerIdentity(process.pid);

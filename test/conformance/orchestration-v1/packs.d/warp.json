@@ -3,6 +3,7 @@
     "test/conformance/orchestration-v1/warp-direct.test.ts"
   ],
   "T-OG-15": [
+    "test/unit/ralph-external/worker-artifacts.test.ts",
     "test/conformance/orchestration-v1/warp-direct.test.ts"
   ],
   "T-OG-20": [
@@ -12,6 +13,7 @@
     "test/conformance/orchestration-v1/warp-direct.test.ts"
   ],
   "T-OG-23": [
+    "test/unit/ralph-external/worker-artifacts.test.ts",
     "test/conformance/orchestration-v1/warp-direct.test.ts"
   ]
 }

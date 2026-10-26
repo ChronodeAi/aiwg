@@ -42,7 +42,7 @@ The old fixed name is retained here solely as probe evidence. It is never
 emitted by the adapter. No new real probes or model calls were made for
 these fixes.
 
-## Brief transport is NOT available today
+## Brief delivery is wired; vendor discovery remains unverified
 
 `--prompt` puts text on argv and is never emitted. The intended transport
 uses a generated skill file. `buildWarpBriefSkillName(invocationId)` maps
@@ -58,10 +58,21 @@ invocation.
 `.agents/skills/aiwg-brief-<invocationId>/SKILL.md`. Both it and
 `buildWorkerArgs` stay pure: resolution writes no files.
 
-Generating the skill file at execution time is **pending #3002**. The
-execution owner must supply the invocation ID, **refuse to overwrite an
-existing path**, clean up the generated file afterward, and **never commit
-it**. The shared execution primitive is unavailable today.
+`buildWorkerArtifacts` now declares that file for the shared session launcher.
+Resolution supplies one invocation ID, which binds both the `--skill` token
+and the workspace path. The installed loader rechecks the declaration against
+the approved adapter; resolution remains pure. At execution time the launcher
+allows one workspace-relative file under the fixed adapter-owned prefix,
+rejects absolute, traversal, non-normalized and mismatched invocation paths,
+and opens every path component without following symlinks. Creation uses
+`O_EXCL`: collisions are reported and the existing file is preserved.
+Content is limited to 1 MiB of UTF-8 bytes. The launcher removes its file on
+completion, stop or launch failure and removes only empty directories it
+created. Generated skills must never be committed.
+
+This extends #3021's run-directory artifacts. Delivery is covered by offline
+launcher and installed-adapter fixtures, including reading the generated skill;
+it does not qualify the real CLI's skill lookup or output grammar.
 
 Help lists `.agents/skills/`, `.warp/skills/`, `.claude/skills/`, and
 `.codex/skills/` as search directories. The skill search root relative to
@@ -106,9 +117,9 @@ text against the shared `workerClaims` schema. A single well-formed JSON
 object alone is insufficient. The actual envelope fields must first be
 established by an authenticated run.
 
-## Manual smoke run (blocked pending authentication and #3002)
+## Manual smoke run (blocked pending authentication)
 
-Once authentication and execution-time generation are available, this
+Once authenticated access is available, this
 manual evidence probe uses a private directory, an invocation-specific
 skill, exclusive creation and cleanup. It assumes the intended search root
 only to investigate that still-unverified behavior:
@@ -137,3 +148,9 @@ A non-zero exit is a failure. Exit zero and valid JSON are evidence to
 inspect, not an adapter success: record the raw envelope, actual answer
 field, skill lookup and execution location before enabling extraction.
 This probe never qualifies the registry profile by itself.
+
+Remaining provider work is an operator capture of authenticated success and
+error envelopes, followed by evidence-backed terminal-answer extraction and a
+manual smoke result with the CLI version. Confirm skill lookup relative to cwd,
+missing-skill behavior and execution location during that run. Until then the
+registry profile stays unqualified and final extraction stays unsupported.

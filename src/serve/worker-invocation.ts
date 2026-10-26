@@ -1,8 +1,9 @@
 /** One nonlaunching typed renderer shared by models resolve and Ralph. */
 import path from 'node:path';
-import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
-import { lstat, realpath, open } from 'node:fs/promises';
+import { inspectWorkerPath as inspectPath, readBrief } from './worker-invocation-paths.js';
+export { inspectWorkerPath } from './worker-invocation-paths.js';
+import { validateWorkerArtifacts } from './worker-artifacts.mjs';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { resolveWorkerPlan, type WorkerPlanSnapshot, type WorkerResolutionPlan } from '../models/resolver.js';
 import { workerConfigDigest, validateWorkerHealthConfig } from '../config/aiwg-config.js';
@@ -120,6 +121,7 @@ type CompleteInvocation = WorkerResolvedInvocation & Required<Pick<WorkerResolve
 export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocation,
   qualification: WorkerInvocationQualification): Promise<WorkerResolvedInvocation> {
   const result = structuredClone(invocation) as CompleteInvocation;
+  validateWorkerArtifacts(result);
   // shellCommand is derived syntax, never authority supplied by a brief.
   if (result.transport === 'shell') result.shellCommand = '';
   // Validate the established invocation shape first. Health is optional and
@@ -271,7 +273,7 @@ export interface WorkerInvocationDriver {
   prepareWorkerInvocation?(invocation: WorkerResolvedInvocation, qualification: WorkerInvocationQualification): Promise<WorkerResolvedInvocation>;
   /** Must use the installed qualified driver, not legacy session defaults or template eval. */
   buildInvocation(input: {
-    selected: WorkerResolvedInvocation['selected']; permissions: WorkerExecution;
+    invocationId?: string; selected: WorkerResolvedInvocation['selected']; permissions: WorkerExecution;
     cwd: string; briefPath: string; brief: string; finalPath: string;
     limits: WorkerResolvedInvocation['limits'];
     health: WorkerEffectiveHealth; role?: string;
@@ -380,49 +382,6 @@ export function parseWorkerCommandArgs(args: string[]): WorkerCommandRequest {
 
 const bytesDigest = (bytes: Buffer | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
-export async function inspectWorkerPath(filename: string, kind: 'file' | 'directory' | 'output'): Promise<boolean> {
-  if (!path.isAbsolute(filename) || filename.includes('\0')) throw new Error('Absolute NUL-free paths are required');
-  if (filename.split('/').includes('..')) throw new Error('Worker path traversal is not allowed');
-  const normalized = path.resolve(filename);
-  let current = normalized;
-  while (true) {
-    try {
-      const canonical = await realpath(current);
-      if (canonical !== current) throw new Error(`Symlink path is not allowed: ${filename}`);
-      if (current !== normalized) return false;
-      const stat = await lstat(normalized);
-      if (kind === 'directory' ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1) {
-        throw new Error(`Expected an unaliased ${kind}: ${filename}`);
-      }
-      return true;
-    } catch (error: any) {
-      if (error.code !== 'ENOENT') throw error;
-      const parent = path.dirname(current);
-      if (parent === current) throw error;
-      current = parent;
-    }
-  }
-}
-const inspectPath = inspectWorkerPath;
-
-async function readBrief(filename: string): Promise<Buffer | null> {
-  if (!await inspectPath(filename, 'file')) return null;
-  const handle = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 262144) throw new Error('Brief must be a bounded regular file (256 KiB)');
-    const buffer = Buffer.alloc(262145);
-    let length = 0;
-    while (length < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
-      if (!bytesRead) break;
-      length += bytesRead;
-    }
-    if (length > 262144) throw new Error('Brief exceeds 256 KiB');
-    return buffer.subarray(0, length);
-  } finally { await handle.close(); }
-}
-
 export type WorkerCommandPlan = WorkerResolutionPlan & { invocation?: WorkerResolvedInvocation; request?: WorkerCommandRequest };
 
 /** Structured root-check failure; only these explicit path details are public. */
@@ -446,7 +405,7 @@ export async function revalidateWorkerInvocationPlan(saved: WorkerCommandPlan, s
   }
   assertValidWorkerPayload('workerResolvedInvocation', saved.invocation);
   const current = await resolveWorkerInvocation(snapshot, saved.request, drivers, now,
-    { digests: saved.digests, briefDigest: saved.invocation.briefDigest ?? null });
+    { digests: saved.digests, briefDigest: saved.invocation.briefDigest ?? null, invocationId: saved.invocation.invocationId });
   // Expiry is calculated from the resolution clock. All execution bindings,
   // controls, thresholds and paths must remain byte-for-byte digest equivalent.
   if (!current.invocation || current.status !== 'eligible'
@@ -461,7 +420,7 @@ export async function revalidateWorkerInvocationPlan(saved: WorkerCommandPlan, s
  * This function does no probing, spawning, registration, admission or writes. */
 export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, request: WorkerCommandRequest,
   drivers: Record<string, WorkerInvocationDriver>, now = new Date().toISOString(),
-  expected?: { digests: Record<string, string>; briefDigest: string | null }): Promise<WorkerCommandPlan> {
+  expected?: { digests: Record<string, string>; briefDigest: string | null; invocationId?: string }): Promise<WorkerCommandPlan> {
   snapshot = structuredClone(snapshot);
   request = structuredClone(request);
   let pointer = '/request/brief';
@@ -586,7 +545,8 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       transportSeconds: adapter.invocation.kind === 'http' ? adapter.invocation.timeoutSeconds : undefined,
       stepEnforcement: controls.includes('stepCap') ? profile.controls.stepCap.support as 'native' | 'external' : 'unavailable' as const };
     let effectiveHealth = resolveWorkerEffectiveHealth(healthConfig, healthInput);
-    const transport = await buildWorkerInvocationTransport(driver, { selected: structuredClone(selected), permissions: structuredClone(tuple.permissions),
+    const invocationId = expected?.invocationId ?? randomUUID();
+    const transport = await buildWorkerInvocationTransport(driver, { invocationId, selected: structuredClone(selected), permissions: structuredClone(tuple.permissions),
       cwd: request.workdir, briefPath: request.brief, brief: bytes?.toString('utf8') ?? '', finalPath, limits: structuredClone(limits),
       health: structuredClone(effectiveHealth), role: request.role });
     pointer = '/invocation/buildInvocation';
@@ -598,7 +558,8 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       isolation: tuple.permissions.launchMode ?? 'systemd-unit',
       policyDigest, catalogDigest: plan.digests.catalogDigest, profileDigest: plan.digests.profileDigest,
       expiresAt, cwd: request.workdir, briefPath: request.brief, stdoutPath, stderrPath, finalPath,
-      ...(transport.artifacts ? { artifacts: transport.artifacts } : {}),
+      ...(transport.artifacts ? { artifacts: transport.artifacts,
+        ...(transport.artifacts.some(artifact => artifact.location === 'workspace-relative') ? { invocationId } : {}) } : {}),
       argv: transport.argv, stdin: transport.stdin, envNames: transport.envNames, mcp: transport.mcp,
       ...(tuple.transport === 'shell' ? { shellCommand: '' } : {}),
       readiness: bytes !== null && workspaceExists && outputParentsExist ? 'launchable' : 'preparatory', briefDigest,
