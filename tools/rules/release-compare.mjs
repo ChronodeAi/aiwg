@@ -92,11 +92,13 @@ function dimensionDeltas(A, B) {
     A[dimension] === null || B[dimension] === null ? null : B[dimension] - A[dimension]]));
 }
 
-export function comparisonPlan(scenarios, { provider = 'claude', model, judgeModel, n = 5, seed = 'release-compare', judgeAlpha = 0.05, judgeScoreMargin = 1.0 } = {}) {
+export function comparisonPlan(scenarios, { provider = 'claude', model, judgeModel, n = 5, seed = 'release-compare', judgeAlpha = 0.05, judgeScoreMargin = 1.0,
+  maxUsd = null, maxCalls = null, prices = null } = {}) {
   if (!PROVIDERS.includes(provider)) throw new Error('Provider must be claude, codex or hermes');
   if (typeof model !== 'string' || !model.trim() || typeof judgeModel !== 'string' || !judgeModel.trim()
     || model.trim().toLowerCase() === judgeModel.trim().toLowerCase()) throw new Error('Distinct explicit subject and judge model IDs are required');
   if (!Number.isSafeInteger(n) || n < 1) throw new Error('n must be a positive integer');
+  validateBudget({ max_usd: maxUsd, max_calls: maxCalls, prices }, [model, judgeModel]);
   const thresholds = judgeThresholds({ judge_alpha: judgeAlpha, judge_score_margin: judgeScoreMargin });
   const random = seededRandom(seed), pairs = [];
   for (const scenario of scenarios.filter(item => item.providers.includes(provider))) for (let repetition = 1; repetition <= n; repetition++) {
@@ -106,11 +108,59 @@ export function comparisonPlan(scenarios, { provider = 'claude', model, judgeMod
   // Shuffle complete pairs as well, so scenario order does not track release order.
   for (let i = pairs.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [pairs[i], pairs[j]] = [pairs[j], pairs[i]]; }
   if (!pairs.length) throw new Error('No scenarios selected');
-  return { version: 1, provider, model: model.trim(), judge_model: judgeModel.trim(), n, seed, ...thresholds, corpus_digest: digest(scenarios),
+  return { version: 1, provider, model: model.trim(), judge_model: judgeModel.trim(), n, seed, ...thresholds,
+    max_usd: maxUsd, max_calls: maxCalls, prices, corpus_digest: digest(scenarios),
     call_counts: { subject: pairs.length * 2, judge: pairs.length, total: pairs.length * 3 },
     token_estimate_inputs: { estimator: 'UTF-8 prompt bytes / 4; planning approximation only',
       subject_prompt_tokens: pairs.reduce((sum, pair) => sum + Buffer.byteLength(subjectPrompt(pair.scenario), 'utf8') / 4 * 2, 0),
       loaded_context_tokens: null, tool_result_tokens: null, subject_output_tokens: null, judge_input_tokens: null, judge_output_tokens: null }, pairs };
+}
+
+// Prices are operator-reviewed inputs, retained with the plan rather than fetched at runtime.
+function validateBudget(plan, models) {
+  if (plan.max_usd != null && (!Number.isFinite(plan.max_usd) || plan.max_usd <= 0)) throw new Error('maxUsd must be positive and finite');
+  if (plan.max_calls != null && (!Number.isSafeInteger(plan.max_calls) || plan.max_calls < 1)) throw new Error('maxCalls must be a positive integer');
+  if (plan.prices != null && (typeof plan.prices !== 'object' || Array.isArray(plan.prices))) throw new Error('Price file must be a model-keyed object');
+  if (plan.prices != null) for (const price of Object.values(plan.prices)) {
+    if (!price || typeof price.source !== 'string' || !price.source.trim()) throw new Error('Each price needs a source');
+    if (price.subscription === true) continue;
+    for (const key of ['input_usd_per_mtok', 'output_usd_per_mtok', 'max_input_tokens', 'max_output_tokens']) {
+      if (!Number.isFinite(price[key]) || price[key] < 0) throw new Error(`Invalid price field: ${key}`);
+    }
+    for (const key of ['cache_read_usd_per_mtok', 'cache_write_usd_per_mtok']) {
+      if (price[key] !== undefined && (!Number.isFinite(price[key]) || price[key] < 0)) throw new Error(`Invalid price field: ${key}`);
+    }
+    if (!(price.max_input_tokens > 0) || !(price.max_output_tokens > 0)) throw new Error('Price token allowances must be positive');
+  }
+  if (plan.max_usd != null && models.some(model => !Object.hasOwn(plan.prices ?? {}, model.trim()))) throw new Error('--max-usd requires --price-file entries for subject and judge (including subscriptions)');
+}
+
+function usageCost(usage, price) {
+  const valid = value => Number.isFinite(value) && value >= 0;
+  const complete = valid(usage?.input_tokens) && valid(usage?.output_tokens);
+  // Claude input_tokens excludes cached tokens. Missing cache prices use the
+  // most expensive input rate; missing usage reserves the entire call allowance.
+  const readRate = price.cache_read_usd_per_mtok ?? price.input_usd_per_mtok;
+  const writeRate = price.cache_write_usd_per_mtok ?? price.input_usd_per_mtok;
+  const maxRate = Math.max(price.input_usd_per_mtok, readRate, writeRate);
+  const input = valid(usage?.input_tokens) ? usage.input_tokens : price.max_input_tokens;
+  const output = valid(usage?.output_tokens) ? usage.output_tokens : price.max_output_tokens;
+  const cached = ['cache_read_input_tokens', 'cache_creation_input_tokens'].map(key => valid(usage?.[key]) ? usage[key] : 0);
+  return { usd: (input * (complete ? price.input_usd_per_mtok : maxRate) + output * price.output_usd_per_mtok
+    + cached[0] * readRate + cached[1] * writeRate) / 1e6, complete };
+}
+
+function callCharge(result, model, prices) {
+  const price = prices?.[model];
+  if (price?.subscription === true) return { usd: 0, source: 'subscription' };
+  // Router's Claude stream reports Anthropic list cost, not OpenRouter spend.
+  const reported = result?.cost_usd ?? result?.total_cost_usd;
+  if (result?.transport !== 'openrouter' && !model.startsWith('anthropic/') && Number.isFinite(reported) && reported >= 0) return { usd: reported, source: 'adapter' };
+  if (price) {
+    const cost = usageCost(result?.usage, price);
+    return { usd: cost.usd, source: cost.complete ? 'usage-price-file' : 'reserved-price-file' };
+  }
+  return { usd: null, source: 'unknown' };
 }
 
 export function isolatedEnv(root, packageRoot, base = process.env) {
@@ -303,10 +353,37 @@ export function executeComparison(plan, fixtures, { subject, judge, checkpoint }
   if (typeof plan.model !== 'string' || !plan.model.trim() || typeof plan.judge_model !== 'string' || !plan.judge_model.trim()
     || plan.model.trim().toLowerCase() === plan.judge_model.trim().toLowerCase()) throw new Error('Distinct explicit subject and judge model IDs are required');
   if (typeof subject !== 'function' || typeof judge !== 'function') throw new Error('Subject and judge adapters are required');
+  validateBudget(plan, [plan.model, plan.judge_model]);
   for (const side of ['A', 'B']) if (!fixtures[side]?.root || !fixtures[side]?.packageRoot) throw new Error(`Missing fixture ${side}`);
   const fixtureIdentities = Object.fromEntries(['A', 'B'].map(side => [side, fixtures[side].content_identity ?? fixtureIdentity(fixtures[side])]));
   const results = [];
+  const accounting = { max_usd: plan.max_usd ?? null, max_calls: plan.max_calls ?? null,
+    stop_threshold_usd: plan.max_usd == null ? null : plan.max_usd * 0.8,
+    spend_usd: 0, calls_started: 0, unknown_cost_calls: 0, stop_reason: null, calls: [] };
+  const report = () => comparisonReport(plan, results, fixtureIdentities, structuredClone(accounting));
+  const reserve = model => Math.max(callCharge(null, model, plan.prices).usd ?? 0,
+    ...accounting.calls.filter(call => call.model === model).map(call => call.usd ?? 0));
+  const recordCall = (role, model, invoke) => {
+    if (accounting.stop_reason || (accounting.stop_threshold_usd !== null && accounting.spend_usd + reserve(model) > accounting.stop_threshold_usd)) {
+      accounting.stop_reason ??= 'max_usd_80_percent';
+      throw new Error('Spend cap stopped the next adapter call');
+    }
+    accounting.calls_started++;
+    let raw;
+    try { raw = invoke(); return raw; }
+    finally {
+      const charge = callCharge(raw, model, plan.prices);
+      accounting.calls.push({ role, model, ...charge });
+      if (charge.usd === null) accounting.unknown_cost_calls++;
+      else accounting.spend_usd += charge.usd;
+      if (accounting.stop_threshold_usd !== null && accounting.spend_usd > accounting.stop_threshold_usd) accounting.stop_reason = 'max_usd_80_percent';
+    }
+  };
   for (const pair of plan.pairs) {
+    const predictedPairUsd = 2 * reserve(plan.model) + reserve(plan.judge_model);
+    if (accounting.max_calls !== null && accounting.calls_started + 3 > accounting.max_calls) accounting.stop_reason = 'max_calls';
+    else if (accounting.stop_threshold_usd !== null && accounting.spend_usd + predictedPairUsd > accounting.stop_threshold_usd) accounting.stop_reason = 'max_usd_80_percent';
+    if (accounting.stop_reason) { if (checkpoint) checkpoint(report()); break; }
     const runs = {};
     for (const side of pair.order) {
       const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-release-sample-'));
@@ -325,8 +402,8 @@ export function executeComparison(plan, fixtures, { subject, judge, checkpoint }
         const bin = path.join(temp, 'bin'); fs.mkdirSync(bin, { recursive: true });
         const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
         fs.writeFileSync(path.join(bin, 'aiwg'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(path.join(packageRoot, 'bin/aiwg.mjs'))} "$@"\n`, { mode: 0o700 });
-        const result = validateSubject(subject({ protocol: 'aiwg-release-subject/v1', provider: plan.provider,
-          model: plan.model, prompt: subjectPrompt(pair.scenario), settings: { read_only: true }, fixture_identity: fixtureIdentities[side] }, { cwd: project, env }), plan.model, plan.provider);
+        const result = validateSubject(recordCall(side, plan.model, () => subject({ protocol: 'aiwg-release-subject/v1', provider: plan.provider,
+          model: plan.model, prompt: subjectPrompt(pair.scenario), settings: { read_only: true }, fixture_identity: fixtureIdentities[side] }, { cwd: project, env })), plan.model, plan.provider);
         if (result.runtime_receipt && result.runtime_receipt.fixture_identity_sha256 !== digest(fixtureIdentities[side])) throw new Error('Runtime observation fixture identity mismatch');
         const assertions = evaluateAssertions(pair.scenario.assertions, result.trace);
         runs[side] = { ...result, tool_stats: toolStats(result.trace), assertions, passed: assertions.length > 0 && assertions.every(assertion => assertion.pass), error: null };
@@ -339,8 +416,8 @@ export function executeComparison(plan, fixtures, { subject, judge, checkpoint }
       const judgeWorkspace = path.join(judgeRoot, 'workspace'), judgePackage = path.join(judgeRoot, 'package');
       fs.mkdirSync(judgeWorkspace); fs.mkdirSync(judgePackage);
       if (runs.A.error || runs.B.error) throw new Error('Subject execution failed; pair cannot be judged');
-      judgeRaw = judge(judgeRequest(plan, pair, runs, fixtures), { cwd: judgeWorkspace,
-        env: isolatedEnv(judgeRoot, judgePackage) });
+      judgeRaw = recordCall('judge', plan.judge_model, () => judge(judgeRequest(plan, pair, runs, fixtures), { cwd: judgeWorkspace,
+        env: isolatedEnv(judgeRoot, judgePackage) }));
       const blind = validateJudgment(judgeRaw, plan.judge_model);
       judgment = { ...blind, winner: blind.winner === 'tie' ? 'tie' : pair.judge_order[blind.winner === 'left' ? 0 : 1],
         scores: { [pair.judge_order[0]]: blind.scores.left, [pair.judge_order[1]]: blind.scores.right } };
@@ -349,11 +426,11 @@ export function executeComparison(plan, fixtures, { subject, judge, checkpoint }
     results.push({ id: pair.scenario.id, domain: pair.scenario.domain, repetition: pair.repetition,
       order: pair.order, judge_order: pair.judge_order, suspected_cause: pair.scenario.suspected_cause ?? 'Rule body compacted, binding absent, or discovery/fetch obligation lost; inspect tool evidence.',
       runs, judgment, judge_error: judgeError, judge_raw: judgeError ? judgeRaw : null });
-    if (checkpoint) checkpoint(comparisonReport(plan, results, fixtureIdentities));
+    if (checkpoint) checkpoint(report());
   }
-  return comparisonReport(plan, results, fixtureIdentities);
+  return report();
 }
-export function comparisonReport(plan, results, fixtureIdentities = null) {
+export function comparisonReport(plan, results, fixtureIdentities = null, accounting = null) {
   const thresholds = judgeThresholds(plan);
   const scenarios = [];
   for (const id of [...new Set(plan.pairs.map(pair => pair.scenario.id))]) {
@@ -407,12 +484,16 @@ export function comparisonReport(plan, results, fixtureIdentities = null) {
   scenarios.sort((a, b) => rank[a.status] - rank[b.status] || a.id.localeCompare(b.id));
   const summary = Object.fromEntries(Object.keys(rank).map(status => [status, scenarios.filter(scenario => scenario.status === status).length]));
   return { version: 1, fixtures: fixtureIdentities, provider: plan.provider, model: plan.model, judge_model: plan.judge_model, corpus_digest: plan.corpus_digest,
-    seed: plan.seed, n: plan.n, ...thresholds, call_counts: plan.call_counts, token_estimate_inputs: plan.token_estimate_inputs, planned_pairs: plan.pairs.length, completed_pairs: results.length, summary,
-    pass: results.length === plan.pairs.length && summary.regressed === 0 && summary.invalid === 0, scenarios };
+    seed: plan.seed, n: plan.n, ...thresholds, prices: plan.prices ?? null, accounting,
+    max_usd: accounting?.max_usd ?? plan.max_usd ?? null, max_calls: accounting?.max_calls ?? plan.max_calls ?? null,
+    spend_usd: accounting?.spend_usd ?? null, stop_reason: accounting?.stop_reason ?? null,
+    call_counts: plan.call_counts, token_estimate_inputs: plan.token_estimate_inputs, planned_pairs: plan.pairs.length, completed_pairs: results.length, summary,
+    pass: !accounting?.stop_reason && results.length === plan.pairs.length && summary.regressed === 0 && summary.invalid === 0, scenarios };
 }
 export function markdownReport(report) {
   return `# Release comparison\n\nProvider: ${report.provider}; subject: ${report.model}; judge: ${report.judge_model}.\n\n`
     + `Gate: ${report.pass ? 'PASS' : 'HOLD'}; ${report.completed_pairs}/${report.planned_pairs} pairs. ${JSON.stringify(report.summary)}\n\n`
+    + `USD cap: ${report.max_usd ?? 'none'}; stop threshold (80%): ${report.accounting?.stop_threshold_usd ?? 'none'}; spend USD: ${report.spend_usd ?? 'unknown'}; call cap: ${report.max_calls ?? 'none'}; calls started: ${report.accounting?.calls_started ?? 'unknown'}; unknown costs: ${report.accounting?.unknown_cost_calls ?? 'unknown'}; stop reason: ${report.stop_reason ?? 'none'}.\n\n`
     + `Judge alpha: ${report.judge_alpha}; dimension margin: ${report.judge_score_margin} (0–4 scale; strict thresholds).\n\n`
     + report.scenarios.map(scenario => `## ${scenario.status}: ${scenario.id}\n\nA pass rate ${scenario.A.pass_rate}; B ${scenario.B.pass_rate}.\n\nJudge dimensions A: ${JSON.stringify(scenario.A.judge_scores)}; B: ${JSON.stringify(scenario.B.judge_scores)}.\n\nSuspected cause (hypothesis): ${scenario.suspected_cause}\n\n`
       + `Judge wins A/B/tie: ${scenario.judge_tally.A}/${scenario.judge_tally.B}/${scenario.judge_tally.tie}; sign-test p (A/B): ${scenario.sign_test_p.A}/${scenario.sign_test_p.B}.\n\n`
@@ -438,18 +519,21 @@ function main() {
   const { values } = parseArgs({ options: { a: { type: 'string' }, b: { type: 'string' }, provider: { type: 'string', default: 'claude' },
     model: { type: 'string' }, 'judge-model': { type: 'string' }, n: { type: 'string', default: '5' }, seed: { type: 'string', default: 'release-compare' },
     'judge-alpha': { type: 'string', default: '0.05' }, 'judge-score-margin': { type: 'string', default: '1.0' },
+    'max-usd': { type: 'string' }, 'max-calls': { type: 'string' }, 'price-file': { type: 'string' },
     scenarios: { type: 'string' }, scenario: { type: 'string', multiple: true }, bundle: { type: 'string', multiple: true },
     'fixture-project': { type: 'string' }, 'npm-cache': { type: 'string' },
     'subject-runner': { type: 'string' }, 'judge-runner': { type: 'string' }, output: { type: 'string' },
     'dry-run': { type: 'boolean' }, 'allow-network': { type: 'boolean' }, help: { type: 'boolean' } } });
-  if (values.help) { console.log('Usage: node tools/rules/release-compare.mjs --a fixture:DIR|aiwg@VERSION|tarball:FILE --b fixture:DIR|tree:DIR|tarball:FILE --provider claude|codex|hermes --model ID --judge-model DISTINCT_ID [--n 5 --seed SEED --judge-alpha 0.05 --judge-score-margin 1.0 --dry-run] [--npm-cache DIR --fixture-project DIR --bundle NAME] [--subject-runner ADAPTER.mjs --judge-runner ADAPTER.mjs --output ARTIFACT_STORE/FILE.json]'); return; }
+  if (values.help) { console.log('Usage: node tools/rules/release-compare.mjs --a fixture:DIR|aiwg@VERSION|tarball:FILE --b fixture:DIR|tree:DIR|tarball:FILE --provider claude|codex|hermes --model ID --judge-model DISTINCT_ID [--n 5 --scenario ID --seed SEED --judge-alpha 0.05 --judge-score-margin 1.0 --dry-run] [--max-usd USD --max-calls N --price-file FILE.json] [--npm-cache DIR --fixture-project DIR --bundle NAME] [--subject-runner ADAPTER.mjs --judge-runner ADAPTER.mjs --output ARTIFACT_STORE/FILE.json]'); return; }
   let scenarios = loadScenarios(values.scenarios);
   if (values.scenario) {
     for (const id of values.scenario) if (!scenarios.some(scenario => scenario.id === id)) throw new Error(`Unknown scenario: ${id}`);
     scenarios = scenarios.filter(scenario => values.scenario.includes(scenario.id));
   }
   const plan = comparisonPlan(scenarios, { provider: values.provider, model: values.model, judgeModel: values['judge-model'], n: Number(values.n), seed: values.seed,
-    judgeAlpha: Number(values['judge-alpha']), judgeScoreMargin: Number(values['judge-score-margin']) });
+    judgeAlpha: Number(values['judge-alpha']), judgeScoreMargin: Number(values['judge-score-margin']),
+    maxUsd: values['max-usd'] === undefined ? null : Number(values['max-usd']), maxCalls: values['max-calls'] === undefined ? null : Number(values['max-calls']),
+    prices: values['price-file'] === undefined ? null : JSON.parse(fs.readFileSync(values['price-file'], 'utf8')) });
   if (values['dry-run']) { console.log(JSON.stringify(plan, null, 2)); return; }
   if (!values.a || !values.b || !values.output || !values['subject-runner'] || !values['judge-runner']) throw new Error('Real runs require --a, --b, --output, --subject-runner and --judge-runner');
   const output = resolveComparisonOutput(values.output);
@@ -466,7 +550,7 @@ function main() {
       npmCache: values['npm-cache'], allowNetwork: values['allow-network'] })]));
     const save = report => { fs.writeFileSync(output, JSON.stringify({ ...report, fixture_inputs: { A: values.a, B: values.b }, bundles: values.bundle ?? DEFAULT_BUNDLES, adapters: { subject: values['subject-runner'], judge: values['judge-runner'] } }, null, 2) + '\n'); fs.writeFileSync(output.replace(/\.json$/, '') + '.md', markdownReport(report)); };
     const report = executeComparison(plan, fixtures, { subject: runnerAdapter(values['subject-runner']), judge: runnerAdapter(values['judge-runner']), checkpoint: save });
-    console.log(JSON.stringify({ output, summary: report.summary, pass: report.pass })); if (!report.pass) process.exitCode = 1;
+    console.log(JSON.stringify({ output, summary: report.summary, pass: report.pass, max_usd: report.max_usd, spend_usd: report.spend_usd, stop_reason: report.stop_reason })); if (!report.pass) process.exitCode = 1;
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
