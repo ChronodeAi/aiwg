@@ -3,6 +3,9 @@ namespace: aiwg
 name: schedule
 platforms: [all]
 description: Route recurring work to a provider-native scheduler or an explicitly external host scheduler
+triggers:
+  - "scheduled recurring task"
+  - "schedule recurring work"
 commandHint:
   argumentHint: "create|list|delete [provider-native options]"
   allowedTools: CronCreate, CronDelete, CronList
@@ -37,7 +40,7 @@ There are three distinct states:
 - When `CronCreate`/`CronList`/`CronDelete` are available, use them.
 - Otherwise, explain that scheduling is external and ask which host mechanism
   the operator controls.
-- Do not create a cron entry or CI workflow without explicit authorization.
+- Do not create a cron entry, systemd timer, or CI workflow without explicit authorization.
 - Keep prompts and reviewed configuration in files; do not place credentials,
   session material, or sensitive prompt text in process arguments.
 

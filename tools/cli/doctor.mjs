@@ -2315,15 +2315,15 @@ export async function runDoctor() {
     if (!config?.parallelism?.worker_dispatch) {
       check('Worker Health', 'info', 'group dispatch is disabled; legacy worker status remains unchanged');
     } else {
+      const { diagnoseWorkerHealthReadiness, workerHealthConfigurationFindings, formatWorkerHealthReadinessFinding } = await importImpl(import.meta.url, 'models/worker-health-readiness.js');
       const healthErrors = validateParallelismConfig(config.parallelism);
       if (healthErrors.length) {
-        for (const message of healthErrors.slice(0, 16)) check('Worker Health Configuration', 'error',
-          `${message}; review parallelism.health and group references before launch`);
+        for (const finding of workerHealthConfigurationFindings(config.parallelism, healthErrors).slice(0, 16)) check('Worker Health Configuration', finding.status,
+          formatWorkerHealthReadinessFinding(finding));
       } else {
         const { ConfigLoader } = await importImpl(import.meta.url, 'models/config-loader.js');
         const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
         const { resolveDynamicModelCatalog } = await importImpl(import.meta.url, 'models/model-discovery.js');
-        const { diagnoseWorkerHealthReadiness } = await importImpl(import.meta.url, 'models/worker-health-readiness.js');
         const loader = new ConfigLoader(process.cwd());
         const models = await loader.load(config.parallelism);
         const catalog = await resolveDynamicModelCatalog({ aiwgRoot: AIWG_ROOT,
@@ -2344,12 +2344,12 @@ export async function runDoctor() {
           now: new Date().toISOString(),
           context: { estimator: 'doctor-offline-context-v1', briefTokens: 0,
             inputTokens: 0, toolOutputAllowance: 0, reservedOutput: 0 },
-        });
+        }, { catalogFile: catalog.discovery?.source === 'static' ? path.join(AIWG_ROOT, 'agentic/code/providers/model-catalog.v1.json') : undefined });
         if (report.contextDigest) check('Worker Health Context', 'info',
           `offline context digest=${report.contextDigest}; actual task context must be resolved before launch`);
         for (const finding of report.findings.slice(0, 32)) {
           check(`Worker Health${finding.role ? ` (${finding.role})` : finding.roles?.length ? ` (${finding.roles.join(', ')})` : ''}`, finding.status,
-            `${finding.code}: ${finding.message} [next: ${finding.nextAction}]`);
+            formatWorkerHealthReadinessFinding(finding));
         }
         if (report.findings.length > 32) check('Worker Health', 'warn',
           `${report.findings.length - 32} additional findings; narrow role/group scope with aiwg models resolve`);

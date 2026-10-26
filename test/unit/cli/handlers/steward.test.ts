@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { readFileSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
@@ -176,6 +176,20 @@ function validProviderManifest(overrides: Record<string, unknown> = {}): Record<
 // ── Tests ─────────────────────────────────────────────────────
 
 describe('stewardHandler metadata', () => {
+
+  it('T-OG-12 keeps onboarding and scheduling procedures discoverable and authorized', () => {
+    const readSkill = (name: string) => readFileSync(new URL(
+      `../../../../agentic/code/addons/aiwg-utils/skills/${name}/SKILL.md`, import.meta.url), 'utf8');
+    const steward = readSkill('steward');
+    const schedule = readSkill('schedule');
+    expect(steward.split('---')[1]).toContain('"set up worker onboarding"');
+    expect(steward).toContain('aiwg doctor');
+    expect(schedule.split('---')[1]).toContain('"scheduled recurring task"');
+    expect(schedule).toContain('When `CronCreate`/`CronList`/`CronDelete` are available, use them.');
+    expect(schedule).toContain('Do not create a cron entry, systemd timer, or CI workflow without explicit authorization.');
+    expect(schedule).toContain('Treat external scheduler configuration as an operator-owned deployment.');
+  });
+
   it('has correct id and category', () => {
     expect(stewardHandler.id).toBe('steward');
     expect(stewardHandler.category).toBe('maintenance');

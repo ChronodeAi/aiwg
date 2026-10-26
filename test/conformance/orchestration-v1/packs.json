@@ -45,7 +45,8 @@
       ],
       "status": "partial",
       "testFiles": [
-        "test/conformance/orchestration-v1/discovery-freshness.test.ts"
+        "test/conformance/orchestration-v1/discovery-freshness.test.ts",
+        "test/unit/cli/handlers/models.test.ts"
       ],
       "remaining": "Owning checkpoint mechanism assertions remain; existing files prove only the scoped contracts or fixture mechanics."
     },
@@ -224,7 +225,9 @@
       "testFiles": [
         "test/unit/models/worker-health-readiness.test.ts",
         "test/unit/models/worker-direct-readiness.test.ts",
-        "test/unit/models/worker-version-probe.test.ts"
+        "test/unit/models/worker-version-probe.test.ts",
+        "test/unit/cli/handlers/models.test.ts",
+        "test/unit/cli/handlers/steward.test.ts"
       ],
       "remaining": " #2913 adds S1 synthetic worker status/health readiness coverage; #2894 adds S1 direct onboarding readiness (install/version via fake CLIs with opt-in probes, resolver-reported dispatch eligibility, unqualified until smoke run #3005); managed ownership, shared breakers and remediation remain S2+."
     },

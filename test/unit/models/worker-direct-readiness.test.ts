@@ -1,70 +1,36 @@
-import { chmod, lstat, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildDirectWorkerDoctorSection,
   diagnoseDirectWorkerReadiness,
   probeDirectWorkerVersion,
 } from '../../../src/models/worker-direct-readiness.js';
-import { loadProviderModelCapabilities } from '../../../src/models/provider-policy.js';
+import { codexCli, fakeCli, installDirectWorkerFixtures, parallelismWith, registry, scratchDir } from './worker-direct-readiness.fixtures.js';
+import { directReadinessHazards } from './worker-direct-readiness.hazards.js';
 import type { ParallelismConfig } from '../../../src/config/aiwg-config.js';
 import { unqualifiedWorkerRolesFixture, workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 
-// T-OG-12 / #2894 S1: synthetic offline inputs plus fake local CLIs created
-// under os.tmpdir() with a temp HOME. No paid calls, no credentials, no real
-// provider installs. Probes run only when a prober is passed (opt-in); the
-// default config-only path must start no process. Temp dirs are removed in
-// afterEach.
-const roots: string[] = [];
-
-beforeEach(async () => {
-  const home = await mkdtemp(join(tmpdir(), 'aiwg-direct-home-'));
-  roots.push(home);
-  vi.stubEnv('HOME', home);
-});
-
-afterEach(async () => {
-  vi.unstubAllEnvs();
-  for (const root of roots.splice(0)) {
-    await rm(root, { recursive: true, force: true });
-    await expect(lstat(root)).rejects.toMatchObject({ code: 'ENOENT' });
-  }
-});
-
-async function scratchDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix));
-  roots.push(dir);
-  return dir;
-}
-
-// Fake CLI: records argv/cwd/environment into the probe cwd, then prints banner.
-async function fakeCli(banner: string): Promise<string> {
-  const dir = await scratchDir('aiwg-direct-cli-');
-  const filename = join(dir, 'fake-codex');
-  await writeFile(filename,
-    '#!/usr/bin/env node\n'
-    + 'const fs = require(\'node:fs\');\n'
-    + 'const path = require(\'node:path\');\n'
-    + 'const record = { argv: process.argv.slice(2), cwd: process.cwd(), env: { ...process.env } };\n'
-    + 'fs.writeFileSync(path.join(process.cwd(), `probe-record-${process.pid}.json`), JSON.stringify(record));\n'
-    + `process.stdout.write(${JSON.stringify(`${banner}\n`)});\n`,
-    { mode: 0o755 });
-  await chmod(filename, 0o755);
-  return filename;
-}
-
-function parallelismWith(clis: NonNullable<ParallelismConfig['clis']>, groups?: ParallelismConfig['groups']): ParallelismConfig {
-  return { worker_dispatch: true, clis, ...(groups ? { groups } : {}) };
-}
-
-const codexCli = (executable: string, extra?: Record<string, unknown>) => ({
-  adapter: 'providers:codex', accountScope: 'local-account', quotaScope: 'synthetic-scope', executable, ...extra,
-});
-
-const registry = () => structuredClone(loadProviderModelCapabilities());
+installDirectWorkerFixtures();
 
 describe('T-OG-12 direct worker onboarding/readiness (#2894)', () => {
+  it.each(directReadinessHazards)('T-OG-12-direct-hazard $name carries the exact path, members and remedy', async hazard => {
+    const input = hazard.input();
+    const configFile = join(process.env.HOME!, 'project/.aiwg/aiwg.config');
+    const report = await diagnoseDirectWorkerReadiness({ ...input, configFile });
+    const finding = report.findings.find(row => row.kind === hazard.kind && row.code === hazard.code);
+    expect(finding).toBeDefined();
+    expect({ configFile: finding!.configFile, configKey: finding!.configKey,
+      members: finding!.members, nextAction: finding!.nextAction }).toEqual({
+      configFile, configKey: hazard.configKey, members: hazard.members, nextAction: hazard.nextAction,
+    });
+    const section = await buildDirectWorkerDoctorSection({ ...input, configFile, probeWorkers: !!input.probe });
+    const line = section.lines.find(row => row.message.startsWith(`${hazard.code}:`));
+    expect(line?.message).toContain(configFile);
+    expect(line?.message).toContain(hazard.configKey);
+    for (const member of hazard.members) expect(line?.message).toContain(member);
+    expect(line?.message).toContain(`[next: ${hazard.nextAction}]`);
+  });
+
   it('T-OG-12-direct-01 reports installed and in range without claiming qualification', async () => {
     const probeCwd = await scratchDir('aiwg-direct-cwd-');
     const report = await diagnoseDirectWorkerReadiness({
