@@ -602,10 +602,33 @@ export function verifyComparisonReport({ file, report, plan, candidate, baseline
   if (!same(retainedReport, report)) throw new Error('Comparison input does not match the exact retained report file');
   const reportKeys = ['version', 'fixtures', 'provider', 'model', 'judge_model', 'corpus_digest', 'seed', 'n', 'judge_alpha', 'judge_score_margin', 'call_counts',
     'token_estimate_inputs', 'planned_pairs', 'completed_pairs', 'summary', 'pass', 'scenarios', 'fixture_inputs', 'bundles', 'adapters'];
-  if (!exactKeys(report, reportKeys) || report.version !== 1 || report.provider !== plan?.provider || report.model !== plan.model
+  const budgetKeys = ['prices', 'accounting', 'max_usd', 'max_calls', 'spend_usd', 'stop_reason'];
+  const hasBudget = exactKeys(report, [...reportKeys, ...budgetKeys]);
+  if ((!hasBudget && !exactKeys(report, reportKeys)) || report.version !== 1 || report.provider !== plan?.provider || report.model !== plan.model
     || report.judge_model !== plan.judge_model || report.model.trim().toLowerCase() === report.judge_model.trim().toLowerCase()) {
     throw new Error('Comparison report format or provider/model identity mismatch');
   }
+  if (hasBudget) {
+    if (!same(report.prices, plan.prices ?? null) || report.max_usd !== (plan.max_usd ?? null)
+      || report.max_calls !== (plan.max_calls ?? null) || report.stop_reason !== null) throw new Error('Comparison budget differs from the trusted plan or stopped early');
+    const account = report.accounting;
+    if (account !== null) {
+      const finite = value => Number.isFinite(value) && value >= 0;
+      if (!exactKeys(account, ['max_usd', 'max_calls', 'stop_threshold_usd', 'spend_usd', 'calls_started', 'unknown_cost_calls', 'stop_reason', 'calls'])
+        || account.max_usd !== report.max_usd || account.max_calls !== report.max_calls || account.stop_reason !== null
+        || account.stop_threshold_usd !== (report.max_usd === null ? null : report.max_usd * 0.8)
+        || !finite(account.spend_usd) || report.spend_usd !== account.spend_usd || !Array.isArray(account.calls)
+        || account.calls_started !== plan.call_counts.total || account.calls.length !== account.calls_started
+        || account.calls.some(call => !exactKeys(call, ['role', 'model', 'usd', 'source'])
+          || !['A', 'B', 'judge'].includes(call.role) || call.model !== (call.role === 'judge' ? plan.judge_model : plan.model)
+          || !['subscription', 'adapter', 'usage-price-file', 'reserved-price-file', 'unknown'].includes(call.source)
+          || (call.source === 'unknown' ? call.usd !== null : !finite(call.usd)))
+        || account.unknown_cost_calls !== account.calls.filter(call => call.usd === null).length
+        || account.spend_usd !== account.calls.reduce((sum, call) => sum + (call.usd ?? 0), 0)
+        || (account.max_usd !== null && (account.spend_usd > account.stop_threshold_usd || account.unknown_cost_calls > 0))
+        || (account.max_calls !== null && account.calls_started > account.max_calls)) throw new Error('Invalid comparison spend accounting');
+    } else if (report.max_usd !== null || report.max_calls !== null || report.spend_usd !== null) throw new Error('Comparison budget accounting is missing');
+  } else if (plan.max_usd != null || plan.max_calls != null) throw new Error('Comparison budget accounting is missing');
   if (report.n !== plan.n || report.seed !== plan.seed || report.corpus_digest !== plan.corpus_digest
     || report.planned_pairs !== plan.pairs.length || report.completed_pairs !== plan.pairs.length
     || !same(report.call_counts, plan.call_counts) || report.summary?.invalid !== 0) throw new Error('Comparison coverage is incomplete or invalid');

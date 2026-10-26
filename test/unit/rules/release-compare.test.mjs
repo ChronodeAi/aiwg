@@ -137,6 +137,176 @@ describe('noise-tolerant release decisions (#3438)', () => {
   });
 });
 
+describe('OpenRouter transport and comparison spend cap (#3298)', () => {
+  const model = 'anthropic/claude-haiku-5.5';
+  const request = { protocol: 'aiwg-release-subject/v1', provider: 'claude', model, prompt: 'Return JSON.' };
+  const routerEnv = { AIWG_RELEASE_CLAUDE_TRANSPORT: 'openrouter', OPENROUTER_API_KEY: 'synthetic-router-secret',
+    ANTHROPIC_API_KEY: 'unrelated-secret', ANTHROPIC_AUTH_TOKEN: 'old-secret', OPENAI_API_KEY: 'other-secret',
+    AWS_SECRET_ACCESS_KEY: 'aws-secret', NODE_OPTIONS: '--require=untrusted', HOME: '/synthetic-home', PATH: '/usr/bin' };
+  const stream = (observed = model, text = '{"action":"follow"}', extra = {}) => [
+    { type: 'assistant', message: { model: observed, content: [{ type: 'text', text }] } },
+    { type: 'result', subtype: 'success', result: text, usage: { input_tokens: 10, output_tokens: 10 }, total_cost_usd: 999, ...extra },
+  ].map(event => JSON.stringify(event)).join('\n');
+  const price = { source: 'https://example.invalid/synthetic-prices', input_usd_per_mtok: 50000, output_usd_per_mtok: 50000,
+    max_input_tokens: 10, max_output_tokens: 10 };
+  const prices = { subject: price, judge: price };
+  const paidSubject = () => subjectResult('follow', { cost_usd: 1 });
+  const paidJudge = () => ({ ...judgment(), cost_usd: 1 });
+
+  it.each([model, 'claude-haiku-5.5'])('uses only child-env auth and accepts observed router model %s', observed => {
+    const result = claudeAdapter(request, { env: routerEnv, spawn(command, argv, _profile, options) {
+      expect(command).toBe('claude'); expect(argv).toContain(model);
+      expect(JSON.stringify(argv)).not.toContain(routerEnv.OPENROUTER_API_KEY);
+      expect(options.env).toEqual({ HOME: '/synthetic-home', PATH: '/usr/bin', ANTHROPIC_BASE_URL: 'https://openrouter.ai/api',
+        ANTHROPIC_AUTH_TOKEN: routerEnv.OPENROUTER_API_KEY, ANTHROPIC_API_KEY: '' });
+      return { status: 0, stdout: stream(observed, `{"action":"follow","reason":"${routerEnv.OPENROUTER_API_KEY}"}`) };
+    } });
+    expect(result).toMatchObject({ model, transport: 'openrouter', cost_usd: 999 });
+    expect(JSON.stringify(result)).not.toContain(routerEnv.OPENROUTER_API_KEY);
+    expect(routerEnv.ANTHROPIC_AUTH_TOKEN).toBe('old-secret');
+    const report = executeComparison(plan(undefined, { model, n: 1 }), fixtures(), { subject: () => result, judge: paidJudge });
+    expect(JSON.stringify(report)).not.toContain(routerEnv.OPENROUTER_API_KEY);
+    expect(markdownReport(report)).not.toContain(routerEnv.OPENROUTER_API_KEY);
+  });
+  it.each(['anthropic/claude-sonnet-5.5', 'claude-sonnet-5.5', 'claude-haiku-5.5-latest'])('rejects mismatched router telemetry %s', observed => {
+    expect(() => claudeAdapter(request, { env: routerEnv, spawn: () => ({ status: 0, stdout: stream(observed) }) })).toThrow(/Observed/);
+  });
+  it.each([{}, { AIWG_RELEASE_CLAUDE_TRANSPORT: 'anthropic' }])('rejects router pins on the default transport %j', env => {
+    expect(() => claudeAdapter(request, { env, spawn: () => { throw new Error('must not spawn'); } })).toThrow(/snapshot/);
+  });
+  it.each(['claude-haiku-5.5', 'anthropic/claude-haiku-latest', 'claude-test-20261001'])('rejects non-router pin %s on router transport', pin => {
+    expect(() => claudeAdapter({ ...request, model: pin }, { env: routerEnv })).toThrow(/snapshot/);
+  });
+  it('admits the sonnet router pin and normalizes a judge model in JSON', () => {
+    const judgeModel = 'anthropic/claude-sonnet-5.5';
+    const result = claudeAdapter({ protocol: 'aiwg-release-judge/v1', model: judgeModel }, { env: routerEnv, spawn(_command, args) {
+      expect(args.slice(args.indexOf('--tools'))).toEqual(['--tools', '']);
+      return { status: 0, stdout: stream('claude-sonnet-5.5', JSON.stringify({ ...judgment(), model: 'claude-sonnet-5.5' })) };
+    } });
+    expect(validateJudgment(result, judgeModel).model).toBe(judgeModel);
+  });
+  it('preserves default env and dated snapshot matching and forwards reported cost', () => {
+    const dated = 'claude-test-20261001', env = { ANTHROPIC_API_KEY: 'synthetic-anthropic-key' };
+    const result = claudeAdapter({ ...request, model: dated }, { env, spawn(_command, _argv, _profile, options) {
+      expect(options.env).toBe(env);
+      return { status: 0, stdout: stream(dated, '{"action":"follow"}', { total_cost_usd: 0.25 }) };
+    } });
+    expect(result).toMatchObject({ model: dated, cost_usd: 0.25 }); expect(result.transport).toBeUndefined();
+    expect(() => claudeAdapter({ ...request, model: dated }, { env, spawn: () => ({ status: 0, stdout: stream(`anthropic/${dated}`) }) })).toThrow(/Observed/);
+  });
+  it('fails before spawn with absent credentials, unknown transport, or a secret in argv', () => {
+    expect(() => claudeAdapter(request, { env: { AIWG_RELEASE_CLAUDE_TRANSPORT: 'openrouter' } })).toThrow(/OPENROUTER_API_KEY/);
+    expect(() => claudeAdapter(request, { env: { AIWG_RELEASE_CLAUDE_TRANSPORT: 'unknown' } })).toThrow(/transport/);
+    expect(() => claudeAdapter({ ...request, prompt: routerEnv.OPENROUTER_API_KEY }, { env: routerEnv })).toThrow(/Credential-bearing/);
+  });
+  it.each(['throw', 'error'])('redacts fake transport failure secrets (%s)', mode => {
+    try {
+      claudeAdapter(request, { env: routerEnv, spawn: () => {
+        if (mode === 'throw') throw new Error(routerEnv.OPENROUTER_API_KEY);
+        return { error: new Error(routerEnv.OPENROUTER_API_KEY) };
+      } });
+      throw new Error('expected failure');
+    } catch (error) { expect(error.message).toContain('<redacted>'); expect(error.message).not.toContain(routerEnv.OPENROUTER_API_KEY); }
+  });
+  it('stops before the next pair would exceed 80% and checkpoints the incomplete HOLD', () => {
+    const checkpoints = [];
+    const report = executeComparison(plan(undefined, { n: 4, maxUsd: 10, prices }), fixtures(), {
+      subject: paidSubject, judge: paidJudge, checkpoint: value => checkpoints.push(value),
+    });
+    expect(report).toMatchObject({ max_usd: 10, spend_usd: 6, stop_reason: 'max_usd_80_percent', completed_pairs: 2, planned_pairs: 4, pass: false });
+    expect(report.accounting).toMatchObject({ stop_threshold_usd: 8, calls_started: 6, unknown_cost_calls: 0 });
+    expect(checkpoints).toHaveLength(3); expect(checkpoints.at(-1)).toEqual(report);
+    expect(checkpoints[0].accounting.calls).toHaveLength(3);
+    expect(markdownReport(report)).toContain('USD cap: 10; stop threshold (80%): 8; spend USD: 6');
+    expect(markdownReport(report)).toContain('stop reason: max_usd_80_percent');
+  });
+  it('writes a zero-call checkpoint when even the first pair cannot fit', () => {
+    const checkpoints = [];
+    const report = executeComparison(plan(undefined, { maxUsd: 1, prices }), fixtures(), {
+      subject: () => { throw new Error('must not call'); }, judge: paidJudge, checkpoint: value => checkpoints.push(value),
+    });
+    expect(report).toMatchObject({ spend_usd: 0, completed_pairs: 0, pass: false, stop_reason: 'max_usd_80_percent' });
+    expect(report.accounting.calls_started).toBe(0); expect(checkpoints).toEqual([report]);
+  });
+  it('revalidates caps on edited plans before invoking adapters', () => {
+    const p = plan(); p.max_usd = 10;
+    expect(() => executeComparison(p, fixtures(), { subject: paidSubject, judge: paidJudge })).toThrow(/price-file/);
+  });
+  it('allows a pair exactly at the 80% threshold', () => {
+    const report = executeComparison(plan(undefined, { n: 1, maxUsd: 3.75, prices }), fixtures(), { subject: paidSubject, judge: paidJudge });
+    expect(report).toMatchObject({ spend_usd: 3, pass: true, stop_reason: null });
+  });
+  it('uses usage prices instead of Anthropic list cost for router calls, including cache tokens', () => {
+    const routerPrices = { [model]: { ...price, cache_read_usd_per_mtok: 10000, cache_write_usd_per_mtok: 60000 }, judge: price };
+    const report = executeComparison(plan(undefined, { n: 1, model, maxUsd: 10, prices: routerPrices }), fixtures(), {
+      subject: () => subjectResult('follow', { model, transport: 'openrouter', cost_usd: 999,
+        usage: { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 } }), judge: paidJudge,
+    });
+    expect(report.spend_usd).toBeCloseTo(1.94);
+    expect(report.accounting.calls.filter(call => call.role !== 'judge').every(call => call.source === 'usage-price-file')).toBe(true);
+  });
+  it('reserves missing usage and cost, including failed and malformed calls', () => {
+    const report = executeComparison(plan(undefined, { n: 4, maxUsd: 10, prices }), fixtures(), {
+      subject: () => subjectResult('follow', { usage: null }), judge: () => judgment(),
+    });
+    expect(report).toMatchObject({ spend_usd: 6, completed_pairs: 2, stop_reason: 'max_usd_80_percent' });
+    expect(report.accounting.calls.every(call => call.source === 'reserved-price-file')).toBe(true);
+    const failed = executeComparison(plan(undefined, { n: 1, maxUsd: 10, prices }), fixtures(), {
+      subject: () => { throw new Error('transport failed'); }, judge: paidJudge,
+    });
+    expect(failed.spend_usd).toBe(2); expect(failed.accounting.calls_started).toBe(2); expect(failed.pass).toBe(false);
+    const malformed = executeComparison(plan(undefined, { n: 1, maxUsd: 10, prices }), fixtures(), {
+      subject: () => subjectResult('follow', { model: 'wrong', cost_usd: 1.5 }), judge: paidJudge,
+    });
+    expect(malformed.spend_usd).toBe(3);
+  });
+  it('checks spend again inside a pair after an unexpectedly expensive call', () => {
+    const report = executeComparison(plan(undefined, { n: 1, maxUsd: 10, prices }), fixtures(), {
+      subject: () => subjectResult('follow', { cost_usd: 7.5 }), judge: paidJudge,
+    });
+    expect(report.spend_usd).toBe(7.5); expect(report.accounting.calls_started).toBe(1);
+    expect(report).toMatchObject({ stop_reason: 'max_usd_80_percent', pass: false });
+  });
+  it.each([1, 2, 4, 5])('respects call cap %s before starting a pair', maxCalls => {
+    const report = executeComparison(plan(undefined, { maxCalls }), fixtures(), { subject: paidSubject, judge: paidJudge });
+    expect(report.accounting.calls_started).toBe(maxCalls < 3 ? 0 : 3);
+    expect(report).toMatchObject({ max_calls: maxCalls, stop_reason: 'max_calls', pass: false });
+  });
+  it('keeps subscription calls at zero and retains uncapped behavior', () => {
+    const subscriptionPrices = { subject: { subscription: true, source: 'ChatGPT subscription' }, judge: { subscription: true, source: 'ChatGPT subscription' } };
+    const free = executeComparison(plan(undefined, { prices: subscriptionPrices, maxUsd: 0.01 }), fixtures(), { subject: paidSubject, judge: paidJudge });
+    expect(free.pass).toBe(true); expect(free.spend_usd).toBe(0);
+    const uncapped = executeComparison(plan(), fixtures(), { subject: () => subjectResult(), judge: () => judgment() });
+    expect(uncapped.pass).toBe(true); expect(uncapped.stop_reason).toBeNull();
+    expect(uncapped.accounting.unknown_cost_calls).toBe(6);
+  });
+  it.each([0, -1, NaN, Infinity])('rejects invalid USD cap %s', maxUsd => expect(() => plan(undefined, { maxUsd, prices })).toThrow(/maxUsd/));
+  it.each([0, -1, 1.5, NaN, Infinity])('rejects invalid call cap %s', maxCalls => expect(() => plan(undefined, { maxCalls })).toThrow(/maxCalls/));
+  it('requires sourced finite prices and allowances before capped calls', () => {
+    expect(() => plan(undefined, { maxUsd: 10 })).toThrow(/price-file/);
+    for (const change of [{ source: '' }, { input_usd_per_mtok: -1 }, { output_usd_per_mtok: Infinity }, { max_input_tokens: 0 }, { cache_read_usd_per_mtok: -1 }]) {
+      expect(() => plan(undefined, { maxUsd: 10, prices: { subject: { ...price, ...change }, judge: price } })).toThrow();
+    }
+  });
+  it('exits 1 and saves JSON/Markdown when CLI cap stops a stub pilot', () => {
+    const root = temp(), prepared = fixtures(), file = path.join(root, 'scenarios.yaml'), output = path.join(root, 'report.json'), priceFile = path.join(root, 'prices.json');
+    fs.writeFileSync(file, JSON.stringify({ version: 1, probe_catalogs: [], workflows: [scenario()] }));
+    fs.writeFileSync(priceFile, JSON.stringify(prices));
+    let failure;
+    try {
+      execFileSync(process.execPath, [path.resolve('tools/rules/release-compare.mjs'), '--a', `fixture:${prepared.A.root}`, '--b', `fixture:${prepared.B.root}`,
+        '--scenarios', file, '--model', 'subject', '--judge-model', 'judge', '--n', '1', '--max-usd', '1', '--max-calls', '3', '--price-file', priceFile,
+        '--subject-runner', path.resolve('test/fixtures/release-compare/subject.mjs'), '--judge-runner', path.resolve('test/fixtures/release-compare/judge.mjs'), '--output', output],
+      { encoding: 'utf8', timeout: 20000, env: { ...process.env, AIWG_ARTIFACTS_PATH: root } });
+    } catch (error) { failure = error; }
+    expect(failure?.status).toBe(1);
+    const report = JSON.parse(fs.readFileSync(output, 'utf8'));
+    expect(report).toMatchObject({ max_usd: 1, max_calls: 3, spend_usd: 0, completed_pairs: 0, stop_reason: 'max_usd_80_percent', pass: false });
+    expect(report.prices).toEqual(prices);
+    expect(fs.readFileSync(output.replace('.json', '.md'), 'utf8')).toContain('Gate: HOLD');
+  });
+});
+
 describe('release comparison extends rule probes (#3298)', () => {
   it('requires a skill body rather than a metadata card in discover-show-follow', () => {
     const workflow = loadScenarios().find(item => item.id === 'discovery-discover-show-follow');
@@ -435,14 +605,16 @@ fs.writeFileSync(path.join(process.env.HOME, 'deployment.json'), JSON.stringify(
   });
   it.each(['claude', 'codex', 'hermes'])('executes the real CLI with offline adapters for %s and saves both report formats', provider => {
     const root = temp(), prepared = fixtures(), file = path.join(root, 'scenarios.yaml'), output = path.join(root, 'report.json');
-    fs.writeFileSync(file, JSON.stringify({ version: 1, probe_catalogs: [], workflows: [scenario()] }));
+    fs.writeFileSync(file, JSON.stringify({ version: 1, probe_catalogs: [], workflows: [scenario(), scenario('second'), scenario('excluded')] }));
     const stdout = execFileSync(process.execPath, [path.resolve('tools/rules/release-compare.mjs'), '--a', `fixture:${prepared.A.root}`,
       '--b', `fixture:${prepared.B.root}`, '--scenarios', file, '--provider', provider, '--model', 'subject', '--judge-model', 'judge', '--n', '1',
+      '--scenario', 'test', '--scenario', 'second',
       '--subject-runner', path.resolve('test/fixtures/release-compare/subject.mjs'), '--judge-runner', path.resolve('test/fixtures/release-compare/judge.mjs'),
       '--output', output], { encoding: 'utf8', timeout: 20000, env: { ...process.env, AIWG_ARTIFACTS_PATH: root } });
     expect(JSON.parse(stdout).pass).toBe(true);
     const report = JSON.parse(fs.readFileSync(output, 'utf8'));
-    expect(report.provider).toBe(provider); expect(report.completed_pairs).toBe(1);
+    expect(report.provider).toBe(provider); expect(report.completed_pairs).toBe(2);
+    expect(report.scenarios.map(item => item.id).sort()).toEqual(['second', 'test']);
     expect(fs.readFileSync(path.join(root, 'report.md'), 'utf8')).toContain('Gate: PASS');
   });
   it('keeps JSON and Markdown in the artifact store, including symlink destinations', () => {
@@ -470,15 +642,15 @@ fs.writeFileSync(path.join(process.env.HOME, 'deployment.json'), JSON.stringify(
         { type: 'result', subtype: 'success', result: '{"action":"follow"}', usage: { input_tokens: 1, output_tokens: 2 } },
       ].map(event => JSON.stringify(event)).join('\n') };
     };
-    expect(claudeAdapter(request, { spawn }).model).toBe(model);
+    expect(claudeAdapter(request, { spawn, env: {} }).model).toBe(model);
     expect(args).toContain('Bash(aiwg show:*)'); expect(args).toContain('--no-session-persistence');
-    expect(() => claudeAdapter({ ...request, model: 'haiku' }, { spawn })).toThrow(/snapshot/);
-    expect(() => claudeAdapter(request, { spawn: () => ({ status: 0, stdout: '{"type":"result","subtype":"success","result":"{}"}' }) })).toThrow(/Observed/);
+    expect(() => claudeAdapter({ ...request, model: 'haiku' }, { spawn, env: {} })).toThrow(/snapshot/);
+    expect(() => claudeAdapter(request, { env: {}, spawn: () => ({ status: 0, stdout: '{"type":"result","subtype":"success","result":"{}"}' }) })).toThrow(/Observed/);
   });
   it('runs the shipped Claude judge with no tools and parses the fixed rubric response', () => {
     const model = 'claude-judge-20261001';
     const expected = { ...judgment(), model };
-    const result = claudeAdapter({ protocol: 'aiwg-release-judge/v1', model, left: {}, right: {} }, { spawn(command, args) {
+    const result = claudeAdapter({ protocol: 'aiwg-release-judge/v1', model, left: {}, right: {} }, { env: {}, spawn(command, args) {
       expect(args.slice(args.indexOf('--tools'))).toEqual(['--tools', '']);
       return { status: 0, stdout: [
         { type: 'assistant', message: { model, content: [] } },
@@ -489,7 +661,7 @@ fs.writeFileSync(path.join(process.env.HOME, 'deployment.json'), JSON.stringify(
   });
   it('uses observed Claude telemetry when the fixed-rubric judge JSON omits model', () => {
     const model = 'claude-judge-20261001', { model: _model, ...response } = judgment();
-    const result = claudeAdapter({ protocol: 'aiwg-release-judge/v1', model }, { spawn: () => ({ status: 0, stdout: [
+    const result = claudeAdapter({ protocol: 'aiwg-release-judge/v1', model }, { env: {}, spawn: () => ({ status: 0, stdout: [
       { type: 'assistant', message: { model, content: [] } },
       { type: 'result', subtype: 'success', result: JSON.stringify(response) },
     ].map(event => JSON.stringify(event)).join('\n') }) });

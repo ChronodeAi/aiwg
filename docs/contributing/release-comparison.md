@@ -119,6 +119,87 @@ documented zero-tool switch. Judge runs therefore select the least-capability
 
 Both adapters are explicit Node entry points, supplied with `--subject-runner FILE.mjs` and `--judge-runner FILE.mjs`. The harness executes each with an argument array, sends one JSON request on stdin, and expects one JSON response on stdout. Send diagnostics to stderr. No model is invoked merely by importing this harness. Provider SDK/CLI integrations can use the installed provider's qualified execution profile without adding another model framework here.
 
+### OpenRouter transport and spend cap
+
+Set `AIWG_RELEASE_CLAUDE_TRANSPORT=openrouter` and supply `OPENROUTER_API_KEY`
+through the environment only. Do not put a key in a command, price file, or
+report. The adapter passes the key only as `ANTHROPIC_AUTH_TOKEN`, sets
+`ANTHROPIC_BASE_URL=https://openrouter.ai/api` and `ANTHROPIC_API_KEY=` (empty),
+and filters other credentials from the CLI environment. Router pins are
+`anthropic/claude-haiku-5.5` and `anthropic/claude-sonnet-5.5`; observed telemetry
+must match, allowing the stream to omit `anthropic/`. The default transport
+continues to require an exact dated Anthropic snapshot.
+
+Use `--max-usd X --max-calls N --price-file FILE.json`. A capped run requires
+prices for both models, including a subscription entry for a Codex judge.
+The price file is a JSON object keyed by the exact requested model IDs. Each paid
+entry requires `source` (pricing URL and retrieval date), numeric
+`input_usd_per_mtok`, `output_usd_per_mtok`, `max_input_tokens`, and
+`max_output_tokens`. Optional `cache_read_usd_per_mtok` and
+`cache_write_usd_per_mtok` account for Claude's separate cache counters; absent
+cache rates use the input rate. Set the token allowances conservatively for
+the **entire adapter invocation**, including startup context, tool turns and
+retries. They are budget reservations, not token limits enforced on a provider.
+Use current, sourced OpenRouter rates; Claude's `total_cost_usd` uses Anthropic
+list prices and is ignored for router billing. No prices are fetched automatically.
+For a qualified Codex account judge, use
+`{"subscription":true,"source":"ChatGPT subscription; no USD charge"}` as its
+price entry and select `tools/rules/release-compare-codex.mjs` with an explicit
+distinct Codex model and the account configuration described above.
+
+The runner reserves two subject calls and one judge call before each pair. It
+stops before projected spend exceeds **80%** of the USD cap, or the next pair
+would exceed the call cap. Reported costs accumulate per call; missing cost is
+computed from usage and prices, and missing token counters reserve their full
+allowances. Failed calls consume a reservation. A spend surprise also stops
+subsequent calls within the pair. JSON and Markdown checkpoints record the cap,
+spend, per-call accounting, and `stop_reason`; a stopped comparison exits 1 and
+cannot pass. These checks govern starting calls: they cannot bound an already
+running provider request. An invoice-level hard limit also requires an
+OpenRouter account/key spending limit; do not treat token reservations as that
+provider limit.
+
+For the USD 10 operator allocation, the following commands split the budget:
+at most USD 2 for the pilot and USD 8 for the full Claude run. The 80% stop rule
+leaves additional headroom. Do not reset or repeat these allocations after spend
+without subtracting previous charges. Supply the reviewed RC tarball and sourced
+price file at the indicated paths. These are live commands; the offline tests
+do not execute them. Hermes is excluded until a qualified launcher exists.
+
+```bash
+export AIWG_RELEASE_CLAUDE_TRANSPORT=openrouter
+comparison_rc=/absolute/path/to/aiwg-rc.tgz
+comparison_prices=/absolute/path/to/openrouter-prices.json
+comparison_artifact_root=$(aiwg artifacts path --json --check-write | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).artifact_root))')
+mkdir -p "$comparison_artifact_root/release-comparison"
+
+# Pilot: three scenarios, one repetition, nine adapter calls maximum.
+node tools/rules/release-compare.mjs \
+  --a aiwg@2026.10.6 --b "tarball:$comparison_rc" --allow-network \
+  --provider claude --model anthropic/claude-haiku-5.5 \
+  --judge-model anthropic/claude-sonnet-5.5 --n 1 --seed release-3298-pilot \
+  --scenario sdlc-small-change --scenario sdlc-intake-unknown \
+  --scenario discovery-discover-show-follow --bundle all \
+  --max-usd 2 --max-calls 9 --price-file "$comparison_prices" \
+  --subject-runner tools/rules/release-compare-claude.mjs \
+  --judge-runner tools/rules/release-compare-claude.mjs \
+  --output "$comparison_artifact_root/release-comparison/claude-openrouter-pilot.json"
+
+# Full Claude corpus: run after reviewing the pilot and quarterly validation.
+node tools/rules/release-compare.mjs \
+  --a aiwg@2026.10.6 --b "tarball:$comparison_rc" --allow-network \
+  --provider claude --model anthropic/claude-haiku-5.5 \
+  --judge-model anthropic/claude-sonnet-5.5 --n 5 --seed release-3298-full \
+  --bundle all --max-usd 8 --max-calls 4290 --price-file "$comparison_prices" \
+  --subject-runner tools/rules/release-compare-claude.mjs \
+  --judge-runner tools/rules/release-compare-claude.mjs \
+  --output "$comparison_artifact_root/release-comparison/claude-openrouter-full.json"
+```
+
+Append `--dry-run` to inspect either plan without installation or model calls.
+The full command retains a HOLD if its allocated budget cannot cover the corpus;
+the USD cap does not authorize dropping scenarios or counting a pilot as a gate.
+
 Subject input:
 
 ```json

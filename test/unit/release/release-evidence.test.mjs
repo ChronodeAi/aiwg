@@ -387,6 +387,27 @@ z.close()`, fixture.directory, fixture.archivePath], { timeout: 30000, killSigna
       candidate: fixture.candidate, baselineVersion: '2026.10.2', expectedBundles: comparison.report.bundles })).toThrow(/coverage/);
   });
 
+  it('accepts accounted reports and legacy reports while rejecting forged spend or early stops', () => {
+    const fixture = candidateFixture(), comparison = comparisonFixture(fixture.candidate);
+    const verify = () => {
+      fs.writeFileSync(comparison.file, JSON.stringify(comparison.report));
+      return verifyComparisonReport({ file: comparison.file, report: comparison.report, plan: comparison.plan,
+        candidate: fixture.candidate, baselineVersion: '2026.10.2', expectedBundles: comparison.report.bundles });
+    };
+    const calls = comparison.plan.pairs.flatMap(pair => [...pair.order, 'judge'].map(role => ({ role,
+      model: role === 'judge' ? comparison.plan.judge_model : comparison.plan.model, usd: null, source: 'unknown' })));
+    comparison.report.accounting = { max_usd: null, max_calls: null, stop_threshold_usd: null, spend_usd: 0,
+      calls_started: calls.length, unknown_cost_calls: calls.length, stop_reason: null, calls };
+    comparison.report.spend_usd = 0;
+    expect(verify().provider).toBe('claude');
+    comparison.report.spend_usd = 1;
+    expect(verify).toThrow(/spend accounting/);
+    comparison.report.spend_usd = 0; comparison.report.stop_reason = 'max_usd_80_percent';
+    expect(verify).toThrow(/stopped early/);
+    for (const key of ['prices', 'accounting', 'max_usd', 'max_calls', 'spend_usd', 'stop_reason']) delete comparison.report[key];
+    expect(verify().provider).toBe('claude');
+  });
+
   it.each(['empty-assertions', 'forged-assertion', 'false-pass', 'trace-mismatch'])(
     'rejects %s rather than trusting self-reported deterministic outcomes', failure => {
       const fixture = candidateFixture(), comparison = comparisonFixture(fixture.candidate);
