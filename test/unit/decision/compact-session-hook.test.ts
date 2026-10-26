@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 let root: string;
 const hook = resolve(__dirname, '../../../agentic/code/addons/aiwg-hooks/hooks/aiwg-session.cjs');
@@ -35,4 +35,20 @@ it('injects only for compact SessionStart with enabled shared activation; other 
     expect(child.status, child.stderr).toBe(0);
     expect(child.stdout).toBe(expected);
   }
+});
+
+// Claude Code may write the hook event after the process starts. A pipe with no
+// data yet must not be treated as absent input.
+it('waits for hook input that arrives after the hook starts reading', async () => {
+  const child = spawn(process.execPath, [hook], { cwd: root, env: { ...process.env, AIWG_ROOT: root, FIXTURE_ENABLED: '1' },
+    stdio: ['pipe', 'pipe', 'pipe'], timeout: 10_000, killSignal: 'SIGKILL' });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const closed = new Promise<number | null>(done => child.on('close', done));
+  await new Promise(done => setTimeout(done, 300));
+  child.stdin.end(JSON.stringify({ hook_event_name: 'SessionStart', source: 'compact' }));
+  expect(await closed, stderr).toBe(0);
+  expect(stdout).toBe('fixture pointer\n');
 });

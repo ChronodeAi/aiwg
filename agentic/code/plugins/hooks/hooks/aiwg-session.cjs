@@ -45,8 +45,17 @@ async function compactContext() {
   try {
     const buffer = Buffer.alloc(65537);
     let used = 0;
+    // stdin can be a non-blocking pipe whose writer has not sent the event yet.
+    // EAGAIN means "no data yet", not "no input": wait briefly and retry.
+    const deadline = Date.now() + 5000;
+    const pause = new Int32Array(new SharedArrayBuffer(4));
     while (used < buffer.length) {
-      const count = fs.readSync(0, buffer, used, buffer.length - used, null);
+      let count;
+      try { count = fs.readSync(0, buffer, used, buffer.length - used, null); }
+      catch (error) {
+        if (error && error.code === 'EAGAIN' && Date.now() < deadline) { Atomics.wait(pause, 0, 0, 10); continue; }
+        throw error;
+      }
       if (count === 0) break;
       used += count;
     }
