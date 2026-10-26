@@ -21,9 +21,9 @@
  * assumption that the artifact root is owned and written by the SAME local
  * user running `aiwg`. It does not and cannot defend against a HOSTILE
  * process running as that same user: such a process already has read/write
- * access to everything the ledger could protect. There is no cross-process
- * lock and no privilege boundary here, by design — adding one would be the
- * "second subsystem" this feature deliberately avoids. Every filesystem
+ * access to everything the ledger could protect. Appenders, rotation and
+ * readers share the existing cross-process directory-lock helper. There is
+ * no privilege boundary here. Every filesystem
  * check below uses only portable Node primitives (no `/proc`, no handle
  * anchoring): `mkdir`/`lstat` for the directory, `open`+`fstat` for the
  * file, with `O_NOFOLLOW` applied when the platform defines it (POSIX; not
@@ -39,26 +39,27 @@
  * single-write atomicity boundary most platforms also honor for `PIPE_BUF`
  * (4096 bytes on Linux): this makes a single, non-interleaved write the
  * overwhelmingly likely outcome for one record, but it is not a guarantee.
- * There is no cross-process append lock, so two concurrent writers can in
- * rare cases interleave and produce one malformed line; `history`/`stats`
- * detect and skip a malformed line (counted, never silently merged into a
- * neighboring record) rather than assuming it is impossible.
+ * The lock covers opening, checking the trailing newline, writing every
+ * byte and closing. Rotation holds that same lock through live-file
+ * replacement. `history`/`stats` count malformed lines as skipped; retention
+ * preserves their original bytes.
  *
  * Recording — attribution resolution and the write — is bounded by a short
  * deadline (`DECISION_LEDGER_RECORD_TIMEOUT_MS`). On timeout, the in-flight
  * attempt is not cancelled (Node has no way to abort an in-flight `open`),
  * so its outcome is genuinely unknown: the record may or may not eventually
  * land. The warning says exactly that ("completion unknown"), and no
- * further stage of that same attempt starts once the deadline has fired
- * (checked before each later `await`), so a slow attribution lookup cannot
- * itself delay the subsequent write past the deadline.
+ * attribution-to-append stage starts once the deadline has fired. An append
+ * already waiting for the ledger lock can still complete after that deadline.
  */
 
 import { randomUUID, createHash } from 'node:crypto';
 import { constants as fsConstants, createReadStream, existsSync } from 'node:fs';
-import { lstat, mkdir, open, type FileHandle } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, rename, rm, type FileHandle } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { acquireDirectoryLock } from '../artifacts/prebuilt-build-lock.js';
+import { syncDirectory } from '../storage/protected-files.js';
 import { projectAiwgPath, projectAiwgWritePath } from '../config/project-artifacts.js';
 import { redactText } from '../governance/redaction.js';
 import { CanonicalJsonByteEstimator } from './context-plan.js';
@@ -187,6 +188,7 @@ export const DECISION_LEDGER_RECORD_TIMEOUT_MS = 250;
 
 const LEDGER_DIR_MODE = 0o700;
 const LEDGER_FILE_MODE = 0o600;
+const LEDGER_LOCK_TIMEOUT_MS = 30_000;
 const IS_WINDOWS = process.platform === 'win32';
 const HAS_O_NOFOLLOW = typeof fsConstants.O_NOFOLLOW === 'number';
 
@@ -444,8 +446,8 @@ async function ensurePrivateDecisionDir(projectRoot: string, warn: (message: str
 }
 
 /**
- * Open (creating if needed) `ledger.jsonl` for append and verify it is safe
- * to write: a regular file with exactly one hard link (rejects a
+ * Open a private ledger/archive file (append by default, read-only for
+ * retention) and verify it is a regular file with exactly one hard link (rejects a
  * pre-planted hard link to an unrelated file, which `O_NOFOLLOW` alone does
  * not catch), and on POSIX owned by the current user with no group/other
  * permission bits. `O_NOFOLLOW` is applied when the platform defines it
@@ -455,7 +457,8 @@ async function ensurePrivateDecisionDir(projectRoot: string, warn: (message: str
  * check is closed untouched (no chmod, no write) and recording is skipped
  * with exactly one warning naming the reason.
  */
-async function openLedgerFileForAppend(ledgerPath: string, warn: (message: string) => void): Promise<FileHandle | null> {
+async function openPrivateLedgerFile(ledgerPath: string, warn: (message: string) => void,
+  flags = fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_WRONLY): Promise<FileHandle | null> {
   try {
     const pre = await lstat(ledgerPath);
     if (pre.isSymbolicLink()) {
@@ -468,10 +471,9 @@ async function openLedgerFileForAppend(ledgerPath: string, warn: (message: strin
       return null;
     }
   }
-  const flags = fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_WRONLY | (HAS_O_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
   let handle: FileHandle;
   try {
-    handle = await open(ledgerPath, flags, LEDGER_FILE_MODE);
+    handle = await open(ledgerPath, flags | (HAS_O_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0), LEDGER_FILE_MODE);
   } catch (error) {
     warn(`warning: cannot open decision ledger file: ${errorMessage(error)}`);
     return null;
@@ -566,9 +568,12 @@ export async function appendDecisionLedgerRecord(record: DecisionLedgerRecord, o
   const decisionDir = await ensurePrivateDecisionDir(options.projectRoot, warn);
   if (!decisionDir) return false;
   const ledgerPath = join(decisionDir, DECISION_LEDGER_FILE_NAME);
-  const handle = await openLedgerFileForAppend(ledgerPath, warn);
-  if (!handle) return false;
+  let release: (() => Promise<void>) | undefined;
+  let handle: FileHandle | null = null;
   try {
+    release = await lockDecisionLedger(decisionDir);
+    handle = await openPrivateLedgerFile(ledgerPath, warn);
+    if (!handle) return false;
     const prefix = (await needsLeadingNewline(ledgerPath)) ? '\n' : '';
     await writeFully(handle, Buffer.from(prefix + line, 'utf8'), options.writeChunk);
     return true;
@@ -576,7 +581,137 @@ export async function appendDecisionLedgerRecord(record: DecisionLedgerRecord, o
     warn(`warning: failed to append decision ledger record: ${errorMessage(error)}`);
     return false;
   } finally {
-    await handle.close().catch(() => {});
+    await handle?.close().catch(() => {});
+    await release?.().catch(error => warn(`warning: cannot release decision ledger lock: ${errorMessage(error)}`));
+  }
+}
+
+function lockDecisionLedger(decisionDir: string): Promise<() => Promise<void>> {
+  return acquireDirectoryLock(join(decisionDir, 'ledger.lock'), {
+    timeoutMs: LEDGER_LOCK_TIMEOUT_MS, pollMs: 10, reclaimDeadOwner: true,
+  });
+}
+
+export interface RotateDecisionLedgerOptions {
+  projectRoot: string;
+  /** Activity-log syntax: positive entry count or duration in days. Default: 90d. */
+  keepLast?: string;
+  /** Explicit authorization to archive everything, including malformed lines. */
+  all?: boolean;
+  /** Artifact-relative or absolute .jsonl path beneath archive/decision/. */
+  to?: string;
+  now?: () => number;
+}
+
+export function parseDecisionLedgerRetention(keepLast?: string, all = false): { count?: number; ms?: number } {
+  if (all) {
+    if (keepLast !== undefined) throw new Error('--all cannot be combined with --keep-last');
+    return {};
+  }
+  const match = /^(\d+)(d?)$/.exec(keepLast ?? '90d');
+  const n = match ? Number(match[1]) : NaN;
+  if (!Number.isSafeInteger(n) || n <= 0 || !Number.isSafeInteger(n * (match?.[2] ? 86_400_000 : 1))) {
+    throw new Error('--keep-last must be a positive count or <N>d; rotating everything requires --all');
+  }
+  return match?.[2] ? { ms: n * 86_400_000 } : { count: n };
+}
+
+function isBeneath(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/** Walk before mkdir: recursive mkdir alone could write through a symlinked ancestor. */
+async function privateArchiveDirectory(root: string, target: string, create: boolean): Promise<boolean> {
+  let current = root;
+  for (const part of relative(root, target).split(sep)) {
+    current = join(current, part);
+    if (create) {
+      try {
+        await mkdir(current, { mode: LEDGER_DIR_MODE });
+        if (!IS_WINDOWS) await syncDirectory(dirname(current));
+      }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    }
+    let info;
+    try { info = await lstat(current); }
+    catch (error) { if (!create && (error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+    // archive/ is shared with the activity log and may already be readable.
+    // Its decision/ subtree (and any nested directories) must be private.
+    const modeMask = current === join(root, 'archive') ? 0o022 : 0o077;
+    if (!info.isDirectory() || (!IS_WINDOWS && (info.uid !== currentUid() || (info.mode & modeMask) !== 0))) {
+      throw new Error(`Unsafe decision archive directory (requires a private, owned real directory): ${current}`);
+    }
+  }
+  return true;
+}
+
+/** Retention preserves each raw line, including invalid UTF-8, CRLF and an unterminated final line. */
+export async function rotateDecisionLedger(options: RotateDecisionLedgerOptions): Promise<{
+  archived: number; retained: number; malformed: number; archivePath: string | null;
+}> {
+  const retention = parseDecisionLedgerRetention(options.keepLast, options.all);
+  const now = (options.now ?? Date.now)();
+  const artifactRoot = projectAiwgWritePath(options.projectRoot);
+  const archiveRoot = join(artifactRoot, 'archive', 'decision');
+  const archivePath = resolve(artifactRoot, options.to ?? join('archive', 'decision',
+    `${new Date(now).toISOString().replace(/[-:]/g, '').replace('T', '-').replace(/\.\d{3}Z$/, '')}-${randomUUID()}.jsonl`));
+  if (!isBeneath(artifactRoot, archivePath)) throw new Error('Archive path must stay inside the resolved artifact root');
+  if (!isBeneath(archiveRoot, archivePath) || !archivePath.endsWith('.jsonl')) {
+    throw new Error('Archive path must be a .jsonl file beneath archive/decision/ in the resolved artifact root');
+  }
+  const fail = (message: string): never => { throw new Error(message); };
+  const decisionDir = await ensurePrivateDecisionDir(options.projectRoot, fail);
+  if (!decisionDir) throw new Error('Cannot access decision ledger directory');
+  const release = await lockDecisionLedger(decisionDir);
+  const ledgerPath = join(decisionDir, DECISION_LEDGER_FILE_NAME);
+  const tempPath = join(decisionDir, `.ledger-${randomUUID()}.tmp`);
+  let archiveCreated = false;
+  try {
+    const live = await openPrivateLedgerFile(ledgerPath, fail, fsConstants.O_RDONLY | fsConstants.O_CREAT);
+    if (!live) throw new Error('Cannot read decision ledger');
+    let content: Buffer;
+    try { content = await live.readFile(); } finally { await live.close(); }
+    const lines: Array<{ bytes: Buffer; timestamp: number | null }> = [];
+    for (let start = 0; start < content.length;) {
+      const newline = content.indexOf(0x0a, start);
+      const end = newline < 0 ? content.length : newline + 1;
+      const bytes = content.subarray(start, end);
+      let timestamp: number | null = null;
+      try {
+        const record: unknown = JSON.parse(bytes.toString('utf8'));
+        if (isDecisionLedgerRecord(record)) timestamp = Date.parse(record.timestamp);
+      } catch { /* preserve malformed bytes */ }
+      lines.push({ bytes, timestamp });
+      start = end;
+    }
+    const valid = lines.filter(line => line.timestamp !== null).sort((a, b) => a.timestamp! - b.timestamp!);
+    const recent = new Set(retention.count === undefined ? [] : valid.slice(-retention.count));
+    const kept: Buffer[] = [], archived: Buffer[] = [];
+    for (const line of lines) {
+      const keep = !options.all && (line.timestamp === null || (retention.count !== undefined
+        ? recent.has(line) : line.timestamp >= now - retention.ms!));
+      (keep ? kept : archived).push(line.bytes);
+    }
+    const result = { archived: archived.length, retained: kept.length,
+      malformed: lines.length - valid.length, archivePath: archived.length ? archivePath : null };
+    if (!archived.length) return result;
+    await privateArchiveDirectory(artifactRoot, dirname(archivePath), true);
+    const archive = await open(archivePath, 'wx', LEDGER_FILE_MODE);
+    archiveCreated = true;
+    try { await writeFully(archive, Buffer.concat(archived)); await archive.sync(); } finally { await archive.close(); }
+    if (!IS_WINDOWS) await syncDirectory(dirname(archivePath));
+    const replacement = await open(tempPath, 'wx', LEDGER_FILE_MODE);
+    try { await writeFully(replacement, Buffer.concat(kept)); await replacement.sync(); } finally { await replacement.close(); }
+    await rename(tempPath, ledgerPath);
+    archiveCreated = false; // Both files now own their respective records.
+    if (!IS_WINDOWS) await syncDirectory(decisionDir);
+    return result;
+  } catch (error) {
+    if (archiveCreated) await rm(archivePath, { force: true }); // Live file is still intact.
+    throw error;
+  } finally {
+    try { await rm(tempPath, { force: true }); } finally { await release(); }
   }
 }
 
@@ -814,21 +949,51 @@ async function* streamDecisionLedgerLines(path: string): AsyncGenerator<string> 
   }
 }
 
-/** Streams parsed-and-validated records one at a time; invalid lines yield `null` so callers can count them as skipped. */
-async function* streamDecisionLedgerRecords(projectRoot: string): AsyncGenerator<DecisionLedgerRecord | null> {
-  for await (const line of streamDecisionLedgerLines(ledgerReadPath(projectRoot))) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      yield isDecisionLedgerRecord(parsed) ? parsed : null;
-    } catch {
-      yield null;
+async function archiveLedgerPaths(artifactRoot: string, directory = join(artifactRoot, 'archive', 'decision')): Promise<string[]> {
+  if (!await privateArchiveDirectory(artifactRoot, directory, false)) return [];
+  const paths: string[] = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const target = join(directory, entry.name);
+    if (entry.isSymbolicLink()) throw new Error(`Unsafe decision archive symlink: ${target}`);
+    if (entry.isDirectory()) paths.push(...await archiveLedgerPaths(artifactRoot, target));
+    else if (entry.name.endsWith('.jsonl')) {
+      const handle = await openPrivateLedgerFile(target, message => { throw new Error(message); }, fsConstants.O_RDONLY);
+      if (!handle) throw new Error(`Unsafe decision archive: ${target}`);
+      await handle.close();
+      paths.push(target);
     }
   }
+  return paths.sort();
+}
+
+/** Streams validated records under the rotation lock; invalid lines yield null. */
+async function* streamDecisionLedgerRecords(projectRoot: string, includeArchives = false): AsyncGenerator<DecisionLedgerRecord | null> {
+  const livePath = ledgerReadPath(projectRoot);
+  const decisionDir = dirname(livePath);
+  if (!existsSync(decisionDir)) return;
+  if (!(await lstat(decisionDir)).isDirectory()) throw new Error('Decision ledger directory must be a real directory');
+  // A single lock also prevents readers from observing the archive and live
+  // replacement at different points in a rotation (duplicates or omissions).
+  const release = await lockDecisionLedger(decisionDir);
+  try {
+    const paths = includeArchives ? [...await archiveLedgerPaths(projectAiwgPath(projectRoot)), livePath] : [livePath];
+    for (const path of paths) {
+      for await (const line of streamDecisionLedgerLines(path)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const parsed = JSON.parse(trimmed) as unknown;
+          yield isDecisionLedgerRecord(parsed) ? parsed : null;
+        } catch {
+          yield null;
+        }
+      }
+    }
+  } finally { await release(); }
 }
 
 export interface DecisionLedgerFilters {
+  includeArchives?: boolean;
   since?: Date;
   provider?: string;
   sessionId?: string;
@@ -873,7 +1038,7 @@ export interface DecisionLedgerHistoryResult {
 export async function decisionLedgerHistory(projectRoot: string, filters: DecisionLedgerFilters = {}): Promise<DecisionLedgerHistoryResult> {
   const records: DecisionLedgerRecord[] = [];
   let skipped = 0;
-  for await (const record of streamDecisionLedgerRecords(projectRoot)) {
+  for await (const record of streamDecisionLedgerRecords(projectRoot, filters.includeArchives)) {
     if (!record) { skipped += 1; continue; }
     if (matchesFilters(record, filters)) records.push(record);
   }
@@ -1069,7 +1234,7 @@ export async function decisionLedgerStats(projectRoot: string, filters: Decision
   const weights = decisionSavingsWeights(config?.decision?.ask);
   const groups = new Map<string | null, StatsAccumulator>();
   let skipped = 0;
-  for await (const record of streamDecisionLedgerRecords(projectRoot)) {
+  for await (const record of streamDecisionLedgerRecords(projectRoot, filters.includeArchives)) {
     if (!record) { skipped += 1; continue; }
     if (!matchesFilters(record, filters)) continue;
     const key = groupKeyFor(record, filters.groupBy);
