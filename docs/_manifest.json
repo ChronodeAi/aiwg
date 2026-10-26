@@ -175,6 +175,7 @@
     "contributing/maintainer-review-guide",
     "contributing/testing-requirements",
     "contributing/publishing-blog-posts",
+    "contributing/release-announcements",
     "blog",
     "blog/2026-6-aiwg-june-2026-report",
     "blog/2026-6-aiwg-cockpit-desktop-control-plane",
@@ -1502,6 +1503,13 @@
       "title": "Publishing Blog Posts",
       "summary": "Blog source-of-truth model, frontmatter spec, and publish flow",
       "file": "contributing/publishing-blog-posts.md",
+      "parent": "contributing"
+    },
+    {
+      "id": "contributing/release-announcements",
+      "title": "Release Announcements",
+      "summary": "How to write plain, user-focused release announcements",
+      "file": "contributing/release-announcements.md",
       "parent": "contributing"
     },
     {
