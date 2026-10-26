@@ -15,14 +15,14 @@
       "source": "05-configuration-spec.md ### 4.1 Existing",
       "owner": "vscode-extension/schemas/aiwg.config.v1.json",
       "target": "properties.parallelism",
-      "sha256": "f9f7f1af25358fb1c7e455216b8dfe1e7ff88ca2c2aea52d003b4936880eda02"
+      "sha256": "23573ea6ceb8f46862a74180fac3cb37d52b13e87123d146c2dde3c9b56fbc88"
     },
     {
       "file": "worker-selection.fragment.json",
       "source": "05-configuration-spec.md ### 4.2 Existing",
       "owner": "schemas/models/model-config-compatibility.v1.schema.json",
       "target": "properties.defaults.properties.workerSelection",
-      "sha256": "6051d9dd591619e4a7721fb688676b03ab5a20faafd791a0cd581e4c75ab6343"
+      "sha256": "0c02d54a58f40beed16096c112cf3d6250ab7c0a3b3acfa98be295152398326f"
     },
     {
       "file": "worker-adapter.fragment.json",

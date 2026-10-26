@@ -253,7 +253,7 @@
         "test/unit/serve/shared-host-scheduler-budgets.test.ts",
         "test/unit/serve/shared-host-scheduler-host.test.ts"
       ],
-      "remaining": "Shared P2/P3 extension pack. #2926: FR-OG-037 starvation diagnostic mode only; no weighted fair-share or hard direct-launch guarantee. #2929: optional worker OTel receipt projection only (pinned GenAI mapping, correlation, redaction, unknown usage, no-egress and bounded outage fixtures; tests in packs.d/worker-telemetry.json); direct traces need no managed services. #2927: offline continuation, binding disclosure and Ralph/SDLC gate retention only (tests in packs.d/ralph-continuation.json); live CLI-version continuation smoke belongs to the conductor under decision 17. Managed integration, platform parity and other P2/P3 extensions remain with their owners."
+      "remaining": "Shared P2/P3 extension pack. #2925: direct/shared group templates with intersected ceilings, constrained project role aliases and origins in guidance (tests in packs.d/group-templates.json). #2926: FR-OG-037 starvation diagnostic mode only; no weighted fair-share or hard direct-launch guarantee. #2929: optional worker OTel receipt projection only (pinned GenAI mapping, correlation, redaction, unknown usage, no-egress and bounded outage fixtures; tests in packs.d/worker-telemetry.json); direct traces need no managed services. #2927: offline continuation, binding disclosure and Ralph/SDLC gate retention only (tests in packs.d/ralph-continuation.json); live CLI-version continuation smoke belongs to the conductor under decision 17. Managed integration, platform parity and other P2/P3 extensions remain with their owners."
     },
     "T-OG-14": {
       "name": "Package/platform/extension",

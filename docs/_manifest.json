@@ -372,6 +372,7 @@
     "decision/cli-mcp-driver",
     "getting-started/session-history",
     "getting-started/worker-dispatch",
+    "getting-started/worker-dispatch-runtime",
     "sessions/cli",
     "configuration",
     "frameworks/forensics-complete/agent-examples",
@@ -2875,6 +2876,13 @@
       "title": "Turn On Direct Worker Dispatch",
       "summary": "What parallelism.worker_dispatch does, what it costs, how AIWG offers it, and how to turn it on or off",
       "file": "getting-started/worker-dispatch.md",
+      "parent": "getting-started"
+    },
+    {
+      "id": "getting-started/worker-dispatch-runtime",
+      "title": "Worker Dispatch Runtime",
+      "summary": "Qualify installed CLIs, resolve and launch direct workers, and supervise their health",
+      "file": "getting-started/worker-dispatch-runtime.md",
       "parent": "getting-started"
     },
     {

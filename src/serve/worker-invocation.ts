@@ -1,3 +1,5 @@
+import { WorkerRequestArgumentError, type WorkerCommandRequest } from './worker-command-request.js';
+export { parseWorkerCommandArgs, type WorkerCommandRequest } from './worker-command-request.js';
 /** One nonlaunching typed renderer shared by models resolve and Ralph. */
 import path from 'node:path';
 import { inspectWorkerPath as inspectPath, readBrief, assertConductorWorkerPlan } from './worker-invocation-paths.js';
@@ -132,70 +134,6 @@ export async function buildWorkerInvocationTransport(driver: Pick<WorkerInvocati
   return transport;
 }
 
-export interface WorkerCommandRequest {
-  role: 'efficiency' | 'coding' | 'reasoning';
-  task: string;
-  group: string;
-  brief: string;
-  workdir: string;
-  final_output: string;
-  transport?: 'shell' | 'mcp';
-  format?: 'shell' | 'json';
-  /** Managed parent supplies the validated task authority; never a CLI override. */
-  managedIntent?: import('../mission-protocol/types.js').WorkerSelectionIntent;
-  authority?: { premiumAuthorized: true; maxAutoTier: 3 };
-}
-
-/** Only fixed argument guidance is safe to expose in public request diagnostics. */
-class WorkerRequestArgumentError extends WorkerPolicyError {
-  readonly pointer: string;
-
-  constructor(key: 'task' | 'brief' | 'workdir' | 'final_output') {
-    super('OG_CONFIG_REFERENCE', key === 'task'
-      ? `Missing required --task. Valid task classes: ${Object.keys(DEFAULT_WORKER_SELECTION.taskClasses!).join(', ')}, plus classes configured in defaults.workerSelection.taskClasses.`
-      : `--${key.replace('_', '-')} must be an absolute path; relative paths are not resolved against cwd or --workdir.`);
-    this.pointer = `/request/${key}`;
-  }
-}
-
-/** Reject unsupported syntax before discovery or any path reads. */
-export function parseWorkerCommandArgs(args: string[]): WorkerCommandRequest {
-  const names: Record<string, string> = { role: 'role', task: 'task', group: 'group', brief: 'brief',
-    workdir: 'workdir', 'final-output': 'final_output', transport: 'transport', format: 'format' };
-  const result: Record<string, string> = {};
-  let json = false;
-  let premiumAuthorized = false;
-  for (let i = 0; i < args.length; i++) {
-    const token = args[i];
-    if (token === '--authorize-premium') {
-      if (premiumAuthorized) throw new Error('Duplicate --authorize-premium');
-      premiumAuthorized = true; continue;
-    }
-    if (token === '--json') { if (json) throw new Error('Duplicate --json'); json = true; continue; }
-    const match = /^--([^=]+)(?:=([\s\S]*))?$/.exec(token);
-    if (!match || !Object.hasOwn(names, match[1])) throw new Error(`Unsupported models resolve argument: ${token}`);
-    const key = names[match[1]];
-    if (key in result) throw new Error(`Duplicate --${match[1]}`);
-    const value = match[2] ?? args[++i];
-    if (!value || value.startsWith('--') && match[2] === undefined || value.includes('\0')) {
-      if (key === 'task' && !value?.includes('\0')) throw new WorkerRequestArgumentError('task');
-      throw new Error(`--${match[1]} requires a value`);
-    }
-    result[key] = value;
-  }
-  if (json && result.format && result.format !== 'json') throw new Error('--json conflicts with --format');
-  if (json) result.format = 'json';
-  for (const key of ['role', 'task', 'group', 'brief', 'workdir', 'final_output']) {
-    if (key === 'task' && !result[key]) throw new WorkerRequestArgumentError('task');
-    if (!result[key]) throw new Error(`Missing ${key}`);
-  }
-  if (!['efficiency', 'coding', 'reasoning'].includes(result.role)) throw new Error('Unsupported role');
-  if (!/^[a-z][a-z0-9-]{0,62}$/.test(result.group)) throw new Error('Invalid group');
-  if (result.transport && !['shell', 'mcp'].includes(result.transport)) throw new Error('Unsupported transport');
-  if (result.format && !['shell', 'json'].includes(result.format)) throw new Error('Unsupported renderer; use POSIX shell or JSON');
-  return { ...result, ...(premiumAuthorized ? { authority: { premiumAuthorized: true, maxAutoTier: 3 } } : {}) } as unknown as WorkerCommandRequest;
-}
-
 const bytesDigest = (bytes: Buffer | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 export type WorkerCommandPlan = WorkerResolutionPlan & { invocation?: WorkerResolvedInvocation; request?: WorkerCommandRequest };
@@ -265,7 +203,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       if (managedIntent && workerConfigDigest(brief!.intent) !== workerConfigDigest(managedIntent)) {
         throw new Error('Managed brief differs from parent task authority');
       }
-      if (brief!.intent.role !== request.role || brief!.intent.taskClass !== request.task || brief!.intent.group !== request.group
+      if (brief!.intent.role !== (snapshot.models.defaults.workerSelection?.roleGuidance?.[request.role]?.baseRole ?? request.role) || brief!.intent.taskClass !== request.task || brief!.intent.group !== request.group
         || brief!.workspace.path !== request.workdir || brief!.output.resultPath !== request.final_output) {
         throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Brief role/task/group/workspace/output differs from request');
       }
@@ -357,7 +295,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       requiredControls: healthConfig?.requireStepCap ? ['stepCap'] : [] });
     pointer = '/parallelism/health';
     failureCode = 'OG_ADAPTER_UNQUALIFIED';
-    const healthInput = { role: request.role, effort: tuple.effort,
+    const healthInput = { role: plan.policy?.roleGuidance?.[request.role]?.baseRole ?? request.role, effort: tuple.effort,
       modelKey: tuple.modelKey, profileRef: tuple.profile, wallSeconds: limits.wallSeconds,
       transportSeconds: adapter.invocation.kind === 'http' ? adapter.invocation.timeoutSeconds : undefined,
       stepEnforcement: controls.includes('stepCap') ? profile.controls.stepCap.support as 'native' | 'external' : 'unavailable' as const };

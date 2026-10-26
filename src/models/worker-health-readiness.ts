@@ -1,7 +1,7 @@
 /** Offline S1 health readiness projection; never launch authority or a probe. */
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-import { validateParallelismConfig, resolveWorkerGroupInstallation, workerConfigDigest, type ParallelismConfig } from '../config/aiwg-config.js';
+import { resolveParallelism, validateParallelismConfig, resolveWorkerGroupInstallation, workerConfigDigest, type ParallelismConfig } from '../config/aiwg-config.js';
 import { assertWorkerHealthQualification } from './provider-policy.js';
 import { resolveWorkerPlan, type WorkerPlanSnapshot, type WorkerPlanRequest } from './resolver.js';
 import { resolveWorkerEffectiveHealth } from '../serve/worker-invocation.js';
@@ -74,14 +74,16 @@ type FindingInput = Omit<WorkerHealthReadinessFinding, 'configFile' | 'configKey
 
 export function diagnoseWorkerHealthReadiness(snapshot: WorkerPlanSnapshot,
   request: Pick<WorkerPlanRequest, 'now' | 'context'>, paths: WorkerHealthReadinessPaths = {}): WorkerHealthReadinessReport {
-  const p = snapshot.config.parallelism;
+  let p = snapshot.config.parallelism;
   const report: WorkerHealthReadinessReport = { enabled: p?.worker_dispatch === true,
     ready: true, contextDigest: null, findings: [], thresholds: [] };
   const configFile = paths.configFile ?? resolve('.aiwg/aiwg.config');
   const modelsFile = paths.modelsFile ?? resolve('models.json');
   const catalogFile = paths.catalogFile ?? join(homedir(), '.cache/aiwg/model-catalog.v1.json');
+  const errors = validateParallelismConfig(p);
+  if (!errors.length && p?.worker_dispatch) p = resolveParallelism(p, snapshot.config.providers[0]);
   const allMembers = Object.entries(p?.groups ?? {}).flatMap(([group, value]) =>
-    value.members.map(member => ({ group, member, label: `${group}/${member.id}` })));
+    (value.members ?? []).map(member => ({ group, member, label: `${group}/${member.id}` })));
   const membersFor = (pointer: string, role: string | null): string[] => {
     const parts = pointer.split('/');
     const groups = role ? snapshot.models.defaults.workerSelection?.roleGuidance?.[role as 'coding' | 'reasoning' | 'efficiency']?.groups : undefined;
@@ -126,7 +128,6 @@ export function diagnoseWorkerHealthReadiness(snapshot: WorkerPlanSnapshot,
     return report;
   }
   report.contextDigest = workerConfigDigest({ context: request.context, modelDigests: snapshot.modelDigests });
-  const errors = validateParallelismConfig(p);
   if (errors.length) {
     report.ready = false;
     report.findings.push(...workerHealthConfigurationFindings(p, errors, { configFile }));
@@ -147,7 +148,7 @@ export function diagnoseWorkerHealthReadiness(snapshot: WorkerPlanSnapshot,
       message: 'No worker role guidance is configured; onboarding cannot offer a qualified route.',
       nextAction: 'configure-role-guidance', role: null });
   }
-  const installations = new Set(enabledGroups.flatMap(group => group.members.filter(member => member.enabled !== false).map(member => member.cli)));
+  const installations = new Set(enabledGroups.flatMap(group => (group.members ?? []).filter(member => member.enabled !== false).map(member => member.cli)));
   for (const cli of installations) {
     if (!p?.clis?.[cli]?.quotaScope) add({ code: 'WORKER_QUOTA_SCOPE_UNKNOWN', status: 'warn', role: null,
       pointer: `/parallelism/clis/${cli}/quotaScope`,
@@ -208,7 +209,7 @@ export function diagnoseWorkerHealthReadiness(snapshot: WorkerPlanSnapshot,
         continue;
       }
       // External admission needs runtime gate evidence; a config declaration alone cannot prove it.
-      const health = resolveWorkerEffectiveHealth(p?.health, { role, effort: tuple.effort,
+      const health = resolveWorkerEffectiveHealth(p?.health, { role: plan.policy?.roleGuidance?.[role]?.baseRole ?? role, effort: tuple.effort,
         modelKey: tuple.modelKey, profileRef: tuple.profile, wallSeconds: plan.ceilings.wallSeconds ?? 1800,
         stepEnforcement: nativeSteps ? 'native' : 'unavailable' });
       report.thresholds.push({ role, group: tuple.group, member: tuple.member, health });

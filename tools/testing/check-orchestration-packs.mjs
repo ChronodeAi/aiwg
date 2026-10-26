@@ -12,7 +12,7 @@ export const fragmentsDir = 'test/conformance/orchestration-v1/packs.d';
 // Provider profiles register their own test files by adding
 // packs.d/<provider>.json; never edit packs.json's testFiles for a provider.
 // Each fragment maps an existing pack ID to test files, or to an object with
-// testFiles/requirements/scenarios. Fragments merge into packs.json in sorted
+// testFiles/requirements/scenarios/mechanismOwners. Fragments merge into packs.json in sorted
 // fragment-filename order, appended after packs.json's own testFiles. This
 // keeps every provider's registration in its own file so two provider PRs
 // never touch the same lines of packs.json.
@@ -48,14 +48,14 @@ export function loadOrchestrationPackRegistry(repositoryRoot = root) {
       const files = Array.isArray(entry) ? entry : entry?.testFiles;
       if (!Array.isArray(files)) throw new Error(`${relativePath}: ${id} must map to an array of test files`);
       if (!Array.isArray(entry)) {
-        if (Object.keys(entry).some(key => !['testFiles', 'requirements', 'scenarios'].includes(key))) {
+        if (Object.keys(entry).some(key => !['testFiles', 'requirements', 'scenarios', 'mechanismOwners'].includes(key))) {
           throw new Error(`${relativePath}: ${id} has unsupported fragment fields`);
         }
-        for (const field of ['requirements', 'scenarios']) {
+        for (const field of ['requirements', 'scenarios', 'mechanismOwners']) {
           if (entry[field] === undefined) continue;
           if (!Array.isArray(entry[field])) throw new Error(`${relativePath}: ${id}.${field} must be an array`);
           const merged = [...(packs[id][field] ?? []), ...entry[field]];
-          packs[id][field] = field === 'requirements' ? [...new Set(merged)] : merged;
+          packs[id][field] = field !== 'scenarios' ? [...new Set(merged)] : merged;
         }
       }
       const existing = seenFiles.get(id);
