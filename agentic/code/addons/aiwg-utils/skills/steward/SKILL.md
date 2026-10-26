@@ -5,6 +5,8 @@ platforms: [all]
 kernel: true
 description: Provide provider capability awareness and route commands by answering what the current provider supports natively vs must emulate
 triggers:
+  - "set up worker onboarding"
+  - "worker onboarding readiness"
   - "help me choose what to use"
   - "help me choose the right AIWG framework or skill"
   - "ask for one recommended path and one fallback"
