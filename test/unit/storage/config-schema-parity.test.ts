@@ -8,6 +8,7 @@ const schema = JSON.parse(readFileSync(resolve('schemas/storage/storage.config.v
 const validate = new Ajv2020({ strict: true, allErrors: true }).compile(schema)
 const fixtures: unknown[] = [
   { version: '1' },
+  ...['FIXTURE_TOKEN', 'store:fixture', 'file:/private/token', 'file:C:\\private\\token', 'file:relative', 'file:/private/\u0000token', 'store:', '', 42].map(apiTokenEnv => ({ version: '1', backends: { memory: { type: 'logseq', graph: '/fixture', apiTokenEnv } } })),
   { version: '1', roots: { research: 'research' }, backends: { memory: { type: 'notion', parent: { pageId: 'p' } } }, fallback: 'block' },
   { version: '1', backends: { memory: { type: 'webdav', url: 'http://localhost', basePath: '/' } } },
   {},

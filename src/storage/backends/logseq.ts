@@ -33,6 +33,8 @@
  */
 
 import { existsSync } from 'fs';
+import { resolveSensitiveInput, type SensitiveInputDependencies } from '../../auth/sensitive-input.js';
+import { credentialReferenceInput } from '../../mcp/credentials.mjs';
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'fs/promises';
 import { dirname, join, relative, resolve, sep } from 'path';
 import type { LogseqBackendConfig, StorageAdapter, StorageEntry, WriteMeta } from '../types.js';
@@ -45,12 +47,14 @@ export class LogseqAdapter implements StorageAdapter {
   private readonly graph: string;
   private readonly apiUrl: string;
   private readonly useApi: boolean;
+  private readonly apiTokenEnv?: string;
   private apiWarned = false;
 
-  constructor(config: LogseqBackendConfig) {
+  constructor(config: LogseqBackendConfig, private readonly sensitiveInput: SensitiveInputDependencies = {}) {
     this.graph = resolve(expandHome(config.graph));
     this.apiUrl = config.apiUrl ?? DEFAULT_API_URL;
     this.useApi = config.useApi ?? true;
+    this.apiTokenEnv = config.apiTokenEnv;
   }
 
   async init(): Promise<void> {
@@ -67,7 +71,14 @@ export class LogseqAdapter implements StorageAdapter {
   private async probeApi(): Promise<void> {
     if (this.apiWarned) return;
 
-    const token = process.env['LOGSEQ_API_TOKEN'];
+    const input = credentialReferenceInput(this.apiTokenEnv ?? 'LOGSEQ_API_TOKEN', 'Logseq apiTokenEnv');
+    // Keep the optional legacy environment path, including its missing-token warning.
+    const token = input.env
+      ? (this.sensitiveInput.environment ?? process.env)[input.env]
+      : await resolveSensitiveInput(input, this.sensitiveInput);
+    if (!token && this.apiTokenEnv !== undefined) {
+      throw new Error('storage(logseq): apiTokenEnv is not set; use ENV_NAME, file:ABSOLUTE_PATH or store:NAME.');
+    }
     if (!token) {
       this.apiWarned = true;
       process.stderr.write(
@@ -97,7 +108,7 @@ export class LogseqAdapter implements StorageAdapter {
     } catch {
       this.apiWarned = true;
       process.stderr.write(
-        `storage(logseq): API server at ${this.apiUrl} is not reachable.\n` +
+        `storage(logseq): API server is not reachable.\n` +
           `  AIWG will continue with direct file writes against the graph.\n` +
           `  Start Logseq with the API server enabled, or set "useApi": false to suppress.\n`
       );
