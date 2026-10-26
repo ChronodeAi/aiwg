@@ -1235,6 +1235,14 @@ describe('MINOR regression (#2895): beneath() resolves symlinks, not just lexica
     await expect(f.launch({ runDir, launchIsolated: f.launchSpy })).rejects.toThrow(/worker-writable/);
     expect(f.launchSpy).not.toHaveBeenCalled();
   });
+
+  it('a missing run directory parent fails before spawn with an actionable error', async () => {
+    const f = await fixture();
+    const runDir = path.join(f.root, 'missing-parent', 'attempt-1');
+    await expect(f.launch({ runDir, launchIsolated: f.launchSpy }))
+      .rejects.toThrow(/run directory parent does not exist: .*missing-parent; create it \(mode 0700\)/);
+    expect(f.launchSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('MAJOR regression (#2895): systemd-unit mode has real stop authority', () => {
