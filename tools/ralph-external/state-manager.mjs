@@ -78,7 +78,7 @@ export class StateManager {
    */
   initialize(config) {
     const now = new Date().toISOString();
-    const loopId = randomUUID();
+    const loopId = config.loopId || randomUUID();
     const sessionId = randomUUID();
 
     /** @type {LoopState} */
@@ -100,6 +100,7 @@ export class StateManager {
       giteaIntegration: config.giteaIntegration || null,
       config: {
         provider: config.provider || 'claude',
+        ...(config.groupWorker ? { groupWorker: config.groupWorker } : {}),
         model: config.model || 'opus',
         budgetPerIteration: config.budgetPerIteration || 2.0,
         budgetLimits: config.budgetLimits || {},

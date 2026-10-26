@@ -1,3 +1,4 @@
+import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2912 (B-OG-48) Hermes headless CLI worker profile: offline S1 profile work.
  *
@@ -78,11 +79,7 @@ async function installPackage(bytes: Buffer) {
   // provider-adapter.mjs (and that file's own worker-health.mjs/
   // _resolve-impl.mjs imports) must resolve inside the copied package too,
   // even though no test calls through installed.owner's strict-claims path.
-  for (const name of ['provider-adapter.mjs', 'worker-health.mjs']) {
-    const dest = path.join(packageRoot, 'lib', name);
-    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-    await chmod(dest, 0o644);
-  }
+  await copyWorkerAdapterRuntime(base, packageRoot);
   const resolveImpl = path.join(base, '_resolve-impl.mjs');
   await copyFile(path.resolve('tools/_resolve-impl.mjs'), resolveImpl);
   await chmod(resolveImpl, 0o644);

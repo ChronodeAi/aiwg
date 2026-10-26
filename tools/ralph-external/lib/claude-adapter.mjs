@@ -212,8 +212,8 @@ export class ClaudeAdapter extends ProviderAdapter {
     ];
 
     // Session tracking
-    if (options.sessionId) {
-      args.push('--session-id', options.sessionId);
+    if (options.resumeSession || options.sessionId) {
+      args.push(options.resumeSession ? '--resume' : '--session-id', options.resumeSession || options.sessionId);
     }
 
     // Model selection (Claude passes through directly)

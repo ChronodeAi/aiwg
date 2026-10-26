@@ -26,7 +26,7 @@ import { SessionLauncher } from './session-launcher.mjs';
 import { OutputAnalyzer } from './output-analyzer.mjs';
 import { PromptGenerator } from './prompt-generator.mjs';
 import { SnapshotManager } from './snapshot-manager.mjs';
-import { CheckpointManager } from './checkpoint-manager.mjs';
+import { launchRalphCycle } from './lib/ralph-cycle-launch.mjs';
 import { StateAssessor } from './state-assessor.mjs';
 // Research-backed modules (REF-015 Self-Refine, REF-021 Reflexion)
 import { BestOutputTracker } from './best-output-tracker.mjs';
@@ -78,6 +78,7 @@ import { createProvider, ensureProvidersRegistered } from './lib/provider-adapte
  * @property {Object} [budgetLimits] - Hard cumulative LFD budget ceilings
  * @property {Object} [explorationQuota] - Flat-cycle structural-variation control
  * @property {number} [timeoutMinutes=60] - Timeout per iteration
+ * @property {Object} [groupWorker] - Optional existing managed resolver request (intent + prepared brief)
  * @property {Object} [mcpConfig] - MCP server configuration
  * @property {string} [workingDir] - Working directory
  * @property {Object} [giteaIntegration] - Gitea issue tracking
@@ -213,7 +214,7 @@ export class Orchestrator {
         {
           objective: config.objective,
           completionCriteria: config.completionCriteria,
-          loopId: config.loopId || process.env.RALPH_LOOP_ID,
+          loopId: config.loopId || config.groupWorker?.managedIntent?.parent?.id || process.env.RALPH_LOOP_ID,
           maxIterations: config.maxIterations || 5,
           model: config.model || 'opus',
           budgetPerIteration: config.budgetPerIteration || 2.0,
@@ -247,6 +248,8 @@ export class Orchestrator {
       completionCriteria: config.completionCriteria,
       maxIterations: config.maxIterations || 5,
       provider: providerName,
+      loopId: this.registeredLoopId ?? config.loopId ?? config.groupWorker?.managedIntent?.parent?.id,
+      groupWorker: config.groupWorker,
       model: config.model || 'opus',
       budgetPerIteration: config.budgetPerIteration || 2.0,
       budgetLimits: config.budgetLimits || {},
@@ -921,18 +924,6 @@ export class Orchestrator {
           this.verboseLog(`System prompt preview (first 300 chars):\n${systemPrompt.slice(0, 300)}`);
         }
 
-        // ========== START CHECKPOINT MANAGER ==========
-        if (state.config.enableCheckpoints) {
-          console.log('[External Ralph] Starting checkpoint manager...');
-          this.checkpointManager = new CheckpointManager({
-            stateDir: iterationDir,
-            projectRoot: this.projectRoot,
-            interval: state.config.checkpointIntervalMinutes * 60 * 1000,
-            sessionId: state.sessionId,
-          });
-          this.checkpointManager.start();
-        }
-
         // ========== LAUNCH SESSION ==========
         console.log('[External Ralph] Launching Claude session...');
         const startTime = Date.now();
@@ -973,21 +964,8 @@ export class Orchestrator {
           }
         }
 
-        const sessionResult = await this.sessionLauncher.launch({
-          prompt,
-          sessionId: state.sessionId,
-          model: state.config.model,
-          budget: state.config.budgetPerIteration,
-          systemPrompt,
-          mcpConfig: state.config.mcpConfig,
-          thinking: state.config.thinking,
-          tools: state.config.tools,
-          workingDir: state.config.workingDir,
-          stdoutPath: outputPaths.stdout,
-          stderrPath: outputPaths.stderr,
-          outputDir: iterationDir,
-          timeoutMs: sessionTimeoutMs,
-          verbose: state.config.verbose,
+        const sessionResult = await launchRalphCycle(this, state, {
+          prompt, systemPrompt, outputPaths, iterationDir, timeoutMs: sessionTimeoutMs,
         });
 
         const duration = Date.now() - startTime;
@@ -1135,7 +1113,8 @@ export class Orchestrator {
         // ========== UPDATE STATE ==========
         state = this.stateManager.addIteration({
           number: state.currentIteration,
-          sessionId: state.sessionId,
+          sessionId: sessionResult.attempt?.bindings.sessionId ?? state.sessionId,
+          attempt: sessionResult.attempt,
           promptFile: promptPath,
           stdoutFile: outputPaths.stdout,
           stderrFile: outputPaths.stderr,
@@ -1468,8 +1447,9 @@ export class Orchestrator {
           this.checkpointManager = null;
         }
 
-        // Save error state
-        this.stateManager.addIteration({
+        // Save error state; keep the loop's copy current so later full-state
+        // saves (e.g. attempt persistence) cannot drop this iteration.
+        state = this.stateManager.addIteration({
           number: state.currentIteration,
           sessionId: state.sessionId,
           exitCode: -1,

@@ -7,6 +7,7 @@ import {
   SharedHostScheduler, type AdmissionRequest, type SharedHostPolicy,
 } from '../../../src/serve/shared-host-scheduler.js';
 import type { WorkerHealthSummary, WorkerUsage } from '../../../src/mission-protocol/types.js';
+import { groupCycleAllowance } from '../../../tools/ralph-external/lib/ralph-group-cycle.mjs';
 
 const epoch = Date.parse('2026-10-22T12:00:00Z');
 const roots: string[] = [];
@@ -50,6 +51,33 @@ function next(id: string, previousRequestId: string, purpose: NonNullable<Admiss
 }
 
 describe('T-OG-05/08/09 cumulative managed allowances', () => {
+  it('reuses standalone Ralph cycle reservations once and charges nested retries to the original allowance', () => {
+    const { scheduler, advance } = setup();
+    const state = { startTime: new Date(epoch).toISOString(), maxIterations: 2,
+      config: { budgetLimits: { total_tokens: 40, spend_usd: 4, wall_clock_minutes: 0.5 } } };
+    const intent = { parent: { id: 'run' }, taskId: 'task', limits: { tokens: 80, costUsd: 8, wallSeconds: 90, maxAttempts: 5 } };
+    const invocation = { limits: { tokens: 20, costUsd: 2 } };
+    const clock = Date.now;
+    Date.now = () => epoch;
+    try {
+      const first = request('cycle', { allowance: groupCycleAllowance(state, intent, invocation) });
+      scheduler.submit(first);
+      const original = scheduler.snapshot();
+      advance(5000);
+      expect(scheduler.submit(structuredClone(first)).accounting!.attemptNumber).toBe(1);
+      scheduler.settle('cycle', 1, health(), usage('reported'));
+      expect(scheduler.submit(first).state).toBe('settled');
+      const nested = request('nested', { allowance: groupCycleAllowance(state, intent, invocation, 'cycle') });
+      expect(scheduler.submit(nested).accounting).toMatchObject({ attemptNumber: 2,
+        runKey: original.records.cycle!.accounting!.runKey, taskKey: original.records.cycle!.accounting!.taskKey });
+      expect(Object.values(scheduler.snapshot().allowances!).map(scope => scope.deadlineAt))
+        .toEqual(Object.values(original.allowances!).map(scope => scope.deadlineAt));
+      scheduler.settle('nested', 1, health(), usage('reported'));
+      const exhausted = request('exhausted', { allowance: groupCycleAllowance(state, intent, invocation, 'nested') });
+      expect(scheduler.submit(exhausted)).toMatchObject({ state: 'denied', reason: 'cumulative attempt allowance exhausted' });
+    } finally { Date.now = clock; }
+  });
+
   it.each(['mission', 'ralph', 'flow'] as const)('binds existing %s ceilings to the shared reservation', kind => {
     const owner = kind === 'mission' ? { kind, budgets: { maxAttempts: 2, maxTokens: 40, maxCostUsd: 4, timeoutSeconds: 30 } }
       : kind === 'ralph' ? { kind, maxIterations: 2, maxTotalTokens: 40, maxTotalCost: 4, maxWallClockMinutes: 0.5 }

@@ -46,6 +46,8 @@ import { sampleWorkerIdentity, sameWorkerIdentity, createWorkerIdentityCapture, 
   qualifyWorkerCpuTickRate, sampleWorkerCpuTime, isSafeWorkerGroupTarget } from './process-monitor.mjs';
 import { createWorkerHealthObserver, sampleOwnedWorktreeContent, classifyWorkerHealthFailure } from './lib/worker-health.mjs';
 import { ScopedFailureBreaker, attributeFailureScope } from './lib/consecutive-failure-circuit-breaker.mjs';
+import { assertManagedWorkerLaunch, validateManagedAttempt } from './lib/managed-worker-attempt.mjs';
+export { assertManagedWorkerLaunch } from './lib/managed-worker-attempt.mjs';
 import { buildSessionEnvironment } from './lib/session-environment.mjs';
 import { launcherRecoveryEvidence, observeLauncherRecoveryOutcome, recordLauncherRecoveryHint } from './lib/launcher-recovery-evidence.mjs';
 export { observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence.mjs';
@@ -413,45 +415,6 @@ function subscribeWorkerRecovery(owner, breaker) {
   _workerRecoverySubscriptions.set(owner, () => reporter.owners.delete(owner));
 }
 
-/** Reuse the MC authority and its registered one-shot identity at every spawn boundary. */
-export async function assertManagedWorkerLaunch(options, invocation, inputs, projectRoot = process.cwd()) {
-  if (!options.managedAdmission || invocation.mode !== 'managed'
-    || inputs.snapshot.config.parallelism?.worker_mode !== 'managed') throw new Error('Managed worker admission is required');
-  const { createMcAdmissionScheduler } = await importImpl(import.meta.url, 'cli/handlers/mc.js');
-  const { loadLauncherRegistry } = await importImpl(import.meta.url, 'cli/handlers/ralph-launcher.js');
-  const { workerModelKey } = await importImpl(import.meta.url, 'models/provider-policy.js');
-  const scheduler = await createMcAdmissionScheduler(projectRoot, inputs.snapshot.config);
-  const { requestId, generation } = options.managedAdmission;
-  const snapshot = scheduler.snapshot();
-  const record = snapshot.records[requestId];
-  const deadlineAtMs = Math.min(...[record?.accounting?.runKey, record?.accounting?.taskKey]
-    .map(key => snapshot.allowances?.[key]?.deadlineAt).filter(Boolean).map(Date.parse));
-  const registered = loadLauncherRegistry(projectRoot).loops[process.env.RALPH_LOOP_ID];
-  const worker = record?.managed;
-  const reservation = record?.accounting?.reservation;
-  if (!record || record.state !== 'admitted' || record.leaseGeneration !== generation
-    || !record.launchClaimedAt || !record.metadata?.invocationId || Date.parse(record.leaseExpiresAt ?? '') <= Date.now()
-    || deadlineAtMs <= Date.now()
-    || worker?.kind !== 'external' || worker.group !== invocation.selected.group
-    || worker.member !== invocation.selected.member || worker.cli !== invocation.selected.cli
-    || worker.model !== workerModelKey(invocation.selected.inferenceProvider, invocation.selected.model)
-    || reservation?.tokens != null && !(invocation.limits.tokens <= reservation.tokens)
-    || reservation?.costUsd != null && !(invocation.limits.costUsd !== null && invocation.limits.costUsd <= reservation.costUsd)
-    || registered?.managedAdmission?.requestId !== requestId || registered.managedAdmission.generation !== generation
-    || registered.managedWorker?.invocationPath !== options.invocationPath
-    || registered.managedWorker?.runDir !== options.runDir) {
-    throw new Error('Managed worker launch differs from the current claimed admission');
-  }
-  if (record.execution) {
-    const identity = sampleWorkerIdentity(process.pid);
-    if (record.execution.pid !== process.pid || !identity?.bootId || !identity.startTicks
-      || record.execution.startedAt !== `${identity.bootId}:${identity.startTicks}:${identity.uid}`) {
-      throw new Error('Managed worker supervisor identity differs');
-    }
-  }
-  return { ...record, deadlineAtMs };
-}
-
 async function workerDispatchPath(filename) {
   let candidate = filename;
   while (dirname(candidate) !== candidate) {
@@ -492,7 +455,14 @@ function workerLaunchRefusal(outcome) {
 const directStartupCorrectionContext = new WeakMap();
 
 async function launchOneWorker(owner, options) {
-  const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validate } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+  const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validatePlan } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+  const validate = async (plan, snapshot, drivers, now) => {
+    if (plan.mode !== 'managed' || !options.managedAdmission) return validatePlan(plan, snapshot, drivers, now);
+    const checked = await validateManagedAttempt(options, plan, { snapshot, drivers }, now, validatePlan,
+      attempt => publishWorkerRecord(dirname(options.invocationPath), `${basename(options.invocationPath)}.attempt.json`, attempt, inspect));
+    options.attempt = checked.attempt;
+    return checked.invocation;
+  };
   const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
   const planBytes = await boundedPrivateRead(options.invocationPath, 1048576, inspect);
   const saved = JSON.parse(planBytes.toString('utf8'));
@@ -504,7 +474,7 @@ async function launchOneWorker(owner, options) {
   const now = clock();
   const invocation = await validate(saved, inputs.snapshot, inputs.drivers, now);
   if (invocation.mode === 'managed' || options.managedAdmission) {
-    const admitted = await assertManagedWorkerLaunch(options, invocation, inputs);
+    const admitted = await assertManagedWorkerLaunch(options, invocation, inputs, options.projectRoot ?? process.cwd());
     options = { ...options, scopedBreaker: null, managedInvocationId: admitted.metadata.invocationId,
       managedDeadlineAtMs: admitted.deadlineAtMs };
   }
@@ -790,6 +760,7 @@ async function launchOneWorker(owner, options) {
       // task — never from an unverified caller claim.
       previousAttemptId: verifiedPreviousAttemptId,
       requestId: invocationId, taskDigest, role: saved.request.role,
+      ...(options.managedAdmission ? { attempt: options.attempt } : {}),
       selected: invocation.selected, planDigest: qualificationDigest(saved), invocationDigest: qualificationDigest(invocation),
       policyDigest: invocation.policyDigest, catalogDigest: invocation.catalogDigest, profileDigest: invocation.profileDigest,
       expiresAt: invocation.expiresAt, argv: displayArgv, commandDisplay: displayArgv.map(token => JSON.stringify(token)).join(' '),
@@ -1678,6 +1649,7 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
     const displayArgv = artifacts.argv.map((token, i) => i === 0 ? token : `<argument:${bytesDigest(token)}>`);
     await publish('invocation.json', { version: 1, origin: 'launcher', invocationId, attemptId: invocationId,
       previousAttemptId: verifiedPreviousAttemptId ?? null, requestId: options.managedAdmission?.requestId ?? invocationId, taskDigest: qualificationDigest(saved.request), role: saved.request.role,
+      ...(options.managedAdmission ? { attempt: options.attempt } : {}),
       selected: invocation.selected, planDigest: qualificationDigest(saved), invocationDigest: qualificationDigest(invocation),
       policyDigest: invocation.policyDigest, catalogDigest: invocation.catalogDigest, profileDigest: invocation.profileDigest,
       expiresAt: invocation.expiresAt, argv: displayArgv, commandDisplay: displayArgv.map(token => JSON.stringify(token)).join(' '),
@@ -1724,7 +1696,7 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
       workerGroup: invocation.selected.group,
       allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
       ...(options.managedAdmission ? { onDispatchCommit: async () => {
-        const admitted = await assertManagedWorkerLaunch(options, invocation, inputs);
+        const admitted = await assertManagedWorkerLaunch(options, invocation, inputs, options.projectRoot ?? process.cwd());
         options.managedDeadlineAtMs = Math.min(options.managedDeadlineAtMs, admitted.deadlineAtMs);
       } } : {}),
       ...(options.managedAdmission ? { onSpawnAttempt: () => { managedSpawnAttempted = true; } } : {}),
@@ -4272,6 +4244,7 @@ export class SessionLauncher extends EventEmitter {
             prompt: options.prompt,
             // AIWG's tracking UUID is not an OMP native session to resume.
             sessionId: this.providerAdapter.getName() === 'omp' ? options.resumeSession : options.sessionId,
+            resumeSession: options.resumeSession,
             model: options.model,
             budget: options.budget,
             maxTurns: options.maxTurns,

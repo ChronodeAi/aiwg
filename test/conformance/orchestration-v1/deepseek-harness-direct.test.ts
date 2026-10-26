@@ -1,3 +1,4 @@
+import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2909 (B-OG-44) DeepSeek Harness (`dsh`) promotion: offline S1 profile
  * work. T-OG-15 renders the version-bound `deepseek-harness-direct`
@@ -55,11 +56,7 @@ async function installPackage(bytes: Buffer) {
   await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: APPROVED.entry.packageName,
     version: APPROVED.entry.packageVersion, type: 'module' }), { mode: 0o644 });
   await writeFile(path.join(packageRoot, 'lib', 'deepseek-harness-adapter.mjs'), bytes, { mode: 0o644 });
-  for (const name of ['provider-adapter.mjs', 'worker-health.mjs']) {
-    const dest = path.join(packageRoot, 'lib', name);
-    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-    await chmod(dest, 0o644);
-  }
+  await copyWorkerAdapterRuntime(base, packageRoot);
   // Legacy class in the same module file imports this transport module too.
   // '../../providers/...' from pkg/lib resolves to base/providers/... (pkg/lib
   // mirrors tools/ralph-external/lib; base mirrors tools/).

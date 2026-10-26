@@ -5,7 +5,7 @@ This checkpoint starts the deterministic infrastructure from test strategy 09
 slices and release gates). It does not complete #2886 or verify installed
 providers. The proposal is read-only and is not required at test time.
 
-`packs.json` registers 22 packs: T-OG-01–12, 14–21 and 23–24. `ownerIssue` is
+`packs.json` registers 23 packs: T-OG-01–21 and 23–24. `ownerIssue` is
 the test-delivery issue, #2886; `mechanismOwners` are the proposal's frozen
 work-package owners. `knownCheckpointIssues` maps the tracker IDs supplied for
 the concurrent S0 work. No unknown tracker IDs are guessed. `slice` is the owning
@@ -263,3 +263,5 @@ were not skipped, and no sandbox bypass was added. All test-owned temporary
 roots were removed; no real credentials, vendor calls or sockets were used by
 the original qualification fixtures (revision 2 adds the loopback probe above). Re-run blocked gates on an authorized runner
 before accepting the S1 installation checkpoint.
+
+#2927 registers T-OG-03/08/13/14 as partial for offline continuation/fresh attempts, changed bindings, shared nested Ralph allowances and SDLC gate retention. No provider breadth or live qualification is added; the conductor records CLI-version smoke under decision 17.
