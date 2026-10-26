@@ -5258,6 +5258,46 @@ version, the command reports `needs-rebuild` instead of silently falling back.
 
 ---
 
+## Decision Ledger Retention
+
+The existing `aiwg decision` family owns completed-call retention and offline
+inspection. `rotate` uses the activity-log `--keep-last <Nd|N>` convention;
+it keeps the last **90 days** by default.
+
+```bash
+aiwg decision rotate [--keep-last <Nd|N> | --all] [--to <path>] [--json]
+aiwg decision history [--include-archives] [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--json]
+aiwg decision stats [--include-archives] [--group-by provider|session|kind|caller|passes|escalation] [--json]
+```
+
+`stats` accepts the same filters as `history`. Both stay offline, reading only
+the live ledger unless `--include-archives` is selected. Archive inclusion
+recursively reads `.jsonl` files under `archive/decision/` in the resolved
+artifact root (`aiwg artifacts path`).
+
+| Rotation option | Behavior |
+|---|---|
+| `--keep-last <N>d` | Keep valid records from the last N days, including the cutoff; default `90d` |
+| `--keep-last <N>` | Keep the N most recent valid records by timestamp |
+| `--all` | Explicitly archive every line; cannot combine with `--keep-last` |
+| `--to <path>` | New `.jsonl` file beneath `archive/decision/`; artifact-relative or absolute |
+| `--json` | Print archived/retained/malformed line counts and the archive path (null when nothing moved) |
+
+Zero or invalid windows require correction or explicit `--all` (usage exit 2).
+Default archive names contain a UTC timestamp and unique ID. Destinations
+outside the artifact root or archive subtree, symlinked directories and
+existing files are refused (exit 1). New directories/files use `0700`/`0600`;
+existing decision archive directories must be private and owned by the current user.
+Malformed lines stay live unless `--all` moves them, with bytes preserved.
+Readers count invalid records as `skipped`.
+
+Appenders, rotation and readers share a cross-process lock. The archive is
+synced before live-file replacement; concurrent appends are preserved. An
+interrupted rotation may leave duplicate copies before replacement; retain
+both files and reconcile before using totals. See the
+[decision ledger guide](../decision/jev-quickstart.md#retaining-recent-calls)
+for locking, failure handling and examples.
+
 ## Effect Ledger Commands
 
 The effect ledger is a signed proof and deduplication index for side effects:

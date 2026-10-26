@@ -267,12 +267,11 @@ recorded**; those are rejected with exit 2 (CLI) before any Jev call.
 symlink, a pre-planted hard link, loose permissions, a previous crash's
 partial write — under the assumption that the artifact root is owned and
 written by the *same local user* running `aiwg`. It is not a defense against
-a hostile process already running as that user: there is no cross-process
-lock, and an existing file or directory that fails a safety check is **never
-modified** (no chmod, no truncation) — recording is skipped and reported
-once. The ledger also has **no built-in retention**: it grows without bound,
-and the operator may truncate or delete it at any time; `history`/`stats`
-tolerate a missing file (empty result) rather than erroring.
+a hostile process already running as that user. An existing file or directory
+that fails a safety check is **never modified** (no chmod, no truncation) —
+recording is skipped and reported once. Appenders, rotation and readers share
+a cross-process lock. Use `decision rotate` to archive older records;
+`history`/`stats` tolerate a missing file (empty result).
 
 A ledger write failure, a slow/unavailable attribution lookup, or anything
 else inside the recording step never changes the `ask` result or exit code:
@@ -280,9 +279,9 @@ recording is bounded by a short deadline (250 ms by default) and prints at
 most one warning to stderr. On timeout, that warning says exactly
 **"completion unknown"** — the in-flight attempt is not and cannot be
 cancelled (Node has no way to abort an in-flight filesystem call), so the
-record may or may not eventually land; no *later* stage of that same attempt
-starts once the deadline fires, so a slow attribution lookup cannot itself
-delay the write past the deadline.
+record may or may not eventually land. A slow attribution lookup cannot start
+a new append after the deadline; an append already waiting for the lock can
+still complete afterward.
 
 Records carry the resolved provider (`--provider` to override; otherwise
 the same runtime detection `aiwg steward` uses, degrading to `unknown` if
@@ -314,11 +313,10 @@ a bounded length. Question and context text are **never** written to the
 ledger at all unless `--record-text` is passed, and even then the redacted
 text is truncated to a documented cap (marked `textTruncated: true` when it
 is). A whole record is capped below the conservative single-write atomicity
-boundary most platforms honor for `PIPE_BUF` (4096 bytes), making a single,
-non-interleaved write the overwhelmingly likely outcome — not a guarantee:
-there is no cross-process append lock, so two concurrent writers can in rare
-cases interleave and produce one malformed line, which `history`/`stats`
-detect and skip (counted), never silently merge into a neighboring record.
+boundary most platforms honor for `PIPE_BUF` (4096 bytes). Appenders hold
+the same cross-process lock as retention from opening the ledger through
+closing it, including short-write retries and trailing-newline repair.
+`history`/`stats` count malformed lines as skipped; rotation preserves them.
 
 `questionDigest`/`contextDigest` are plain, deterministic SHA-256 over the
 raw text. That is **not** a confidentiality guarantee: a short or guessable
@@ -338,7 +336,7 @@ aiwg decision history --no-caller --json
 
 `history` and `stats` read the ledger offline — no network, no Jev call.
 `history` supports `--since`, `--provider`, `--session`, `--kind`,
-`--status`, `--caller`, `--no-caller` and `--json`; `--since` is strict ISO-8601 — a bare date or an
+`--status`, `--caller`, `--no-caller`, `--include-archives` and `--json`; `--since` is strict ISO-8601 — a bare date or an
 offsetless timestamp is interpreted as UTC, and an invalid calendar date
 (e.g. `2026-02-30`) is rejected with exit 2, including when an explicit
 offset is present (the local calendar/time components are validated before
@@ -359,9 +357,59 @@ fallback rate (and a per-reason rate) as a fraction of the group's total
 calls, the confidence distribution, and three separate savings quantities in
 both text and JSON. Both
 commands report how many stored lines failed validation as `skipped`.
-Retention (archiving or pruning old entries) is a documented follow-up, not
-implemented yet — delete or truncate `.aiwg/decision/ledger.jsonl` yourself
-if it grows too large; both commands tolerate a missing file.
+
+### Retaining recent calls
+
+`aiwg decision rotate` follows the activity-log retention convention:
+`--keep-last <Nd|N>` selects a duration in days or a count of the most recent
+valid records. It is a subcommand of the existing `decision` owner because
+it manages the same completed-call ledger as `history` and `stats`.
+
+```bash
+aiwg decision rotate                       # keep the last 90 days
+aiwg decision rotate --keep-last 1000       # keep the newest 1000 valid calls
+aiwg decision rotate --keep-last 30d --json
+aiwg decision rotate --all                  # explicitly archive everything
+aiwg decision rotate --all --to archive/decision/manual.jsonl
+aiwg decision history --include-archives --json
+aiwg decision stats --include-archives --group-by caller --json
+```
+
+The default keeps records from the last **90 days**, including the cutoff.
+Zero/negative windows are refused; rotating without a keep window requires
+`--all`, which cannot be combined with `--keep-last`. Count retention orders
+by timestamp, preserving original line order within each output file.
+Malformed lines (including invalid UTF-8 and partial final lines) retain their
+original bytes in the live file; `--all` moves them to the archive. Nothing is
+pruned or deleted by retention.
+
+Archives default to `archive/decision/<UTC-timestamp>-<unique-id>.jsonl`
+beneath the artifact root resolved by `aiwg artifacts path`. `--to` accepts
+an artifact-relative or absolute `.jsonl` filename **within that same archive
+subtree**. Paths outside the resolved root or archive subtree, symlinked directories,
+and existing destination files are refused. New archive directories use
+`0700`, files use `0600`; existing decision archive directories must be private and
+owned by the current user. The shared `archive/` parent may be readable but
+must not be writable by other users. Ledger file safety checks also apply when reading
+archives. External artifact roots remain external; there is no local fallback.
+
+Appenders, rotation, and readers share `decision/ledger.lock` using the
+existing cross-process directory lock. Rotation writes and syncs the archive
+before atomically replacing the live file under that lock, so concurrent
+completed appends remain in one of the files. Reads hold the lock across both
+live and archive scans to avoid observing half a rotation. Lock acquisition
+waits at most 30 seconds and reclaims only owners proven dead on this host.
+The existing short recording deadline still reports completion as unknown
+if an append continues in the background while waiting for the lock. All
+writers must use the updated ledger API; manually editing files bypasses it.
+An interruption between archive creation and live replacement can leave
+copies in both files; preserve both and reconcile before relying on totals.
+
+`history` and `stats` scan only the live ledger by default. With
+`--include-archives`, they also scan `.jsonl` files recursively under
+`archive/decision/`, apply their existing filters, and report invalid lines
+as `skipped`. These commands remain offline and tolerate a missing ledger.
+
 
 ### Reading savings and setting weights
 

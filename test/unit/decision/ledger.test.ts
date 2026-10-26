@@ -1,4 +1,7 @@
-import { chmod, link, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile, type FileHandle } from 'node:fs/promises';
+import { mkdtempSync } from 'node:fs';
+import { Worker } from 'node:worker_threads';
+import { once } from 'node:events';
+import { chmod, link, mkdir, readdir, readFile, rm, stat, symlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -13,6 +16,7 @@ import {
   DecisionLedgerSinceError,
   decisionLedgerHistory,
   decisionLedgerStats,
+  rotateDecisionLedger,
   MAX_LEDGER_RECORD_BYTES,
   MAX_RECORDED_CHOICE_IDS,
   parseDecisionLedgerSince,
@@ -69,7 +73,7 @@ describe('decision ledger', () => {
   });
 
   async function tempRoot(): Promise<string> {
-    const directory = await mkdtemp(path.join(tmpdir(), 'aiwg-decision-ledger-'));
+    const directory = mkdtempSync(path.join(tmpdir(), 'aiwg-decision-ledger-'));
     directories.push(directory);
     return directory;
   }
@@ -138,6 +142,156 @@ describe('decision ledger', () => {
   function ledgerFilePath(projectRoot: string): string {
     return path.join(projectRoot, '.aiwg', 'decision', 'ledger.jsonl');
   }
+
+  describe('retention', () => {
+    async function appendAt(projectRoot: string, id: string, daysAgo: number) {
+      const record = buildDecisionLedgerRecord(yesNoInput, answeredResult,
+        buildContext({ projectRoot, id: () => id, now: () => FIXED_NOW - daysAgo * 86_400_000 }));
+      expect(await appendDecisionLedgerRecord(record, { projectRoot })).toBe(true);
+      return record;
+    }
+
+    it('defaults to 90 days, preserves malformed bytes, and optionally reads archives offline', async () => {
+      const projectRoot = await tempRoot();
+      await appendAt(projectRoot, 'old', 91);
+      await appendAt(projectRoot, 'boundary', 90);
+      await appendAt(projectRoot, 'recent', 1);
+      const malformed = Buffer.from([0xff, 0x0d, 0x0a, 0x7b]);
+      await writeFile(ledgerFilePath(projectRoot), Buffer.concat([
+        await readFile(ledgerFilePath(projectRoot)), malformed,
+      ]));
+      const result = await rotateDecisionLedger({ projectRoot, now: () => FIXED_NOW });
+      expect(result).toMatchObject({ archived: 1, retained: 4, malformed: 2 });
+      expect((await readFile(ledgerFilePath(projectRoot))).subarray(-malformed.length)).toEqual(malformed);
+      expect((await decisionLedgerHistory(projectRoot)).records.map(record => record.id)).toEqual(['boundary', 'recent']);
+      expect(await decisionLedgerHistory(projectRoot, { includeArchives: true })).toMatchObject({ count: 3, skipped: 2 });
+      expect((await decisionLedgerStats(projectRoot, { includeArchives: true })).groups[0].totalCalls).toBe(3);
+      if (!IS_WINDOWS) {
+        expect((await stat(result.archivePath!)).mode & 0o777).toBe(0o600);
+        expect((await stat(path.dirname(result.archivePath!))).mode & 0o777).toBe(0o700);
+        expect((await stat(ledgerFilePath(projectRoot))).mode & 0o777).toBe(0o600);
+      }
+      const everything = await rotateDecisionLedger({ projectRoot, all: true });
+      expect(everything).toMatchObject({ archived: 4, retained: 0, malformed: 2 });
+      expect((await readFile(everything.archivePath!)).subarray(-malformed.length)).toEqual(malformed);
+      expect(await decisionLedgerHistory(projectRoot, { includeArchives: true })).toMatchObject({ count: 3, skipped: 2 });
+    });
+
+    it('keeps the most recent N valid records even when timestamps are out of order', async () => {
+      const projectRoot = await tempRoot();
+      await appendAt(projectRoot, 'recent', 1);
+      await appendAt(projectRoot, 'old', 100);
+      await appendAt(projectRoot, 'middle', 10);
+      const result = await rotateDecisionLedger({ projectRoot, keepLast: '2' });
+      expect(result).toMatchObject({ archived: 1, retained: 2 });
+      expect((await decisionLedgerHistory(projectRoot)).records.map(record => record.id)).toEqual(['middle', 'recent']);
+    });
+
+    it.each(['0', '0d', '-1', 'NaN', '9007199254740992', ''])('refuses rotate-all without --all (%s)', async keepLast => {
+      const projectRoot = await tempRoot();
+      await appendAt(projectRoot, 'unchanged', 100);
+      const original = await readFile(ledgerFilePath(projectRoot));
+      await expect(rotateDecisionLedger({ projectRoot, keepLast })).rejects.toThrow('--all');
+      expect(await readFile(ledgerFilePath(projectRoot))).toEqual(original);
+    });
+
+    it('refuses paths outside an external resolved artifact root and paths through symlinks', async () => {
+      const projectRoot = await tempRoot();
+      const artifactRoot = await tempRoot();
+      const outside = await tempRoot();
+      process.env.AIWG_ARTIFACTS_PATH = artifactRoot;
+      const record = await appendAt(projectRoot, 'old', 100);
+      for (const to of [path.join(outside, 'archive.jsonl'), '../escape.jsonl',
+        path.join(artifactRoot + '-sibling', 'archive.jsonl')]) {
+        await expect(rotateDecisionLedger({ projectRoot, all: true, to })).rejects.toThrow('artifact root');
+      }
+      await symlink(outside, path.join(artifactRoot, 'archive'), IS_WINDOWS ? 'junction' : 'dir');
+      await expect(rotateDecisionLedger({ projectRoot, all: true })).rejects.toThrow('Unsafe');
+      expect(await readdir(outside)).toEqual([]);
+      await rm(path.join(artifactRoot, 'archive'));
+      const result = await rotateDecisionLedger({ projectRoot, all: true, to: 'archive/decision/custom.jsonl' });
+      expect(result.archivePath).toBe(path.join(artifactRoot, 'archive/decision/custom.jsonl'));
+      expect((await decisionLedgerHistory(projectRoot, { includeArchives: true })).records).toEqual([record]);
+      expect(await readdir(path.join(projectRoot, '.aiwg')).catch(() => [])).not.toContain('decision');
+    });
+
+    it('reuses the activity-log archive parent and creates a private nested decision archive', async () => {
+      const projectRoot = await tempRoot();
+      await appendAt(projectRoot, 'old', 100);
+      const archiveRoot = path.join(projectRoot, '.aiwg', 'archive');
+      await mkdir(archiveRoot, { mode: 0o755 });
+      if (!IS_WINDOWS) await chmod(archiveRoot, 0o755);
+      const result = await rotateDecisionLedger({ projectRoot, all: true,
+        to: 'archive/decision/nested/custom.jsonl' });
+      expect(result.archived).toBe(1);
+      expect((await decisionLedgerHistory(projectRoot, { includeArchives: true })).count).toBe(1);
+      if (!IS_WINDOWS) {
+        expect((await stat(archiveRoot)).mode & 0o777).toBe(0o755);
+        expect((await stat(path.dirname(result.archivePath!))).mode & 0o777).toBe(0o700);
+      }
+    });
+
+    it('refuses loose archive permissions without changing them or losing live data', async () => {
+      if (IS_WINDOWS) return;
+      const projectRoot = await tempRoot();
+      await appendAt(projectRoot, 'old', 100);
+      const archiveDir = path.join(projectRoot, '.aiwg', 'archive', 'decision');
+      await mkdir(archiveDir, { recursive: true, mode: 0o700 });
+      await chmod(archiveDir, 0o755);
+      await expect(rotateDecisionLedger({ projectRoot, all: true })).rejects.toThrow('Unsafe');
+      expect((await stat(archiveDir)).mode & 0o777).toBe(0o755);
+      expect((await decisionLedgerHistory(projectRoot)).count).toBe(1);
+    });
+
+    it('refuses existing archive files, symlinks and hard links without changing the ledger', async () => {
+      const projectRoot = await tempRoot();
+      await appendAt(projectRoot, 'one', 100);
+      const first = await rotateDecisionLedger({ projectRoot, all: true });
+      await appendAt(projectRoot, 'two', 100);
+      const original = await readFile(ledgerFilePath(projectRoot));
+      await expect(rotateDecisionLedger({ projectRoot, all: true, to: first.archivePath! })).rejects.toThrow();
+      const archiveDir = path.dirname(first.archivePath!);
+      await symlink(first.archivePath!, path.join(archiveDir, 'link.jsonl'));
+      await expect(rotateDecisionLedger({ projectRoot, all: true, to: path.join(archiveDir, 'link.jsonl') })).rejects.toThrow();
+      await expect(decisionLedgerHistory(projectRoot, { includeArchives: true })).rejects.toThrow('symlink');
+      await rm(path.join(archiveDir, 'link.jsonl'));
+      await link(first.archivePath!, path.join(archiveDir, 'hard.jsonl'));
+      await expect(decisionLedgerHistory(projectRoot, { includeArchives: true })).rejects.toThrow('hard link');
+      expect(await readFile(ledgerFilePath(projectRoot))).toEqual(original);
+    });
+
+    it('preserves every record while a real worker appends during repeated rotation', async () => {
+      const projectRoot = await tempRoot();
+      const record = await appendAt(projectRoot, 'seed', 100);
+      const worker = new Worker(`
+        const { parentPort, workerData } = require('node:worker_threads');
+        (async () => {
+          const { appendDecisionLedgerRecord } = await import(workerData.module);
+          parentPort.postMessage('ready');
+          await new Promise(resolve => parentPort.once('message', resolve));
+          for (let i = 0; i < 120; i++) {
+            const ok = await appendDecisionLedgerRecord({ ...workerData.record, id: 'worker-' + i },
+              { projectRoot: workerData.projectRoot, warn: message => { throw new Error(message); } });
+            if (!ok) throw new Error('Worker append failed');
+          }
+          parentPort.close();
+        })().catch(error => { throw error; });
+      `, { eval: true, workerData: { projectRoot, record,
+        module: new URL('../../../dist/src/decision/ledger.js', import.meta.url).href } });
+      try {
+        const exited = once(worker, 'exit');
+        await once(worker, 'message');
+        worker.postMessage('go');
+        for (let i = 0; i < 24; i++) await rotateDecisionLedger({ projectRoot, keepLast: '1' });
+        expect((await exited)[0]).toBe(0);
+        const history = await decisionLedgerHistory(projectRoot, { includeArchives: true });
+        const ids = history.records.map(record => record.id);
+        expect(history.skipped).toBe(0);
+        expect(ids).toHaveLength(121);
+        expect(new Set(ids)).toEqual(new Set(['seed', ...Array.from({ length: 120 }, (_, i) => `worker-${i}`)]));
+      } finally { await worker.terminate(); }
+    });
+  });
 
   it.each(DECISION_SESSION_ENV_VARS)('records session and source from %s on both transports', async key => {
     const projectRoot = await tempRoot();

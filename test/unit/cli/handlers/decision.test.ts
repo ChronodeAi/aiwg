@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -66,6 +68,68 @@ describe('decisionHandler', () => {
     });
     expect(getCommandIds()).toContain('decision');
     expect(searchCommandsByKeyword('classification').map(command => command.id)).toContain('decision');
+  });
+
+  it('rotates with the activity-log flags and reads archives offline through history and stats', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-decision-retention-cli-'));
+    cleanup.push(dir);
+    const record = buildDecisionLedgerRecord({ question: 'Proceed?', mode: { kind: 'yes-no' } }, {
+      schema: 'aiwg-decision-ask/v1', status: 'fallback', answer: null, confidence: null,
+      reason: 'not-configured', fallback: 'llm', model: null, usage: null, latencyMs: 0,
+    }, { transport: 'cli', projectRoot: dir, provider: 'codex', sessionId: 'synthetic',
+      now: () => Date.UTC(2020, 0, 1) });
+    expect(await appendDecisionLedgerRecord(record, { projectRoot: dir })).toBe(true);
+    const run = (args: string[]) => decisionHandler.execute({ args, rawArgs: [], cwd: dir, frameworkRoot: process.cwd() });
+    const rotated = await run(['rotate', '--to', 'archive/decision/custom.jsonl', '--json']);
+    expect(rotated.exitCode).toBe(0);
+    expect(JSON.parse(rotated.message!)).toMatchObject({ archived: 1, retained: 0 });
+    expect(JSON.parse((await run(['history', '--json'])).message!).count).toBe(0);
+    expect(JSON.parse((await run(['history', '--include-archives', '--json'])).message!).count).toBe(1);
+    expect(JSON.parse((await run(['stats', '--include-archives', '--json'])).message!).groups[0].totalCalls).toBe(1);
+    expect((await run(['stats', '--include-archives'])).message).toContain('1 calls');
+    expect((await run(['rotate', '--all'])).exitCode).toBe(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('routes retention and archive inclusion through the built CLI offline', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-decision-built-retention-'));
+    cleanup.push(dir);
+    const record = buildDecisionLedgerRecord({ question: 'Synthetic?', mode: { kind: 'yes-no' } }, {
+      schema: 'aiwg-decision-ask/v1', status: 'fallback', answer: null, confidence: null,
+      reason: 'not-configured', fallback: 'llm', model: null, usage: null, latencyMs: 0,
+    }, { transport: 'cli', projectRoot: dir, provider: 'unknown', sessionId: 'synthetic' });
+    expect(await appendDecisionLedgerRecord(record, { projectRoot: dir })).toBe(true);
+    const run = (...args: string[]) => JSON.parse(execFileSync(process.execPath,
+      [path.resolve('bin/aiwg.mjs'), 'decision', ...args, '--json'], {
+        cwd: dir, encoding: 'utf8', timeout: 60_000,
+        env: { PATH: process.env.PATH, HOME: dir, AIWG_CONFIG: path.join(dir, 'aiwg-config.json'),
+          AIWG_ARTIFACTS_PATH: path.join(dir, '.aiwg'), AIWG_SKIP_ACTIVITY_LOG: '1',
+          AIWG_DISABLE_PROCESS_PROVIDER_DETECTION: '1' },
+      }));
+    expect(run('rotate', '--all')).toMatchObject({ archived: 1, retained: 0 });
+    expect(run('history')).toMatchObject({ count: 0 });
+    expect(run('history', '--include-archives')).toMatchObject({ count: 1 });
+    expect(run('stats', '--include-archives').groups[0]).toMatchObject({ totalCalls: 1 });
+  });
+
+  it.each([
+    ['rotate', '--keep-last', '0'], ['rotate', '--keep-last', '0d'],
+    ['rotate', '--all', '--keep-last', '90d'], ['rotate', '--keep-last'],
+    ['rotate', '--to'], ['rotate', '--unknown'], ['rotate', 'extra'],
+  ])('rejects invalid retention arguments: %j', async (...args) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-decision-retention-usage-'));
+    cleanup.push(dir);
+    const result = await decisionHandler.execute({ args, rawArgs: [], cwd: dir, frameworkRoot: process.cwd() });
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('refuses an archive outside the artifact root through the CLI', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-decision-retention-path-'));
+    cleanup.push(dir);
+    const result = await decisionHandler.execute({ args: ['rotate', '--all', '--to', path.join(dir, 'escape.jsonl')],
+      rawArgs: [], cwd: dir, frameworkRoot: process.cwd() });
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toContain('artifact root');
   });
 
   it('shows separate token and dollar estimates in text and JSON for session and caller groups', async () => {
