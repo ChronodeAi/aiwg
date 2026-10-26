@@ -48,13 +48,11 @@
  * no CLI flag to inline its content. `buildWorkerArgs` below is a pure
  * function (per #3002/#2998 precedent: it must never write files or touch
  * the network), so it cannot create that file itself. This profile
- * therefore exports {@link buildWarpBriefSkillFile}, a pure function
- * returning the exact relative path and Markdown content an execution-time
- * file-generation primitive would need to write before this argv runs —
- * that primitive does not exist in the shared session-launcher yet
- * (tracked as the same class of need as #2998/#3002: "an execution-time
- * generated artifact"). Until it exists, `--skill` dispatch is reported
- * honestly as unqualified/blocked, never silently invented as working.
+ * exposes pure skill content/path declarations through buildWorkerArtifacts.
+ * The shared launcher creates the bounded per-invocation file exclusively
+ * under the worker cwd, then removes it on failure, completion or stop.
+ * Delivery wiring is synthetic-tested; real skill discovery stays unqualified
+ * until an authenticated run establishes the search root and behavior.
  *
  * Other controls this profile found NO flag for at all in the full
  * `agent run --help` capture, so they are `unavailable` rather than
@@ -143,12 +141,9 @@ function assertSingleTokenValue(value, label) {
  * `.warp/skills/`, `.claude/skills/`, and `.codex/skills/`", `agent run
  * --help`). This function only RETURNS the intended relative path and
  * Markdown content; it never writes anything (argv rendering, and
- * everything this profile exports, stays pure — #3002). An execution-time
- * file-generation primitive in the shared session-launcher is the missing
- * piece that would actually place this file before the rendered argv runs;
- * until that exists, the `skill`/brief-transport control stays unqualified.
- * The intended search root is unverified. Execution-time generation must
- * refuse existing paths, clean up afterward, and never commit the file.
+ * everything this profile exports, stays pure — #3002). The shared launcher
+ * writes this declaration exclusively at execution time and cleans it up.
+ * The real skill search root remains unverified behind authentication.
  * @param {string} brief
  * @param {string} invocationId
  * @returns {{ relativePath: string, content: string }}
@@ -230,6 +225,12 @@ export class WarpAdapter extends ProviderAdapter {
       '--skill', skill,
       '--no-snapshot',
     ];
+  }
+
+  /** Pure declaration; argv and skill content share the exact invocation id. */
+  buildWorkerArtifacts(invocation) {
+    return [{ name: 'brief-skill', location: 'workspace-relative', prefix: '.agents/skills/aiwg-brief-',
+      ...buildWarpBriefSkillFile(invocation.brief, invocation.invocationId) }];
   }
 
   /** No documented stdin abort channel; nothing is sent on stdin (module doc). */

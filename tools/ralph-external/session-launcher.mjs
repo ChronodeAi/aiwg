@@ -96,25 +96,9 @@ const bytesDigest = bytes => `sha256:${createHash('sha256').update(bytes).digest
 export const beneath = (root, filename) => { const r = relative(root, filename); return r === '' || !r.startsWith('..') && !isAbsolute(r); };
 const signalNumberToName = Object.fromEntries(Object.entries(osConstants.signals ?? {}).map(([name, number]) => [number, name]));
 
-/** Resolve the deepest existing ancestor's realpath, then reattach any
- * not-yet-created remainder. A lexical prefix match is not sufficient: a
- * symlinked ancestor of either path can make `beneath()` wrong in either
- * direction, so both sides are resolved before the lexical comparison. */
-async function resolveRealish(target) {
-  const parts = target.split('/').filter(Boolean);
-  for (let i = parts.length; i >= 0; i--) {
-    const candidate = i === 0 ? '/' : `/${parts.slice(0, i).join('/')}`;
-    try {
-      const real = await realpath(candidate);
-      const remainder = parts.slice(i).join('/');
-      return remainder ? join(real, remainder) : real;
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
-  return target;
-}
 export async function realBeneath(root, filename) {
-  const [realRoot, realFilename] = await Promise.all([resolveRealish(root), resolveRealish(filename)]);
-  return beneath(realRoot, realFilename);
+  const paths = await importImpl(import.meta.url, 'serve/worker-invocation-paths.js');
+  return paths.realBeneath(root, filename);
 }
 
 // Linux directory handles pin each ancestor. O_NOFOLLOW on a pathname alone
@@ -332,55 +316,8 @@ function checkDispatchGuard(dispatchGuard) {
   }
 }
 
-/** Execution-time files in the launcher's private directory. Content producers
- * are pure; preview paths remain ${artifact:name}. Workspace locations are a
- * future declaration kind and are refused here. */
-export async function materializeWorkerArtifacts(invocation, runDir) {
-  const artifacts = invocation.artifacts ?? [];
-  if (!Array.isArray(artifacts) || artifacts.length > 16) throw new Error('Worker artifact count exceeds bound');
-  const names = new Set();
-  let total = 0;
-  for (const artifact of artifacts) {
-    if (!artifact || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(artifact.name)
-      || /[^A-Za-z0-9_-]/.test(artifact.name) || names.has(artifact.name) || typeof artifact.content !== 'string'
-      || artifact.location !== undefined && artifact.location !== 'run-directory') throw new Error('Invalid worker artifact declaration');
-    names.add(artifact.name);
-    const size = Buffer.byteLength(artifact.content);
-    total += size;
-    if (size > 1048576 || total > 4194304) throw new Error('Worker artifact bytes exceed bound');
-  }
-  const paths = new Map(artifacts.map(artifact => [artifact.name, join(runDir, `artifact-${artifact.name}`)]));
-  const argv = invocation.argv.map(token => {
-    if (!token.includes('${artifact:')) return token;
-    const match = /^\$\{artifact:([A-Za-z0-9][A-Za-z0-9_-]{0,63})\}$/.exec(token);
-    if (!match || !paths.has(match[1])) throw new Error('Undeclared worker artifact placeholder');
-    return paths.get(match[1]);
-  });
-  const { inspectWorkerPath } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
-  await inspectWorkerPath(runDir, 'directory');
-  const stat = await lstat(runDir);
-  if (stat.uid !== process.getuid() || (stat.mode & 0o077)) throw new Error('Worker artifact directory must be private and owned');
-  const created = [];
-  const cleanup = async () => {
-    const results = await Promise.allSettled(created.map(filename =>
-      withWorkerPath(filename, target => unlink(target)).catch(error => {
-        if (error.code !== 'ENOENT') throw error;
-      })));
-    const failed = results.find(result => result.status === 'rejected');
-    if (failed) throw failed.reason;
-  };
-  try {
-    for (const artifact of artifacts) {
-      const filename = paths.get(artifact.name);
-      const handle = await withWorkerPath(filename, target => open(target,
-        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
-      created.push(filename);
-      try { await handle.writeFile(artifact.content); await handle.sync(); }
-      finally { await handle.close(); }
-    }
-    return { argv, cleanup };
-  } catch (error) { await cleanup(); throw error; }
-}
+import { materializeWorkerArtifacts, WorkerArtifactLifecycle } from './lib/worker-artifacts.mjs';
+export { materializeWorkerArtifacts } from './lib/worker-artifacts.mjs';
 
 const _workerRecoverySubscriptions = new WeakMap();
 const _workerRecoveryReporters = new WeakMap();
@@ -456,9 +393,11 @@ const directStartupCorrectionContext = new WeakMap();
 
 async function launchOneWorker(owner, options) {
   const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validatePlan } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
-  const validate = async (plan, snapshot, drivers, now) => {
-    if (plan.mode !== 'managed' || !options.managedAdmission) return validatePlan(plan, snapshot, drivers, now);
-    const checked = await validateManagedAttempt(options, plan, { snapshot, drivers }, now, validatePlan,
+  // Forward the saved-plan path: invocation identity is verified against it (#2905).
+  const validate = async (plan, snapshot, drivers, now, planPath = options.invocationPath) => {
+    const validateAt = (p, s, d, n) => validatePlan(p, s, d, n, planPath);
+    if (plan.mode !== 'managed' || !options.managedAdmission) return validateAt(plan, snapshot, drivers, now);
+    const checked = await validateManagedAttempt(options, plan, { snapshot, drivers }, now, validateAt,
       attempt => publishWorkerRecord(dirname(options.invocationPath), `${basename(options.invocationPath)}.attempt.json`, attempt, inspect));
     options.attempt = checked.attempt;
     return checked.invocation;
@@ -472,7 +411,9 @@ async function launchOneWorker(owner, options) {
   let inputs = await loadInputs();
   const clock = () => typeof options.now === 'function' ? options.now() : options.now ?? new Date().toISOString();
   const now = clock();
-  const invocation = await validate(saved, inputs.snapshot, inputs.drivers, now);
+  const { assertConductorWorkerPlan } = await importImpl(import.meta.url, 'serve/worker-invocation-paths.js');
+  await assertConductorWorkerPlan(saved, options.invocationPath, inputs.drivers);
+  const invocation = await validate(saved, inputs.snapshot, inputs.drivers, now, options.invocationPath);
   if (invocation.mode === 'managed' || options.managedAdmission) {
     const admitted = await assertManagedWorkerLaunch(options, invocation, inputs, options.projectRoot ?? process.cwd());
     options = { ...options, scopedBreaker: null, managedInvocationId: admitted.metadata.invocationId,
@@ -578,7 +519,7 @@ async function launchOneWorker(owner, options) {
   // themselves; pre-spawn refusals above never reach this point. Global
   // dispatch AND per-CLI enablement are checked inside `admitDirectWorker`
   // before any breaker construction (#2915 final review, finding 1).
-  const invocationId = randomUUID();
+  const invocationId = invocation.invocationId ?? randomUUID();
   // #2915 review 4 (finding 8): computed ONCE, before admission, so the
   // SAME digest both gates the allowance reservation here and is published
   // into invocation.json below — never recomputed from a possibly-stale
@@ -706,6 +647,7 @@ async function launchOneWorker(owner, options) {
     // release without leaving a marker even past the canary deadline.
     await settleLedger({ kind: 'uncertain', confirmedStop: true });
     if (ledgerDiagnostics.length) error.ledgerDiagnostics = ledgerDiagnostics;
+    artifactLifecycle.failure(error);
     throw error;
   }
   const supervisor = sampleWorkerIdentity(process.pid);
@@ -723,7 +665,9 @@ async function launchOneWorker(owner, options) {
   // the per-call promise returned to the caller still reflects this write's
   // own outcome.
   let latestProcessRecord = null;
+  const artifactLifecycle = new WorkerArtifactLifecycle(invocation, invocationId);
   const publish = (name, value) => {
+    artifactLifecycle.observe(name, value);
     if (name === 'process.json') {
       value = { ...value, recovery: { ...admission.breaker.recoveryStatus(), observedAt: new Date().toISOString() } };
       if (options.startupCorrectionRecord) value.startupCorrection = options.startupCorrectionRecord;
@@ -784,7 +728,7 @@ async function launchOneWorker(owner, options) {
     }
     // Recheck policy, prompt, installation and exact bindings after file preparation.
     inputs = await loadInputs();
-    await validate(saved, inputs.snapshot, inputs.drivers, clock());
+    await validate(saved, inputs.snapshot, inputs.drivers, clock(), options.invocationPath);
     gate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config,
       paths: await Promise.all([invocation.cwd, runDir].map(workerDispatchPath)) });
     if (!gate.ok) throw workerDispatchRefusal(gate);
@@ -846,6 +790,7 @@ async function launchOneWorker(owner, options) {
     // real child's own queued events (exit/close) race ahead of
     // `captureOneWorker`'s own listener attachment in several tests (and
     // would in production).
+    artifactLifecycle.spawning();
     const launchResult = (options.launchIsolated ?? launchIsolatedWorker)({ name: invocationId,
       command: artifacts.argv[0], args: artifacts.argv.slice(1), cwd: invocation.cwd,
       memoryMaxGb: options.memoryMaxGb ?? 4, gate, config: inputs.snapshot.config, isolation, workerGroup: invocation.selected.group,
@@ -959,6 +904,7 @@ async function launchOneWorker(owner, options) {
       const graceMs = (invocation.health?.terminateGraceSeconds ?? 5) * 1000;
       const { confirmedStop } = await resolveStopEvidence({ isolationMode: outcome.mode,
         unitName: outcome.unit ?? null, child: outcome.child, graceMs });
+      artifactLifecycle.confirmedStop = confirmedStop;
       await settleLedger({ kind: 'uncertain', confirmedStop });
       // #2915 review 6 (finding 3d): when this bounded stop escalation DOES
       // confirm termination, also call the explicit reconciliation -- a
@@ -976,7 +922,7 @@ async function launchOneWorker(owner, options) {
   } finally {
     admission.breaker.removeListener('transition', onScopeTransition);
     await publishing;
-    try { await artifacts?.cleanup(); } finally {
+    try { await artifactLifecycle.finish(artifacts); } finally {
       // Never chmod a worker-replaced pathname; only the inodes we opened.
       for (const handle of handles) { await handle.chmod(0o600).catch(() => {}); await handle.close().catch(() => {}); }
       await inspect(runDir, 'directory');
@@ -1623,7 +1569,8 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
   if (runStat.uid !== process.getuid()) throw new Error('Worker run directory must be conductor-owned');
   await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     try { await handle.chmod(0o700); } finally { await handle.close(); } });
-  const invocationId = options.managedAdmission ? options.managedInvocationId : randomUUID();
+  const invocationId = invocation.invocationId ?? (options.managedAdmission ? options.managedInvocationId : randomUUID());
+  if (options.managedAdmission && invocationId !== options.managedInvocationId) throw new Error('Worker artifact invocation id differs from managed admission');
   const reservation = await withWorkerPath(join(runDir, '.launch-owner'), target => open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
   try { await reservation.writeFile(invocationId); await reservation.sync(); } finally { await reservation.close(); }
   const supervisor = sampleWorkerIdentity(process.pid);
@@ -1635,7 +1582,9 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
   const writeRecord = options.publishRecord ?? publishWorkerRecord;
   const publishFailures = [];
   let publishing = Promise.resolve();
+  const artifactLifecycle = new WorkerArtifactLifecycle(invocation, invocationId);
   const publish = (name, value) => {
+    artifactLifecycle.observe(name, value);
     const write = publishing.catch(() => {}).then(() => writeRecord(runDir, name, value, inspect));
     publishing = write.catch(error => { publishFailures.push({ name, error: error?.message ?? String(error) }); });
     return write;
@@ -1673,7 +1622,7 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
     }
     // Recheck policy, prompt, installation and exact bindings after file preparation.
     inputs = await loadInputs();
-    await validate(saved, inputs.snapshot, inputs.drivers, clock());
+    await validate(saved, inputs.snapshot, inputs.drivers, clock(), options.invocationPath);
     localGate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config,
       paths: await Promise.all([invocation.cwd, runDir].map(workerDispatchPath)) });
     if (!localGate.ok) throw workerDispatchRefusal(localGate);
@@ -1690,6 +1639,7 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
     // gated path's own test doubles, not a behavior this branch adds):
     // `await`ing a value that was never a Promise resolves to that exact
     // value with no observable difference.
+    artifactLifecycle.spawning();
     const launchResult = (options.launchIsolated ?? launchIsolatedWorker)({ name: invocationId,
       command: artifacts.argv[0], args: artifacts.argv.slice(1), cwd: invocation.cwd,
       memoryMaxGb: options.memoryMaxGb ?? 4, gate: localGate, config: inputs.snapshot.config, isolation,
@@ -1711,9 +1661,10 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
       ...(options.managedAdmission ? { managedAdmission: options.managedAdmission } : {}),
       endedAt: new Date().toISOString(), isolation: isolation.mode, termination: managedSpawnAttempted ? 'uncertain' : 'confirmed',
       descendants: managedSpawnAttempted ? 'unknown' : 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
+    artifactLifecycle.failure(error);
     throw error;
   } finally {
-    try { await artifacts?.cleanup(); } finally {
+    try { await artifactLifecycle.finish(artifacts); } finally {
       // Never chmod a worker-replaced pathname; only the inodes we opened.
       for (const handle of handles) { await handle.chmod(0o600).catch(() => {}); await handle.close().catch(() => {}); }
       await inspect(runDir, 'directory');

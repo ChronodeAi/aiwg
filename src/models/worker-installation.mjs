@@ -1,5 +1,6 @@
 /** Shared installed-worker qualification owner, also used by the Ralph compatibility facade. */
 import { spawn } from 'node:child_process';
+import { buildInstalledWorkerTransport } from './worker-artifact-binding.mjs';
 import { constants } from 'node:fs';
 import { open, realpath, lstat, mkdir, rename, writeFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
@@ -1142,12 +1143,9 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, p
           ...(profile.transport === 'mcp' ? { mcp: binding.mcp, mcpSchemas: record.mcpSchemas } : {}) },
         ...(typeof instance.buildWorkerStdinFrame === 'function'
           ? { buildWorkerStdinFrame: (brief, invocation) => instance.buildWorkerStdinFrame(brief, invocation) } : {}),
-        buildInvocation: async input => profile.transport === 'shell' ? {
-          argv: [scope.binary.realpath, ...instance.buildWorkerArgs(input, profile, input.permissions)],
-          stdin: adapter.invocation.stdin, envNames: Object.keys(installation.environment),
-          ...(typeof instance.buildWorkerArtifacts === 'function'
-            ? { artifacts: instance.buildWorkerArtifacts(input) } : {}),
-        } : instance.buildInvocation(input),
+        buildInvocation: async input => profile.transport === 'shell'
+          ? buildInstalledWorkerTransport(instance, input, profile, adapter.invocation, scope.binary.realpath, installation.environment)
+          : instance.buildInvocation(input),
         prepareWorkerInvocation: (invocation, qualification) => prepareInstalledWorkerInvocation(instance, invocation, qualification),
         ...(mcpRegistry ? { mcpRegistry, mcpProfile: record.mcpProfile } : {}),
       };

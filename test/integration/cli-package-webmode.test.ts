@@ -345,6 +345,7 @@ describe('@aiwg/cli packaged web distribution', () => {
       'tools/ralph-external/lib/strict-worker-json.mjs',
       'tools/ralph-external/lib/session-attempt.mjs',
       'tools/ralph-external/lib/managed-worker-attempt.mjs',
+      'tools/ralph-external/lib/worker-artifacts.mjs',
       'tools/ralph-external/lib/worker-health.mjs',
       'tools/ralph-external/lib/claude-adapter.mjs',
       'tools/ralph-external/lib/codex-adapter.mjs',
