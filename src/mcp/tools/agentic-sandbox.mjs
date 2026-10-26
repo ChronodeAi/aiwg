@@ -1,14 +1,14 @@
 /**
  * Governed Agentic Sandbox fleet and activity MCP surface.
  *
- * Credentials are file-backed server configuration, never tool arguments.
+ * Credentials are private-file or native-store configuration, never tool arguments.
  * Every tool in this module uses the management bearer domain; executor-plane
  * credentials are deliberately out of scope and cannot be substituted.
  *
  * @implements #2015
  */
 
-import { readFile, stat } from 'node:fs/promises';
+import { access } from 'node:fs/promises';
 import { z } from 'zod';
 import { integer, dateTime } from '../../schema/zod-validation.mjs';
 import { assertNoWorkerBinding, mcpError, mcpJson } from '../helpers.mjs';
@@ -36,17 +36,27 @@ function configuredBaseUrl(env = process.env) {
   return url.toString().replace(/\/$/, '');
 }
 
-async function managementBearer(env = process.env) {
-  const tokenFile = String(env.AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE ?? '').trim();
-  if (!tokenFile) throw new Error('AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE is required for the sandbox toolset');
-  const metadata = await stat(tokenFile);
-  if (!metadata.isFile()) throw new Error('sandbox management token path is not a regular file');
-  if (process.platform !== 'win32' && (metadata.mode & 0o077) !== 0) {
-    throw new Error('sandbox management token file must not be accessible by group or other users');
+async function sensitiveInputModule() {
+  // Source MCP modules and the published dist tree share the compiled owner.
+  for (const location of [new URL('../../auth/sensitive-input.js', import.meta.url), new URL('../../../dist/src/auth/sensitive-input.js', import.meta.url)]) {
+    try { await access(location); } catch { continue; }
+    return import(location.href);
   }
-  const token = String(await readFile(tokenFile, 'utf8')).trim();
-  if (!token || /[\r\n]/.test(token)) throw new Error('sandbox management token file must contain one non-empty bearer token');
-  return token;
+  throw new Error('Sandbox credentials require the built CLI package; run npm run build:cli.');
+}
+
+async function managementBearer(env = process.env, readStore) {
+  const tokenFile = String(env.AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE ?? '').trim();
+  const tokenStore = String(env.AIWG_SANDBOX_MANAGEMENT_TOKEN_STORE ?? '').trim();
+  if (!tokenFile && !tokenStore) {
+    throw new Error('Sandbox management bearer requires AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE or AIWG_SANDBOX_MANAGEMENT_TOKEN_STORE.');
+  }
+  const { readPrivateValueFile, resolveSensitiveInput } = await sensitiveInputModule();
+  return resolveSensitiveInput(tokenFile ? { prefix: 'token', file: tokenFile } : { prefix: 'token', store: tokenStore }, {
+    isTTY: false,
+    readFile: (pathname) => readPrivateValueFile(pathname, 'AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE'),
+    ...(readStore ? { readStore } : {}),
+  });
 }
 
 function containsRestricted(value) {
@@ -138,32 +148,40 @@ function typedResult(body, status, validate) {
 }
 
 export class AgenticSandboxMcpClient {
-  constructor({ env = process.env, fetch = globalThis.fetch.bind(globalThis) } = {}) {
+  constructor({ env = process.env, fetch = globalThis.fetch.bind(globalThis), readStore } = {}) {
     this.env = env;
     this.fetch = fetch;
+    this.readStore = readStore;
   }
 
   async request(path, { method = 'GET', body, headers = {}, validate = (value) => safeResponse(value) } = {}) {
     assertNoWorkerBinding(body, 'mcp');
     const baseUrl = configuredBaseUrl(this.env);
-    const token = await managementBearer(this.env);
-    const response = await this.fetch(`${baseUrl}${path}`, {
-      method,
-      headers: { accept: 'application/json', authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    let parsed;
+    const token = await managementBearer(this.env, this.readStore);
+    const redact = (text) => String(text).split(token).join('[REDACTED]');
     try {
-      parsed = await response.json();
-    } catch {
-      if (response.status === 404 || response.status === 405) parsed = {};
-      else return mcpError(`sandbox returned non-JSON HTTP ${response.status}`);
-    }
-    try {
-      assertNoWorkerBinding(parsed, 'mcp');
-      return typedResult(parsed, response.status, validate);
+      const response = await this.fetch(`${baseUrl}${path}`, {
+        method,
+        headers: { accept: 'application/json', authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      let parsed;
+      try {
+        const value = await response.json();
+        // Upstream errors and metadata can reflect the authorization header.
+        parsed = JSON.parse(JSON.stringify(value).split(JSON.stringify(token).slice(1, -1)).join('[REDACTED]'));
+      } catch {
+        if (response.status === 404 || response.status === 405) parsed = {};
+        else return mcpError(`sandbox returned non-JSON HTTP ${response.status}`);
+      }
+      try {
+        assertNoWorkerBinding(parsed, 'mcp');
+        return typedResult(parsed, response.status, validate);
+      } catch (error) {
+        return mcpError(`${error.code ?? 'sandbox_malformed_response'}: ${error.message}`);
+      }
     } catch (error) {
-      return mcpError(`${error.code ?? 'sandbox_malformed_response'}: ${error.message}`);
+      throw new Error(redact(error instanceof Error ? error.message : 'Sandbox management request failed'));
     }
   }
 }

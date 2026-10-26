@@ -1,7 +1,7 @@
 /**
  * OpenRouter fleet spend observation and local activity correlation.
  *
- * Secrets are resolved only from the process environment or the user's
+ * Secrets are resolved from named sources or the user's
  * ~/.config/aiwg/keys directory. Fleet configuration contains references,
  * never credential values.
  *
@@ -12,6 +12,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { load as loadYaml } from 'js-yaml';
+import { resolveSensitiveInput, type SensitiveInputDependencies } from '../auth/sensitive-input.js';
 
 const OPENROUTER_API = 'https://openrouter.ai/api/v1';
 const KEY_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -23,6 +24,8 @@ export interface FleetEntry {
   bot: string;
   machine: string;
   key_ref: string;
+  /** Optional native-store entry for this key only; never a credential value. */
+  key_store?: string;
   monthly_cap: number;
 }
 
@@ -66,6 +69,8 @@ export interface FleetReportOptions {
   activityLog?: string;
   homeDir?: string;
   env?: NodeJS.ProcessEnv;
+  /** Native-store IO injection, shared with the sensitive-input resolver. */
+  readStore?: SensitiveInputDependencies['readStore'];
   fetchImpl?: typeof fetch;
   apiBaseUrl?: string;
   now?: Date;
@@ -138,6 +143,9 @@ function validateFleetConfig(value: unknown): FleetConfig {
     if (!KEY_REF_PATTERN.test(entry.key_ref)) {
       throw new Error(`fleet[${index}].key_ref contains unsupported characters.`);
     }
+    if (entry.key_store !== undefined && (typeof entry.key_store !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(entry.key_store))) {
+      throw new Error(`fleet[${index}].key_store must name a native-store entry (1–128 letters, digits, dots, underscores or hyphens).`);
+    }
     if (typeof entry.monthly_cap !== 'number' || !Number.isFinite(entry.monthly_cap) || entry.monthly_cap < 0) {
       throw new Error(`fleet[${index}].monthly_cap must be a non-negative number.`);
     }
@@ -149,6 +157,7 @@ function validateFleetConfig(value: unknown): FleetConfig {
       bot: entry.bot.trim(),
       machine: entry.machine.trim(),
       key_ref: entry.key_ref,
+      ...(entry.key_store !== undefined ? { key_store: entry.key_store } : {}),
       monthly_cap: entry.monthly_cap,
     };
   });
@@ -176,13 +185,19 @@ export function keyEnvironmentName(keyRef: string): string {
 
 export async function loadFleetKey(
   keyRef: string,
-  options: Pick<FleetReportOptions, 'homeDir' | 'env'> = {},
+  options: Pick<FleetReportOptions, 'homeDir' | 'env' | 'readStore'> & { store?: string } = {},
 ): Promise<string> {
   if (!KEY_REF_PATTERN.test(keyRef)) throw new Error('Invalid key_ref.');
   const env = options.env ?? process.env;
+  const dependencies = { environment: env, readStore: options.readStore, isTTY: false };
+  // An explicit reference is scoped to this entry. Never probe a global key or
+  // another bot's store when the selected source is unavailable.
+  if (options.store !== undefined) {
+    return resolveSensitiveInput({ prefix: 'key', store: options.store }, dependencies);
+  }
   const environmentName = keyEnvironmentName(keyRef);
   const environmentValue = env[environmentName]?.trim();
-  if (environmentValue) return environmentValue;
+  if (environmentValue) return resolveSensitiveInput({ prefix: 'key', env: environmentName }, dependencies);
 
   const homeDir = options.homeDir ?? os.homedir();
   const keyDirectory = path.resolve(homeDir, '.config', 'aiwg', 'keys');
@@ -193,7 +208,7 @@ export async function loadFleetKey(
     directoryStat = await fs.lstat(keyDirectory);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(`No secure credential directory exists for key_ref '${keyRef}'; use ${environmentName} or create ~/.config/aiwg/keys with mode 0700.`);
+      throw new Error(`No secure credential directory exists for key_ref '${keyRef}'; use ${environmentName}, --key-store <name> (fleet: key_store), or create ~/.config/aiwg/keys with mode 0700.`);
     }
     throw error;
   }
@@ -206,23 +221,11 @@ export async function loadFleetKey(
   if (typeof process.getuid === 'function' && directoryStat.uid !== process.getuid()) {
     throw new Error('The AIWG credential directory must be owned by the current user.');
   }
-  let stat;
   try {
-    stat = await fs.lstat(keyPath);
+    return await resolveSensitiveInput({ prefix: 'key', file: keyPath }, dependencies);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(`No credential found for key_ref '${keyRef}' in the secure key directory or ${environmentName}.`);
-    }
-    throw error;
+    throw new Error(`Credential for key_ref '${keyRef}': ${(error as Error).message} Use ${environmentName}, --key-store <name> (fleet: key_store), or a private ~/.config/aiwg/keys/<key_ref> file.`);
   }
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`Credential for key_ref '${keyRef}' must be a regular file, not a symlink.`);
-  if ((stat.mode & 0o077) !== 0) throw new Error(`Credential file for key_ref '${keyRef}' must not be accessible by group or other users.`);
-  if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
-    throw new Error(`Credential file for key_ref '${keyRef}' must be owned by the current user.`);
-  }
-  const value = (await fs.readFile(keyPath, 'utf8')).trim();
-  if (!value) throw new Error(`Credential file for key_ref '${keyRef}' is empty.`);
-  return value;
 }
 
 function parseActivityLog(raw: string): ActivityGeneration[] {
@@ -276,7 +279,11 @@ async function openRouterGet<T>(
     throw new Error('OpenRouter returned unreadable JSON. Check the API response format.');
   }
   if (!payload || typeof payload !== 'object' || !payload.data) throw new Error('OpenRouter returned an invalid response.');
-  return payload.data;
+  // Generation metadata can reflect a request header in free-text fields. Keep
+  // such content out of both structured and human-readable reports.
+  return JSON.parse(JSON.stringify(payload.data, (_name, value: unknown) => (
+    typeof value === 'string' ? value.split(key).join('[REDACTED]') : value
+  ))) as T;
 }
 
 function correlateGenerations(
@@ -307,7 +314,7 @@ async function reportBot(
   options: FleetReportOptions,
 ): Promise<FleetBotReport> {
   try {
-    const key = await loadFleetKey(entry.key_ref, options);
+    const key = await loadFleetKey(entry.key_ref, { ...options, store: entry.key_store });
     const keyData = await openRouterGet<OpenRouterKeyData>('/key', key, options);
     const spend = Number(keyData.usage_monthly ?? keyData.usage ?? 0);
     if (!Number.isFinite(spend) || spend < 0) throw new Error('OpenRouter returned invalid monthly usage.');
