@@ -1,5 +1,10 @@
 /** Bounded execution-time artifact and invocation regression coverage. */
 import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, symlink, readdir, rename } from 'node:fs/promises';
+import fs from 'node:fs/promises';
+import childProcess from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,11 +17,16 @@ import { launchIsolatedWorker } from '../../../tools/ralph-external/lib/worker-i
 
 const roots: string[] = [], breakers: ScopedFailureBreaker[] = [];
 afterEach(async () => {
-  vi.unstubAllEnvs(); vi.restoreAllMocks();
+  vi.unstubAllEnvs(); vi.restoreAllMocks(); syncBuiltinESMExports();
   for (const breaker of breakers.splice(0)) breaker.destroy();
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 const fixture = (options: any = {}) => workerInvocationFixture(options, { roots, breakers });
+const withStopProof = (options: any) => {
+  const launched = launchIsolatedWorker(options);
+  const attach = (outcome: any) => ({ ...outcome, mode: 'systemd-unit', unit: 'aiwg-worker-artifact-fixture' });
+  return launched?.then ? launched.then(attach) : attach(launched);
+};
 
 describe('T-OG-15 execution-time artifacts and adapter stdin (#3002/#2998)', () => {
   it('records substituted launch argv and artifact byte digests without contents', async () => {
@@ -162,16 +172,18 @@ describe('T-OG-15/23 workspace-relative artifacts (#2905)', () => {
     await writeFile(f.invocationPath, JSON.stringify(plan));
     const options = { ...f.options, ...(gated ? {} : { scopedBreaker: null }) };
     return { ...f, plan, filename: path.join(f.cwd, artifact(plan.invocation!.invocationId!).relativePath),
-      launch: (extra: any = {}) => f.launcher.launchWorker({ ...options, ...extra }) };
+      launch: (extra: any = {}) => f.launcher.launchWorker({ ...options,
+        launchIsolated: withStopProof,
+        isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }), ...extra }) };
   }
-  it('creates one private file under cwd, substitutes its path and removes created directories', async () => {
+  it('creates one private file under cwd, substitutes its path and keeps shared prefixes', async () => {
     const f = await workspace();
     const result = await materializeWorkerArtifacts(f, f.runDir);
     expect(result.argv[1]).toBe(path.join(f.cwd, f.artifacts[0].relativePath));
     expect(await readFile(result.argv[1], 'utf8')).toBe(f.artifacts[0].content);
     expect((await lstat(result.argv[1])).mode & 0o777).toBe(0o600);
     await result.cleanup(); await result.cleanup();
-    expect(await readdir(f.cwd)).toEqual([]);
+    expect(await readdir(path.join(f.cwd, '.agents/skills'))).toEqual([]);
   });
   it.each(['../escape', '/tmp/escape', '.agents//skills/aiwg-brief-invocation-1/SKILL.md',
     '.agents/./skills/aiwg-brief-invocation-1/SKILL.md', '.agents/skills/../escape',
@@ -219,7 +231,7 @@ describe('T-OG-15/23 workspace-relative artifacts (#2905)', () => {
     const moved = path.join(f.root, 'moved'), outside = path.join(f.root, 'outside');
     await mkdir(outside); await writeFile(path.join(outside, 'SKILL.md'), 'unrelated');
     await rename(path.join(f.cwd, '.agents'), moved); await symlink(outside, path.join(f.cwd, '.agents'));
-    await expect(result.cleanup()).rejects.toThrow(/cleanup failed/);
+    await result.cleanup();
     await expect(lstat(path.join(moved, 'skills/aiwg-brief-invocation-1/SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(path.join(outside, 'SKILL.md'), 'utf8')).toBe('unrelated');
   });
@@ -227,18 +239,226 @@ describe('T-OG-15/23 workspace-relative artifacts (#2905)', () => {
     const f = await workspace(), result = await materializeWorkerArtifacts(f, f.runDir);
     await rename(result.argv[1], `${result.argv[1]}.old`); await writeFile(result.argv[1], 'replacement');
     await expect(result.cleanup()).rejects.toThrow(/cleanup failed/);
-    expect(await readFile(result.argv[1], 'utf8')).toBe('replacement');
+    const preserved = await readdir(f.runDir, { recursive: true });
+    const contents = await Promise.all(preserved.map(name => readFile(path.join(f.runDir, name), 'utf8').catch(() => '')));
+    expect(contents).toContain('replacement');
+  });
+  it.each(['file', 'directory'])('quarantines a %s swapped at the cleanup syscall boundary', async kind => {
+    const f = await workspace(), result = await materializeWorkerArtifacts(f, f.runDir);
+    const target = kind === 'file' ? result.argv[1] : path.dirname(result.argv[1]);
+    const suffix = kind === 'file' ? '/SKILL.md' : '/aiwg-brief-invocation-1';
+    const replacement = path.join(f.root, 'unrelated');
+    if (kind === 'file') await writeFile(replacement, 'unrelated'); else await mkdir(replacement);
+    const identity = await lstat(replacement);
+    const original = { lstat: fs.lstat, rename: fs.rename };
+    let hit = false;
+    const swap = async () => {
+      hit = true;
+      await original.rename(target, path.join(f.root, 'owned'));
+      await original.rename(replacement, target);
+    };
+    // Old code swaps after inspection; fixed code swaps immediately before capture.
+    vi.spyOn(fs, 'lstat').mockImplementation(async (...args: any[]) => {
+      const stat = await (original.lstat as any)(...args);
+      if (!hit && String(args[0]).endsWith(suffix)) await swap();
+      return stat;
+    });
+    vi.spyOn(fs, 'rename').mockImplementation(async (...args: any[]) => {
+      if (!hit && String(args[0]).endsWith(suffix)) await swap();
+      return (original.rename as any)(...args);
+    });
+    syncBuiltinESMExports();
+    await expect(result.cleanup()).rejects.toThrow(/cleanup failed/);
+    expect(hit).toBe(true);
+    vi.restoreAllMocks(); syncBuiltinESMExports();
+    const candidates = [target, ...(await readdir(f.runDir, { recursive: true })).map(name => path.join(f.runDir, name))];
+    const stats = await Promise.all(candidates.map(name => lstat(name).catch(() => null)));
+    expect(stats.some(stat => stat?.dev === identity.dev && stat?.ino === identity.ino)).toBe(true);
+  });
+  it('fails closed when an opened invocation directory is relocated outside cwd', async () => {
+    const f = await workspace(), original = fs.open;
+    const moved = path.join(f.root, 'outside-workspace');
+    let hit = false;
+    vi.spyOn(fs, 'open').mockImplementation(async (...args: any[]) => {
+      const handle = await (original as any)(...args);
+      if (!hit && String(args[0]).endsWith('/aiwg-brief-invocation-1')) {
+        hit = true;
+        await rename(path.join(f.cwd, '.agents/skills/aiwg-brief-invocation-1'), moved);
+      }
+      return handle;
+    });
+    syncBuiltinESMExports();
+    await expect(materializeWorkerArtifacts(f, f.runDir)).rejects.toThrow(/path changed|containment/i);
+    expect(hit).toBe(true);
+    await expect(lstat(path.join(moved, 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('rechecks the entire cwd chain after exclusive leaf creation', async () => {
+    const f = await workspace(), original = fs.open;
+    const moved = path.join(f.root, 'outside-workspace');
+    let hit = false;
+    vi.spyOn(fs, 'open').mockImplementation(async (...args: any[]) => {
+      const handle = await (original as any)(...args);
+      if (!hit && String(args[0]).endsWith('/SKILL.md')) {
+        hit = true;
+        await rename(path.join(f.cwd, '.agents'), moved);
+      }
+      return handle;
+    });
+    syncBuiltinESMExports();
+    await expect(materializeWorkerArtifacts(f, f.runDir)).rejects.toThrow(/containment/);
+    expect(hit).toBe(true);
+    await expect(lstat(path.join(moved, 'skills/aiwg-brief-invocation-1/SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('cannot overwrite an empty directory raced against exclusive mkdir', async () => {
+    const f = await workspace(), original = fs.mkdir;
+    const target = path.dirname(path.join(f.cwd, f.artifacts[0].relativePath));
+    let identity: any;
+    vi.spyOn(fs, 'mkdir').mockImplementation(async (...args: any[]) => {
+      if (!identity && String(args[0]).endsWith('/aiwg-brief-invocation-1')) {
+        await original(target); identity = await lstat(target);
+      }
+      return (original as any)(...args);
+    });
+    syncBuiltinESMExports();
+    await expect(materializeWorkerArtifacts(f, f.runDir)).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(identity).toBeDefined();
+    expect((await lstat(target)).ino).toBe(identity.ino);
+    expect(await readdir(target)).toEqual([]);
+    expect(await readdir(f.runDir)).toEqual([]);
+  });
+  it.each(['empty', 'populated'])('EEXIST preserves an existing %s invocation directory without adopting or deleting it', async kind => {
+    const f = await workspace(), target = path.dirname(path.join(f.cwd, f.artifacts[0].relativePath));
+    await mkdir(target, { recursive: true });
+    if (kind === 'populated') await writeFile(path.join(target, 'unrelated'), 'preserve');
+    const identity = await lstat(target);
+    await expect(materializeWorkerArtifacts(f, f.runDir)).rejects.toMatchObject({ code: 'EEXIST' });
+    expect((await lstat(target)).ino).toBe(identity.ino);
+    expect(await readdir(target)).toEqual(kind === 'empty' ? [] : ['unrelated']);
+    expect(await readdir(f.runDir)).toEqual([]);
+  });
+  it.each(['linux', 'darwin'])('materializes through Node alone on the %s path strategy', async platform => {
+    const f = await workspace(), descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const spawn = vi.spyOn(childProcess, 'spawnSync').mockImplementation(() => { throw new Error('external interpreter forbidden'); });
+    syncBuiltinESMExports();
+    Object.defineProperty(process, 'platform', { ...descriptor, value: platform });
+    try {
+      const result = await materializeWorkerArtifacts(f, f.runDir);
+      expect(await readFile(result.argv[1], 'utf8')).toBe(f.artifacts[0].content);
+      await result.cleanup();
+      expect(await readdir(path.join(f.cwd, '.agents/skills'))).toEqual([]);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally { Object.defineProperty(process, 'platform', descriptor); }
+  });
+  it('retains an unproven nonempty directory without deleting its entries', async () => {
+    const f = await workspace(), original = fs.open;
+    let hit = false;
+    vi.spyOn(fs, 'open').mockImplementation(async (...args: any[]) => {
+      const handle = await (original as any)(...args);
+      if (!hit && String(args[0]).endsWith('/aiwg-brief-invocation-1')) {
+        hit = true; await writeFile(path.join(f.cwd, path.dirname(f.artifacts[0].relativePath), 'unrelated'), 'preserve');
+      }
+      return handle;
+    });
+    syncBuiltinESMExports();
+    await expect(materializeWorkerArtifacts(f, f.runDir)).rejects.toThrow(/identity.*retained/);
+    expect(hit).toBe(true);
+    expect(await readFile(path.join(f.cwd, path.dirname(f.artifacts[0].relativePath), 'unrelated'), 'utf8')).toBe('preserve');
+  });
+  it('never adopts or prunes a shared prefix substituted after mkdir', async () => {
+    const f = await workspace(), original = fs.mkdir;
+    const replacement = path.join(f.root, 'unrelated-directory'); await mkdir(replacement);
+    const identity = await lstat(replacement);
+    let hit = false;
+    vi.spyOn(fs, 'mkdir').mockImplementation(async (...args: any[]) => {
+      const value = await (original as any)(...args);
+      if (!hit && String(args[0]).endsWith('/.agents')) {
+        hit = true;
+        await rename(path.join(f.cwd, '.agents'), path.join(f.root, 'created-directory'));
+        await rename(replacement, path.join(f.cwd, '.agents'));
+      }
+      return value;
+    });
+    syncBuiltinESMExports();
+    const result = await materializeWorkerArtifacts(f, f.runDir);
+    await result.cleanup();
+    expect(hit).toBe(true);
+    expect((await lstat(path.join(f.cwd, '.agents'))).ino).toBe(identity.ino);
+  });
+  it('rejects a substituted invocation directory after mkdir before open', async () => {
+    const f = await workspace(), original = fs.open;
+    const replacement = path.join(f.root, 'unrelated-directory'); await mkdir(replacement);
+    const identity = await lstat(replacement);
+    let hit = false;
+    vi.spyOn(fs, 'open').mockImplementation(async (...args: any[]) => {
+      if (!hit && String(args[0]).endsWith('/aiwg-brief-invocation-1')) {
+        hit = true;
+        await rename(path.join(f.cwd, '.agents/skills/aiwg-brief-invocation-1'), path.join(f.root, 'owned-directory'));
+        await rename(replacement, path.join(f.cwd, '.agents/skills/aiwg-brief-invocation-1'));
+      }
+      return (original as any)(...args);
+    });
+    syncBuiltinESMExports();
+    await expect(materializeWorkerArtifacts(f, f.runDir)).rejects.toThrow();
+    expect(hit).toBe(true);
+    const candidates = await readdir(f.runDir, { recursive: true });
+    const stats = await Promise.all([lstat(path.join(f.cwd, '.agents/skills/aiwg-brief-invocation-1')).catch(() => null),
+      ...candidates.map(name => lstat(path.join(f.runDir, name)))]);
+    expect(stats.some(stat => stat?.ino === identity.ino && stat?.dev === identity.dev)).toBe(true);
+  });
+  it('rejects coherently rewritten identity using the conductor-owned saved plan', async () => {
+    const f = await launchFixture();
+    const saved = structuredClone(f.plan);
+    saved.invocation!.invocationId = 'worker-chosen-id';
+    saved.invocation!.artifacts![0].relativePath = `${prefix}worker-chosen-id/SKILL.md`;
+    await expect(revalidateWorkerInvocationPlan(saved, f.snapshot, f.drivers, f.request.now, f.invocationPath)).rejects.toThrow(/identity|conductor/i);
+  });
+  it('rejects coherently rewritten Warp skill argv, path, frontmatter and identity', async () => {
+    const f = await fixture();
+    const { buildWarpBriefSkillFile, buildWarpBriefSkillName } = await import('../../../tools/ralph-external/lib/warp-adapter.mjs');
+    const original = f.drivers.codex.buildInvocation;
+    f.drivers.codex.buildInvocation = async (input: any) => {
+      const transport = await original(input);
+      transport.argv.splice(transport.argv.indexOf('--'), 0, '--skill', buildWarpBriefSkillName(input.invocationId));
+      return { ...transport, artifacts: [{ name: 'patch', location: 'workspace-relative', prefix,
+        ...buildWarpBriefSkillFile(input.brief, input.invocationId) }] };
+    };
+    const plan = await resolveWorkerInvocation(f.snapshot, f.plan.request!, f.drivers, f.request.now);
+    expect(plan.invocation, JSON.stringify(plan.diagnostics)).toBeDefined();
+    await writeFile(f.invocationPath, JSON.stringify(plan));
+    const saved = structuredClone(plan), invocation = saved.invocation!;
+    invocation.invocationId = 'worker-chosen-id';
+    invocation.argv[invocation.argv.indexOf('--skill') + 1] = buildWarpBriefSkillName(invocation.invocationId);
+    Object.assign(invocation.artifacts![0], buildWarpBriefSkillFile(f.prompt, invocation.invocationId));
+    // Keep derived shell syntax coherent as well, so identity authority is the rejection.
+    invocation.shellCommand = invocation.shellCommand!.replaceAll(plan.invocation!.invocationId!, invocation.invocationId);
+    await expect(revalidateWorkerInvocationPlan(saved, f.snapshot, f.drivers, f.request.now, f.invocationPath)).rejects.toThrow(/identity|conductor/i);
+    await expect(revalidateWorkerInvocationPlan(plan, f.snapshot, f.drivers, f.request.now)).rejects.toThrow(/conductor/i);
+  });
+  it.each(['cwd', 'qualified-root', 'symlink-root'])('launcher refuses plans inside %s', async location => {
+    const f = await launchFixture();
+    let root = f.cwd;
+    if (location !== 'cwd') {
+      root = path.join(f.root, 'writable'); await mkdir(root);
+      let declared = root;
+      if (location === 'symlink-root') { declared = path.join(f.root, 'alias'); await symlink(root, declared); }
+      f.drivers.codex.qualification.installation = { workerWritableRoots: [declared] };
+    }
+    const invocationPath = path.join(root, 'plan.json'); await writeFile(invocationPath, JSON.stringify(f.plan));
+    const launchIsolated = vi.fn();
+    await expect(f.launch({ invocationPath, launchIsolated })).rejects.toThrow(/worker-writable/);
+    expect(launchIsolated).not.toHaveBeenCalled();
+    await expect(lstat(f.runDir)).rejects.toMatchObject({ code: 'ENOENT' });
   });
   it('keeps the same id during revalidation, rejects tampered bindings and uses a fresh id for a new plan', async () => {
     const f = await launchFixture();
-    expect((await revalidateWorkerInvocationPlan(f.plan, f.snapshot, f.drivers, f.request.now)).invocationId).toBe(f.plan.invocation!.invocationId);
+    expect((await revalidateWorkerInvocationPlan(f.plan, f.snapshot, f.drivers, f.request.now, f.invocationPath)).invocationId).toBe(f.plan.invocation!.invocationId);
     const again = await resolveWorkerInvocation(f.snapshot, f.plan.request!, f.drivers, f.request.now);
     expect(again.invocation!.invocationId).not.toBe(f.plan.invocation!.invocationId);
     for (const field of ['prefix', 'relativePath', 'invocationId']) {
       const saved = structuredClone(f.plan);
       if (field === 'invocationId') saved.invocation!.invocationId = 'wrong-id';
       else (saved.invocation!.artifacts![0] as any)[field] = field === 'prefix' ? '.other/brief-' : `${prefix}wrong-id/SKILL.md`;
-      await expect(revalidateWorkerInvocationPlan(saved, f.snapshot, f.drivers, f.request.now)).rejects.toThrow();
+      await expect(revalidateWorkerInvocationPlan(saved, f.snapshot, f.drivers, f.request.now, f.invocationPath)).rejects.toThrow();
     }
   });
   it.each([true, false])('launcher uses the declaration id and cleans after completion (recovery gate %s)', async gated => {
@@ -247,7 +467,7 @@ describe('T-OG-15/23 workspace-relative artifacts (#2905)', () => {
     const launchIsolated = (options: any) => {
       // Synchronous launch boundary observes the already materialized file.
       seen = true;
-      return launchIsolatedWorker(options);
+      return withStopProof(options);
     };
     const result = await f.launch({ launchIsolated });
     expect(seen).toBe(true); expect(result.invocationId).toBe(f.plan.invocation!.invocationId);
@@ -265,8 +485,13 @@ describe('T-OG-15/23 workspace-relative artifacts (#2905)', () => {
   });
   it('launcher cleans the artifact after an owned stop', async () => {
     const f = await launchFixture('hang');
+    const child: any = new EventEmitter();
+    child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough(); child.unref = () => {};
+    child.pid = 2147483646;
     f.launcher.once('launched', () => f.launcher.kill());
-    await f.launch();
+    await f.launch({ launchIsolated: () => ({ child, mode: 'systemd-unit', unit: 'aiwg-worker-artifact-fixture' }),
+      stopUnit: () => { queueMicrotask(() => { child.stdout.end(); child.stderr.end();
+        child.emit('exit', null, 'SIGTERM'); child.emit('close', null, 'SIGTERM'); }); return { ok: true }; } });
     await expect(lstat(f.filename)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

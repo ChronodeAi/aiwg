@@ -12,6 +12,7 @@ import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.m
  * bundled profile stays unqualified (DH08).
  */
 import { SessionLauncher } from '../../../tools/ralph-external/session-launcher.mjs';
+import { launchIsolatedWorker } from '../../../tools/ralph-external/lib/worker-isolation.mjs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -262,7 +263,14 @@ describe('T-OG-15 DeepSeek Harness direct command contract', () => {
     const result = await new SessionLauncher().launchWorker({ invocationPath, runDir,
       inputs: { snapshot, drivers }, now: '2026-10-07T00:00:00Z',
       checkDispatch: () => ({ ok: true, enabled: true, failures: [] }),
+      launchIsolated: (options: any) => {
+        const launched = launchIsolatedWorker(options);
+        const proof = (outcome: any) => ({ ...outcome, mode: 'systemd-unit', unit: 'aiwg-worker-dsh-fixture' });
+        return launched?.then ? launched.then(proof) : proof(launched);
+      },
+      isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }),
       isolation: { mode: 'degraded', reason: 'synthetic' }, allowDegraded: true });
+    expect(result.termination).toBe('confirmed');
     const record = JSON.parse(await readFile(recordPath, 'utf8'));
     expect(record).toMatchObject({ model: MODEL, effort: EFFORT, sandbox: 'workspace-write', approval: 'never', cwd: workdir,
       patchPath: path.join(runDir, 'artifact-dsh-patch'), brief: payload });
