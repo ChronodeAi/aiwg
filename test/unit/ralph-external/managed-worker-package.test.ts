@@ -33,7 +33,7 @@ describe('T-OG-14 packaged managed one-shot entry point', () => {
     await symlink(join(source, 'node_modules'), join(root, 'node_modules'), 'dir');
     const toolFiles = ['tools/_resolve-impl.mjs', 'tools/ralph-external/session-launcher.mjs',
       'tools/ralph-external/process-monitor.mjs', 'tools/scripts/resource-preflight.mjs',
-      ...['managed-worker-attempt', 'session-attempt', 'worker-health', 'worker-artifacts', 'consecutive-failure-circuit-breaker', 'session-environment', 'launcher-recovery-evidence',
+      ...['worker-inputs', 'worker-launch-cli', 'managed-worker-attempt', 'session-attempt', 'worker-health', 'worker-artifacts', 'consecutive-failure-circuit-breaker', 'session-environment', 'launcher-recovery-evidence',
         'worker-isolation', 'systemd-client', 'recovery-probe'].map(file => `tools/ralph-external/lib/${file}.mjs`)];
     for (const file of toolFiles) {
       expect(manifest.files.includes('tools/') || manifest.files.includes(file), file).toBe(true);

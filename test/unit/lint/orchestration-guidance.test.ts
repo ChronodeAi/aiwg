@@ -60,7 +60,7 @@ describe('Tier 0 check-in guidance (#2914)', () => {
     expect(parseWorkerLaunchArgs(retry.slice(2))).toEqual({
       invocationPath: '/absolute/private/conductor/plan-2.json',
       runDir: '/absolute/private/conductor/runs/attempt-2',
-      retryOf: { invocationId: 'PREDECESSOR_INVOCATION_ID', runDir: '/absolute/private/conductor/runs/attempt-1' },
+      retryOf: { runDir: '/absolute/private/conductor/runs/attempt-1' },
     });
     const statuses = [startup, watch, diagnosis, stop, commonCause].map(command => {
       expect(command.slice(0, 2)).toEqual(['aiwg', 'ralph-external']);
@@ -73,6 +73,18 @@ describe('Tier 0 check-in guidance (#2914)', () => {
       { runDir: '/absolute/private/conductor/runs/attempt-1', watch: false, observe: false, json: true },
       { runsRoot: '/absolute/private/conductor/runs', watch: false, observe: false, json: true },
     ]);
+  });
+
+  it('routes conductors through launcher/MCP and installed fail-closed verification', () => {
+    const text = read(SCOPING);
+    expect(text).toContain('Raw resolved-shell launch is for operators only');
+    expect(text).toContain('conductors use the launcher or MCP worker-invoke');
+    expect(text).toContain('aiwg ralph-external --verify-worker');
+    expect(text).toContain('ISOLATION_UNAVAILABLE');
+    expect(text).toContain('never hand-import a verifier from the task checkout');
+    expect(text).toContain('no degraded override');
+    expect(walkthrough()).toContain('--retry-of-run-dir');
+    expect(walkthrough()).not.toContain('PREDECESSOR_INVOCATION_ID');
   });
 
   it('walkthrough allowances match effective health defaults and retain resolved-window authority', () => {

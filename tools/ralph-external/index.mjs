@@ -27,6 +27,8 @@ import { IterationAnalytics } from './iteration-analytics.mjs';
 import { EarlyStopping } from './early-stopping.mjs';
 import { CrossTaskLearner } from './cross-task-learner.mjs';
 import { watchWorkerStatus } from './process-monitor.mjs';
+import { parseWorkerLaunchArgs } from './lib/worker-launch-cli.mjs';
+export { parseWorkerLaunchArgs } from './lib/worker-launch-cli.mjs';
 
 /** Strict status-only grammar, before provider probes and state constructors. */
 export function parseWorkerStatusArgs(args) {
@@ -364,7 +366,8 @@ USAGE:
   ralph-external --resume [options]
   ralph-external --status
   ralph-external --abort
-  ralph-external --launch-worker --invocation FILE --run-dir DIR [--allow-degraded-worker]
+  ralph-external --verify-worker --run-dir DIR --check JSON [--check JSON] [--json]
+  ralph-external --launch-worker --invocation FILE --run-dir DIR [--retry-of-run-dir DIR] [--allow-degraded-worker]
                           Exit 0: confirmed success. Exit 1: confirmed failure
                           (error, timeout, or a confirmed stop with a
                           nonzero/signaled exit). Exit 2: uncertain
@@ -688,6 +691,11 @@ async function main() {
     }
     return;
   }
+  if (args.includes('--verify-worker')) {
+    const { runWorkerVerificationCli } = await import('./lib/worker-verification-cli.mjs');
+    process.exitCode = await runWorkerVerificationCli(args);
+    return;
+  }
   // Dispatch before legacy parsing, provider probing or stateful constructors.
   if (args.includes('--launch-worker')) {
     const { SessionLauncher } = await import('./session-launcher.mjs');
@@ -884,41 +892,6 @@ async function main() {
     if (cleanupLogTee) cleanupLogTee();
     process.exit(1);
   }
-}
-
-export function parseWorkerLaunchArgs(args) {
-  const result = {};
-  const seen = new Set();
-  let retryOfInvocationId;
-  let retryOfRunDir;
-  for (let i = 0; i < args.length; i++) {
-    const flag = args[i];
-    if (seen.has(flag)) throw new Error(`Duplicate worker launch option: ${flag}`);
-    seen.add(flag);
-    if (flag === '--launch-worker') continue;
-    if (flag === '--allow-degraded-worker') { result.allowDegraded = true; continue; }
-    // #2915 step 4: `--retry-of <invocationId>` conductor-declares a retry;
-    // `--retry-of-run-dir <dir>` names where the predecessor's OWN
-    // launcher-written evidence lives. Both are required together and
-    // verified fresh against disk by `SessionLauncher.launchWorker` —
-    // never trusted as supplied. Omitting both means unrelated work.
-    const key = { '--invocation': 'invocationPath', '--run-dir': 'runDir',
-      '--retry-of': '__retryOfInvocationId', '--retry-of-run-dir': '__retryOfRunDir' }[flag];
-    if (!key) throw new Error(`Unsupported worker launch option: ${flag}`);
-    const value = args[++i];
-    if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
-    if (key === '__retryOfInvocationId') retryOfInvocationId = value;
-    else if (key === '__retryOfRunDir') retryOfRunDir = value;
-    else result[key] = value;
-  }
-  if (!seen.has('--launch-worker') || !result.invocationPath || !result.runDir) {
-    throw new Error('Usage: ralph-external --launch-worker --invocation FILE --run-dir DIR [--allow-degraded-worker] [--retry-of ID --retry-of-run-dir DIR]');
-  }
-  if ((retryOfInvocationId === undefined) !== (retryOfRunDir === undefined)) {
-    throw new Error('--retry-of and --retry-of-run-dir must be supplied together');
-  }
-  if (retryOfInvocationId !== undefined) result.retryOf = { invocationId: retryOfInvocationId, runDir: retryOfRunDir };
-  return result;
 }
 
 // Run main() only when executed directly (node index.mjs …), NOT when imported

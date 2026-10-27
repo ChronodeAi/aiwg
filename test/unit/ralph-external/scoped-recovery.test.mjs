@@ -2705,7 +2705,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
   // real `launchWorker({ retryOf })` wiring -- the writable-root exclusion
   // must refuse forged/misplaced evidence without blocking legitimate
   // retries.
-  it('accepts a genuine retry predecessor outside the worker-writable root, through the real launchWorker path', async () => {
+  it.each([true, false])('accepts a genuine retry predecessor through launchWorker (explicit ID: %s)', async explicitId => {
     const fx = await enoentFixtureRoot();
     const launcher = new SessionLauncher();
     try {
@@ -2723,7 +2723,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         JSON.stringify({ invocationId: 'genuine-prev', termination: 'confirmed' }), { mode: 0o600 });
       const result = await launcher.launchWorker({
         invocationPath, runDir: path.join(fx.root, 'retry-run-genuine'),
-        retryOf: { invocationId: 'genuine-prev', runDir: genuineRunDir },
+        retryOf: { ...(explicitId ? { invocationId: 'genuine-prev' } : {}), runDir: genuineRunDir },
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
         isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,

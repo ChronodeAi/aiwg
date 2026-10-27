@@ -95,7 +95,8 @@
         "test/unit/ralph-external/worker-finals.test.ts",
         "test/unit/mission-protocol/worker-results.test.ts",
         "test/unit/ralph-external/worktree-preparation.test.ts",
-        "test/unit/ralph-external/trusted-verification.test.ts"
+        "test/unit/ralph-external/trusted-verification.test.ts",
+        "test/unit/ralph-external/worker-verification-cli.test.ts"
       ],
       "remaining": "Tier 0 argument construction, gate refusal, async degraded launch, guarded live OOM containment, conductor-owned worktree/base-digest preparation, claim-conflict serialize/fail, symlink/hardlink escape denial, and sandbox-vs-real-failure classification coverage; the live probe skips when a systemd user manager is unavailable. Qualification enforced/degraded recording, a registered Tier 1 isolated verifier executor, managed disk reservations and leases remain with the owning B-OG-13 checkpoint's S2+ slice."
     },
@@ -349,6 +350,7 @@
         "test/unit/ralph-external/worker-finals.test.ts",
         "test/unit/mission-protocol/worker-results.test.ts",
         "test/unit/mcp/worker-invoke.test.ts",
+        "test/unit/mcp/stdio-lifecycle.test.ts",
         "test/conformance/orchestration-v1/worker-health-mcp.test.ts",
         "test/conformance/orchestration-v1/provider-coverage.test.ts"
       ],

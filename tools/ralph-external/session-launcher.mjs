@@ -49,6 +49,8 @@ import { ScopedFailureBreaker, attributeFailureScope } from './lib/consecutive-f
 import { assertManagedWorkerLaunch, validateManagedAttempt } from './lib/managed-worker-attempt.mjs';
 export { assertManagedWorkerLaunch } from './lib/managed-worker-attempt.mjs';
 import { buildSessionEnvironment } from './lib/session-environment.mjs';
+import { withWorkerPath, boundedPrivateRead } from './lib/worker-inputs.mjs';
+import { resolveRetryReference } from './lib/worker-launch-cli.mjs';
 import { launcherRecoveryEvidence, observeLauncherRecoveryOutcome, recordLauncherRecoveryHint } from './lib/launcher-recovery-evidence.mjs';
 export { observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence.mjs';
 import { workerNeedsNativeNamespaces, probeWorkerNativeSandbox, nativeSandboxFailure, nativeSandboxProbeMessage, NATIVE_SANDBOX_UNAVAILABLE, checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
@@ -99,56 +101,6 @@ const signalNumberToName = Object.fromEntries(Object.entries(osConstants.signals
 export async function realBeneath(root, filename) {
   const paths = await importImpl(import.meta.url, 'serve/worker-invocation-paths.js');
   return paths.realBeneath(root, filename);
-}
-
-// Linux directory handles pin each ancestor. O_NOFOLLOW on a pathname alone
-// cannot protect an ancestor that the worker replaces after inspection.
-async function withWorkerPath(filename, operation) {
-  if (!isAbsolute(filename) || filename.includes('\0') || filename.split('/').includes('..')) throw new Error('Invalid worker path');
-  const components = filename.split('/').filter(Boolean);
-  const leaf = components.pop();
-  let directory = await open('/', constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-  try {
-    for (const component of components) {
-      const next = await open(`/proc/self/fd/${directory.fd}/${component}`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-      await directory.close(); directory = next;
-    }
-    return await operation(`/proc/self/fd/${directory.fd}/${leaf ?? '.'}`);
-  } finally { await directory.close(); }
-}
-
-// #2915 review 4 (finding 4): `privateOutput: true` REPAIRS a loose mode
-// (chmod 0600) rather than rejecting it — correct for the worker's own
-// final-output file, which the launcher itself created and is free to
-// re-tighten. `rejectInsecureMode: true` additionally REFUSES a mode other
-// than exactly 0600 instead of repairing it, for evidence this launcher
-// did NOT create moments ago (retry predecessor metadata) — a 0666 file
-// there is itself a signal worth refusing on, not silently normalizing
-// away.
-async function boundedPrivateRead(filename, limit, inspect, privateOutput = false, rejectInsecureMode = false) {
-  if (!await inspect(filename, 'file')) throw new Error('Required worker input is missing');
-  const handle = await withWorkerPath(filename, target => open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK));
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit) throw new Error('Worker input must be a bounded unaliased regular file');
-    if (privateOutput) {
-      if (stat.uid !== process.getuid()) throw new Error('Worker final must be conductor-owned');
-      if (rejectInsecureMode) {
-        if ((stat.mode & 0o777) !== 0o600) throw new Error('Worker input mode must already be exactly 0600; insecure modes are refused, not repaired');
-      } else {
-        await handle.chmod(0o600);
-      }
-    }
-    const buffer = Buffer.alloc(limit + 1);
-    let length = 0;
-    while (length < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
-      if (!bytesRead) break;
-      length += bytesRead;
-    }
-    if (length > limit) throw new Error('Worker input exceeds bound');
-    return buffer.subarray(0, length);
-  } finally { await handle.close(); }
 }
 
 export async function publishWorkerRecord(runDir, name, value, inspect) {
@@ -455,7 +407,7 @@ async function launchOneWorker(owner, options) {
   // check too.
   let verifiedPreviousAttemptId = null;
   if (options?.retryOf !== undefined) {
-    const exitRecord = await verifyRetryPredecessor(options.retryOf,
+    const exitRecord = await verifyRetryPredecessor(await resolveRetryReference(options.retryOf, { inspect }),
       { newInvocationPath: options?.invocationPath, inspect, workerWritableRoots: writableRoots });
     verifiedPreviousAttemptId = exitRecord.invocationId;
   }

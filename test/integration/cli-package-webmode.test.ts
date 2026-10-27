@@ -340,6 +340,9 @@ describe('@aiwg/cli packaged web distribution', () => {
       'tools/ralph-external/lib/launcher-recovery-evidence.mjs',
       'tools/ralph-external/lib/recovery-probe.mjs',
       'tools/ralph-external/lib/worker-overflow.mjs',
+      // Launch helpers session-launcher imports (#3658).
+      'tools/ralph-external/lib/worker-inputs.mjs',
+      'tools/ralph-external/lib/worker-launch-cli.mjs',
       'tools/scripts/resource-preflight.mjs',
       'tools/ralph-external/lib/provider-adapter.mjs',
       'tools/ralph-external/lib/strict-worker-json.mjs',
