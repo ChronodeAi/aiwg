@@ -145,25 +145,8 @@ Reusable project context and specialist workflows for the AI tools you already u
 
 ### Continuous Integration
 
-- [`.gitea/workflows/build-plugins.yml`](./.gitea/workflows/build-plugins.yml)
-- [`.gitea/workflows/ci.yml`](./.gitea/workflows/ci.yml)
-- [`.gitea/workflows/conformance.yml`](./.gitea/workflows/conformance.yml)
-- [`.gitea/workflows/dataset-intelligence-conformance.yml`](./.gitea/workflows/dataset-intelligence-conformance.yml)
-- [`.gitea/workflows/docsite-build.yml`](./.gitea/workflows/docsite-build.yml)
-- [`.gitea/workflows/docsite-deploy.yml`](./.gitea/workflows/docsite-deploy.yml)
-- [`.gitea/workflows/fortemi-shard-conformance.yml`](./.gitea/workflows/fortemi-shard-conformance.yml)
-- [`.gitea/workflows/gitea-release.yml`](./.gitea/workflows/gitea-release.yml)
-- [`.gitea/workflows/github-mirror.yml`](./.gitea/workflows/github-mirror.yml)
-- [`.gitea/workflows/hermes-citations.yml`](./.gitea/workflows/hermes-citations.yml)
-- [`.gitea/workflows/metadata-validation.yml`](./.gitea/workflows/metadata-validation.yml)
-- [`.gitea/workflows/notify-site.yml`](./.gitea/workflows/notify-site.yml)
-- [`.gitea/workflows/npm-publish.yml`](./.gitea/workflows/npm-publish.yml)
-- [`.gitea/workflows/omp-conformance.yml`](./.gitea/workflows/omp-conformance.yml)
-- [`.gitea/workflows/scheduled-docs-release.yml`](./.gitea/workflows/scheduled-docs-release.yml)
-- [`.gitea/workflows/storage-server-conformance.yml`](./.gitea/workflows/storage-server-conformance.yml)
-- [`.gitea/workflows/upload-release-sigs.yml`](./.gitea/workflows/upload-release-sigs.yml)
-- [`.github/workflows/npm-publish.yml`](./.github/workflows/npm-publish.yml)
-- [`.github/workflows/socket-post-publish.yml`](./.github/workflows/socket-post-publish.yml)
+- [`.gitea/workflows/`](./.gitea/workflows/) (19 workflow files)
+- [`.github/workflows/`](./.github/workflows/) (4 workflow files)
 
 <!-- AIWG:project-extraction:end -->
 
