@@ -1,3 +1,4 @@
+import { termAfterReady, TERM_READY } from '../../helpers/term-escalation.js';
 import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2907 (B-OG-42) OpenClaw promotion: offline S1 profile work.
@@ -466,10 +467,8 @@ describe('T-OG-20/21/23 OpenClaw run identity, stall and security signals', () =
     const { file } = await fakeConfig(root, 'ignore-term');
     const brief = await briefFile(workdir);
     const result = await run(process.execPath, [FAKE, ...argv(brief, workdir)], { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: file },
-      timeoutMs: 8_000, onStart: started => { setTimeout(() => {
-        started.kill('SIGTERM');
-        setTimeout(() => { if (started.exitCode === null && started.signalCode === null) started.kill('SIGKILL'); }, 500);
-      }, 600); } });
+      timeoutMs: 8_000, onStart: termAfterReady });
+    expect(result.stdout).toContain(TERM_READY);
     expect(result.signal).toBe('SIGKILL');
     expect(result.code).toBeNull();
   });

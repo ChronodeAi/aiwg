@@ -15,6 +15,7 @@
  * described in tools/ralph-external/lib/factory-adapter.mjs; it is synthetic
  * and never qualifies a live run.
  */
+import { ignoreTermUntilKilled } from '../ignore-term.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const SESSION = 'factory-fixture-session';
@@ -217,8 +218,7 @@ switch (scenario) {
     break;
   }
   case 'ignore-term':
-    process.on('SIGTERM', () => {});
-    setInterval(() => {}, 1000);
+    ignoreTermUntilKilled();
     break;
   case 'hang':
   case 'stdin-wait':

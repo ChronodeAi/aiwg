@@ -1,3 +1,4 @@
+import { termAfterReady, TERM_READY } from '../../helpers/term-escalation.js';
 import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2897 (B-OG-07) Codex promotion: offline S1 profile work.
@@ -762,13 +763,9 @@ describe('T-OG-20/21/23 Codex run identity, stall and security signals', () => {
     const { root, workdir } = await scratch();
     const finalPath = path.join(root, 'final.json');
     const { file } = await fakeConfig(root, 'ignore-term');
-    let child: ReturnType<typeof spawn> | undefined;
     const result = await run(process.execPath, argv(workdir, finalPath), { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: file },
-      timeoutMs: 8_000, onStart: started => { child = started; setTimeout(() => {
-        started.kill('SIGTERM');
-        setTimeout(() => { if (started.exitCode === null && started.signalCode === null) started.kill('SIGKILL'); }, 500);
-      }, 600); } });
-    expect(child).toBeDefined();
+      timeoutMs: 8_000, onStart: termAfterReady });
+    expect(result.stdout).toContain(TERM_READY);
     expect(result.signal).toBe('SIGKILL');
     expect(result.code).toBeNull();
   });

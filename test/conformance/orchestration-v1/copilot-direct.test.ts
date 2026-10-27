@@ -17,6 +17,7 @@
  * `--output-format json`'s event vocabulary is undocumented in `--help`. So
  * `observeHealthEvent` always returns null here, exactly like OpenHuman.
  */
+import { termAfterReady, TERM_READY } from '../../helpers/term-escalation.js';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -455,13 +456,9 @@ describe('T-OG-20/21/23 Copilot run identity, stall and security signals', () =>
     const { root, workdir } = await scratch();
     const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'synthetic brief');
     const { file } = await fakeConfig(root, 'ignore-term');
-    let child: ReturnType<typeof spawn> | undefined;
     const result = await run(process.execPath, argv(workdir, briefPath), { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: file },
-      timeoutMs: 8_000, onStart: started => { child = started; setTimeout(() => {
-        started.kill('SIGTERM');
-        setTimeout(() => { if (started.exitCode === null && started.signalCode === null) started.kill('SIGKILL'); }, 500);
-      }, 600); } });
-    expect(child).toBeDefined();
+      timeoutMs: 8_000, onStart: termAfterReady });
+    expect(result.stdout).toContain(TERM_READY);
     expect(result.signal).toBe('SIGKILL');
     expect(result.code).toBeNull();
   });
