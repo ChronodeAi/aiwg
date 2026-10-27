@@ -108,6 +108,7 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     'tools/ralph-external/process-monitor.mjs',
     'tools/ralph-external/lib/session-environment.mjs',
     'tools/ralph-external/lib/worker-inputs.mjs',
+    'tools/ralph-external/lib/worker-final.mjs',
     'tools/ralph-external/lib/worker-launch-cli.mjs',
     'tools/ralph-external/lib/worker-isolation.mjs',
     'tools/ralph-external/lib/worker-native-sandbox.mjs',

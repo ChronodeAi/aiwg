@@ -292,6 +292,7 @@
       "status": "partial",
       "testFiles": [
         "test/unit/ralph-external/worker-single-invocation.test.ts",
+        "test/unit/ralph-external/worker-final-validation.test.ts",
         "test/unit/cli/handlers/models-direct-invocation.test.ts",
         "test/unit/cli/handlers/models-production-invocation.test.ts",
         "test/conformance/orchestration-v1/worker-resolution.test.ts",
