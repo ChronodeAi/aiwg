@@ -4,6 +4,9 @@
   "verifiedAt": "2026-07-20",
   "providers": {
     "antigravity": {
+      "sessionEnvAllowlist": [
+        "GEMINI_API_KEY"
+      ],
       "agent": "native",
       "skill": "native",
       "globalChild": "inherited",
@@ -19,7 +22,7 @@
       "invalidPinFallback": "Provider validation/error; never assume fallback",
       "configTarget": "agy launch arguments; custom-agent model tiers are not projected from generic AIWG model ids",
       "artifactFormat": "YAML frontmatter plus Markdown; runtime --model and --effort flags",
-      "verification": "Pinned offline contract (--help/--version only); authenticated model selection was not executed",
+      "verification": "Pinned offline contract (--help/--version only); authenticated model selection was not executed. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://antigravity.google/docs/cli/subagents/",
       "verifiedAt": "2026-09-04",
       "workerHealthAdapter": {
@@ -154,7 +157,7 @@
               "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority.",
               "--dangerously-skip-permissions and --remote-control are never part of the direct profile; neither was ever shipped as a new argv-prompt path.",
               "A soft-denied tool permission request (exit 0, stderr notice naming the allow-rule needed) is NOT the same as success; its exact stderr wording is not evidenced from help or changelog, so this is an open, honestly-marked detection gap rather than an invented check (tools/ralph-external/lib/antigravity-adapter.mjs ANTIGRAVITY_SOFT_DENY_RISK_NOTE).",
-              "GEMINI_API_KEY in envAllowlist is a strings-sourced GUESS, not confirmed to authenticate this CLI. Live fix-round-1 probes (D/E, no login present) show a bare run stops at \"Error: authentication required. Run 'agy' to log in, then retry.\" — this is an interactive Google-account login, not a documented env-key or OpenRouter-style flag. The manual smoke run is BLOCKED until an operator completes an interactive `agy` login on the target host.",
+              "GEMINI_API_KEY is documented at https://antigravity.google/docs/install/ (reviewed 2026-10-26): settings.json must also set modelProvider to gemini; the key alone has no effect. Earlier 1.3.3 probes only exercised missing account login. This documentation confirms the credential name, not authenticated execution or qualification of this version-bound worker profile.",
               "The 1.3.3 --effort enum (low|medium|high|xhigh|max) supersedes the stale 1.1.26-pinned three-value set in tools/providers/antigravity-transport.mjs (a separate, unedited legacy transport used by the MCP/doctor bridge, not this direct-shell profile).",
               "Flag validation happens BEFORE auth: live probe F, `agy --print=x --input-format bogus --output-format stream-json`, returned \"Error: unknown --input-format \\\"bogus\\\" (want text or stream-json)\" without reaching the auth stop, confirming --input-format is validated against exactly {text, stream-json} independent of login state.",
               "The brief reaches agy through adapter-frame: the installed buildWorkerStdinFrame hook supplies exactly one NDJSON user message and EOF. The stdin control stays unqualified pending one authenticated smoke run."
@@ -865,6 +868,9 @@
       }
     },
     "cursor": {
+      "sessionEnvAllowlist": [
+        "CURSOR_API_KEY"
+      ],
       "agent": "native",
       "skill": "unsupported",
       "globalChild": "inherited",
@@ -873,7 +879,7 @@
       "invalidPinFallback": "Plan/admin fallback may apply; record observed result",
       "configTarget": ".cursor/agents/*.md",
       "artifactFormat": "YAML frontmatter plus Markdown",
-      "verification": "Schema fixture and entitled Cursor invocation",
+      "verification": "Schema fixture and entitled Cursor invocation. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://cursor.com/docs/subagents",
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
@@ -1465,6 +1471,9 @@
       }
     },
     "warp": {
+      "sessionEnvAllowlist": [
+        "WARP_API_KEY"
+      ],
       "agent": "global-only",
       "skill": "unsupported",
       "globalChild": "native",
@@ -1473,7 +1482,7 @@
       "invalidPinFallback": "Profile availability dependent",
       "configTarget": "Warp agent profile or run configuration",
       "artifactFormat": "Saved profile / run control plane",
-      "verification": "Inspect active profile and run metadata",
+      "verification": "Inspect active profile and run metadata. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://docs.warp.dev/agent-platform/capabilities/agent-profiles-permissions",
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
@@ -2284,6 +2293,7 @@
       }
     },
     "windsurf": {
+      "sessionEnvAllowlist": [],
       "agent": "unsupported",
       "skill": "unsupported",
       "globalChild": "inherited",
@@ -2292,7 +2302,7 @@
       "invalidPinFallback": "No portable custom-child selector",
       "configTarget": "No supported portable artifact field",
       "artifactFormat": "Informational policy only",
-      "verification": "Assert unsupported fields are omitted",
+      "verification": "Assert unsupported fields are omitted. Session environment is explicitly empty: desktop/cloud login owns authentication; no CLI credential variable is evidenced. Coverage-only: no worker execution or qualified worker adapter. See $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://docs.devin.ai/desktop/cascade/skills",
       "verifiedAt": "2026-07-20",
       "workerHealthCoverage": {
@@ -2312,6 +2322,22 @@
       }
     },
     "openclaw": {
+      "sessionEnvAllowlist": [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_OAUTH_TOKEN",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "MISTRAL_API_KEY",
+        "XAI_API_KEY",
+        "OPENCLAW_HOME",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_GATEWAY_URL",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_GATEWAY_PASSWORD"
+      ],
       "agent": "native",
       "skill": "unsupported",
       "globalChild": "native",
@@ -2320,7 +2346,7 @@
       "invalidPinFallback": "Provider/account fallback must be observed",
       "configTarget": "OpenClaw subagent configuration",
       "artifactFormat": "JSON/JSONC runtime configuration",
-      "verification": "Inspect resolved subagent metadata",
+      "verification": "Inspect resolved subagent metadata. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://docs.openclaw.ai/tools/subagents",
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
@@ -2508,6 +2534,7 @@
       }
     },
     "grokbot": {
+      "sessionEnvAllowlist": [],
       "agent": "unsupported",
       "skill": "unsupported",
       "globalChild": "informational",
@@ -2516,7 +2543,7 @@
       "invalidPinFallback": "Report unsupported; do not fabricate xAI/Grok model pins as native",
       "configTarget": "Grok Bot has no verified AIWG-owned model config path",
       "artifactFormat": "Informational only",
-      "verification": "Confirm steward models --route --provider grokbot emits unsupported/informational",
+      "verification": "Confirm steward models --route --provider grokbot emits unsupported/informational. Session environment is explicitly empty: desktop/cloud login owns authentication; no CLI credential variable is evidenced. Coverage-only: no worker execution or qualified worker adapter. See $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://github.com/jmagly/aiwg/blob/main/docs/architecture/adr-grokbot-provider-target.md",
       "verifiedAt": "2026-09-15",
       "workerHealthCoverage": {
@@ -2536,6 +2563,10 @@
       }
     },
     "grok-build": {
+      "sessionEnvAllowlist": [
+        "XAI_API_KEY",
+        "GROK_HOME"
+      ],
       "agent": "inherited",
       "skill": "inherited",
       "globalChild": "native",
@@ -2544,7 +2575,7 @@
       "invalidPinFallback": "Report the unavailable alias; use the sole discovered model only when exactly one is available",
       "configTarget": "$GROK_HOME/config.toml [models] and [model.<alias>] (read-only discovery)",
       "artifactFormat": "Grok Build model alias",
-      "verification": "grok inspect --json plus bounded parsing of model fields from reported config layers",
+      "verification": "grok inspect --json plus bounded parsing of model fields from reported config layers. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://docs.x.ai/build/settings",
       "verifiedAt": "2026-09-21",
       "workerHealthAdapter": {
@@ -2736,6 +2767,25 @@
       }
     },
     "hermes": {
+      "sessionEnvAllowlist": [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "GROQ_API_KEY",
+        "MISTRAL_API_KEY",
+        "XAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_BASE_URL",
+        "OPENROUTER_BASE_URL",
+        "CUSTOM_BASE_URL",
+        "HERMES_HOME",
+        "HERMES_INFERENCE_PROVIDER"
+      ],
       "agent": "global-only",
       "skill": "unsupported",
       "globalChild": "native",
@@ -2744,7 +2794,7 @@
       "invalidPinFallback": "Provider resolution is global; report actual model",
       "configTarget": "Hermes delegation configuration",
       "artifactFormat": "Global CLI/config setting",
-      "verification": "Inspect Hermes delegation configuration",
+      "verification": "Inspect Hermes delegation configuration. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation",
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
@@ -2927,6 +2977,19 @@
       }
     },
     "openhuman": {
+      "sessionEnvAllowlist": [
+        "OPENHUMAN_CORE_TOKEN",
+        "OPENHUMAN_CORE_RPC_URL",
+        "OPENHUMAN_CORE_HOST",
+        "OPENHUMAN_CORE_PORT",
+        "OPENHUMAN_WORKSPACE",
+        "OPENHUMAN_DOTENV_PATH",
+        "OPENHUMAN_KEYRING_MASTER_KEY",
+        "OPENHUMAN_KEYRING_MASTER_KEY_FILE",
+        "OPENHUMAN_APP_ENV",
+        "BACKEND_URL",
+        "OPENHUMAN_MODEL"
+      ],
       "agent": "compiled",
       "skill": "unsupported",
       "globalChild": "inherited",
@@ -2935,7 +2998,7 @@
       "invalidPinFallback": "Exact pins validate; semantic hints route dynamically",
       "configTarget": "OpenHuman agent TOML",
       "artifactFormat": "Standalone TOML agent definition",
-      "verification": "Parse against OpenHuman definition schema",
+      "verification": "Parse against OpenHuman definition schema. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://github.com/tinyhumansai/openhuman/blob/main/src/openhuman/agent/harness/definition.rs",
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
