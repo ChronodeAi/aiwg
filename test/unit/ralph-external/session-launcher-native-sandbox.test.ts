@@ -74,14 +74,13 @@ async function fixture(mode: 'systemd-unit' | 'native-sandbox' = 'systemd-unit',
 describe('policy-selected native sandbox launch', () => {
   it.each([null, undefined])('refuses a failed unit probe before spawn or run directory creation (breaker=%s)', async scopedBreaker => {
     const f = await fixture();
-    f.probeNativeSandbox.mockReturnValue({ ok: false, mode: 'systemd-unit', detail: 'uid_map: Operation not permitted' } as any);
+    f.probeNativeSandbox.mockReturnValue({ ok: false, mode: 'systemd-unit', mechanism: 'bwrap', detail: 'uid_map: Operation not permitted' } as any);
     const error = await f.launcher.launchWorker({ ...f.options, scopedBreaker }).catch((error: Error) => error);
     expect(error).toMatchObject({ name: 'WorkerPolicyError', code: 'OG_NATIVE_SANDBOX_UNAVAILABLE' });
     expect(error.message).toMatch(/^OG_NATIVE_SANDBOX_UNAVAILABLE:/);
-    expect(error.message).toContain('restricted unprivileged user namespaces inside systemd user units');
+    expect(error.message).toContain('bwrap probe failed inside a systemd user unit');
     expect(error.message).toContain('uid_map: Operation not permitted');
-    expect(error.message).toContain('AppArmor allowance');
-    expect(error.message).toContain('launchMode="native-sandbox"');
+    expect(error.message).not.toMatch(/AppArmor|launchMode=/);
     expect(f.launchIsolated).not.toHaveBeenCalled();
     await expect(lstat(f.runDir)).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -90,7 +89,7 @@ describe('policy-selected native sandbox launch', () => {
     const f = await fixture();
     f.plan.selected!.permissions.sandbox = 'external';
     await writeFile(f.options.invocationPath, JSON.stringify(f.plan));
-    f.probeNativeSandbox.mockReturnValue({ ok: false, mode: 'systemd-unit', detail: 'uid_map: Operation not permitted' } as any);
+    f.probeNativeSandbox.mockReturnValue({ ok: false, mode: 'systemd-unit', mechanism: 'bwrap', detail: 'uid_map: Operation not permitted' } as any);
     await expect(f.launcher.launchWorker(f.options)).rejects.toMatchObject({ code: 'OG_NATIVE_SANDBOX_UNAVAILABLE' });
     expect(f.probeNativeSandbox).toHaveBeenCalledOnce();
     expect(f.launchIsolated).not.toHaveBeenCalled();

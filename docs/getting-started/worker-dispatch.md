@@ -493,7 +493,8 @@ aiwg config set --project parallelism.worker_dispatch false
 Turning it off only changes this one setting — any per-CLI enablement (`parallelism.clis`) and group
 configuration keep their existing values, so turning dispatch back on later restores the same setup.
 
-## Running outside the conductor sandbox
+## Worker launch boundary on Linux
 
-See [Worker dispatch runtime](worker-dispatch-runtime.md#running-outside-the-conductor-sandbox) for the
-full procedure.
+Codex and Muse sandbox checks probe system `bwrap` inside a transient user unit.
+See [Worker dispatch runtime](worker-dispatch-runtime.md#worker-launch-boundary-on-linux)
+for probe details, diagnostics, and launch boundaries.

@@ -42,50 +42,8 @@ import { buildSystemdClientEnv, resolveSystemdClient, resolveSystemdRun, CONNECT
 
 const UNIT_SAFE = /[^A-Za-z0-9:_.@-]/g;
 const transportBootstrapVariables = ['NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'LD_DEBUG', 'LD_DEBUG_OUTPUT'];
-const nativeSandboxProbes = new Map();
-let nativeSandboxProbeSequence = 0;
-export const NATIVE_SANDBOX_UNAVAILABLE = 'OG_NATIVE_SANDBOX_UNAVAILABLE';
-
-export function workerNeedsNativeNamespaces(adapter, permissions = {}, platform = process.platform) {
-  return platform === 'linux' && adapter?.provider === 'codex'
-    && (permissions.transport ?? 'shell') === 'shell'
-    && ['read-only', 'workspace-write'].includes(permissions.sandbox ?? 'workspace-write');
-}
-
-export function nativeSandboxFailure(text) {
-  return /loopback: Failed RTM_NEWADDR: Operation not permitted|uid_map[^\n]*Operation not permitted/i.test(text);
-}
-
-export function nativeSandboxProbeMessage(result) {
-  return `${NATIVE_SANDBOX_UNAVAILABLE}: Native sandbox unavailable: restricted unprivileged user namespaces inside systemd user units (host AppArmor policy may restrict userns). Probe: ${String(result.detail ?? 'failed').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 512)}. Select parallelism.groups.<group>.execution.launchMode="native-sandbox" with a verified enforcing CLI sandbox, or configure a host AppArmor allowance for the systemd worker launch path.`;
-}
-
-/** No inference: exercise user/network namespaces through the worker's unit and client environment path. */
-export function probeWorkerNativeSandbox({ spawn = spawnSync, env = process.env, envNames = ['PATH', 'HOME'], cwd,
-  cache = spawn === spawnSync ? nativeSandboxProbes : undefined } = {}) {
-  const key = JSON.stringify([cwd, [...envNames].sort()]);
-  if (cache?.has(key)) return cache.get(key);
-  let result;
-  try {
-    const managerEnvNames = resolveManagerEnvNames({ spawn });
-    const command = process.execPath;
-    const args = [fileURLToPath(import.meta.url), '--worker-environment', JSON.stringify(unitEnvironmentNames(envNames)),
-      '--', '/usr/bin/unshare', '--user', '--map-root-user', '--net', '/usr/bin/true'];
-    const argv = buildWorkerIsolationArgs({ unit: proposeWorkerUnitName(`sandbox-probe-${process.pid}-${++nativeSandboxProbeSequence}`),
-      command, args, cwd, env, envNames, managerEnvNames, memoryMaxGb: 0.25, attached: true,
-      extraProperties: ['RuntimeMaxSec=5s', 'TimeoutStopSec=1s'] });
-    const observed = spawn(resolveSystemdRun(), ['--collect', ...argv.slice(1)], {
-      encoding: 'utf8', timeout: 8000, maxBuffer: 4096, env: buildSystemdClientEnv({ env, envNames }) });
-    result = observed.status === 0 && !observed.error ? { ok: true, mode: 'systemd-unit' }
-      : { ok: false, mode: 'systemd-unit', code: NATIVE_SANDBOX_UNAVAILABLE,
-        detail: String(observed.error?.message ?? (String(observed.stderr ?? '').trim() || `exit ${observed.status}`)).replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 512) };
-  } catch (error) {
-    result = { ok: false, mode: 'systemd-unit', code: NATIVE_SANDBOX_UNAVAILABLE,
-      detail: String(error.message).replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 512) };
-  }
-  cache?.set(key, result);
-  return result;
-}
+export { NATIVE_SANDBOX_UNAVAILABLE, workerNeedsNativeNamespaces, nativeSandboxFailure,
+  nativeSandboxProbeMessage, probeWorkerNativeSandbox } from './worker-native-sandbox.mjs';
 
 /** Derive a unit-safe `aiwg-worker-<name>-<epoch>` unit name. */
 export function proposeWorkerUnitName(name, nowSeconds = Math.floor(Date.now() / 1000)) {

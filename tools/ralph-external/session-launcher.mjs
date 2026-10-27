@@ -442,7 +442,7 @@ async function launchOneWorker(owner, options) {
   const isolation = invocation.isolation === 'native-sandbox' ? { mode: 'native-sandbox' }
     : options.isolation ?? detectWorkerIsolation();
   if (isolation.mode === 'systemd-unit' && workerNeedsNativeNamespaces(adapter, permissions)) {
-    const probe = await (options.probeNativeSandbox ?? probeWorkerNativeSandbox)({ cwd: invocation.cwd,
+    const probe = await (options.probeNativeSandbox ?? probeWorkerNativeSandbox)({ adapter, cwd: invocation.cwd,
       envNames: invocation.envNames, env: Object.fromEntries(invocation.envNames.filter(name => process.env[name] !== undefined)
         .map(name => [name, process.env[name]])) });
     if (!probe.ok) throw new WorkerPolicyError(NATIVE_SANDBOX_UNAVAILABLE, nativeSandboxProbeMessage(probe));
