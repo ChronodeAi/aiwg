@@ -143,7 +143,7 @@ describe('worker MCP stdout byte budgets', () => {
   it('rejects a split unterminated frame before concatenating the overflow bytes', async () => {
     const { child, transport, emit } = await transportFixture();
     emit(Buffer.alloc(MAX_MCP_FRAME_BYTES, 120));
-    expect(transport._buffer.length).toBe(MAX_MCP_FRAME_BYTES);
+    expect(transport._bufferBytes).toBe(MAX_MCP_FRAME_BYTES);
     const concat = vi.spyOn(Buffer, 'concat');
     try {
       emit(Buffer.from('x'));
@@ -158,6 +158,35 @@ describe('worker MCP stdout byte budgets', () => {
     child.emit('close');
     expect(transport.onerror).toHaveBeenCalledTimes(1);
     expect(transport.onclose).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['complete', 'overflow'])('bounds copying for a frame split across many pipe reads (%s)', async ending => {
+    const { transport, emit } = await transportFixture();
+    const frame = Buffer.alloc(MAX_MCP_FRAME_BYTES, 32);
+    Buffer.from('{"jsonrpc":"2.0","method":"notifications/test"}').copy(frame);
+    const concat = vi.spyOn(Buffer, 'concat');
+    const scan = vi.spyOn(Buffer.prototype, 'indexOf');
+    try {
+      for (let offset = 0; offset < frame.length; offset += 16 * 1024) {
+        emit(frame.subarray(offset, offset + 16 * 1024));
+      }
+      expect(concat.mock.calls.length).toBe(0);
+      // Searching old fragments again would turn small pipe reads quadratic.
+      expect(scan.mock.contexts.every((buffer: Buffer) => buffer.length <= 16 * 1024)).toBe(true);
+      if (ending === 'complete') {
+        emit(Buffer.from('\n'));
+        expect(concat).toHaveBeenCalledTimes(1);
+        expect(transport.onmessage).toHaveBeenCalledWith({ jsonrpc: '2.0', method: 'notifications/test' });
+        expect(transport.onerror).not.toHaveBeenCalled();
+      } else {
+        emit(Buffer.from('x'));
+        expect(concat.mock.calls.length).toBe(0);
+        expect(transport._failure.code).toBe('OG_WORKER_MCP_FRAME_TOO_LARGE');
+        expect(transport.onmessage).not.toHaveBeenCalled();
+      }
+      expect(transport._buffer).toBeUndefined();
+      expect(transport._bufferBytes).toBe(0);
+    } finally { concat.mockRestore(); scan.mockRestore(); }
   });
 
   it('rejects an oversized newline-terminated frame in one chunk before parsing it', async () => {
@@ -1906,6 +1935,7 @@ describe('mcp transport against the real fake stdio worker (T-OG-17)', () => {
     }
   });
 
+  // Measured <2 s/iteration with eight CPU burners; 6 × 2 s × 3 headroom.
   it.skipIf(process.platform !== 'linux' || !supportsCapturedWorkerStdio)('retains capacity and control after each unconfirmed degraded overflow', async () => {
     const root = await tempRoot();
     const script = path.join(root, 'hostile-worker.mjs');
@@ -1945,7 +1975,7 @@ setInterval(() => {}, 1000);
         if (pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch { /* already reaped */ } }
       }
     }
-  }, 30000);
+  }, 6 * 2000 * 3);
 
   it.each(['confirmed', 'uncertain'])('awaits %s overflow evidence and releases capacity only with proof repeatedly', async termination => {
     const root = await tempRoot();
