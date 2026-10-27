@@ -50,6 +50,7 @@ import { assertManagedWorkerLaunch, validateManagedAttempt } from './lib/managed
 export { assertManagedWorkerLaunch } from './lib/managed-worker-attempt.mjs';
 import { buildSessionEnvironment } from './lib/session-environment.mjs';
 import { withWorkerPath, boundedPrivateRead } from './lib/worker-inputs.mjs';
+import { collectWorkerFinal } from './lib/worker-final.mjs';
 import { resolveRetryReference } from './lib/worker-launch-cli.mjs';
 import { launcherRecoveryEvidence, observeLauncherRecoveryOutcome, recordLauncherRecoveryHint } from './lib/launcher-recovery-evidence.mjs';
 export { observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence.mjs';
@@ -1187,26 +1188,10 @@ async function captureOneWorker(owner, ctx) {
     let healthFinalValid = false;
     let healthAttemptFinalValid = false;
     try {
-      const finalStat = await lstat(paths.final);
-      if (!finalStat.isFile() || finalStat.isSymbolicLink() || finalStat.nlink !== 1 || finalStat.size > 262144) throw new Error('Invalid final output');
-      await ctx.inspect(paths.final, 'file');
-      let extracted = false;
-      if (finalStat.size === 0 && driver.extractFinal) {
-        const final = driver.extractFinal(output.toString('utf8'));
-        if (final === null || final === undefined || final.success === false) throw new Error('Missing or unsuccessful final extraction');
-        const bytes = JSON.stringify({ invocationId, source: 'adapter-extraction', candidate: true, verified: false, result: final });
-        if (Buffer.byteLength(bytes) > 262144) throw new Error('Final exceeds bound');
-        await handles[2].writeFile(bytes); extracted = true;
-      }
-      const finalBytes = await boundedPrivateRead(paths.final, 262144, ctx.inspect, true);
-      if (!finalBytes.length) throw new Error('Missing final output');
-      if (!extracted && driver.extractFinal) {
-        const parsed = driver.extractFinal(finalBytes.toString('utf8'));
-        if (parsed === null || parsed === undefined || parsed.success === false) throw new Error('Invalid final output');
-      }
-      await publish('final-evidence.json', { invocationId, path: paths.final, digest: bytesDigest(finalBytes),
-        source: extracted ? 'adapter-extraction' : 'worker-output', candidate: true, verified: false,
-        terminalSuccess: result.exitCode === 0 && !result.timedOut && !result.errorCode });
+      const { finalBytes, extracted, parseFinal } = await collectWorkerFinal({
+        path: paths.final, workdir: invocation.cwd, driver, output, invocationId, result,
+        inspect: ctx.inspect, handle: handles[2], publish, outputFraming: ctx.profile.health?.outputFraming,
+      });
       // Consume #2890's strict final contract when supplied by the installed
       // driver. Legacy extraction remains a candidate, never health authority.
       if (driver.parseWorkerFinal) {
@@ -1214,7 +1199,7 @@ async function captureOneWorker(owner, ctx) {
           // Strict validation consumes original bytes. A legacy extracted
           // object may already have lost duplicate keys and cannot authorize
           // completion through reserialization.
-          const claims = await driver.parseWorkerFinal(extracted ? output : finalBytes, {
+          const claims = await parseFinal(extracted ? output : finalBytes, {
             format: extracted && ctx.profile.health?.outputFraming === 'jsonl' ? 'jsonl' : 'json', observation: { transport: 'shell',
             status: result.exitCode === 0 && !result.errorCode && !result.timedOut ? 'completed' : 'failed',
             termination: result.termination, exitCode: result.exitCode } });
@@ -1479,7 +1464,8 @@ async function captureOneWorker(owner, ctx) {
 //
 // `launchOneWorkerBaseline` and `captureOneWorkerBaseline` reproduce
 // `launchOneWorker`/`captureOneWorker`, apart from the lifecycle fixes above,
-// as they existed at base commit `a4085b86a` (`git show
+// with shared workerClaims/digest validation (#3675) applied to both paths,
+// otherwise as they existed at base commit `a4085b86a` (`git show
 // a4085b86a:tools/ralph-external/session-launcher.mjs`) — before any
 // #2915 direct-recovery code existed in this file. `launchOneWorker`
 // above calls `launchOneWorkerBaseline` for every attempt
@@ -1511,6 +1497,7 @@ async function captureOneWorker(owner, ctx) {
 //     `a4085b86a` called them — with NO `onDispatchCommit` — which that
 //     module's own dual-mode contract (`_runDispatchCommit`) defines as
 //     "behaves exactly as before the hook existed";
+//   - shared final validation (`lib/worker-final.mjs`, #3675);
 //   - unchanged imports (`process-monitor.mjs`, `lib/worker-health.mjs`,
 //     `serve/worker-invocation.js`, `models/qualification-digest.mjs`).
 // Neither function imports, reads, or references the breaker, the
@@ -1828,29 +1815,13 @@ async function captureOneWorkerBaseline(owner, ctx) {
       publishFailures: ctx.publishFailures?.length ? ctx.publishFailures.slice() : null };
     let healthFinalValid = false;
     try {
-      const finalStat = await lstat(paths.final);
-      if (!finalStat.isFile() || finalStat.isSymbolicLink() || finalStat.nlink !== 1 || finalStat.size > 262144) throw new Error('Invalid final output');
-      await ctx.inspect(paths.final, 'file');
-      let extracted = false;
-      if (finalStat.size === 0 && driver.extractFinal) {
-        const final = driver.extractFinal(output.toString('utf8'));
-        if (final === null || final === undefined || final.success === false) throw new Error('Missing or unsuccessful final extraction');
-        const bytes = JSON.stringify({ invocationId, source: 'adapter-extraction', candidate: true, verified: false, result: final });
-        if (Buffer.byteLength(bytes) > 262144) throw new Error('Final exceeds bound');
-        await handles[2].writeFile(bytes); extracted = true;
-      }
-      const finalBytes = await boundedPrivateRead(paths.final, 262144, ctx.inspect, true);
-      if (!finalBytes.length) throw new Error('Missing final output');
-      if (!extracted && driver.extractFinal) {
-        const parsed = driver.extractFinal(finalBytes.toString('utf8'));
-        if (parsed === null || parsed === undefined || parsed.success === false) throw new Error('Invalid final output');
-      }
-      await publish('final-evidence.json', { invocationId, path: paths.final, digest: bytesDigest(finalBytes),
-        source: extracted ? 'adapter-extraction' : 'worker-output', candidate: true, verified: false,
-        terminalSuccess: result.exitCode === 0 && !result.timedOut && !result.errorCode });
+      const { finalBytes, extracted, parseFinal } = await collectWorkerFinal({
+        path: paths.final, workdir: invocation.cwd, driver, output, invocationId, result,
+        inspect: ctx.inspect, handle: handles[2], publish, outputFraming: ctx.profile.health?.outputFraming,
+      });
       if (driver.parseWorkerFinal) {
         try {
-          await driver.parseWorkerFinal(extracted ? output : finalBytes, {
+          await parseFinal(extracted ? output : finalBytes, {
             format: extracted && ctx.profile.health?.outputFraming === 'jsonl' ? 'jsonl' : 'json', observation: { transport: 'shell',
             status: result.exitCode === 0 && !result.errorCode && !result.timedOut ? 'completed' : 'failed',
             termination: result.termination, exitCode: result.exitCode } });

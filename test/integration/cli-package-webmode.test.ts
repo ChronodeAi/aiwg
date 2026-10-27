@@ -343,6 +343,8 @@ describe('@aiwg/cli packaged web distribution', () => {
       // Launch helpers session-launcher imports (#3658).
       'tools/ralph-external/lib/worker-inputs.mjs',
       'tools/ralph-external/lib/worker-launch-cli.mjs',
+      // Worker final validation the launcher imports (#3675).
+      'tools/ralph-external/lib/worker-final.mjs',
       'tools/scripts/resource-preflight.mjs',
       'tools/ralph-external/lib/provider-adapter.mjs',
       'tools/ralph-external/lib/strict-worker-json.mjs',

@@ -47,11 +47,13 @@ async function fixture(settings = {}) {
   let dispatches = 0;
   let now = 1_000;
   let cancelled = false;
+  const finalClaims = { version: 1, status: 'completed', summary: 'Synthetic corrected worker',
+    claims: [], artifacts: [], checks: [], limitations: [] };
   const driver = { qualification: { adapter, adapterId: adapter.id, cliVersion: '1.0.0',
     boundary: { kind: 'os', identity: 'fixture:boundary', digest: qualificationDigest('boundary'), controls: ['sandbox'] } },
     buildInvocation: async input => ({ argv: [executable, '--final-output', input.finalPath,
       settings.embeddedOutput ? `unrelated-prefix:${input.finalPath}` : extraArgument], stdin: 'closed', envNames: [] }),
-    extractFinal: () => ({ success: true }) };
+    extractFinal: text => { try { return JSON.parse(text).result; } catch { return null; } } };
   if (settings.requalify) {
     const evidence = { scopeDigest: qualificationDigest('old binary identity'), fixtureDigest: qualificationDigest('negative fixtures'),
       verifiedAt: f.request.now, evidenceRef: 'fixture:qualified-binary' };
@@ -128,7 +130,7 @@ async function fixture(settings = {}) {
             child.emit('exit', 1, null);
           } else if (dispatches === 2 && settings.success) {
             expect(command).toBe('/qualified/refreshed-worker');
-            child.stdout.write('{"type":"result","result":{"success":true}}\n');
+            child.stdout.write(`${JSON.stringify({ type: 'result', result: finalClaims })}\n`);
             child.emit('exit', 0, null);
           } else {
             child.emit('error', Object.assign(new Error('synthetic spawn error'), { code: settings.code ?? 'ENOENT' }));
