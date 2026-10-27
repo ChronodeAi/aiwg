@@ -91,18 +91,40 @@ describe('direct stable publication and advisory registry checks', () => {
       'Verify provenance attestation landed', 'Verify stable dist-tag policy', 'Report advisory npm registry checks'];
     for (const name of ordered) expect(index(name), name).toBeGreaterThanOrEqual(0);
     for (let i=1; i<ordered.length; i++) expect(index(ordered[i-1])).toBeLessThan(index(ordered[i]));
-    expect(step('Retain smoke-tested tarballs before publication').with.path.trim().split('\n').map((line: string) => line.trim())).toEqual([
-      '${{ runner.temp }}/stable-package/aiwg-${{ steps.version.outputs.version }}.tgz',
-      '${{ runner.temp }}/stable-package/aiwg-cli-${{ steps.version.outputs.version }}.tgz',
-      '${{ runner.temp }}/stable-package/aiwg-cockpit-${{ steps.version.outputs.version }}.tgz',
-      '${{ runner.temp }}/stable-package/installed-smoke.json',
-    ]);
+    expect(step('Retain smoke-tested tarballs before publication').with.path).toBe('${{ runner.temp }}/stable-package/');
+    expect(step('Retain smoke-tested tarballs before publication').with['if-no-files-found']).toBe('error');
+    expect(step('Preserve exact installer').run).toContain('validateInputs');
+    expect(index('Retain smoke-tested tarballs before publication')).toBeLessThan(index('Verify all retained tarballs before publication'));
+    expect(index('Verify all retained tarballs before publication')).toBeLessThan(index('Publish smoke-tested stable tarballs to npmjs.org'));
+    expect(step('Verify all retained tarballs before publication').run).toContain('--verify-retention');
+    expect(workflow.permissions.actions).toBe('read');
     expect(step('Checkout release tag').run).toContain('git merge-base --is-ancestor');
     expect(step('Publish smoke-tested stable tarballs to npmjs.org').run).toContain('direct-stable-publish.mjs');
     expect(step('Publish smoke-tested stable tarballs to npmjs.org').if).toBeUndefined();
     expect(step('Upload signed release assets to GitHub release').run).toContain('aiwg-cli-${VERSION}.tgz');
     expect(step('Upload signed release assets to GitHub release').run).toContain('aiwg-cockpit-${VERSION}.tgz');
     expect(workflow.jobs['socket-post-publish'].needs).toBe('publish-to-npmjs-org');
+  });
+
+  it('recovers registry bytes before building and preserves all tag/signature gates', () => {
+    const recover = index('Recover published registry tarballs');
+    for (const name of ['Verify workflow identity is tag-bound', 'Verify signed tag (#1299 / A9 gate)', 'Checkout release tag', 'Extract and verify version against tag']) {
+      expect(index(name)).toBeLessThan(recover);
+      expect(step(name).if).toBeUndefined();
+    }
+    expect(step('Recover published registry tarballs').run).toContain('--prepare');
+    expect(step('Recover published registry tarballs').env.RELEASE_COMMIT).toContain('release_source.outputs.commit');
+    expect(step('Publish smoke-tested stable tarballs to npmjs.org').env.ALREADY_PUBLISHED).toContain('recovery.outputs.published_packages');
+    expect(step('Publish smoke-tested stable tarballs to npmjs.org').run).toContain('--already-published "$ALREADY_PUBLISHED"');
+    for (const name of ['Validate and build stable release', 'Require slow release infrastructure tests', 'Pack and smoke-test exact npm surfaces']) {
+      expect(index(name)).toBeGreaterThan(recover);
+      expect(step(name).if).toBe("${{ steps.recovery.outputs.recovered != 'true' }}");
+      expect(step(name)['continue-on-error']).toBeUndefined();
+    }
+    for (const name of ['Generate tarball + cosign sign + manifest', 'Sign SBOM with cosign (keyless)']) {
+      expect(step(name).run).toContain('node tools/release/cosign-sign-blob.mjs');
+      expect(step(name).run).not.toContain('cosign sign-blob');
+    }
   });
 
   it.each(['1', '0'])('creates or updates a public stable release with announcement notes (view status %s)', (exists) => {

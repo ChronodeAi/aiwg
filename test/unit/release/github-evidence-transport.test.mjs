@@ -60,7 +60,7 @@ function perReleaseZip() {
   if (output.status !== 0) throw new Error(output.stderr.toString());
   return output.stdout;
 }
-function extract(bytes, root) { return spawnSync('python3', [extractor, root], { input: bytes, encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' }); }
+function extract(bytes, root, legacy = false) { return spawnSync('python3', [extractor, root, ...(legacy ? ['--legacy-stable-package'] : [])], { input: bytes, encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' }); }
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: {
   'content-type': 'application/json', date: 'Tue, 20 Oct 2026 18:00:00 GMT',
 } });
@@ -95,6 +95,22 @@ function comparisonFetch({ bytes, testedCommit, candidateCommit, workflowId, run
 }
 
 describe('authenticated GitHub release evidence transport', () => {
+  it('finds stable runs and artifacts through authenticated, paginated tag/commit queries without an approval issue', async () => {
+    const calls = [], commit = 'a'.repeat(40);
+    const transport = createGithubEvidenceTransport({ token: 'synthetic-token', fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      const parsed = new URL(url), field = parsed.pathname.endsWith('/artifacts') ? 'artifacts' : 'workflow_runs';
+      return json({ total_count: 101, [field]: Array.from({ length: parsed.searchParams.get('page') === '1' ? 100 : 1 }, (_, id) => ({ id })) });
+    } });
+    expect((await transport.listWorkflowRuns({ repository: 'owner/repo', workflow: 'npm-publish.yml', branch: 'v2026.10.9', commit })).items).toHaveLength(101);
+    expect((await transport.listRunArtifacts({ repository: 'owner/repo', runId: 40349216419 })).items).toHaveLength(101);
+    expect(calls).toHaveLength(4);
+    expect(calls[0].url).toContain(`/workflows/npm-publish.yml/runs?branch=v2026.10.9&head_sha=${commit}`);
+    expect(calls[2].url).toContain('/runs/40349216419/artifacts');
+    for (const call of calls) expect(call.options.headers.Authorization).toBe('Bearer synthetic-token');
+    await expect(transport.listApprovals({ repository: 'owner/repo' })).rejects.toThrow(/Approval issue/);
+    expect(() => transport.listWorkflowRuns({ repository: 'owner/repo', workflow: 'npm-publish.yml', branch: 'main', commit })).toThrow(/stable workflow identity/);
+  });
   it('pins source to the commit and paginates jobs for the exact attempt and approvals', async () => {
     const calls = [], commit = 'a'.repeat(40);
     const transport = createGithubEvidenceTransport({ token: 'secret', approvalIssue: 3201, fetchImpl: async (url, options) => {
@@ -139,6 +155,22 @@ describe('authenticated GitHub release evidence transport', () => {
       expect(fs.readdirSync(destination)).toEqual([]);
     }
     expect(fs.existsSync(path.join(root, 'outside'))).toBe(false);
+  });
+  it('normalizes only the known legacy container prefix and still rejects traversal and duplicate basenames', () => {
+    const prefix = '__w/_temp/stable-package/';
+    for (const [names, legacy, pass] of [
+      [[`${prefix}aiwg-2026.10.9.tgz`], true, true],
+      [[`${prefix}aiwg-2026.10.9.tgz`], false, false],
+      [[`${prefix}../outside`], true, false],
+      [['other/aiwg-2026.10.9.tgz'], true, false],
+      [['a', `${prefix}a`], true, false],
+    ]) {
+      const archive = spawnSync('python3', ['-I', '-S', '-c', 'import sys,json,zipfile\nz=zipfile.ZipFile(sys.stdout.buffer,"w")\nfor n in json.loads(sys.argv[1]): z.writestr(n,"synthetic")\nz.close()', JSON.stringify(names)], { timeout: 30000 });
+      expect(archive.status).toBe(0);
+      const destination = temp(), result = extract(archive.stdout, destination, legacy);
+      expect(result.status === 0, JSON.stringify({ names, legacy })).toBe(pass);
+      expect(fs.readdirSync(destination)).toEqual(pass ? ['aiwg-2026.10.9.tgz'] : []);
+    }
   });
   it('binds a current-quarter full-validation comparison to its tested ancestor and a distinct candidate', async () => {
     const root = temp(), testedCommit = 'a'.repeat(40), candidateCommit = 'b'.repeat(40), workflowId = 74, runId = 55, artifactId = 66;

@@ -13,6 +13,9 @@ MAX_ARCHIVE = 256 * 1024 * 1024
 
 def main():
     destination = sys.argv[1]
+    legacy_stable = len(sys.argv) == 3 and sys.argv[2] == '--legacy-stable-package'
+    if len(sys.argv) != 2 and not legacy_stable:
+        raise ValueError('invalid extraction arguments')
     data = sys.stdin.buffer.read(MAX_ARCHIVE + 1)
     if len(data) > MAX_ARCHIVE:
         raise ValueError('archive size limit exceeded')
@@ -21,9 +24,15 @@ def main():
         if not 1 <= len(entries) <= 16:
             raise ValueError('invalid entry count')
         names = set()
+        normalized = []
         total = 0
         for entry in entries:
             name = entry.filename
+            # A container runner translated only the first multiline upload
+            # path, leaving the old stable artifact rooted at /. Accept just
+            # that known prefix for recovery; keep every basename check below.
+            if legacy_stable and name.startswith('__w/_temp/stable-package/'):
+                name = name[len('__w/_temp/stable-package/'):]
             mode = entry.external_attr >> 16
             kind = stat.S_IFMT(mode)
             if (not name or name in ('.', '..') or '/' in name or '\\' in name or '\x00' in name
@@ -31,12 +40,13 @@ def main():
                     or entry.flag_bits & 1 or entry.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)):
                 raise ValueError('invalid archive entry')
             names.add(name)
+            normalized.append((entry, name))
             total += entry.file_size
             if (entry.file_size > MAX_FILE or total > MAX_TOTAL
                     or entry.file_size > max(1, entry.compress_size) * 500):
                 raise ValueError('archive expansion limit exceeded')
-        for entry in entries:
-            with archive.open(entry) as source, open(os.path.join(destination, entry.filename), 'xb') as target:
+        for entry, name in normalized:
+            with archive.open(entry) as source, open(os.path.join(destination, name), 'xb') as target:
                 remaining = entry.file_size
                 while remaining:
                     chunk = source.read(min(1024 * 1024, remaining))

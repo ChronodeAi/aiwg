@@ -113,19 +113,23 @@ function packJson(text) {
 }
 function isolatedEnv(temp, base) {
   const home = path.join(temp, 'home'); fs.mkdirSync(home, { recursive: true });
-  return { ...base, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'),
+  const clean = { ...base, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'),
     XDG_DATA_HOME: path.join(home, '.local/share'), XDG_CACHE_HOME: path.join(home, '.cache'),
     CODEX_HOME: path.join(home, '.codex'), HERMES_HOME: path.join(home, '.hermes'), CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
     AIWG_ARTIFACTS_PATH: path.join(temp, 'artifacts'), AIWG_CONFIG: path.join(home, '.aiwg'), AIWG_ROOT: '',
     npm_config_userconfig: path.join(home, '.npmrc'), npm_config_prefix: path.join(temp, 'prefix'),
     npm_config_cache: path.join(temp, 'npm-cache'), AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1' };
+  // Downloaded package executables must not inherit publication or signing authority.
+  for (const key of Object.keys(clean)) {
+    if (/^(?:GH_TOKEN|GITHUB_TOKEN|NODE_AUTH_TOKEN|NPM_TOKEN|SIGSTORE_ID_TOKEN|ACTIONS_ID_TOKEN_REQUEST_.*|COSIGN_.*)$/i.test(key)) delete clean[key];
+  }
+  return clean;
 }
 export function packAndSmoke({ root = ROOT, output, spawn = boundedSpawnSync, env = process.env } = {}) {
   if (!output) throw new Error('Bundle output is required');
   output = path.resolve(output); fs.mkdirSync(output, { recursive: true });
   const version = readJson(path.join(root, 'package.json')).version;
   const allowlist = new Set(fs.readFileSync(path.join(root, 'ci/expected-tarball-top-level.txt'), 'utf8').split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#')));
-  const smoke = [];
   for (const surface of SURFACES) {
     const info = packJson(command('npm', ['pack', '--json', '--pack-destination', output], { cwd: path.join(root, surface.dir), env, spawn }));
     const packed = info?.[0], filename = `${surface.stem}-${version}.tgz`;
@@ -136,7 +140,29 @@ export function packAndSmoke({ root = ROOT, output, spawn = boundedSpawnSync, en
       tops.add(file.path.split('/')[0]);
     }
     if (surface.name === 'aiwg' && ([...tops].some(name => !allowlist.has(name)) || [...allowlist].some(name => !tops.has(name)))) throw new Error('Root tarball top-level allowlist mismatch');
-    const tarball = path.join(output, filename), before = sha256(tarball);
+    const tarball = path.join(output, filename);
+    if (surface.name === '@aiwg/cockpit') {
+      // Its prepack rebuilds web/dist. Keep this real two-build byte check in
+      // the release packaging lane so staging-path or bundler drift fails
+      // before the smoke-tested bytes can be published.
+      const repeat = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rc-repack-'));
+      try {
+        const repeated = packJson(command('npm', ['pack', '--json', '--pack-destination', repeat], { cwd: path.join(root, surface.dir), env, spawn }));
+        if (repeated.length !== 1 || repeated[0]?.name !== surface.name || repeated[0]?.version !== version || repeated[0]?.filename !== filename
+          || !fs.readFileSync(tarball).equals(fs.readFileSync(path.join(repeat, filename)))) throw new Error(`Non-reproducible package tarball: ${surface.name}`);
+      } finally { fs.rmSync(repeat, { recursive: true, force: true }); }
+    }
+  }
+  return smokeTarballs({ root, output, spawn, env });
+}
+// Recovery runs the same installed-package checks on authenticated registry
+// bytes without invoking prepack or replacing them with a new local build.
+export function smokeTarballs({ root = ROOT, output, spawn = boundedSpawnSync, env = process.env } = {}) {
+  if (!output) throw new Error('Bundle output is required');
+  output = path.resolve(output);
+  const version = readJson(path.join(root, 'package.json')).version, smoke = [];
+  for (const surface of SURFACES) {
+    const filename = `${surface.stem}-${version}.tgz`, tarball = path.join(output, filename), before = sha256(tarball);
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rc-install-'));
     try {
       const cleanEnv = isolatedEnv(temp, env), prefix = path.join(temp, 'install');

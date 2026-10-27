@@ -45,7 +45,7 @@ describe('required provider deployment release gates', () => {
     expect(gate).toBeLessThan(index('Pack and smoke-test exact npm surfaces'));
     expect(gate).toBeLessThan(index('Publish smoke-tested stable tarballs to npmjs.org'));
     expect(steps[gate].run).toBe('node tools/ci/run-with-hang-report.mjs --timeout 30m -- npm run test:release-slow');
-    expect(steps[gate].if).toBeUndefined();
+    expect(steps[gate].if).toBe("${{ steps.recovery.outputs.recovered != 'true' }}");
     expect(steps[gate]['continue-on-error']).toBeUndefined();
   });
   it('offers a manual-only release lane after building the CLI', () => {
