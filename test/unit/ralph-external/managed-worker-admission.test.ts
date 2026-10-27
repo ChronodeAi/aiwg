@@ -1,13 +1,13 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assertManagedWorkerLaunch } from '../../../tools/ralph-external/session-launcher.mjs';
 import { saveLauncherRegistry } from '../../../src/cli/handlers/ralph-launcher.js';
 import { createMcAdmissionScheduler } from '../../../src/cli/handlers/mc.js';
 import { bindManagedAdmissionPolicy, FileAdmissionStore, managedProjectAdmissionPolicy,
   projectAdmissionAuthority } from '../../../src/serve/shared-host-scheduler.js';
-import { workerActivationDigests, workerConfigDigest, type AiwgConfig } from '../../../src/config/aiwg-config.js';
+import { getConfigPath, workerActivationDigests, workerConfigDigest, type AiwgConfig } from '../../../src/config/aiwg-config.js';
 
 let root: string;
 const now = '2026-10-22T12:00:00.000Z';
@@ -25,6 +25,9 @@ async function fixture() {
     clis: { first: { adapter: 'providers:codex', accountScope: 'synthetic-account', quotaScope: 'synthetic-quota' } },
   } } as AiwgConfig;
   config.parallelism!.activation = { revision: 1, ...workerActivationDigests(config), snapshotRef: 'synthetic:activation' };
+  // Admission rechecks the project's on-disk activation, as a real project has it.
+  mkdirSync(dirname(getConfigPath(root)), { recursive: true });
+  writeFileSync(getConfigPath(root), JSON.stringify(config));
   const policy = managedProjectAdmissionPolicy(root, config.parallelism!, workerConfigDigest(config.parallelism!.activation), 1);
   const store = new FileAdmissionStore(projectAdmissionAuthority(root).path);
   bindManagedAdmissionPolicy(store, policy);
@@ -48,6 +51,11 @@ async function fixture() {
 }
 
 describe('T-OG-08 managed one-shot admission guard', () => {
+  it('refuses admission when the project config holding the activation is missing', async () => {
+    const f = await fixture();
+    rmSync(getConfigPath(root));
+    await expect(assertManagedWorkerLaunch(f.options, f.invocation, f.inputs, root)).rejects.toThrow(/Managed activation cannot be verified/);
+  });
   it('accepts only the shared claimed external reservation without charging another allowance', async () => {
     const f = await fixture();
     const before = f.store.read();
