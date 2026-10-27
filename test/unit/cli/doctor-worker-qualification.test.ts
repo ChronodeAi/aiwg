@@ -91,6 +91,9 @@ if (process.argv.includes('--version')) console.log('systemd 255');
 else if (${namespaceProbe}) process.exit(0);
 else { console.error('uid_map: Operation not permitted'); process.exit(1); }
 `);
+  // The sandbox probe resolves the CLI's bwrap before entering the unit; hosts and CI
+  // runners without one must still reach the fake systemd-run outcome below.
+  await writeExecutable(path.join(systemdBin, 'bwrap'), `#!${process.execPath}\nprocess.exit(0);\n`);
   await writeExecutable(path.join(systemdBin, 'systemctl'), `#!${process.execPath}
 if (process.argv.includes('show-environment')) process.exit(0);
 else console.log('255');
