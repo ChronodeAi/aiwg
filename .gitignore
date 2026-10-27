@@ -120,3 +120,13 @@ test/**/.tmp-*/
 
 # stale docs preview build target (active target is dist/aiwg-docs)
 .docs-preview/
+
+# AIWG project-local bundle source — track these (managed by AIWG)
+!.aiwg/aiwg.config
+!.aiwg/quickref.json
+!.aiwg/quickref.config.json
+!.aiwg/addons/
+!.aiwg/extensions/
+!.aiwg/frameworks/
+!.aiwg/plugins/
+!.aiwg/providers/
