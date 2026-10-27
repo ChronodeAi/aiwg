@@ -199,6 +199,7 @@
     "test:coverage:testing-quality": "vitest run --config config/vitest.testing-quality-coverage.config.js",
     "test:coverage:audit-foundations": "vitest run --config config/vitest.audit-foundations-coverage.config.js",
     "test:coverage:enforcement": "node tools/testing/verify-coverage-enforcement.mjs",
+    "test:coverage:orchestration-changed": "node tools/testing/orchestration-changed-coverage.mjs",
     "test:conformance:audit": "node tools/testing/audit-conformance-inventory.mjs",
     "lint:relations-prebuilt-package": "tsx tools/lint/relations-prebuilt-package.mjs"
   },

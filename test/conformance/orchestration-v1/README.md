@@ -101,11 +101,35 @@ phases and the actual host's Node version, OS, architecture, CPU model/count.
 Thresholds allow shared CI hosts; each test is bounded by 30 seconds.
 
 These are direct-surface regression checks, registered as partial. They exclude
-discovery, cold start, queueing, inference, managed admission, signing/storage
-and worktree creation. They do not satisfy the full warm-worktree launch or
-managed plan/admission gate. The 100-request crash admission, 1,000-request
-managed overhead, changed-code coverage targets and S5 audit remain follow-up
-work; Decision 17 leaves these managed requirements intact.
+discovery, cold start, queueing, inference, signing/storage
+and worktree creation. They do not satisfy the full warm-worktree launch gate.
+P01 in `worker-resolution.test.ts` adds the 1,000-request managed overhead
+check (T-OG-05, cached plan plus managed admission submit, same p95 ≤250 ms
+bound and warm-up style), and `shared-host-scheduler-fencing.test.ts` adds the
+100-request two-process crash admission check (T-OG-06 NFR-OG-003 P01: caps 4
+global and 2 per member, SIGKILL mid-admission with restart, zero premature
+releases and no cap overshoot). Both are registered through
+`packs.d/managed-gates.json` as partial. Changed-code coverage targets and the
+S5 audit remain follow-up work; Decision 17 leaves these managed requirements
+intact.
+
+## Managed follow-ups: Must inventory and changed-code coverage
+
+`must-requirements.json` transcribes every Must FR-OG/NFR-OG ID from the
+09-test-strategy pack tables with its owning packs; `must-allowlist.json`
+names each currently unmapped Must with a reviewed reason. The pack gate fails
+on any unmapped Must without an entry, on a stale entry whose Must became
+mapped, and on entries outside the inventory or without a reason. The Must
+gate is registry-wide: it fails the overall report but never rewrites a slice
+verdict, so the S5 audit stays `unverified` until S2–S4 owners exit.
+
+`tools/testing/orchestration-changed-coverage.mjs` gates changed files only
+(diff against the merge base): 90% statements / 85% branches for changed
+validators (`src/models`, `src/config`, `src/mission-protocol`,
+`src/serve/shared-host-*`), 80% branches for changed adapters/recovery
+(`tools/ralph-external`, `src/serve`, `src/mcp`). It runs inside the existing
+coverage CI step as `npm run test:coverage:orchestration-changed`; it is not
+a new lane.
 
 The existing `config/vitest.conformance.config.js` fixture lane imports
 `orchestrationConformanceFiles` from `config/test-lanes.mjs`; those files are

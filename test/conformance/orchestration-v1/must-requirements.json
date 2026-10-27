@@ -1,0 +1,822 @@
+{
+  "source": "09-test-strategy.md pack coverage tables (T-OG-01 through T-OG-24, Revision 2 Tier 0 packs and Revision 3 liveness packs)",
+  "note": "Owning packs transcribe where each requirement is accepted; they are not mappings. A Must is mapped only when a pack declares it in requirements and binds it in scenarios. T-OG-22 owns FR-OG-101/102 per 09 but has no registry pack at this checkpoint; those FRs stay allowlisted until a registered pack maps them.",
+  "requirements": [
+    {
+      "id": "FR-OG-001",
+      "packs": [
+        "T-OG-03"
+      ]
+    },
+    {
+      "id": "FR-OG-002",
+      "packs": [
+        "T-OG-03"
+      ]
+    },
+    {
+      "id": "FR-OG-003",
+      "packs": [
+        "T-OG-03"
+      ]
+    },
+    {
+      "id": "FR-OG-004",
+      "packs": [
+        "T-OG-03"
+      ]
+    },
+    {
+      "id": "FR-OG-005",
+      "packs": [
+        "T-OG-03"
+      ]
+    },
+    {
+      "id": "FR-OG-006",
+      "packs": [
+        "T-OG-03"
+      ]
+    },
+    {
+      "id": "FR-OG-007",
+      "packs": [
+        "T-OG-02"
+      ]
+    },
+    {
+      "id": "FR-OG-008",
+      "packs": [
+        "T-OG-02"
+      ]
+    },
+    {
+      "id": "FR-OG-009",
+      "packs": [
+        "T-OG-02"
+      ]
+    },
+    {
+      "id": "FR-OG-010",
+      "packs": [
+        "T-OG-02"
+      ]
+    },
+    {
+      "id": "FR-OG-011",
+      "packs": [
+        "T-OG-02"
+      ]
+    },
+    {
+      "id": "FR-OG-012",
+      "packs": [
+        "T-OG-02"
+      ]
+    },
+    {
+      "id": "FR-OG-013",
+      "packs": [
+        "T-OG-02"
+      ]
+    },
+    {
+      "id": "FR-OG-014",
+      "packs": [
+        "T-OG-13"
+      ]
+    },
+    {
+      "id": "FR-OG-015",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-016",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-017",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-018",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-019",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-020",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-021",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-022",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-023",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-024",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-025",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-026",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-027",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-028",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-029",
+      "packs": [
+        "T-OG-01"
+      ]
+    },
+    {
+      "id": "FR-OG-030",
+      "packs": [
+        "T-OG-05"
+      ]
+    },
+    {
+      "id": "FR-OG-031",
+      "packs": [
+        "T-OG-05"
+      ]
+    },
+    {
+      "id": "FR-OG-032",
+      "packs": [
+        "T-OG-05"
+      ]
+    },
+    {
+      "id": "FR-OG-033",
+      "packs": [
+        "T-OG-05"
+      ]
+    },
+    {
+      "id": "FR-OG-034",
+      "packs": [
+        "T-OG-05"
+      ]
+    },
+    {
+      "id": "FR-OG-035",
+      "packs": [
+        "T-OG-06"
+      ]
+    },
+    {
+      "id": "FR-OG-036",
+      "packs": [
+        "T-OG-06"
+      ]
+    },
+    {
+      "id": "FR-OG-037",
+      "packs": [
+        "T-OG-13"
+      ]
+    },
+    {
+      "id": "FR-OG-038",
+      "packs": [
+        "T-OG-04"
+      ]
+    },
+    {
+      "id": "FR-OG-039",
+      "packs": [
+        "T-OG-04"
+      ]
+    },
+    {
+      "id": "FR-OG-040",
+      "packs": [
+        "T-OG-03",
+        "T-OG-06"
+      ]
+    },
+    {
+      "id": "FR-OG-041",
+      "packs": [
+        "T-OG-03"
+      ]
+    },
+    {
+      "id": "FR-OG-042",
+      "packs": [
+        "T-OG-04"
+      ]
+    },
+    {
+      "id": "FR-OG-043",
+      "packs": [
+        "T-OG-03",
+        "T-OG-06"
+      ]
+    },
+    {
+      "id": "FR-OG-044",
+      "packs": [
+        "T-OG-06"
+      ]
+    },
+    {
+      "id": "FR-OG-045",
+      "packs": [
+        "T-OG-06"
+      ]
+    },
+    {
+      "id": "FR-OG-046",
+      "packs": [
+        "T-OG-06"
+      ]
+    },
+    {
+      "id": "FR-OG-047",
+      "packs": [
+        "T-OG-13"
+      ]
+    },
+    {
+      "id": "FR-OG-048",
+      "packs": [
+        "T-OG-07"
+      ]
+    },
+    {
+      "id": "FR-OG-049",
+      "packs": [
+        "T-OG-07"
+      ]
+    },
+    {
+      "id": "FR-OG-050",
+      "packs": [
+        "T-OG-07"
+      ]
+    },
+    {
+      "id": "FR-OG-051",
+      "packs": [
+        "T-OG-13"
+      ]
+    },
+    {
+      "id": "FR-OG-052",
+      "packs": [
+        "T-OG-02",
+        "T-OG-12"
+      ]
+    },
+    {
+      "id": "FR-OG-053",
+      "packs": [
+        "T-OG-12"
+      ]
+    },
+    {
+      "id": "FR-OG-054",
+      "packs": [
+        "T-OG-12"
+      ]
+    },
+    {
+      "id": "FR-OG-055",
+      "packs": [
+        "T-OG-12"
+      ]
+    },
+    {
+      "id": "FR-OG-056",
+      "packs": [
+        "T-OG-13"
+      ]
+    },
+    {
+      "id": "FR-OG-057",
+      "packs": [
+        "T-OG-09"
+      ]
+    },
+    {
+      "id": "FR-OG-058",
+      "packs": [
+        "T-OG-09"
+      ]
+    },
+    {
+      "id": "FR-OG-059",
+      "packs": [
+        "T-OG-09"
+      ]
+    },
+    {
+      "id": "FR-OG-060",
+      "packs": [
+        "T-OG-09"
+      ]
+    },
+    {
+      "id": "FR-OG-061",
+      "packs": [
+        "T-OG-13"
+      ]
+    },
+    {
+      "id": "FR-OG-062",
+      "packs": [
+        "T-OG-13"
+      ]
+    },
+    {
+      "id": "FR-OG-063",
+      "packs": [
+        "T-OG-03",
+        "T-OG-10"
+      ]
+    },
+    {
+      "id": "FR-OG-064",
+      "packs": [
+        "T-OG-10",
+        "T-OG-11"
+      ]
+    },
+    {
+      "id": "FR-OG-065",
+      "packs": [
+        "T-OG-10"
+      ]
+    },
+    {
+      "id": "FR-OG-066",
+      "packs": [
+        "T-OG-10"
+      ]
+    },
+    {
+      "id": "FR-OG-067",
+      "packs": [
+        "T-OG-10"
+      ]
+    },
+    {
+      "id": "FR-OG-068",
+      "packs": [
+        "T-OG-03",
+        "T-OG-10"
+      ]
+    },
+    {
+      "id": "FR-OG-069",
+      "packs": [
+        "T-OG-10"
+      ]
+    },
+    {
+      "id": "FR-OG-070",
+      "packs": [
+        "T-OG-08"
+      ]
+    },
+    {
+      "id": "FR-OG-071",
+      "packs": [
+        "T-OG-08",
+        "T-OG-14"
+      ]
+    },
+    {
+      "id": "FR-OG-072",
+      "packs": [
+        "T-OG-13"
+      ]
+    },
+    {
+      "id": "FR-OG-073",
+      "packs": [
+        "T-OG-13"
+      ]
+    },
+    {
+      "id": "FR-OG-074",
+      "packs": [
+        "T-OG-11"
+      ]
+    },
+    {
+      "id": "FR-OG-075",
+      "packs": [
+        "T-OG-11"
+      ]
+    },
+    {
+      "id": "FR-OG-076",
+      "packs": [
+        "T-OG-11"
+      ]
+    },
+    {
+      "id": "FR-OG-077",
+      "packs": [
+        "T-OG-11"
+      ]
+    },
+    {
+      "id": "FR-OG-078",
+      "packs": [
+        "T-OG-13"
+      ]
+    },
+    {
+      "id": "FR-OG-079",
+      "packs": [
+        "T-OG-15"
+      ]
+    },
+    {
+      "id": "FR-OG-080",
+      "packs": [
+        "T-OG-15"
+      ]
+    },
+    {
+      "id": "FR-OG-081",
+      "packs": [
+        "T-OG-15"
+      ]
+    },
+    {
+      "id": "FR-OG-082",
+      "packs": [
+        "T-OG-15"
+      ]
+    },
+    {
+      "id": "FR-OG-083",
+      "packs": [
+        "T-OG-16"
+      ]
+    },
+    {
+      "id": "FR-OG-084",
+      "packs": [
+        "T-OG-18"
+      ]
+    },
+    {
+      "id": "FR-OG-085",
+      "packs": [
+        "T-OG-16"
+      ]
+    },
+    {
+      "id": "FR-OG-086",
+      "packs": [
+        "T-OG-16"
+      ]
+    },
+    {
+      "id": "FR-OG-087",
+      "packs": [
+        "T-OG-16"
+      ]
+    },
+    {
+      "id": "FR-OG-088",
+      "packs": [
+        "T-OG-15",
+        "T-OG-18"
+      ]
+    },
+    {
+      "id": "FR-OG-089",
+      "packs": [
+        "T-OG-19"
+      ]
+    },
+    {
+      "id": "FR-OG-090",
+      "packs": [
+        "T-OG-17"
+      ]
+    },
+    {
+      "id": "FR-OG-091",
+      "packs": [
+        "T-OG-17",
+        "T-OG-19"
+      ]
+    },
+    {
+      "id": "FR-OG-092",
+      "packs": [
+        "T-OG-17",
+        "T-OG-18"
+      ]
+    },
+    {
+      "id": "FR-OG-093",
+      "packs": [
+        "T-OG-15",
+        "T-OG-17"
+      ]
+    },
+    {
+      "id": "FR-OG-094",
+      "packs": [
+        "T-OG-16",
+        "T-OG-19"
+      ]
+    },
+    {
+      "id": "FR-OG-095",
+      "packs": [
+        "T-OG-20",
+        "T-OG-23"
+      ]
+    },
+    {
+      "id": "FR-OG-096",
+      "packs": [
+        "T-OG-20",
+        "T-OG-21"
+      ]
+    },
+    {
+      "id": "FR-OG-097",
+      "packs": [
+        "T-OG-20",
+        "T-OG-21"
+      ]
+    },
+    {
+      "id": "FR-OG-098",
+      "packs": [
+        "T-OG-20",
+        "T-OG-21"
+      ]
+    },
+    {
+      "id": "FR-OG-099",
+      "packs": [
+        "T-OG-20",
+        "T-OG-21",
+        "T-OG-23"
+      ]
+    },
+    {
+      "id": "FR-OG-100",
+      "packs": [
+        "T-OG-21"
+      ]
+    },
+    {
+      "id": "FR-OG-101",
+      "packs": [
+        "T-OG-21",
+        "T-OG-22"
+      ]
+    },
+    {
+      "id": "FR-OG-102",
+      "packs": [
+        "T-OG-22"
+      ]
+    },
+    {
+      "id": "FR-OG-103",
+      "packs": [
+        "T-OG-21",
+        "T-OG-22",
+        "T-OG-23",
+        "T-OG-24"
+      ]
+    },
+    {
+      "id": "FR-OG-104",
+      "packs": [
+        "T-OG-24"
+      ]
+    },
+    {
+      "id": "FR-OG-105",
+      "packs": [
+        "T-OG-20",
+        "T-OG-21",
+        "T-OG-23"
+      ]
+    },
+    {
+      "id": "FR-OG-106",
+      "packs": [
+        "T-OG-23"
+      ]
+    },
+    {
+      "id": "NFR-OG-001",
+      "packs": [
+        "T-OG-05"
+      ]
+    },
+    {
+      "id": "NFR-OG-002",
+      "packs": [
+        "T-OG-03"
+      ]
+    },
+    {
+      "id": "NFR-OG-003",
+      "packs": [
+        "T-OG-05",
+        "T-OG-24"
+      ]
+    },
+    {
+      "id": "NFR-OG-004",
+      "packs": [
+        "T-OG-06",
+        "T-OG-24"
+      ]
+    },
+    {
+      "id": "NFR-OG-005",
+      "packs": [
+        "T-OG-03",
+        "T-OG-06",
+        "T-OG-24"
+      ]
+    },
+    {
+      "id": "NFR-OG-006",
+      "packs": [
+        "T-OG-01",
+        "T-OG-10",
+        "T-OG-18"
+      ]
+    },
+    {
+      "id": "NFR-OG-007",
+      "packs": [
+        "T-OG-07"
+      ]
+    },
+    {
+      "id": "NFR-OG-008",
+      "packs": [
+        "T-OG-04",
+        "T-OG-14"
+      ]
+    },
+    {
+      "id": "NFR-OG-009",
+      "packs": [
+        "T-OG-02",
+        "T-OG-03",
+        "T-OG-14"
+      ]
+    },
+    {
+      "id": "NFR-OG-010",
+      "packs": [
+        "T-OG-12"
+      ]
+    },
+    {
+      "id": "NFR-OG-011",
+      "packs": [
+        "T-OG-09"
+      ]
+    },
+    {
+      "id": "NFR-OG-012",
+      "packs": [
+        "T-OG-01",
+        "T-OG-08",
+        "T-OG-14",
+        "T-OG-24"
+      ]
+    },
+    {
+      "id": "NFR-OG-013",
+      "packs": [
+        "T-OG-01",
+        "T-OG-02"
+      ]
+    },
+    {
+      "id": "NFR-OG-014",
+      "packs": [
+        "T-OG-12",
+        "T-OG-14"
+      ]
+    },
+    {
+      "id": "NFR-OG-015",
+      "packs": [
+        "T-OG-15",
+        "T-OG-16",
+        "T-OG-17"
+      ]
+    },
+    {
+      "id": "NFR-OG-016",
+      "packs": [
+        "T-OG-15",
+        "T-OG-18"
+      ]
+    },
+    {
+      "id": "NFR-OG-017",
+      "packs": [
+        "T-OG-19"
+      ]
+    },
+    {
+      "id": "NFR-OG-018",
+      "packs": [
+        "T-OG-17",
+        "T-OG-18",
+        "T-OG-23"
+      ]
+    },
+    {
+      "id": "NFR-OG-019",
+      "packs": [
+        "T-OG-20",
+        "T-OG-21"
+      ]
+    },
+    {
+      "id": "NFR-OG-020",
+      "packs": [
+        "T-OG-20",
+        "T-OG-21",
+        "T-OG-23"
+      ]
+    },
+    {
+      "id": "NFR-OG-021",
+      "packs": [
+        "T-OG-22"
+      ]
+    },
+    {
+      "id": "NFR-OG-022",
+      "packs": [
+        "T-OG-20",
+        "T-OG-23",
+        "T-OG-24"
+      ]
+    }
+  ]
+}

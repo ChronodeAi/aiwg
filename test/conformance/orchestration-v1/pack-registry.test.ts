@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { fragmentsDir, inspectPackRegistry, loadOrchestrationPackRegistry, qualificationErrors, registryPath, requiredPacks } from '../../../tools/testing/check-orchestration-packs.mjs';
+import { fragmentsDir, inspectPackRegistry, loadOrchestrationPackRegistry, mustAllowlistPath, mustCoverageErrors, mustRequirementsPath, qualificationErrors, registryPath, requiredPacks } from '../../../tools/testing/check-orchestration-packs.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const checker = pathToFileURL(path.join(root, 'tools/testing/check-orchestration-packs.mjs')).href;
@@ -55,6 +55,7 @@ describe('T-OG registry wiring gate (partial coverage is not release acceptance)
       'test/unit/serve/shared-host-scheduler-managed.test.ts',
       'test/unit/serve/shared-host-scheduler-budgets.test.ts',
       'test/unit/serve/shared-host-scheduler-host.test.ts',
+      'test/unit/serve/shared-host-scheduler-fencing.test.ts',
       'test/conformance/orchestration-v1/muse-direct.test.ts',
       'test/unit/ralph/muse-direct.test.mjs',
     ]);
@@ -121,6 +122,11 @@ describe('T-OG registry wiring gate (partial coverage is not release acceptance)
     if (scenario === 'implemented-without-files') Object.assign(value.packs['T-OG-06'], { status: 'implemented', testFiles: [] });
     mkdirSync(path.dirname(path.join(directory, registryPath)), { recursive: true });
     writeFileSync(path.join(directory, registryPath), JSON.stringify(value));
+    for (const inventory of [mustRequirementsPath, mustAllowlistPath]) {
+      const destination = path.join(directory, inventory);
+      mkdirSync(path.dirname(destination), { recursive: true });
+      writeFileSync(destination, readFileSync(path.join(root, inventory), 'utf8'));
+    }
     const script = `import { runPackGate } from ${JSON.stringify(checker)}; runPackGate({ repositoryRoot: ${JSON.stringify(directory)} });`;
     const child = spawnSync(process.execPath, ['--input-type=module', '--eval', script], { encoding: 'utf8', timeout: 10_000 });
     expect(child.error).toBeUndefined();
@@ -264,6 +270,68 @@ describe('owned scenario content for implementation claims', () => {
     expect(managedFailure.scopes.managed.result).toBe('failed');
     value.packs['T-OG-08'].laterSlices = ['S6'];
     expect(inspectPackRegistry(value, root).errors).toContain('T-OG-08: invalid laterSlices');
+  });
+});
+
+describe('T-OG Must requirement inventory against pack mappings', () => {
+  const mustRoot = (allowlist: unknown) => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'aiwg-must-inventory-'));
+    roots.push(directory);
+    for (const inventory of [mustRequirementsPath, mustAllowlistPath]) {
+      const destination = path.join(directory, inventory);
+      mkdirSync(path.dirname(destination), { recursive: true });
+      writeFileSync(destination, readFileSync(path.join(root, inventory), 'utf8'));
+    }
+    if (allowlist !== undefined) {
+      writeFileSync(path.join(directory, mustAllowlistPath),
+        JSON.stringify({ note: 'synthetic', allowlist }, null, 2));
+    }
+    return directory;
+  };
+
+  it('maps every Must requirement or names a reviewed allowlist reason', () => {
+    const value = registry();
+    expect(mustCoverageErrors(value, root)).toEqual([]);
+    expect(inspectPackRegistry(value, root).errors.filter(error => /^(N?FR)-OG-\d{3}:/.test(error))).toEqual([]);
+  });
+
+  it('inventories 106 FR and 22 NFR Musts with only the two new mappings unallowlisted', () => {
+    const must = JSON.parse(readFileSync(path.join(root, mustRequirementsPath), 'utf8'));
+    expect(must.requirements).toHaveLength(128);
+    expect(new Set(must.requirements.map((entry: any) => entry.id)).size).toBe(128);
+    const allowlist = JSON.parse(readFileSync(path.join(root, mustAllowlistPath), 'utf8')).allowlist;
+    expect(Object.keys(allowlist).sort()).toEqual(
+      must.requirements.map((entry: any) => entry.id).filter((id: string) => !['NFR-OG-001', 'NFR-OG-003'].includes(id)).sort());
+  });
+
+  it('fails on a new unmapped Must without an allowlist entry', () => {
+    const allowlist = JSON.parse(readFileSync(path.join(root, mustAllowlistPath), 'utf8')).allowlist;
+    delete allowlist['FR-OG-001'];
+    expect(mustCoverageErrors(registry(), mustRoot(allowlist))).toEqual(
+      ['FR-OG-001: Must requirement has no pack requirements/scenarios mapping']);
+  });
+
+  it('fails on a stale entry whose Must became mapped', () => {
+    const allowlist = JSON.parse(readFileSync(path.join(root, mustAllowlistPath), 'utf8')).allowlist;
+    allowlist['NFR-OG-001'] = 'synthetic stale entry';
+    expect(mustCoverageErrors(registry(), mustRoot(allowlist))).toEqual(
+      [`${mustAllowlistPath}: NFR-OG-001 is now mapped; remove the allowlist entry`]);
+  });
+
+  it('fails on allowlist entries outside the inventory or without a reason', () => {
+    const allowlist = JSON.parse(readFileSync(path.join(root, mustAllowlistPath), 'utf8')).allowlist;
+    allowlist['FR-OG-999'] = 'synthetic unknown';
+    allowlist['FR-OG-002'] = '  ';
+    expect(mustCoverageErrors(registry(), mustRoot(allowlist))).toEqual(expect.arrayContaining([
+      `${mustAllowlistPath}: FR-OG-999 is not a Must requirement`,
+      `${mustAllowlistPath}: FR-OG-002 needs a reviewed reason`,
+    ]));
+  });
+
+  it('fails closed when the inventory files are absent', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'aiwg-must-missing-'));
+    roots.push(directory);
+    expect(mustCoverageErrors(registry(), directory)).toEqual([`${mustRequirementsPath} is missing or invalid`]);
   });
 });
 
