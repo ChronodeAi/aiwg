@@ -27,6 +27,11 @@ import {
   type SessionCoverageReport,
 } from './batch-contracts.js';
 import { IncrementalSessionImporter, SessionImportFailure, type ImportLimits } from './importer.js';
+import {
+  HOST_CATALOG_WORKSPACE_ID,
+  isAccountScopedAdapter,
+  publishHostRoutedBatch,
+} from './host-catalog.js';
 import { matchImportExclusion, resolveImportExclusions, type SourceExclusion } from './import-exclusions.js';
 import { resolveImportLimits } from './import-limits.js';
 import { fingerprintSourceFile } from './readers.js';
@@ -47,6 +52,14 @@ export interface BatchImportOptions {
   limits?: Partial<ImportLimits>;
   runtime?: SessionRuntimeIdentity;
   repository: SessionRepository;
+  /**
+   * Host catalog for account-scoped providers (#3232). When present (with
+   * hostCatalogPath), their sessions import once into the host repository
+   * and the workspace repository records a reference instead of a copy.
+   * Without it, account-scoped sources import locally (legacy behavior).
+   */
+  hostRepository?: SessionRepository;
+  hostCatalogPath?: string;
   signal?: AbortSignal;
   inactivityThresholdMs?: number;
   now?: () => Date;
@@ -115,6 +128,7 @@ export async function importDiscoveryManifest(
   run.completedAt = null;
   options.repository.saveBatchImportRun(run);
   injectFault(options, run, 'run-saved');
+  const hostRoutedSourceIds: string[] = [];
 
   for (const manifestSource of options.manifest.sources) {
     const disposition = run.sources.find(
@@ -156,23 +170,32 @@ export async function importDiscoveryManifest(
     persistProgress(options.repository, run, now());
     try {
       await assertManifestSourceUnchanged(manifestSource);
+      const adapter = adapterFor(manifestSource.provider, limits);
+      // Account-scoped providers (Grok Bot) are imported once into the
+      // host catalog; the workspace catalog records a reference (#3232).
+      // Any adapter declaring account scope follows this route.
+      const hostRouted = options.hostRepository !== undefined
+        && options.hostCatalogPath !== undefined
+        && isAccountScopedAdapter(adapter);
+      const targetRepository = hostRouted ? options.hostRepository! : options.repository;
+      const importWorkspaceId = hostRouted ? HOST_CATALOG_WORKSPACE_ID : options.manifest.workspaceId;
+      if (hostRouted) hostRoutedSourceIds.push(manifestSource.sourceId);
       const selectedSource: SelectedSource = {
         provider: manifestSource.provider,
         locator: manifestSource.locator,
         locatorClass: manifestSource.locatorClass,
         sourceId: manifestSource.sourceId,
         authorizedScope: {
-          workspaceId: options.manifest.workspaceId,
+          workspaceId: importWorkspaceId,
           allowedRoots: [manifestSource.authorizedRoot],
         },
       };
-      const adapter = adapterFor(manifestSource.provider, limits);
       const source = await sessionSource(selectedSource, adapter);
-      const receipts = await new IncrementalSessionImporter(options.repository).import({
+      const receipts = await new IncrementalSessionImporter(targetRepository).import({
         source,
         selectedSource,
         adapter,
-        workspaceId: options.manifest.workspaceId,
+        workspaceId: importWorkspaceId,
         policyVersion: '1.0.0',
         batchRunId: run.runId,
         publish: false,
@@ -181,7 +204,7 @@ export async function importDiscoveryManifest(
         limits,
       });
       await assertManifestSourceUnchanged(manifestSource);
-      const totals = options.repository.sourceImportTotals(
+      const totals = targetRepository.sourceImportTotals(
         manifestSource.sourceId,
         run.runId,
       );
@@ -219,6 +242,18 @@ export async function importDiscoveryManifest(
     .map((source) => source.sourceId);
   injectFault(options, run, 'before-publication');
   options.repository.commitStagedBatch(run.runId, publishable);
+  if (options.hostRepository && options.hostCatalogPath && hostRoutedSourceIds.length > 0) {
+    const acceptedHost = run.sources
+      .filter((source) => hostRoutedSourceIds.includes(source.sourceId) && isAccepted(source.status))
+      .map((source) => source.sourceId);
+    publishHostRoutedBatch({
+      hostRepository: options.hostRepository,
+      workspaceRepository: options.repository,
+      batchRunId: run.runId,
+      sourceIds: acceptedHost,
+      hostCatalogPath: options.hostCatalogPath,
+    });
+  }
   injectFault(options, run, 'after-publication');
   run.status = pending ? 'interrupted' : rejected || acquisitionIncomplete ? 'partial' : 'complete';
   run.updatedAt = now().toISOString();
@@ -482,8 +517,12 @@ async function rebuildFromCatalog(options: BatchImportOptions): Promise<BatchImp
   let staged: SessionRepository | undefined;
   try {
     staged = new SessionRepository(join(stagingDirectory, 'staging.sqlite'));
+    // The staged rebuild transfers normalized rows (not host references) into
+    // the destination, so account-scoped sources rebuild locally here as
+    // before; the destination's own host routing applies on its next import.
     const receipt = await importDiscoveryManifest({ ...options, manifest, repository: staged,
-      carryForward: undefined, fault: undefined });
+      carryForward: undefined, fault: undefined,
+      hostRepository: undefined, hostCatalogPath: undefined });
     const identities = new Set<string>();
     const destinationCodex = new Map(catalogSessions(options.repository, workspaceId)
       .filter(session => session.provider === 'codex').map(session => [session.nativeSessionId, session.sourceId]));

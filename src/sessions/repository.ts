@@ -33,6 +33,17 @@ import {
   type SessionAnalyticsFact,
   type SessionAnalyticsStatus,
 } from './analytics.js';
+import {
+  HOST_REFERENCE_TABLE_DDL,
+  type HostSessionReference,
+  type SessionIdentity,
+} from './host-catalog.js';
+
+/** Visible-session aggregate identity plus the internal ids references need. */
+export interface SessionIdentityRow extends SessionIdentity {
+  sessionId: string;
+  sourceId: string;
+}
 
 const POLICY_PROVIDER_MIGRATION = 'policy-provider-identity:v2';
 const EVENT_ORIGIN_INTENT_MIGRATION = 'event-origin-intent:v1';
@@ -424,6 +435,9 @@ export class SessionRepository {
       -- alignment without reading searchable text or event JSON.
       CREATE INDEX IF NOT EXISTS idx_fts_event_id ON session_event_fts_content(c0);
     `);
+    // Workspace pointers at account-scoped sessions stored in the host
+    // catalog (#3232). References, never copies; legacy copied rows stay.
+    this.db.exec(HOST_REFERENCE_TABLE_DDL);
     const deletionReceiptColumns = this.db.prepare(
       'PRAGMA table_info(deletion_receipts)',
     ).all().map((row) => String(row.name));
@@ -1265,6 +1279,61 @@ export class SessionRepository {
     ).all().map((row) => String(row.workspace_id));
   }
 
+  /**
+   * Record a workspace pointer at an account-scoped session stored in the
+   * host catalog (#3232). Non-destructive: existing copied rows are left
+   * untouched and remain readable.
+   */
+  recordHostSessionReference(reference: HostSessionReference): void {
+    this.db.prepare(
+      `INSERT INTO session_host_refs
+         (provider, native_session_id, session_id, source_id, host_catalog)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(provider, native_session_id) DO UPDATE SET
+         session_id=excluded.session_id, source_id=excluded.source_id,
+         host_catalog=excluded.host_catalog`,
+    ).run(
+      reference.provider, reference.nativeSessionId, reference.sessionId,
+      reference.sourceId, reference.hostCatalog,
+    );
+  }
+
+  listHostSessionReferences(): HostSessionReference[] {
+    return this.db.prepare(
+      `SELECT provider, native_session_id, session_id, source_id, host_catalog
+       FROM session_host_refs ORDER BY provider, native_session_id`,
+    ).all().map((row) => ({
+      provider: String(row.provider),
+      nativeSessionId: String(row.native_session_id),
+      sessionId: String(row.session_id),
+      sourceId: String(row.source_id),
+      hostCatalog: String(row.host_catalog),
+    }));
+  }
+
+  /**
+   * Visible sessions reduced to aggregate identities (plus the internal ids
+   * reference recording needs). Aggregate search/analytics over several
+   * catalogs dedupe on provider + native session so legacy copied rows
+   * count once (#3232).
+   */
+  listSessionIdentities(workspaceId?: string): SessionIdentityRow[] {
+    const where = workspaceId
+      ? `s.workspace_id=? AND ${VISIBLE_SESSION_PREDICATE}`
+      : VISIBLE_SESSION_PREDICATE;
+    const params: unknown[] = workspaceId ? [workspaceId] : [];
+    return this.db.prepare(
+      `SELECT json_extract(s.data, '$.provider') AS provider, s.native_session_id,
+              s.session_id, s.source_id
+       FROM sessions s WHERE ${where} ORDER BY s.session_id`,
+    ).all(...params).map((row) => ({
+      provider: String(row.provider),
+      nativeSessionId: String(row.native_session_id),
+      sessionId: String(row.session_id),
+      sourceId: String(row.source_id),
+    }));
+  }
+
   saveBatchImportRun(run: BatchImportRun): void {
     run = redactSessionValue(run).value;
     const save = this.db.transaction(() => {
@@ -1843,34 +1912,7 @@ export class SessionRepository {
 
   analyticsSummary(options: SessionAnalyticsQuery): SessionAnalyticsSummary {
     const facts = this.listAnalyticsFacts({ ...options, limit: options.limit ?? 5_000 });
-    const byCategory = countBy(facts, (fact) => fact.category);
-    const byStatus = countBy(facts, (fact) => fact.status);
-    const byProvider = countBy(facts, (fact) => fact.provider);
-    const byTool = countBy(
-      facts.filter((fact) => fact.toolName),
-      (fact) => fact.toolName!,
-    );
-    return {
-      analyticsVersion: '1.0.0',
-      workspaceId: options.workspaceId,
-      totals: {
-        facts: facts.length,
-        sessions: new Set(facts.map((fact) => fact.sessionId)).size,
-        toolCalls: facts.filter((fact) => fact.category === 'tool-call').length,
-        toolFailures: facts.filter((fact) =>
-          fact.category === 'tool-result' && fact.status === 'failed').length,
-        escalations: facts.filter((fact) => fact.category === 'escalation').length,
-        hitlDecisions: facts.filter((fact) => fact.category === 'hitl').length,
-        indicators: facts.filter((fact) => fact.category === 'indicator').length,
-        retryGroups: new Set(
-          facts.map((fact) => fact.retryGroupId).filter(Boolean),
-        ).size,
-      },
-      byCategory,
-      byStatus,
-      byProvider,
-      byTool,
-    };
+    return summarizeSessionAnalyticsFacts(facts, options.workspaceId);
   }
 
   getAnalyticsEvidence(
@@ -2775,6 +2817,41 @@ function canonicalDevinLocator(value: string): string {
   return value.startsWith('windsurf-')
     ? `devin-desktop-${value.slice('windsurf-'.length)}`
     : value;
+}
+
+/**
+ * Summarize analytics facts without touching a catalog, so cross-catalog
+ * merges (workspace facts plus referenced host facts, #3232) report the
+ * same shape as a single-catalog summary.
+ */
+export function summarizeSessionAnalyticsFacts(
+  facts: readonly SessionAnalyticsFact[],
+  workspaceId: string,
+): SessionAnalyticsSummary {
+  return {
+    analyticsVersion: '1.0.0',
+    workspaceId,
+    totals: {
+      facts: facts.length,
+      sessions: new Set(facts.map((fact) => fact.sessionId)).size,
+      toolCalls: facts.filter((fact) => fact.category === 'tool-call').length,
+      toolFailures: facts.filter((fact) =>
+        fact.category === 'tool-result' && fact.status === 'failed').length,
+      escalations: facts.filter((fact) => fact.category === 'escalation').length,
+      hitlDecisions: facts.filter((fact) => fact.category === 'hitl').length,
+      indicators: facts.filter((fact) => fact.category === 'indicator').length,
+      retryGroups: new Set(
+        facts.map((fact) => fact.retryGroupId).filter(Boolean),
+      ).size,
+    },
+    byCategory: countBy(facts, (fact) => fact.category),
+    byStatus: countBy(facts, (fact) => fact.status),
+    byProvider: countBy(facts, (fact) => fact.provider),
+    byTool: countBy(
+      facts.filter((fact) => fact.toolName),
+      (fact) => fact.toolName!,
+    ),
+  };
 }
 
 function countBy<T>(

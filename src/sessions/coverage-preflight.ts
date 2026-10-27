@@ -163,7 +163,13 @@ export function reconcileCoveragePreflight(
     if (!['pending-import', 'import-incomplete', 'scope-incomplete', 'acquired'].includes(entry.disposition)) return entry;
     const selected = sources.filter((source) => source.provider === entry.provider);
     const imported = selected.length === entry.sourceCount && selected.length > 0
-      && selected.every((source) => source.status === 'excluded' || (accepted.has(source.status) && source.eventsAccepted > 0));
+      // duplicate/previously-committed sources were acquired by an earlier
+      // run, so zero new events still counts as imported. A host-routed
+      // second workspace import lands here: the host copy already exists
+      // and the workspace only records references (#3232). A freshly
+      // committed source with zero events stays incomplete.
+      && selected.every((source) => source.status === 'excluded' || (accepted.has(source.status)
+        && (source.eventsAccepted > 0 || source.status !== 'committed')));
     return {
       ...entry,
       disposition: !imported ? 'import-incomplete' as const

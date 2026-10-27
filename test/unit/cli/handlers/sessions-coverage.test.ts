@@ -53,6 +53,9 @@ async function cli(args: string[]) {
 
 describe('sessions coverage CLI', () => {
   itWithSqlite.each([false, true])('repairs a narrow explicit manifest on refresh and imports all configured providers into a fresh catalog (defer first: %s)', async deferFirst => {
+    // Pin the host catalog per test (see the host-references test below).
+    const hostCatalog = join(root, 'host-catalog.sqlite');
+    vi.stubEnv('AIWG_SESSIONS_HOST_CATALOG', hostCatalog);
     const claude = join(root, '.claude/projects', claudeProjectKey(root));
     const codex = join(root, '.codex/sessions/2026/10/14');
     const grokbot = join(root, 'grokbot');
@@ -131,13 +134,26 @@ describe('sessions coverage CLI', () => {
     expect(refreshed.messages.join(' ')).toContain('claude, codex');
     const fresh = join(root, 'fresh.sqlite');
     const imported = await cli(['import-discovered', '--workspace', root, '--db', fresh, '--confirm', '--json']);
-    expect(imported.data.receipt.totals).toMatchObject({ accepted: 3, rejected: 0 });
+    // The refresh above already imported the Grok Bot replica into the host
+    // catalog, so the fresh workspace catalog records a reference instead
+    // of a third committed copy: two local commits plus one previously
+    // committed host source, and a complete run (#3232).
+    expect(imported.data.receipt.run.status).toBe('complete');
+    expect(imported.data.receipt.totals).toMatchObject({ accepted: 2, rejected: 0, previouslyCommitted: 1 });
     expect(imported.data.warnings[0].missingProviders).toEqual(['claude', 'codex']);
     const repository = new SessionRepository(fresh);
     try {
+      // Workspace-scoped providers import as copies; the account-scoped
+      // Grok Bot conversation is referenced from the host catalog (#3232).
       expect(repository.listSessions({ workspaceId: root, limit: 10 }).items.map(session => session.provider).sort())
-        .toEqual(['claude', 'codex', 'grokbot']);
+        .toEqual(['claude', 'codex']);
+      expect(repository.listHostSessionReferences().map(reference => reference.provider)).toEqual(['grokbot']);
     } finally { repository.close(); }
+    const host = new SessionRepository(hostCatalog);
+    try {
+      expect(host.listSessions({ workspaceId: 'host', limit: 10 }).items.map(session => session.provider))
+        .toEqual(['grokbot']);
+    } finally { host.close(); }
     process.exitCode = 0;
   });
 
@@ -247,6 +263,59 @@ describe('sessions coverage CLI', () => {
     expect(doctor.data.health).toMatchObject({ integrity: 'ok', indexIntegrity: 'ok' });
     const listed = await cli(['list', '--workspace', root, '--db', db, '--json']);
     expect(listed.data.coverage.acquisitionStatus).toBe('partial');
+  });
+
+  itWithSqlite('lists and searches workspace sessions through host references (#3232)', async () => {
+    // Pin the host catalog: os.homedir() keeps the lane default home in
+    // workers despite the per-test HOME stub, so the override (the
+    // supported tests-never-touch-HOME route) selects a per-test path.
+    const hostCatalog = join(root, 'host-catalog.sqlite');
+    vi.stubEnv('AIWG_SESSIONS_HOST_CATALOG', hostCatalog);
+    const grokbot = join(root, 'grokbot');
+    mkdirSync(grokbot, { recursive: true });
+    const conversation = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1';
+    writeFileSync(join(grokbot, grokbotTranscriptReplicaFilename('synthetic-account', conversation)), JSON.stringify({
+      schemaVersion: 1, value: { entries: [{ kind: 'message', id: 'synthetic-message', role: 'user',
+        content: 'host catalog readthrough marker zebracake', timestampMs: 1_790_000_000_000, seq: 1 }] },
+    }));
+    const db = join(root, 'catalog.sqlite');
+    const discovery = await cli(['discover', '--workspace', root, '--provider-home', root,
+      '--expected-providers', 'grokbot', '--grokbot-root', grokbot, '--json']);
+    expect(discovery.exitCode, JSON.stringify(discovery)).toBe(0);
+    const imported = await cli(['import-discovered', '--workspace', root, '--db', db, '--confirm', '--json']);
+    expect(imported.exitCode, JSON.stringify(imported)).toBe(0);
+    expect(imported.data.receipt.run.status).toBe('complete');
+    // The workspace catalog holds a reference, not a copied row.
+    const repository = new SessionRepository(db);
+    try {
+      expect(repository.listSessions({ workspaceId: root, limit: 10 }).items).toEqual([]);
+      expect(repository.listHostSessionReferences().map((reference) => reference.provider)).toEqual(['grokbot']);
+    } finally { repository.close(); }
+    // list reads through the reference by default and counts it once.
+    const listed = await cli(['list', '--workspace', root, '--db', db, '--json']);
+    expect(listed.exitCode, JSON.stringify(listed)).toBe(0);
+    expect(listed.data.items.map((session: { provider: string }) => session.provider)).toEqual(['grokbot']);
+    expect(listed.data.page.total).toBe(1);
+    const filtered = await cli(['list', '--workspace', root, '--db', db, '--provider', 'grokbot', '--json']);
+    expect(filtered.data.items).toHaveLength(1);
+    expect(filtered.data.page.total).toBe(1);
+    const other = await cli(['list', '--workspace', root, '--db', db, '--provider', 'claude', '--json']);
+    expect(other.data.items).toEqual([]);
+    expect(other.data.page.total).toBe(0);
+    // search reads through the reference too.
+    const searched = await cli(['search', 'zebracake', '--workspace', root, '--db', db, '--json']);
+    expect(searched.exitCode, JSON.stringify(searched)).toBe(0);
+    expect(searched.data.items.length).toBeGreaterThan(0);
+    expect(new Set(searched.data.items.map((hit: { provider: string }) => hit.provider))).toEqual(new Set(['grokbot']));
+    // analytics stays available over referenced sessions.
+    const summary = await cli(['analytics', 'summary', '--workspace', root, '--db', db, '--json']);
+    expect(summary.exitCode, JSON.stringify(summary)).toBe(0);
+    expect(summary.data.summary.workspaceId).toBe(root);
+    // A missing host catalog never breaks the workspace listing.
+    rmSync(hostCatalog, { force: true });
+    const degraded = await cli(['list', '--workspace', root, '--db', db, '--json']);
+    expect(degraded.exitCode, JSON.stringify(degraded)).toBe(0);
+    expect(degraded.data.items).toEqual([]);
   });
 
   itWithSqlite('reports complete default-scope acquisition and no resume requirement despite provider gaps', async () => {

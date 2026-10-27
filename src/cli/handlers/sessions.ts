@@ -64,7 +64,16 @@ import {
   resolveMemoryConsumerManifest,
   assertSessionProviderId,
   acquireImportLease,
+  countUniqueSessionsAcrossCatalogs,
   defaultDiscoveryManifestPath,
+  defaultHostCatalogPath,
+  HOST_CATALOG_WORKSPACE_ID,
+  indexIdentitiesBySessionId,
+  manifestNeedsHostCatalog,
+  mergeCrossCatalogRows,
+  mergeSessionLists,
+  resolveHostReferences,
+  summarizeSessionAnalyticsFacts,
   discoverWorkspaceHistories,
   createSessionAdapterRegistry,
   coveragePreflight,
@@ -86,8 +95,13 @@ import {
   recoverEmbeddedAttachments,
   SESSION_EXPORT_PLAN_SCHEMA_VERSION,
   type SessionExportPlan,
+  type HostSessionReference,
+  type Session,
+  type SessionIdentityRow,
   type SessionProviderId,
   type SessionAuthorizationContext,
+  type SessionSearchHit,
+  type SessionSearchOptions,
   type SessionAnalyticsCategory,
   type SessionAnalyticsFact,
   type SessionAnalyticsQuery,
@@ -352,18 +366,35 @@ async function executeCommand(
           limit,
           cursor,
         });
+        // Account-scoped sessions live once in the host catalog; the
+        // workspace holds references (#3232). Read through them on the
+        // opening page so the workspace lists its referenced sessions.
+        // Cursor pages continue the local snapshot. Totals dedupe legacy
+        // copied rows against references, counting each session once.
+        const hostView = cursor
+          ? null
+          : readHostReferencedSessions(repository, { provider, tag: args.values.get('--tag') });
+        const items = hostView && hostView.sessions.length > 0
+          ? mergeSessionLists(result.items, hostView.sessions).slice(0, limit)
+          : result.items;
+        const total = hostView && hostView.references.length > 0
+          ? countUniqueSessionsAcrossCatalogs([{
+            identities: repository.listSessionIdentities(workspaceId),
+            references: hostView.resolvedReferences,
+          }])
+          : result.total;
         const coverage = {
           ...repository.getCoverage(workspaceId),
           catalogScope: catalogScope(ctx, args, repository, workspaceId),
         };
         const response = {
-          items: result.items,
+          items,
           page: {
             limit,
             cursor: cursor ?? null,
             nextCursor: result.nextCursor,
             snapshotRowid: result.snapshotRowid,
-            total: result.total,
+            total,
           },
           coverage,
         };
@@ -470,7 +501,8 @@ async function executeCommand(
         const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
         const providerInput = args.values.get('--provider');
         const provider = providerInput ? assertSessionProviderId(providerInput) : undefined;
-        const result = repository.search({
+        const limit = boundedInteger(args.values.get('--limit'), 50, 1, 500, '--limit');
+        const searchOptions = {
           query,
           workspaceId,
           providers: provider ? [provider] : undefined,
@@ -485,13 +517,30 @@ async function executeCommand(
           sensitivity: args.values.get('--sensitivity'),
           extractionState: args.values.get('--extraction-state'),
           controlEvents: controlEventMode(args.values.get('--control-events')),
-          limit: boundedInteger(args.values.get('--limit'), 50, 1, 500, '--limit'),
+          limit,
           cursor: args.values.get('--cursor'),
-        });
+        };
+        const result = repository.search(searchOptions);
+        // Read through host references on the opening page so workspace
+        // search finds referenced account-scoped sessions. Each session
+        // counts once: host hits for sessions already present locally
+        // (legacy copied rows) are dropped by provider + native session.
+        const hostRead = searchOptions.cursor
+          ? null
+          : searchHostReferencedSessions(repository, searchOptions, provider);
+        const items = hostRead && hostRead.hits.length > 0
+          ? mergeCrossCatalogRows(
+            result.items,
+            hostRead.hits,
+            indexIdentitiesBySessionId(repository.listSessionIdentities(workspaceId)),
+            indexIdentitiesBySessionId(hostRead.hostIdentities),
+            (hit) => [hit.provider, hit.eventId].join(' '),
+          ).slice(0, limit)
+          : result.items;
         return ok(command, {
-          items: result.items,
+          items,
           catalogScope: catalogScope(ctx, args, repository, workspaceId),
-          page: { limit: boundedInteger(args.values.get('--limit'), 50, 1, 500, '--limit'),
+          page: { limit,
             nextCursor: result.nextCursor },
         });
       }
@@ -499,14 +548,22 @@ async function executeCommand(
         const view = requiredPositional(args, 0, 'analytics view');
         const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
         const query = analyticsQuery(args, workspaceId);
+        // Host references resolve to facts stored under the host catalog;
+        // each session counts once by provider + native session id. Without
+        // references the single-catalog path below is unchanged.
+        const mergedFacts = readWorkspaceAnalyticsFacts(repository, query);
         if (view === 'summary') {
           return ok(command, {
             view,
-            summary: repository.analyticsSummary(query),
+            summary: mergedFacts
+              ? summarizeSessionAnalyticsFacts(mergedFacts, workspaceId)
+              : repository.analyticsSummary(query),
           });
         }
         const categories = analyticsCategories(view);
-        const items = repository.listAnalyticsFacts({ ...query, categories });
+        const items = mergedFacts
+          ? mergedFacts.filter((fact) => categories.includes(fact.category))
+          : repository.listAnalyticsFacts({ ...query, categories });
         return ok(command, {
           analyticsVersion: '1.0.0',
           view,
@@ -1624,28 +1681,37 @@ async function importDiscovered(
     });
   }
 
+  const waitMs = boundedInteger(args.values.get('--lock-wait-ms'), 5_000, 0, 300_000, '--lock-wait-ms');
   const lease = await acquireImportLease(
     databasePath(ctx, args),
     sha256(['discovered-import', manifest.manifestId, manifest.workspaceId].join('\0')),
-    {
-      waitMs: boundedInteger(
-        args.values.get('--lock-wait-ms'),
-        5_000,
-        0,
-        300_000,
-        '--lock-wait-ms',
-      ),
-    },
+    { waitMs },
   );
+  let hostLease: Awaited<ReturnType<typeof acquireImportLease>> | undefined;
   try {
     const previous = carryPath ? new SessionRepository(carryPath, { readonly: true }) : undefined;
     let repository: SessionRepository | undefined;
+    let hostRepository: SessionRepository | undefined;
     try {
       repository = openRepository(ctx, args);
+      // Account-scoped providers (Grok Bot) import once into the host
+      // catalog; the workspace catalog records a reference (#3232). The
+      // host catalog is only opened when the manifest actually holds an
+      // account-scoped source.
+      const hostCatalogPath = defaultHostCatalogPath();
+      if (manifestNeedsHostCatalog(manifest.sources)) {
+        mkdirSync(dirname(hostCatalogPath), { recursive: true, mode: 0o700 });
+        // The workspace lease does not cover the shared host catalog; serialize
+        // host writers the same way the hourly refresh does.
+        hostLease = await acquireImportLease(hostCatalogPath, `host-import-${process.pid}`, { waitMs });
+        hostRepository = new SessionRepository(hostCatalogPath);
+      }
       const interruptedRuns = repository.interruptRunningBatchImports();
       const receipt = await importDiscoveryManifest({
         manifest,
         repository,
+        hostRepository,
+        hostCatalogPath,
         carryForward: previous,
         limits,
         exclude,
@@ -1666,9 +1732,11 @@ async function importDiscovered(
       });
     } finally {
       repository?.close();
+      hostRepository?.close();
       previous?.close();
     }
   } finally {
+    await hostLease?.release();
     await lease.release();
   }
 }
@@ -2002,6 +2070,150 @@ function catalogScope(
       ? `Other workspaces in this catalog: ${otherWorkspaces.map((workspace) => `${JSON.stringify(workspace.workspaceId)} (${workspace.count} sessions)`).join(', ')}. Select one with --workspace <path-or-id>; from another directory also pass --db ${JSON.stringify(database)}.`
       : null,
   };
+}
+
+/**
+ * Host-catalog read-through for account-scoped sessions (#3232). The
+ * workspace catalog holds references instead of copies; each reference
+ * records its host catalog path. Every referenced catalog opens read-only
+ * and closes before returning. Unreadable catalogs contribute nothing, so
+ * local rows still list when the host catalog is missing.
+ */
+function eachReferencedHostCatalog<T>(
+  repository: SessionRepository,
+  provider: string | undefined,
+  read: (host: SessionRepository, references: HostSessionReference[]) => T,
+): Array<{ references: HostSessionReference[]; value: T }> {
+  const references = repository.listHostSessionReferences()
+    .filter((reference) => !provider || reference.provider === provider);
+  if (references.length === 0) return [];
+  const byCatalog = new Map<string, HostSessionReference[]>();
+  for (const reference of references) {
+    const group = byCatalog.get(reference.hostCatalog);
+    if (group) group.push(reference);
+    else byCatalog.set(reference.hostCatalog, [reference]);
+  }
+  const reads: Array<{ references: HostSessionReference[]; value: T }> = [];
+  for (const [catalogPath, group] of byCatalog) {
+    let host: SessionRepository | undefined;
+    try {
+      host = new SessionRepository(catalogPath, { readonly: true });
+    } catch {
+      continue;
+    }
+    try {
+      reads.push({ references: group, value: read(host, group) });
+    } finally {
+      host.close();
+    }
+  }
+  return reads;
+}
+
+function readHostReferencedSessions(
+  repository: SessionRepository,
+  filters: { provider?: SessionProviderId; tag?: string },
+): { references: HostSessionReference[]; resolvedReferences: HostSessionReference[]; sessions: Session[] } {
+  const reads = eachReferencedHostCatalog(repository, filters.provider, (host, group) => {
+    const page = host.listSessions({
+      provider: filters.provider,
+      workspaceId: HOST_CATALOG_WORKSPACE_ID,
+      limit: group.length,
+    });
+    const sessions = resolveHostReferences(group, page.items)
+      .filter((session) => !filters.tag || host.listTags(session.sessionId).includes(filters.tag));
+    const resolvedSourceIds = new Set(sessions.map((session) => session.sourceId));
+    return {
+      sessions,
+      resolvedReferences: group.filter((reference) => resolvedSourceIds.has(reference.sourceId)),
+    };
+  });
+  return {
+    references: reads.flatMap((read) => read.references),
+    resolvedReferences: reads.flatMap((read) => read.value.resolvedReferences),
+    sessions: reads.flatMap((read) => read.value.sessions),
+  };
+}
+
+function searchHostReferencedSessions(
+  repository: SessionRepository,
+  searchOptions: Omit<SessionSearchOptions, 'workspaceId'>,
+  provider: SessionProviderId | undefined,
+): { hits: SessionSearchHit[]; hostIdentities: SessionIdentityRow[] } {
+  const reads = eachReferencedHostCatalog(repository, provider, (host) => {
+    const result = host.search({
+      ...searchOptions,
+      workspaceId: HOST_CATALOG_WORKSPACE_ID,
+      cursor: undefined,
+    });
+    return {
+      hits: result.items,
+      hostIdentities: host.listSessionIdentities(HOST_CATALOG_WORKSPACE_ID),
+    };
+  });
+  return {
+    hits: reads.flatMap((read) => read.value.hits),
+    hostIdentities: reads.flatMap((read) => read.value.hostIdentities),
+  };
+}
+
+function readHostReferencedAnalyticsFacts(
+  repository: SessionRepository,
+  query: SessionAnalyticsQuery,
+): { facts: SessionAnalyticsFact[]; hostIdentities: SessionIdentityRow[] } {
+  // query.sessionId is a workspace-local internal id; host rows carry host
+  // stable ids, so resolve it to a provider + native session key first.
+  let sessionKey: string | null = null;
+  if (query.sessionId) {
+    const session = repository.getSession(query.sessionId, query.workspaceId);
+    if (!session) return { facts: [], hostIdentities: [] };
+    sessionKey = `${session.provider} ${session.nativeSessionId}`;
+  }
+  const reads = eachReferencedHostCatalog(repository, query.provider, (host, group) => {
+    const wanted = new Set(group.map((reference) => `${reference.provider} ${reference.nativeSessionId}`));
+    const identities = host.listSessionIdentities(HOST_CATALOG_WORKSPACE_ID);
+    const hostSessionIds = new Set(
+      identities
+        .filter((identity) => wanted.has(`${identity.provider} ${identity.nativeSessionId}`))
+        .map((identity) => identity.sessionId),
+    );
+    const { sessionId: _localSessionId, ...hostQuery } = query;
+    const facts = host.listAnalyticsFacts({ ...hostQuery, workspaceId: HOST_CATALOG_WORKSPACE_ID })
+      .filter((fact) => hostSessionIds.has(fact.sessionId)
+        && (!sessionKey || `${fact.provider} ${hostSessionKey(fact.sessionId, identities)}` === sessionKey));
+    return { facts, identities };
+  });
+  return {
+    facts: reads.flatMap((read) => read.value.facts),
+    hostIdentities: reads.flatMap((read) => read.value.identities),
+  };
+}
+
+function hostSessionKey(sessionId: string, identities: readonly SessionIdentityRow[]): string | null {
+  return identities.find((identity) => identity.sessionId === sessionId)?.nativeSessionId ?? null;
+}
+
+/**
+ * Workspace analytics facts with host references resolved. Returns null
+ * when the workspace holds no references so callers keep the exact
+ * single-catalog query path (SQL limit/filter semantics unchanged).
+ */
+function readWorkspaceAnalyticsFacts(
+  repository: SessionRepository,
+  query: SessionAnalyticsQuery,
+): SessionAnalyticsFact[] | null {
+  const references = repository.listHostSessionReferences()
+    .filter((reference) => !query.provider || reference.provider === query.provider);
+  if (references.length === 0) return null;
+  const hostRead = readHostReferencedAnalyticsFacts(repository, query);
+  if (hostRead.facts.length === 0) return null;
+  return mergeCrossCatalogRows(
+    repository.listAnalyticsFacts(query),
+    hostRead.facts,
+    indexIdentitiesBySessionId(repository.listSessionIdentities(query.workspaceId)),
+    indexIdentitiesBySessionId(hostRead.hostIdentities),
+    (fact) => `${fact.provider} ${fact.factId}`,
+  );
 }
 
 async function configuredImportLimits(ctx: HandlerContext, args: ParsedArgs, workspace?: string) {

@@ -466,6 +466,15 @@ export interface SessionSourceAdapter {
    * cursor plus the catalog's identity-keyed inserts.
    */
   readonly sourceContinuity?: 'append-only' | 'snapshot';
+  /**
+   * Declares whether the provider's conversations are scoped to the
+   * authorizing workspace (the default, `'workspace'` when omitted) or to
+   * the surrounding account with no workspace identity (`'account'`).
+   * Account-scoped sessions are imported once into the user-scope (host)
+   * catalog; workspace catalogs record a reference instead of a copy
+   * (#3232). See host-catalog.ts.
+   */
+  readonly scopeClass?: 'workspace' | 'account';
   /** Validated mutable preamble excluded from append-continuity checks. */
   mutablePrefixBytes?(source: SelectedSource): Promise<number>;
   discover(scope: AuthorizedScope): AsyncIterable<SourceDescriptor>;

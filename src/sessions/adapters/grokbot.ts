@@ -196,6 +196,13 @@ export class GrokbotSessionAdapter implements SessionSourceAdapter {
    * rename-swap), not appended to. See the class-level doc comment.
    */
   readonly sourceContinuity = 'snapshot' as const;
+  /**
+   * Account scope (#3232): conversations carry no workspace identity, so
+   * every workspace authorizing the same `--grokbot-root` would otherwise
+   * import the same conversations. The importer routes account-scoped
+   * sources to the host catalog once; workspace catalogs keep a reference.
+   */
+  readonly scopeClass = 'account' as const;
 
   private readonly interchange: GenericSessionInterchangeAdapter;
 

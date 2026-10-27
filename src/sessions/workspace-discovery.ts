@@ -380,10 +380,13 @@ export async function discoverWorkspaceHistories(
         // old entries, so a content-digest sourceId (the default above)
         // would churn every re-discovery and break checkpoint continuity.
         // Key it on the conversation id instead, same rationale as the OMP
-        // override above.
+        // override above. Unlike OMP, the key carries no workspaceId: Grok
+        // Bot conversations are account-scoped (#3232), so the same replica
+        // must resolve to one host-catalog source no matter which workspace
+        // authorizes it; workspace catalogs keep a reference instead of a copy.
         const conversationId = grokbotConversationIdFromLocator(locator);
         if (conversationId) {
-          source.sourceId = sha256(['grokbot-native-source-v1', workspaceId, conversationId].join('\0'));
+          source.sourceId = sha256(['grokbot-native-source-v1', conversationId].join('\0'));
         }
       }
       providerSources.push(source);

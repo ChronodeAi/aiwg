@@ -172,6 +172,18 @@ describe('provider/runtime coverage preflight', () => {
     }
   });
 
+  it('treats already-acquired host references with zero new events as complete (#3232)', () => {
+    const options = { expectedProviders: ['grokbot'], reports: [checked('grokbot')], runtime };
+    const preflight = coveragePreflight(options);
+    const referenceOnly = (status: 'duplicate' | 'previously-committed'): BatchSourceDisposition => ({
+      ...accepted('grokbot'), status, sessionsAccepted: 0, eventsAccepted: 0,
+    });
+    expect(reconcileCoveragePreflight(preflight, [referenceOnly('duplicate')]).status).toBe('complete');
+    expect(reconcileCoveragePreflight(preflight, [referenceOnly('previously-committed')]).status).toBe('complete');
+    expect(reconcileCoveragePreflight(preflight, [{ ...accepted('grokbot'), sessionsAccepted: 0, eventsAccepted: 0 }]).status)
+      .toBe('partial');
+  });
+
   it.each([true, false])('keeps explicitly excluded sources out of acquisition gaps and rejection totals (all excluded: %s)', allExcluded => {
     const sources: BatchSourceDisposition[] = [{ ...accepted('claude'), status: 'excluded',
       sessionsAccepted: 0, eventsAccepted: 0, exclusion: { entry: 'session-id', kind: 'session-id' } }];
