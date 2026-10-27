@@ -28,6 +28,8 @@
       "status": "partial",
       "testFiles": [
         "test/unit/models/worker-resolution.test.ts",
+        "test/unit/models/conductor-data-policy.test.ts",
+        "test/unit/providers/conductor-data-guard.test.ts",
         "test/unit/config/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-contracts.test.ts",

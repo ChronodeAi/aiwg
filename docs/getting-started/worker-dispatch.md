@@ -13,7 +13,7 @@ controlled by one setting: `parallelism.worker_dispatch` in `.aiwg/aiwg.config`.
 
 When it is off, AIWG's model-selected delegation rubric still applies — the active provider delegates to
 its own native subagents. When it is on, AIWG can also place work directly onto other configured worker
-CLIs.
+CLIs. See [local-only conductor inputs](../providers/conductor-local-only-inputs.md) before opening classified task files.
 
 ## What it costs
 

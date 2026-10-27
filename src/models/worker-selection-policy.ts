@@ -1,10 +1,12 @@
 // Validates and merges worker selection restrictions and constrained role aliases.
 import { z } from 'zod';
+import { validLocalOnlyPath } from './conductor-data-policy.mjs';
 import { integer } from '../schema/zod-validation.mjs';
 import type { WorkerSelectionPolicy, WorkerPolicyOrigin, WorkerPolicyDiagnostic, WorkerDataPolicy } from './types.js';
 
 const uniqueStrings = z.array(z.string().min(1)).refine(values => new Set(values).size === values.length, 'Duplicate entries');
 const WorkerDataPolicySchema = z.strictObject({
+  localOnlyPaths: uniqueStrings.refine(values => values.every(validLocalOnlyPath), 'Expected literal project-relative paths').optional(),
   allowedProcessing: z.array(z.enum(['local', 'remote'])).refine(values => new Set(values).size === values.length).optional(),
   allowProductImprovement: z.boolean().optional(),
   allowUnknown: z.boolean().optional(),
@@ -140,7 +142,7 @@ export function mergeWorkerSelection(layers: WorkerPolicyLayer[]): {
       let relaxation = false;
       if (layer.authority !== 'builtin' && explicit.length > 0) {
         const previous = target[key];
-        if (['deniedEfforts', 'deniedModels'].includes(key)) effective = [...new Set([...previous, ...value])];
+        if (['deniedEfforts', 'deniedModels', 'localOnlyPaths'].includes(key)) effective = [...new Set([...previous, ...value])];
         else if (['allowedVisibility', 'allowedLifecycle', 'allowedProcessing'].includes(key)) {
           relaxation = value.some((v: string) => !previous.includes(v));
           effective = previous.filter((v: string) => value.includes(v));

@@ -1,3 +1,5 @@
+import { postDeploy } from './codex-post-deploy.mjs';
+export { postDeploy };
 import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * OpenAI Codex Provider
@@ -47,7 +49,6 @@ import {
   writeFile,
   deployFiles,
   createAgentsMdFromTemplate,
-  initializeFrameworkWorkspace,
   getAddonAgentFiles,
   getAddonCommandFiles,
   getAddonSkillDirs,
@@ -511,13 +512,6 @@ export function generatePluginBundle(targetDir, opts = {}) {
 // Post-Deployment
 // ============================================================================
 
-export async function postDeploy(targetDir, opts) {
-  initializeFrameworkWorkspace(targetDir, opts.mode, opts.dryRun, opts.srcRoot);
-
-  if (opts.createAgentsMd) {
-    if (opts.contextFiles !== false) createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
-  }
-}
 
 // ============================================================================
 // File Extension
