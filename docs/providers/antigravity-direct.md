@@ -98,17 +98,22 @@ an open, honestly-marked detection gap (`ANTIGRAVITY_SOFT_DENY_RISK_NOTE`
 in the adapter), not a repaired one. **This quote by itself establishes
 neither exit code 0 nor a SUCCESS terminal.**
 
-## Auth is blocked on an interactive login
+## Authentication prerequisites
 
 Probes D/E prove this CLI's non-interactive failure mode for missing auth
 is `Error: authentication required. Run 'agy' to log in, then retry.` —
-an **interactive Google-account login**, not a documented API-key flag or
-environment variable. `GEMINI_API_KEY` in the registry `envAllowlist` is a
-`strings`-sourced **guess**, not confirmed to authenticate this CLI. **The
-manual smoke run below is BLOCKED until an operator completes an
-interactive `agy` login on the target host.**
+an **interactive Google-account login** under the default configuration.
+The [official authentication guide](https://antigravity.google/docs/install/)
+(reviewed 2026-10-26 for #3624) also documents `GEMINI_API_KEY`, provided
+`~/.gemini/antigravity-cli/settings.json` sets `modelProvider` to `gemini`.
+The key alone has no effect. Both session and worker lists retain this
+confirmed variable. The earlier probes did not select that provider and do
+not disprove key authentication. This documentation does not qualify the
+version-bound 1.3.3 worker profile or establish a successful authenticated
+run. **The manual smoke run remains blocked until an operator configures
+valid provider authentication on the target host.**
 
-## Manual smoke run (blocked on login — see above)
+## Manual smoke run (blocked on authentication — see above)
 
 ```sh
 d=$(mktemp -d) && cd "$d" || exit 1

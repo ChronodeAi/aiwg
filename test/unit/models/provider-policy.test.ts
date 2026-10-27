@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { buildSessionEnvironment } from '../../../tools/ralph-external/lib/session-environment.mjs';
 import {
   compileModelPolicy,
   assertOperatorWorkerNativeArgv,
@@ -13,6 +14,68 @@ import {
 } from '../../../src/models/provider-policy.js';
 
 describe('provider model registry', () => {
+  const sessionPolicies = {
+    antigravity: ['GEMINI_API_KEY'],
+    cursor: ['CURSOR_API_KEY'],
+    warp: ['WARP_API_KEY'],
+    windsurf: [],
+    openclaw: ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_OAUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY',
+      'OPENROUTER_API_KEY', 'MISTRAL_API_KEY', 'XAI_API_KEY', 'OPENCLAW_HOME',
+      'OPENCLAW_STATE_DIR', 'OPENCLAW_CONFIG_PATH', 'OPENCLAW_GATEWAY_URL',
+      'OPENCLAW_GATEWAY_TOKEN', 'OPENCLAW_GATEWAY_PASSWORD'],
+    grokbot: [],
+    'grok-build': ['XAI_API_KEY', 'GROK_HOME'],
+    hermes: ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'GEMINI_API_KEY',
+      'GOOGLE_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'MISTRAL_API_KEY',
+      'XAI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL',
+      'OPENROUTER_BASE_URL', 'CUSTOM_BASE_URL', 'HERMES_HOME', 'HERMES_INFERENCE_PROVIDER'],
+    openhuman: ['OPENHUMAN_CORE_TOKEN', 'OPENHUMAN_CORE_RPC_URL', 'OPENHUMAN_CORE_HOST',
+      'OPENHUMAN_CORE_PORT', 'OPENHUMAN_WORKSPACE', 'OPENHUMAN_DOTENV_PATH',
+      'OPENHUMAN_KEYRING_MASTER_KEY', 'OPENHUMAN_KEYRING_MASTER_KEY_FILE',
+      'OPENHUMAN_APP_ENV', 'BACKEND_URL', 'OPENHUMAN_MODEL'],
+  };
+
+  it('makes session inheritance an explicit decision for every bundled provider', () => {
+    for (const capability of Object.values(loadProviderModelCapabilities().providers)) {
+      expect(Object.hasOwn(capability, 'sessionEnvAllowlist')).toBe(true);
+      expect(Array.isArray(capability.sessionEnvAllowlist)).toBe(true);
+    }
+  });
+
+  it.each(Object.entries(sessionPolicies))('inherits only declared provider variables for %s', (provider, names) => {
+    expect(loadProviderModelCapabilities().providers[provider].sessionEnvAllowlist).toEqual(names);
+    const candidates = new Set([
+      ...Object.values(sessionPolicies).flat(), 'UNRELATED_API_KEY', 'AIWG_RESOURCE_TOKEN',
+      'GROK_CODE_XAI_API_KEY', 'OPENHUMAN_HOME', 'HERMES_YOLO_MODE',
+    ]);
+    const source = Object.fromEntries([...candidates].map(name => [name, `dummy-${name}`]));
+    const expected = Object.fromEntries(names.map(name => [name, source[name]]));
+    expect(buildSessionEnvironment(provider, {}, source)).toEqual(expected);
+    expect(buildSessionEnvironment(provider, {}, { ...source, HOME: '/synthetic-home', PATH: '/synthetic-bin' }))
+      .toEqual({ ...expected, HOME: '/synthetic-home', PATH: '/synthetic-bin' });
+    expect(source.UNRELATED_API_KEY).toBe('dummy-UNRELATED_API_KEY');
+  });
+
+  it.each(['windsurf', 'grokbot'])('keeps %s coverage-only with an explained empty session policy', provider => {
+    const capability = loadProviderModelCapabilities().providers[provider];
+    expect(capability.sessionEnvAllowlist).toEqual([]);
+    expect(capability.verification).toContain('no CLI credential variable is evidenced');
+    expect(capability.workerAdapter).toBeUndefined();
+    expect(capability.workerHealthAdapter).toBeUndefined();
+    expect(capability.workerHealthCoverage?.scope).toBe('out');
+  });
+
+  it('confirms Antigravity key prerequisites without broadening worker policy', () => {
+    const adapter = loadProviderModelCapabilities().providers.antigravity.workerHealthAdapter!;
+    expect(adapter.invocation.kind).toBe('process');
+    if (adapter.invocation.kind !== 'process') throw new Error('Expected process adapter');
+    expect(adapter.invocation.envAllowlist).toEqual(['GEMINI_API_KEY', 'HOME', 'PATH']);
+    const profile = adapter.invocationProfiles!['direct-shell'];
+    expect(profile.envAllowlist).toEqual(adapter.invocation.envAllowlist);
+    expect(profile.pitfalls.join(' ')).toContain('modelProvider to gemini');
+    expect(adapter.qualification.status).toBe('unqualified');
+  });
+
   it('covers every audited provider with sourced, dated capability entries', () => {
     const registry = loadProviderModelCapabilities();
     expect(Object.keys(registry.providers).sort()).toEqual([
