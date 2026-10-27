@@ -159,9 +159,11 @@ aiwg models resolve --role coding --task implementation --group harness \
 
 ## Running outside the conductor sandbox
 
-Run the rendered worker command from your own shell **outside your own harness
-sandbox**, using Claude Code `sandbox.excludedCommands` or an unsandboxed Bash
-call. The worker CLI's native sandbox, per-task worktree and resource scope
+Conductors save the resolved JSON plan and run `aiwg ralph-external
+--launch-worker --invocation /absolute/plan.json --run-dir /absolute/private/run`,
+or use the qualified MCP `worker-invoke` descriptor. Raw resolved-shell launch
+is for operators only. Run the launcher from your own shell **outside your own
+harness sandbox**, using Claude Code `sandbox.excludedCommands` or an unsandboxed Bash call. The worker CLI's native sandbox, per-task worktree and resource scope
 provide isolation. Never nest sandboxes: a CLI sandbox inside a conductor
 sandbox fails.
 
@@ -205,10 +207,9 @@ you intend to grant.
 ## Worker launch boundary on Linux
 
 This section covers AIWG's own launcher: `aiwg ralph-external --launch-worker`
-and managed-tier launches. It does not apply to Tier 0 direct
-handoff, the default. In Tier 0 the conductor runs the command rendered by
-`aiwg models resolve --transport shell --format shell` from its own shell outside the
-conductor harness's sandbox; no systemd unit is created.
+and managed-tier launches. Tier 0 conductors use this attached one-shot launcher
+or MCP `worker-invoke`; no Mission/MC session or daemon is required. Operators
+may run the raw resolved shell command, which has no launcher records or scope.
 
 Launcher workers use a systemd user unit by default (`execution.launchMode: "systemd-unit"`),
 with cgroup memory limits and a cgroup kill scope. For Codex `read-only` and
@@ -216,7 +217,7 @@ with cgroup memory limits and a cgroup kill scope. For Codex `read-only` and
 user/network namespace probe inside a transient user unit using the worker's
 client environment handling. `aiwg doctor --probe-workers` reports this same
 check in `sandboxChecks` with `scope: "systemd-launcher"`. A blocked check is a
-warning, not a qualification failure: Tier 0 direct dispatch stays ready, and
+warning, not a qualification failure: resolution stays ready, and
 the launcher re-probes and refuses at launch time.
 
 Ubuntu hosts can restrict unprivileged user namespaces inside systemd user units
@@ -273,6 +274,58 @@ The host resource gate and saved-plan revalidation still apply. Launch mode is
 pinned in the config digest and resolved invocation; changing it requires a fresh
 `models resolve` plan. After changing the policy, run
 `aiwg doctor --probe-workers --qualify --yes` and resolve again.
+
+## Retrying and verifying a stopped worker
+
+After confirmed termination, re-resolve the authorized retry into fresh plan,
+worktree, final and run paths. Link it with one launch command:
+
+```bash
+aiwg ralph-external --launch-worker --invocation /absolute/private/plan-2.json \
+  --run-dir /absolute/private/runs/attempt-2 \
+  --retry-of-run-dir /absolute/private/runs/attempt-1
+```
+
+The launcher derives the predecessor ID from `invocation.json` and still verifies
+private ownership, matching `.launch-owner`/invocation/exit records, task-chain
+identity, exclusion from worker-writable roots and confirmed stop. An optional
+`--retry-of ID` asserts an explicit ID; a mismatch is refused. Linking a retry
+never resets cumulative caps or authorizes a substitution.
+
+Use the installed verifier after the worker stops; do not import source from the
+task checkout. Protected check definitions belong to the conductor's policy:
+
+```bash
+aiwg ralph-external --verify-worker --run-dir /absolute/private/runs/attempt-1 \
+  --check '{"id":"unit","command":"/usr/bin/node","args":["--test","test/unit.test.mjs"],"timeoutMs":60000}' \
+  --json
+```
+
+Repeat `--check` for multiple checks. Each JSON object accepts `id`, an absolute
+`command` outside the worktree, and optional `args`, absolute `cwd` within the
+worktree, `envNames` and `timeoutMs` (1–86400000). The exact supplied binaries form
+the conductor allowlist. Never copy definitions from worker output or a
+worker-writable manifest, or run package-manager scripts as protected checks.
+The launcher record supplies the worktree and final artifact; use
+`--artifact /absolute/worker-tree/file` for another artifact in that tree.
+At least one protected check is required.
+
+Run verification from the configured conductor project with its trusted worker
+installation approvals available. The CLI independently loads all qualified
+worker-writable roots before authenticating run metadata.
+
+The CLI uses the installed `verifyWorkerArtifact`, `runProtectedCheck` and
+`computeWorktreeTreeDigest` implementation. It checks owned confirmed-stop records
+and live-probes required write/home/network confinement before executing checks.
+Missing isolation returns `blocked`, `ISOLATION_UNAVAILABLE`, and exit 2; there is
+no degraded override. Move verification to a host that enforces those protections.
+A check failure returns `rejected` and exit 1. Exit 0 returns `accepted` with the
+artifact/tree digests and hashed check evidence. JSON is a version-1
+`worker-verification` result carrying status, findings, isolation and exitCode.
+Only integrate the verified digest; subsequent edits invalidate acceptance.
+
+The `aiwg mcp serve` process stays up until stdin closes or it receives SIGINT/SIGTERM,
+so `worker-invoke` and later status calls share one live connection.
 
 ## Cross-family review evidence
 

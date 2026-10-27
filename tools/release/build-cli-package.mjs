@@ -107,6 +107,8 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     'tools/ralph-external/session-launcher.mjs',
     'tools/ralph-external/process-monitor.mjs',
     'tools/ralph-external/lib/session-environment.mjs',
+    'tools/ralph-external/lib/worker-inputs.mjs',
+    'tools/ralph-external/lib/worker-launch-cli.mjs',
     'tools/ralph-external/lib/worker-isolation.mjs',
     'tools/ralph-external/lib/systemd-client.mjs',
     'tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs',

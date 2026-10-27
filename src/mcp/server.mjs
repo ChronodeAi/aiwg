@@ -691,17 +691,8 @@ If retry fails, prepare structured escalation:
 export async function startServer() {
   const server = await createServer();
   const transport = new StdioServerTransport();
-
-  console.error('[AIWG MCP] Starting server...');
-  await server.connect(transport);
-  console.error('[AIWG MCP] Server connected via stdio transport');
-
-  // Handle graceful shutdown
-  process.on('SIGINT', async () => {
-    console.error('[AIWG MCP] Shutting down...');
-    await server.close();
-    process.exit(0);
-  });
+  const { serveStdioUntilClosed } = await import('./stdio-lifecycle.mjs');
+  await serveStdioUntilClosed(server, transport);
 }
 
 // Run if executed directly

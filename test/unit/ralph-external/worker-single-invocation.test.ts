@@ -1185,13 +1185,13 @@ describe('T-OG-23 pre-spawn boundaries and ownership', () => {
     }
   });
 
-  it('#2915 step 4: --retry-of/--retry-of-run-dir parse together or not at all', () => {
+  it('#2915 step 4: explicit retry IDs require a run directory', () => {
     const args = ['--launch-worker', '--invocation', '/plan.json', '--run-dir', '/run'];
     expect(parseWorkerLaunchArgs(args)).not.toHaveProperty('retryOf');
     expect(parseWorkerLaunchArgs([...args, '--retry-of', 'prev-1', '--retry-of-run-dir', '/prev-run']))
       .toMatchObject({ retryOf: { invocationId: 'prev-1', runDir: '/prev-run' } });
     expect(() => parseWorkerLaunchArgs([...args, '--retry-of', 'prev-1'])).toThrow(/together/);
-    expect(() => parseWorkerLaunchArgs([...args, '--retry-of-run-dir', '/prev-run'])).toThrow(/together/);
+    expect(parseWorkerLaunchArgs([...args, '--retry-of-run-dir', '/prev-run'])).toMatchObject({ retryOf: { runDir: '/prev-run' } });
   });
 
   it('T-OG-14 rejects unsupported platforms before helper spawn', async () => {
