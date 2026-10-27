@@ -42,6 +42,9 @@ it.each([false, true])('T-OG-17 MCP run reports the failing claims field with re
   let call: any;
   await graph.workerInvoke.registerWorkerInvokeToolset({ registerTool(_name: string, _schema: unknown, handler: any) { call = handler; } }, {
     projectRoot: root, workerWorktreesRoot: workdir, stdinRuntimeRoot: path.join(root, 'runtime'),
+    // Synthetic fixture workdir: never spawn a real context deploy here (the
+    // ensure path has its own dedicated coverage); test the diagnostics.
+    ensureWorkerContext: false,
     loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: { codex: driver } }),
     now: () => new Date(f.request.now), launchShellWorker,
     waitForUnitTermination: async () => ({ termination: 'confirmed', exitCode: 0 }),

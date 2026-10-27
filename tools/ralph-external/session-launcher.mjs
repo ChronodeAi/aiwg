@@ -378,6 +378,23 @@ async function launchOneWorker(owner, options) {
   const { assertConductorWorkerPlan } = await importImpl(import.meta.url, 'serve/worker-invocation-paths.js');
   await assertConductorWorkerPlan(saved, options.invocationPath, inputs.drivers);
   const invocation = await validate(saved, inputs.snapshot, inputs.drivers, now, options.invocationPath);
+  // #3685 round 2: the worker CLI's AIWG bootstrap must be present in the
+  // worker workdir before any spawn — a context-free worker would run with
+  // no project rules/skills/hooks. Opt-in per entry point (the
+  // `--launch-worker` CLI enables it via `options.ensureWorkerContext`);
+  // absent means "no ensure", never a default deploy, so pinned baselines
+  // and synthetic launches are unaffected. A failed ensure throws the
+  // typed `OG_WORKER_CONTEXT_UNAVAILABLE` diagnostic (with remedy) and the
+  // worker never spawns.
+  if (options.ensureWorkerContext) {
+    const { ensureWorkerContextForLaunch } = await import('./lib/worker-context.mjs');
+    await ensureWorkerContextForLaunch({
+      workdir: invocation.cwd,
+      cli: invocation.selected?.cli,
+      config: inputs.snapshot?.config ?? null,
+      ...(typeof options.ensureWorkerContext === 'object' ? options.ensureWorkerContext : {}),
+    });
+  }
   if (invocation.mode === 'managed' || options.managedAdmission) {
     const admitted = await assertManagedWorkerLaunch(options, invocation, inputs, options.projectRoot ?? process.cwd());
     options = { ...options, scopedBreaker: null, managedInvocationId: admitted.metadata.invocationId,

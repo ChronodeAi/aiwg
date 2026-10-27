@@ -3217,6 +3217,7 @@
             "${effort}",
             "--workspace",
             "${workspace}",
+            "--trust-workspace",
             "--approval-mode",
             "never",
             "--approval-judge",
@@ -3309,8 +3310,8 @@
               },
               "trust": {
                 "support": "unqualified",
-                "mapping": "[]",
-                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
+                "mapping": "[\"--trust-workspace\"]",
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation. Tier 0 workspaces are conductor-prepared worker trees the conductor owns, so the profile binds --trust-workspace by default (#3685: untrusted Muse loads project_sources=0 with user skills only and empty hook admission; trusted loads project_sources=1, project skills and hooks)."
               },
               "children": {
                 "support": "unqualified",
@@ -3331,13 +3332,13 @@
               "Live qualification is an open S1 blocker; installed help and synthetic/echo mechanics are not paid inference qualification.",
               "Configured-model events provide runtime-configured identity only, never backend attestation.",
               "Contributor data policy is explicit; shared policy denies contributor models and never silently selects the CLI default.",
-              "Workspace trust defaults off; only a host-qualified trust mapping may load rules/skills. Approval-mode never and approval-judge off retain the sandbox. Muse requires a qualified external boundary.",
+              "Workspace trust is bound on for conductor-prepared worker trees (the conductor owns the worktree), so project rules/skills/hooks load; only a host-qualified trust mapping may change it. Approval-mode never and approval-judge off retain the sandbox. Muse requires a qualified external boundary.",
               "Host qualification must bind an absolute output-schema mapping and include that schema in runtimeFiles.",
               "Muse JSONL strict normalization needs the shared strict-parser hook; the MCP bridge must consume the selected provider parser. MSP is not MCP.",
               "Semantic step/tool completion grammar and native session-log layout remain unavailable; unrelated logs, deltas and CPU cannot establish progress.",
               "Shared version gate: installation requires the raw trimmed banner Muse Code 1.4.4 (1.4.4-R5419.1), but semver selection requires 1.4.4-R5419.1. No normalization exists; keep unqualified until the shared owner binds raw and normalized versions.",
               "Operator qualification approves the installed direct renderer, not authenticated inference or backend model identity.",
-              "Workspace trust defaults off. Only never approval is supported. Explicit unsupported controls block dispatch.",
+              "Workspace trust is on for conductor-prepared worker trees. Only never approval is supported. Explicit unsupported controls block dispatch.",
               "Self-delegation must be explicitly allowed by policy; no native child-denial flag is assumed."
             ],
             "health": {
