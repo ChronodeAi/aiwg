@@ -36,6 +36,75 @@ describe('T-OG-01 local-only conductor input policy', () => {
   ])('refuses the explicit shell reference %s', command => {
     expect(conductorToolDenial(tool(command), '/project', ['eval-work/local.txt'])).toMatch(/local-only/);
   });
+  it.each([
+    'for f in eval-work/*.json eval-work/*.txt .eval-control/policy.md; do echo "=== $f ==="; cat "$f"; done',
+    'cat eval-work/*.txt',
+    'cat eval-work/loc?l.txt',
+    'cat eval-work/[kl]ocal.txt',
+    'cat eval-work/[!p]*.txt',
+    'cat eval-work/[a-z]*.txt',
+    'cat eval-*/local.*',
+    'cat **/local.txt',
+    'cat eval-work/**/*.txt',
+    'cat "eval-work/"*.txt',
+    'cat < eval-work/*.txt',
+    'grep -r x eval-work',
+    'grep -Rn x ./eval-work',
+    'grep --recursive -e x eval-work',
+    'grep -r -e x -- eval-work',
+    'rg x eval-work',
+    'rg --glob "*.txt" x eval-work',
+    'rg --files eval-work',
+    'rg x',
+    'grep -r x',
+    'find eval-work -type f -exec cat {} \\;',
+  ])('refuses glob or ancestor reads: %s', command => {
+    const root = mkdtempSync(path.join(tmpdir(), 'aiwg-conductor-glob-')); roots.push(root);
+    mkdirSync(path.join(root, 'eval-work'));
+    writeFileSync(path.join(root, 'eval-work/local.txt'), 'synthetic local-only input');
+    expect(conductorToolDenial(tool(command, root), root, ['eval-work/local.txt'])).toMatch(/local-only/);
+  });
+  it.each([
+    'cat eval-work/public.txt',
+    'ls eval-work',
+    'cat eval-work/*.json',
+    'cat eval-work/**/*.json',
+    'cat eval-work/[!l]*.txt',
+    'cat eval-work/*.tx',
+    'cat eval-work/*/local.txt',
+    'cat "eval-work/*.txt"',
+    "cat 'eval-work/loc?l.txt'",
+    'cat eval-work/\\*.txt',
+    'cat eval-work/"*".txt',
+    'grep x eval-work',
+    'grep -r x public-inputs',
+    'rg x public-inputs',
+    'rg -e x public-inputs',
+    'find public-inputs -exec cat {} \\;',
+    'rg x public-inputs; ls eval-work',
+  ])('allows commands that cannot read the protected file: %s', command => {
+    const root = mkdtempSync(path.join(tmpdir(), 'aiwg-conductor-glob-')); roots.push(root);
+    mkdirSync(path.join(root, 'eval-work'));
+    writeFileSync(path.join(root, 'eval-work/local.txt'), 'synthetic local-only input');
+    expect(conductorToolDenial(tool(command, root), root, ['eval-work/local.txt'])).toBeNull();
+  });
+  it('resolves glob cwd and symlink ancestors, including protected directory subtrees', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'aiwg-conductor-glob-')); roots.push(root);
+    mkdirSync(path.join(root, 'eval-work'));
+    mkdirSync(path.join(root, 'private-inputs/deep'), { recursive: true });
+    writeFileSync(path.join(root, 'eval-work/local.txt'), 'synthetic local-only input');
+    writeFileSync(path.join(root, 'private-inputs/deep/input.txt'), 'synthetic nested input');
+    symlinkSync(path.join(root, 'eval-work'), path.join(root, 'alias-dir'));
+    const paths = ['eval-work/local.txt', 'private-inputs'];
+    for (const command of ['cat *.txt', 'cat ../eval-work/*.txt', 'rg x .']) {
+      expect(conductorToolDenial(tool(command, path.join(root, 'eval-work')), root, paths)).toBeTruthy();
+    }
+    for (const command of ['cat alias-dir/*.txt', 'rg x alias-dir', 'cat private-*/*', 'cat private-*/*/*.txt']) {
+      expect(conductorToolDenial(tool(command, root), root, paths)).toBeTruthy();
+    }
+    expect(conductorToolDenial(tool(`cat ${root}/eval-work/*.txt`), root, paths)).toBeTruthy();
+    expect(conductorToolDenial(tool('cat private-inputs/*'), root, ['private-inputs'])).toBeTruthy();
+  });
   it('normalizes Read paths and nested cwd, blocks subtrees and symlink aliases', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'aiwg-conductor-input-')); roots.push(root);
     mkdirSync(path.join(root, 'eval-work'));
