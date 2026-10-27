@@ -1,6 +1,6 @@
 // Exercise the inherited lane environment through native, provider and child resolvers.
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, inject, it, vi } from 'vitest';
@@ -13,6 +13,24 @@ import setup from '../../helpers/default-home-setup.mjs';
 afterEach(() => vi.unstubAllEnvs());
 
 describe('default lane temporary home', () => {
+  it('carries only git safe.directory trust into the temporary home', () => {
+    // CI containers trust the checkout through the real HOME's global git config;
+    // without it, git in an isolated HOME refuses the checkout as dubiously owned.
+    const real = mkdtempSync(path.join(os.tmpdir(), 'aiwg-real-home-'));
+    try {
+      writeFileSync(path.join(real, '.gitconfig'), '[safe]\n\tdirectory = /synthetic/checkout\n[user]\n\tname = Operator\n');
+      vi.stubEnv('HOME', real);
+      const fixture = createTemporaryHome('aiwg-safe-dir-');
+      try {
+        const read = (key: string) => execFileSync('git', ['config', '--global', '--get-all', key], {
+          encoding: 'utf8', timeout: 10_000, env: { ...process.env, HOME: fixture.home }, stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        expect(read('safe.directory')).toBe('/synthetic/checkout');
+        expect(() => read('user.name')).toThrow();
+      } finally { fixture.cleanup(); }
+    } finally { rmSync(real, { recursive: true, force: true }); }
+  });
+
   it('isolates native, provider, XDG and child-process home resolution', () => {
     const home = inject('defaultLaneHome');
     expect(path.dirname(home)).toBe(path.resolve(os.tmpdir()));
