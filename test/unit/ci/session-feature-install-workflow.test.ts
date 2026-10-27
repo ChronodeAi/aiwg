@@ -35,7 +35,12 @@ describe('session SQLite feature release gate', () => {
 
   it('runs packed-install smoke in the direct stable workflow before publication', () => {
     expect(githubWorkflow).toContain('npm run test:sessions:feature-install');
-    expect(githubWorkflow.indexOf('npm run test:sessions:feature-install')).toBeLessThan(githubWorkflow.indexOf('direct-stable-publish.mjs'));
+    const stable = parse(githubWorkflow).jobs['publish-to-npmjs-org'].steps;
+    const validation = stable.findIndex((step: { name: string }) => step.name === 'Validate and build stable release');
+    const publication = stable.findIndex((step: { name: string }) => step.name === 'Publish smoke-tested stable tarballs to npmjs.org');
+    expect(validation).toBeLessThan(publication);
+    expect(stable[validation].run).toContain('npm run test:sessions:feature-install');
+    expect(stable[validation].if).toBe("${{ steps.recovery.outputs.recovered != 'true' }}");
     expect(giteaWorkflow).toContain('direct-stable-publish.mjs --mirror');
   });
 

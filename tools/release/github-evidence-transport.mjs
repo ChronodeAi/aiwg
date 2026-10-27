@@ -8,7 +8,7 @@ const validRepo = repository => /^[\w.-]+\/[\w.-]+$/.test(repository ?? '');
 const positive = value => Number.isSafeInteger(value) && value > 0;
 
 export function createGithubEvidenceTransport({ token, approvalIssue, fetchImpl = globalThis.fetch } = {}) {
-  if (typeof token !== 'string' || !token.trim() || !positive(approvalIssue) || typeof fetchImpl !== 'function') throw new Error('GitHub token and approval issue are required');
+  if (typeof token !== 'string' || !token.trim() || (approvalIssue !== undefined && !positive(approvalIssue)) || typeof fetchImpl !== 'function') throw new Error('GitHub token and valid optional approval issue are required');
   const request = async (url, { binary = false, authenticated = true } = {}) => {
     const headers = { Accept: binary ? 'application/octet-stream' : 'application/vnd.github+json', 'User-Agent': 'aiwg-release-evidence', 'X-GitHub-Api-Version': '2022-11-28' };
     if (authenticated) headers.Authorization = `Bearer ${token}`;
@@ -50,6 +50,11 @@ export function createGithubEvidenceTransport({ token, approvalIssue, fetchImpl 
     },
     getWorkflow: ({ repository, workflowId }) => { if (!positive(workflowId)) throw new Error('Invalid workflow ID'); return api(`${repoPath(repository)}/actions/workflows/${workflowId}`); },
     getRun: ({ repository, runId }) => { if (!positive(runId)) throw new Error('Invalid run ID'); return api(`${repoPath(repository)}/actions/runs/${runId}`); },
+    listWorkflowRuns: ({ repository, workflow, branch, commit }) => {
+      if (workflow !== 'npm-publish.yml' || !/^v\d{4}\.\d+\.\d+$/.test(branch ?? '') || !/^[a-f0-9]{40}$/.test(commit ?? '')) throw new Error('Invalid stable workflow identity');
+      return collection(`${repoPath(repository)}/actions/workflows/${workflow}/runs?branch=${encodeURIComponent(branch)}&head_sha=${commit}`, 'workflow_runs');
+    },
+    listRunArtifacts: ({ repository, runId }) => { if (!positive(runId)) throw new Error('Invalid run ID'); return collection(`${repoPath(repository)}/actions/runs/${runId}/artifacts`, 'artifacts'); },
     listJobs: ({ repository, runId, attempt }) => { if (!positive(runId) || !positive(attempt)) throw new Error('Invalid run attempt'); return collection(`${repoPath(repository)}/actions/runs/${runId}/attempts/${attempt}/jobs`, 'jobs'); },
     getArtifact: ({ repository, artifactId }) => { if (!positive(artifactId)) throw new Error('Invalid artifact ID'); return api(`${repoPath(repository)}/actions/artifacts/${artifactId}`); },
     compareCommits: ({ repository, base, head }) => {
@@ -63,6 +68,7 @@ export function createGithubEvidenceTransport({ token, approvalIssue, fetchImpl 
       return { repository, path: sourcePath, commit, content: Buffer.from(data.content.replace(/\s/g, ''), 'base64').toString('utf8') };
     },
     async listApprovals({ repository }) {
+      if (!positive(approvalIssue)) throw new Error('Approval issue is required');
       const page = await collection(`${repoPath(repository)}/issues/${approvalIssue}/comments`);
       const approvals = page.items.filter(item => { try { return ['aiwg-release-comparison-approval/v1', 'aiwg-release-comparison-approval/v2', 'aiwg-stable-release-approval/v1'].includes(JSON.parse(item.body)?.schema); } catch { return false; } });
       return { items: approvals.map(item => ({ id: item.id, html_url: item.html_url, actor: item.user, created_at: item.created_at, updated_at: item.updated_at, body: item.body })), complete: true, totalCount: approvals.length };

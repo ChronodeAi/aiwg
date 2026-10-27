@@ -95,6 +95,7 @@ concurrency:
 permissions:
   contents: write   # Create/upload GitHub release assets (rc.1 retag #8 — gh release).
   id-token: write   # Required for OIDC trusted publishing to npmjs.org.
+  actions: read     # Verify retained smoke-tested packages on reruns and dispatches.
 
 jobs:
   publish-to-npmjs-org:
@@ -258,12 +259,22 @@ jobs:
           echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION (dist-tag: $NPM_TAG)"
 
+      - name: Recover published registry tarballs
+        id: recovery
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.release_tag }}
+          RELEASE_COMMIT: ${{ steps.release_source.outputs.commit }}
+        run: node tools/release/direct-stable-publish.mjs --prepare --directory "$RUNNER_TEMP/stable-package" --version '${{ steps.version.outputs.version }}'
+
       - name: Install mandatory SQLite session test backend
+        if: ${{ steps.recovery.outputs.recovered != 'true' }}
         run: |
           npm run features:sqlite
           node -e "require('better-sqlite3')"
 
       - name: Scan known affected package feed
+        if: ${{ steps.recovery.outputs.recovered != 'true' }}
         run: |
           if [ -n "${AIWG_AFFECTED_PACKAGES_CSV:-}" ] || [ -f /mnt/ops/users/roctinam/Downloads/22-packages.csv ]; then
             npm run lint:affected-packages
@@ -272,6 +283,7 @@ jobs:
           fi
 
       - name: Validate and build stable release
+        if: ${{ steps.recovery.outputs.recovered != 'true' }}
         run: |
           set -euo pipefail
           npm run typecheck
@@ -282,9 +294,11 @@ jobs:
           npm run test:sessions:feature-install
 
       - name: Require slow release infrastructure tests
+        if: ${{ steps.recovery.outputs.recovered != 'true' }}
         run: node tools/ci/run-with-hang-report.mjs --timeout 30m -- npm run test:release-slow
 
       - name: Pack and smoke-test exact npm surfaces
+        if: ${{ steps.recovery.outputs.recovered != 'true' }}
         run: node tools/release/release-candidate.mjs pack --output "${RUNNER_TEMP}/stable-package"
 
       - name: Install syft (SBOM generator)
@@ -317,27 +331,29 @@ jobs:
           cp tools/install/install.sh "${RUNNER_TEMP}/stable-package/install.sh"
           bash "${RUNNER_TEMP}/stable-package/install.sh" --dry-run
           VERSION='${{ steps.version.outputs.version }}'
-          for file in "aiwg-${VERSION}.tgz" "aiwg-cli-${VERSION}.tgz" "aiwg-cockpit-${VERSION}.tgz" installed-smoke.json; do
-            test -s "${RUNNER_TEMP}/stable-package/$file"
-          done
+          node --input-type=module -e 'import {validateInputs} from "./tools/release/direct-stable-publish.mjs"; validateInputs(process.argv[1], process.argv[2]);' "$RUNNER_TEMP/stable-package" "$VERSION"
 
       - name: Retain smoke-tested tarballs before publication
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: stable-packages-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/stable-package/aiwg-${{ steps.version.outputs.version }}.tgz
-            ${{ runner.temp }}/stable-package/aiwg-cli-${{ steps.version.outputs.version }}.tgz
-            ${{ runner.temp }}/stable-package/aiwg-cockpit-${{ steps.version.outputs.version }}.tgz
-            ${{ runner.temp }}/stable-package/installed-smoke.json
+          path: ${{ runner.temp }}/stable-package/
+          compression-level: 0
           if-no-files-found: error
           retention-days: 90
 
+      - name: Verify all retained tarballs before publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node tools/release/direct-stable-publish.mjs --verify-retention --directory "$RUNNER_TEMP/stable-package" --version '${{ steps.version.outputs.version }}'
+
       - name: Publish smoke-tested stable tarballs to npmjs.org
+        env:
+          ALREADY_PUBLISHED: ${{ steps.recovery.outputs.published_packages }}
         run: |
           set -euo pipefail
           VERSION='${{ steps.version.outputs.version }}'
-          node tools/release/direct-stable-publish.mjs --directory "$RUNNER_TEMP/stable-package" --version "$VERSION" --receipt "$RUNNER_TEMP/stable-publication.json"
+          node tools/release/direct-stable-publish.mjs --directory "$RUNNER_TEMP/stable-package" --version "$VERSION" --receipt "$RUNNER_TEMP/stable-publication.json" --already-published "$ALREADY_PUBLISHED"
           cp "$RUNNER_TEMP/stable-package/aiwg-${VERSION}.tgz" "$RUNNER_TEMP/stable-package/aiwg-cli-${VERSION}.tgz" "$RUNNER_TEMP/stable-package/aiwg-cockpit-${VERSION}.tgz" "$RUNNER_TEMP/stable-package/aiwg-${VERSION}.cdx.json" "$RUNNER_TEMP/stable-package/install.sh" .
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
@@ -447,15 +463,15 @@ jobs:
         #   3. Build a signed release manifest with SHA-256 + tag + commit
         #      + workflow run URL for the audit trail.
         #   4. cosign-sign the manifest → produces release-manifest.json.sigstore.
-        # Keyless signing — no --key flag; cosign uses the ambient
-        # GitHub Actions OIDC token (permissions: id-token: write above).
+        # Keyless signing uses an explicit GitHub OIDC fetch with bounded retry.
+        # The helper passes the token privately through the cosign environment.
         run: |
           set -euo pipefail
           VERSION='${{ steps.version.outputs.version }}'
           TAG="v${VERSION}"
           TARBALL="aiwg-${VERSION}.tgz"
 
-          # Sign the same artifact passed to npm publish; no registry lookup.
+          # Sign the verified smoke-tested bytes selected for publication or recovery.
           if [ ! -f "$TARBALL" ]; then
             echo "✗ Expected published tarball $TARBALL is missing"
             ls -la
@@ -471,10 +487,9 @@ jobs:
           # the Rekor transparency-log entry. Consumers verify with
           # `cosign verify-blob --bundle <file>.sigstore <file>` — fully
           # offline once the bundle is downloaded.
-          cosign sign-blob \
-            --yes \
+          node tools/release/cosign-sign-blob.mjs \
             --bundle "${TARBALL}.sigstore" \
-            "$TARBALL"
+            --file "$TARBALL"
           echo "✓ Signed $TARBALL → ${TARBALL}.sigstore"
 
           # Resolve the annotated tag's object SHA — this is what `git tag
@@ -548,10 +563,9 @@ jobs:
           echo "Manifest written:"
           cat "$MANIFEST"
 
-          cosign sign-blob \
-            --yes \
+          node tools/release/cosign-sign-blob.mjs \
             --bundle "${MANIFEST}.sigstore" \
-            "$MANIFEST"
+            --file "$MANIFEST"
           echo "✓ Signed $MANIFEST → ${MANIFEST}.sigstore"
 
           # Expose names for the upload step.
@@ -589,10 +603,9 @@ jobs:
         run: |
           set -euo pipefail
           SBOM='${{ steps.sbom.outputs.sbom }}'
-          cosign sign-blob \
-            --yes \
+          node tools/release/cosign-sign-blob.mjs \
             --bundle "${SBOM}.sigstore" \
-            "$SBOM"
+            --file "$SBOM"
           echo "✓ Signed $SBOM → ${SBOM}.sigstore"
 
       - name: Prepare installer and checksum manifest

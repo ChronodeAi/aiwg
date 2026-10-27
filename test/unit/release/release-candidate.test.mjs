@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import yaml from 'js-yaml';
 import { releaseIdentity, sha256, RC_LANES, ROUTINE_RC_LANES, RC_VALIDATION_PROFILES, RC_WORKFLOW, RC_STEPS, RC_JOB, SURFACES,
-  validateRelease, packAndSmoke, writeCandidateManifest, verifyRcBundle, promotionPlan } from '../../../tools/release/release-candidate.mjs';
+  validateRelease, packAndSmoke, smokeTarballs, writeCandidateManifest, verifyRcBundle, promotionPlan } from '../../../tools/release/release-candidate.mjs';
 const roots = [];
 const temp = () => { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rc-test-')); roots.push(root); return root; };
 afterEach(() => roots.splice(0).forEach(root => fs.rmSync(root, { recursive: true, force: true })));
@@ -254,7 +254,7 @@ describe('signed RC identity and exact-artifact promotion foundation (#3201)', (
       calls.push({ command, args });
       if (command === 'npm' && args[0] === 'pack') {
         const surface = SURFACES.find(surface => path.join(root, surface.dir) === options.cwd);
-        const filename = `${surface.stem}-${version}.tgz`; fs.writeFileSync(path.join(output, filename), surface.name);
+        const filename = `${surface.stem}-${version}.tgz`; fs.writeFileSync(path.join(args[3], filename), surface.name);
         return { status: 0, stdout: JSON.stringify([{ name: surface.name, version, filename, files: [{ path: 'package.json' }] }]) };
       }
       if (command === 'npm' && args[0] === 'install') {
@@ -267,8 +267,83 @@ describe('signed RC identity and exact-artifact promotion foundation (#3201)', (
       return { status: 0, stdout: version };
     } });
     expect(evidence.packages).toHaveLength(3);
+    const packs = calls.filter(call => call.command === 'npm' && call.args[0] === 'pack');
+    expect(packs).toHaveLength(4);
+    expect(packs.at(-1).args[3]).not.toBe(output);
+    expect(fs.existsSync(packs.at(-1).args[3])).toBe(false);
     expect(calls.filter(call => call.command === 'npm' && call.args[0] === 'install').every(call => path.dirname(call.args.at(-1)) === output)).toBe(true);
     expect(homes.every(home => !fs.existsSync(home))).toBe(true);
+  });
+  it('refuses a second cockpit build with different bytes before smoke or publication', () => {
+    const root = temp(), output = path.join(root, 'bundle'), repacks = [];
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version })); fs.mkdirSync(path.join(root, 'ci'));
+    fs.writeFileSync(path.join(root, 'ci/expected-tarball-top-level.txt'), 'package.json\n');
+    let cockpitInstalls = 0;
+    expect(() => packAndSmoke({ root, output, spawn(command, args, profile, options) {
+      if (command === 'npm' && args[0] === 'pack') {
+        const surface = SURFACES.find(surface => path.join(root, surface.dir) === options.cwd);
+        const filename = `${surface.stem}-${version}.tgz`, destination = args[3];
+        if (destination !== output) repacks.push(destination);
+        fs.writeFileSync(path.join(destination, filename), surface.name + (destination === output ? '' : ' changed bundle'));
+        return { status: 0, stdout: JSON.stringify([{ name: surface.name, version, filename, files: [{ path: 'package.json' }] }]) };
+      }
+      if (command === 'npm' && args[0] === 'install') {
+        const surface = SURFACES.find(surface => args.at(-1).endsWith(`${surface.stem}-${version}.tgz`));
+        if (surface.name === '@aiwg/cockpit') cockpitInstalls++;
+        const installed = path.join(args[2], 'node_modules', ...surface.name.split('/'));
+        fs.mkdirSync(installed, { recursive: true }); fs.writeFileSync(path.join(installed, 'package.json'), JSON.stringify({ name: surface.name, version }));
+      }
+      return { status: 0, stdout: version };
+    } })).toThrow('Non-reproducible package tarball: @aiwg/cockpit');
+    expect(cockpitInstalls).toBe(0);
+    expect(repacks).toHaveLength(1);
+    expect(repacks.every(directory => !fs.existsSync(directory))).toBe(true);
+    expect(fs.existsSync(path.join(output, 'installed-smoke.json'))).toBe(false);
+  });
+  it('smoke-tests supplied recovery tarballs without running pack or build', () => {
+    const root = temp(), output = path.join(root, 'bundle'), calls = [];
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version })); fs.mkdirSync(output);
+    for (const surface of SURFACES) fs.writeFileSync(path.join(output, `${surface.stem}-${version}.tgz`), surface.name);
+    const evidence = smokeTarballs({ root, output, spawn(command, args) {
+      calls.push({ command, args });
+      if (command === 'npm') {
+        expect(args[0]).toBe('install');
+        const surface = SURFACES.find(surface => args.at(-1).endsWith(`${surface.stem}-${version}.tgz`));
+        const installed = path.join(args[2], 'node_modules', ...surface.name.split('/'));
+        fs.mkdirSync(installed, { recursive: true }); fs.writeFileSync(path.join(installed, 'package.json'), JSON.stringify({ name: surface.name, version }));
+      }
+      return { status: 0, stdout: version };
+    } });
+    expect(evidence.packages.map(pkg => pkg.package)).toEqual(SURFACES.map(surface => surface.name));
+    expect(calls.filter(call => call.command === 'npm')).toHaveLength(3);
+    for (const item of evidence.packages) expect(item.sha256).toBe(sha256(path.join(output, item.filename)));
+  });
+  it('withholds publication and signing credentials from every recovery smoke child', () => {
+    const root = temp(), output = path.join(root, 'bundle'), childEnvs = [];
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version })); fs.mkdirSync(output);
+    for (const surface of SURFACES) fs.writeFileSync(path.join(output, `${surface.stem}-${version}.tgz`), surface.name);
+    const credentials = Object.fromEntries(['GH_TOKEN', 'GITHUB_TOKEN', 'NODE_AUTH_TOKEN', 'NPM_TOKEN',
+      'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_FUTURE',
+      'SIGSTORE_ID_TOKEN', 'COSIGN_PASSWORD', 'COSIGN_PKCS11_PIN', 'COSIGN_IDENTITY_TOKEN', 'COSIGN_PRIVATE_KEY',
+    ].map(key => [key, `synthetic-${key}`]));
+    const env = { ...credentials, PATH: '/synthetic/bin', GITHUB_REPOSITORY: repository };
+    const before = { ...env };
+    const evidence = smokeTarballs({ root, output, env, spawn(command, args, _profile, options) {
+      childEnvs.push(options.env);
+      if (command === 'npm') {
+        const surface = SURFACES.find(surface => args.at(-1).endsWith(`${surface.stem}-${version}.tgz`));
+        const installed = path.join(args[2], 'node_modules', ...surface.name.split('/'));
+        fs.mkdirSync(installed, { recursive: true }); fs.writeFileSync(path.join(installed, 'package.json'), JSON.stringify({ name: surface.name, version }));
+      }
+      return { status: 0, stdout: version };
+    } });
+    expect(evidence.pass).toBe(true);
+    expect(childEnvs).toHaveLength(8);
+    for (const childEnv of childEnvs) {
+      for (const key of Object.keys(credentials)) expect(childEnv).not.toHaveProperty(key);
+      expect(childEnv).toMatchObject({ PATH: '/synthetic/bin', GITHUB_REPOSITORY: repository });
+    }
+    expect(env).toEqual(before);
   });
   it('RC workflow retains pinned actions, signed-tag gate and all-success artifact upload; stable publish consumes it', () => {
     const root = repoRoot;

@@ -18,7 +18,8 @@ describe('@aiwg/cli release workflow wiring', () => {
     for (let i = 1; i < required.length; i++) expect(index(required[i - 1])).toBeLessThan(index(required[i]));
     expect(steps[index(required[1])].run).toContain('npm run package:cli');
     expect(steps[index(required[2])].run).toContain('release-candidate.mjs pack');
-    expect(steps[index(required[3])].with.path).toContain('aiwg-cli-${{ steps.version.outputs.version }}.tgz');
+    expect(steps[index(required[3])].with.path).toBe('${{ runner.temp }}/stable-package/');
+    expect(index('Verify all retained tarballs before publication')).toBeLessThan(index(required[4]));
     const publish = steps[index(required[4])];
     expect(publish.run).toContain('direct-stable-publish.mjs');
     expect(publish.run).toContain('aiwg-cli-${VERSION}.tgz');
