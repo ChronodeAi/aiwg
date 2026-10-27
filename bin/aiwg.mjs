@@ -27,6 +27,14 @@ import { existsSync, readFileSync } from 'fs';
 import os from 'os';
 import { randomUUID } from 'crypto';
 
+// Every exit path calls process.exit() right after writing. On a pipe, Node
+// queues writes the reader has not consumed yet and process.exit() drops them,
+// so a slow reader saw JSON reports cut off at the 64 KiB pipe buffer. Blocking
+// pipe writes finish before the next statement runs, so nothing is lost.
+for (const stream of [process.stdout, process.stderr]) {
+  if (!stream.isTTY) stream._handle?.setBlocking?.(true);
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, '..');
