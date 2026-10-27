@@ -135,4 +135,22 @@ describe('B3 use deployment plumbing', () => {
     expect(readFileSync(path.join(cwd, '.claude/rules/RULES-INDEX.md'), 'utf8')).toContain(`aiwg:managed v${version} bundled`);
     expect(result.output).not.toContain('Unable to resolve AIWG deploy version');
   }, 240_000);
+
+  it('records every configured addon provider after use all (#3661)', () => {
+    const cwd = path.join(scratch, 'addon-providers');
+    mkdirSync(path.join(cwd, '.aiwg'), { recursive: true });
+    const providers = ['claude', 'codex', 'muse'];
+    const configPath = path.join(cwd, '.aiwg/aiwg.config');
+    writeFileSync(configPath, JSON.stringify({ version: '1', providers, installed: {}, scripts: {} }));
+    const kernel = run(cwd, ['all', '--quiet']);
+    expect(kernel.code, kernel.output).toBe(0);
+    const addon = run(cwd, ['decision-engine']);
+    expect(addon.code, addon.output).toBe(0);
+    expect(addon.output).not.toMatch(/^\s*ERROR\s*$/m);
+    expect(addon.output).not.toContain('Installed-state record is missing');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    expect(Object.keys(config.installed['decision-engine'].deployedTo).sort()).toEqual([...providers].sort());
+    for (const provider of providers) expect(config.installed['decision-engine'].deployedTo[provider].skills).toBeGreaterThan(0);
+  }, 480_000);
+
 });

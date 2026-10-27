@@ -40,6 +40,7 @@ import { appendGitignore } from '../../config/gitignore.js';
 import { getLogger } from '../log.js';
 import { installCockpit } from './cockpit.js';
 import { initHandler } from './init.js';
+import { selectAddonProfile } from './use-addon-profile.js';
 import {
   checkCollisions,
   formatCollisionReport,
@@ -2998,7 +2999,7 @@ export class UseHandler implements CommandHandler {
 
     let coreResult: HandlerResult;
     try {
-      coreResult = await this.executeCore({ ...ctx, args: coreArgs });
+      coreResult = await this.executeCore({ ...ctx, args: coreArgs }, providers);
     } catch (error) {
       coreResult = { exitCode: 1, message: error instanceof Error ? error.message : String(error) };
     } finally {
@@ -3130,7 +3131,7 @@ export class UseHandler implements CommandHandler {
     };
   }
 
-  private async executeCore(ctx: HandlerContext): Promise<HandlerResult> {
+  private async executeCore(ctx: HandlerContext, resolvedProviders?: string[]): Promise<HandlerResult> {
     const explicitTarget = firstUsePositional(ctx.args);
 
     if (ctx.args.includes('--workspace-signals')) {
@@ -3655,7 +3656,8 @@ export class UseHandler implements CommandHandler {
     if (isAddon || isExtension) {
       const providerIdx = remainingArgs.findIndex(a => a === '--provider' || a === '--platform');
       const explicitAddonProvider = providerIdx >= 0 && remainingArgs[providerIdx + 1] ? remainingArgs[providerIdx + 1] : null;
-      const provider = resolveBuiltInProviderForUse(explicitAddonProvider ?? (config?.providers?.[0] ?? 'claude')).provider;
+      const providers = resolvedProviders ?? [...new Set(configuredGlobalProviders(remainingArgs, config)
+        .map(provider => resolveBuiltInProviderForUse(provider).provider))];
       const targetIdx = remainingArgs.findIndex(a => a === '--target');
       const target = targetIdx >= 0 && remainingArgs[targetIdx + 1] ? remainingArgs[targetIdx + 1] : process.cwd();
       const dryRunAddon = remainingArgs.includes('--dry-run');
@@ -3666,273 +3668,202 @@ export class UseHandler implements CommandHandler {
       } catch (error) {
         return { exitCode: 1, message: `Error: ${error instanceof Error ? error.message : String(error)}` };
       }
-      if (addonScope === 'user' && !USER_SCOPE_PATHS[provider]) {
-        return {
-          exitCode: 1,
-          message: `--scope user not supported for provider '${provider}' — see docs/customization/user-scope-deployment.md for the supported list`,
-        };
-      }
-
-      const runner = createUseScriptRunner(frameworkRoot);
-      const addonBaseArgs = ['--deploy-commands', '--deploy-skills', '--deploy-rules'];
-      if (remainingArgs.includes('--allow-over-budget')) addonBaseArgs.push('--allow-over-budget');
-      if (addonScope === 'user') addonBaseArgs.push('--scope', 'user');
-      // An explicitly selected upstream addon must be self-contained in the
-      // project. Unlike a full framework deploy, its standard skills cannot be
-      // left index-only: the user asked to install this specific bundle and
-      // its supporting scripts must travel with the skill directory.
-      addonBaseArgs.push('--copy-all');
-      addonBaseArgs.push(...modelDeployArgs);
-      if (provider) addonBaseArgs.push('--provider', provider);
-      if (target) addonBaseArgs.push('--target', target);
-      // Forward --copy-all (#1219) so addon-only deploys also honor it.
-      if ((remainingArgs.includes('--copy-all') || remainingArgs.includes('--copy-standard-skills'))
-          && !addonBaseArgs.includes('--copy-all')) {
-        addonBaseArgs.push('--copy-all');
-      }
-      if (dryRunAddon) addonBaseArgs.push('--dry-run');
-      if (remainingArgs.includes('--force')) addonBaseArgs.push('--force');
-
       const kind = isExtension ? 'extension' : 'addon';
-      const activationOrder = isAddon
-        ? await resolveRequiredAddonActivationOrder(frameworkRoot, framework)
-        : [framework];
-      const requiredAddons = activationOrder.slice(0, -1);
-
-      for (const dependency of requiredAddons) {
-        ui.blank();
-        ui.header(`  Deploying required ${dependency} addon...`);
-        const dependencySource = addonPath(frameworkRoot, dependency);
-        const dependencyResult = await runner.run('tools/agents/deploy-agents.mjs', [
-          '--quiet', '--source', dependencySource,
-          ...addonBaseArgs,
-        ], { capture: true });
-        if (dependencyResult.exitCode !== 0) {
-          return {
-            ...dependencyResult,
-            message: dependencyResult.message
-              || `Failed to deploy required addon '${dependency}'`,
-          };
-        }
-        if (!dryRunAddon) {
-          try {
-            await reconcileDeployedSkillAssets(dependencySource, target, provider, { strictReferences: false, force: remainingArgs.includes('--force') });
-          } catch (error) {
-            return {
-              exitCode: 1,
-              message: `Required addon '${dependency}' skill asset deployment failed: ${error instanceof Error ? error.message : String(error)}`,
-            };
-          }
-        }
-        try {
-          await registerSourceCliCommands({
-            source: dependencySource,
-            target,
-            provider,
-            dryRun: dryRunAddon,
-            fallbackDescription: `${dependency} addon commands`,
-          });
-        } catch (error) {
-          return {
-            exitCode: 1,
-            message: `Failed to register required addon '${dependency}' CLI commands: ${error instanceof Error ? error.message : String(error)}`,
-          };
-        }
-        ui.success(dryRunAddon
-          ? `Required ${dependency} addon activation previewed`
-          : `Required ${dependency} addon deployed`);
-      }
-
-      ui.blank();
-      ui.header(`  Deploying ${framework} ${kind}...`);
       const addonSource = isExtension
         ? extensionPath(frameworkRoot, framework)
         : addonPath(frameworkRoot, framework);
-      const addonResult = await runner.run('tools/agents/deploy-agents.mjs', [
-        '--quiet', '--source', addonSource,
-        ...addonBaseArgs,
-      ], { capture: true });
+      // Deploy, reconcile, and record exactly the provider set verification checks.
+      for (const provider of providers) {
+        if (addonScope === 'user' && !USER_SCOPE_PATHS[provider]) {
+          return {
+            exitCode: 1,
+            message: `--scope user not supported for provider '${provider}' — see docs/customization/user-scope-deployment.md for the supported list`,
+          };
+        }
 
-      if (addonResult.exitCode !== 0) {
-        return addonResult;
-      }
+        const runner = createUseScriptRunner(frameworkRoot);
+        const addonBaseArgs = ['--deploy-commands', '--deploy-skills', '--deploy-rules'];
+        if (remainingArgs.includes('--allow-over-budget')) addonBaseArgs.push('--allow-over-budget');
+        if (addonScope === 'user') addonBaseArgs.push('--scope', 'user');
+        // An explicitly selected upstream addon must be self-contained in the
+        // project. Unlike a full framework deploy, its standard skills cannot be
+        // left index-only: the user asked to install this specific bundle and
+        // its supporting scripts must travel with the skill directory.
+        addonBaseArgs.push('--copy-all');
+        addonBaseArgs.push(...modelDeployArgs);
+        if (provider) addonBaseArgs.push('--provider', provider);
+        if (target) addonBaseArgs.push('--target', target);
+        // Forward --copy-all (#1219) so addon-only deploys also honor it.
+        if ((remainingArgs.includes('--copy-all') || remainingArgs.includes('--copy-standard-skills'))
+            && !addonBaseArgs.includes('--copy-all')) {
+          addonBaseArgs.push('--copy-all');
+        }
+        if (dryRunAddon) addonBaseArgs.push('--dry-run');
+        if (remainingArgs.includes('--force')) addonBaseArgs.push('--force');
 
-      if (!dryRunAddon) {
+        const activationOrder = isAddon
+          ? await resolveRequiredAddonActivationOrder(frameworkRoot, framework)
+          : [framework];
+        const requiredAddons = activationOrder.slice(0, -1);
+
+        for (const dependency of requiredAddons) {
+          ui.blank();
+          ui.header(`  Deploying required ${dependency} addon...`);
+          const dependencySource = addonPath(frameworkRoot, dependency);
+          const dependencyResult = await runner.run('tools/agents/deploy-agents.mjs', [
+            '--quiet', '--source', dependencySource,
+            ...addonBaseArgs,
+          ], { capture: true });
+          if (dependencyResult.exitCode !== 0) {
+            return {
+              ...dependencyResult,
+              message: dependencyResult.message
+                || `Failed to deploy required addon '${dependency}'`,
+            };
+          }
+          if (!dryRunAddon) {
+            try {
+              await reconcileDeployedSkillAssets(dependencySource, target, provider, { strictReferences: false, force: remainingArgs.includes('--force') });
+            } catch (error) {
+              return {
+                exitCode: 1,
+                message: `Required addon '${dependency}' skill asset deployment failed: ${error instanceof Error ? error.message : String(error)}`,
+              };
+            }
+          }
+          try {
+            await registerSourceCliCommands({
+              source: dependencySource,
+              target,
+              provider,
+              dryRun: dryRunAddon,
+              fallbackDescription: `${dependency} addon commands`,
+            });
+          } catch (error) {
+            return {
+              exitCode: 1,
+              message: `Failed to register required addon '${dependency}' CLI commands: ${error instanceof Error ? error.message : String(error)}`,
+            };
+          }
+          ui.success(dryRunAddon
+            ? `Required ${dependency} addon activation previewed`
+            : `Required ${dependency} addon deployed`);
+        }
+
+        ui.blank();
+        ui.header(`  Deploying ${framework} ${kind}...`);
+        const addonResult = await runner.run('tools/agents/deploy-agents.mjs', [
+          '--quiet', '--source', addonSource,
+          ...addonBaseArgs,
+        ], { capture: true });
+
+        if (addonResult.exitCode !== 0) {
+          return addonResult;
+        }
+
+        if (!dryRunAddon) {
+          try {
+            await reconcileDeployedSkillAssets(addonSource, target, provider, { strictReferences: false, force: remainingArgs.includes('--force') });
+          } catch (error) {
+            return {
+              exitCode: 1,
+              message: `${kind} '${framework}' skill asset deployment failed: ${error instanceof Error ? error.message : String(error)}`,
+            };
+          }
+        }
+
+        if (!dryRunAddon && provider === 'omp' && (detectScope(remainingArgs) === 'user' || remainingArgs.includes('--user'))) {
+          try { await deployOmpUserSource({ frameworkRoot, source: addonSource, target, bundle: framework, copyAll: true }); }
+          catch (error) { return { exitCode: 1, message: `OMP user deployment failed: ${error instanceof Error ? error.message : String(error)}` }; }
+        }
+
+        // Register only artifacts actually written by a confirmed deployment.
+        if (!dryRunAddon) {
+          try {
+            const registry = getRegistry();
+            const paths = getProviderPaths(provider);
+            await registerDeployedExtensions(registry, {
+              agentsPath: paths.agents,
+              skillsPath: paths.skills,
+              commandsPath: paths.commands,
+              rulesPath: paths.rules,
+              behaviorsPath: paths.behaviors,
+              provider,
+              cwd: target,
+            });
+            ui.success('Extension registration complete');
+          } catch (error) {
+            ui.warn(`Failed to register extensions: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+
+        // Register CLI commands if addon declares them
         try {
-          await reconcileDeployedSkillAssets(addonSource, target, provider, { strictReferences: false, force: remainingArgs.includes('--force') });
+          await registerSourceCliCommands({
+            source: addonSource,
+            target,
+            provider,
+            dryRun: dryRunAddon,
+            fallbackDescription: `${framework} addon commands`,
+          });
         } catch (error) {
           return {
             exitCode: 1,
-            message: `${kind} '${framework}' skill asset deployment failed: ${error instanceof Error ? error.message : String(error)}`,
+            message: `Failed to register CLI commands: ${error instanceof Error ? error.message : String(error)}`,
           };
         }
-      }
 
-      if (!dryRunAddon && provider === 'omp' && (detectScope(remainingArgs) === 'user' || remainingArgs.includes('--user'))) {
-        try { await deployOmpUserSource({ frameworkRoot, source: addonSource, target, bundle: framework, copyAll: true }); }
-        catch (error) { return { exitCode: 1, message: `OMP user deployment failed: ${error instanceof Error ? error.message : String(error)}` }; }
-      }
-
-      // Register only artifacts actually written by a confirmed deployment.
-      if (!dryRunAddon) {
-        try {
-          const registry = getRegistry();
-          const paths = getProviderPaths(provider);
-          await registerDeployedExtensions(registry, {
-            agentsPath: paths.agents,
-            skillsPath: paths.skills,
-            commandsPath: paths.commands,
-            rulesPath: paths.rules,
-            behaviorsPath: paths.behaviors,
-            provider,
-            cwd: target,
-          });
-          ui.success('Extension registration complete');
-        } catch (error) {
-          ui.warn(`Failed to register extensions: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-
-      // Register CLI commands if addon declares them
-      try {
-        await registerSourceCliCommands({
-          source: addonSource,
-          target,
-          provider,
-          dryRun: dryRunAddon,
-          fallbackDescription: `${framework} addon commands`,
-        });
-      } catch (error) {
-        return {
-          exitCode: 1,
-          message: `Failed to register CLI commands: ${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-
-      if (!dryRunAddon && (provider === 'openclaw' || (provider === 'grokbot' && addonScope === 'user'))) {
-        try {
-          await recordNativeAddonDeploy(addonSource, target, provider, framework);
-        } catch (error) {
-          return { exitCode: 1, message: `Addon user registry update failed: ${error instanceof Error ? error.message : String(error)}` };
-        }
-      }
-
-      // Persist the same lifecycle record frameworks and project-local bundles
-      // receive so status, refresh, doctor, and remove can account for this
-      // upstream addon and every provider artifact it actually deployed.
-      if (!dryRunAddon && config) {
-        try {
-          const manifestPath = path.join(addonSource, 'manifest.json');
-          const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
-            version?: string;
-          };
-          // Provider rule aggregation may rename many source rules into one
-          // managed index. Record this addon's contributed artifact counts,
-          // matching framework registry semantics, rather than trying to
-          // attribute shared aggregate filenames after deployment.
-          const counts = await countBundleSourceArtifacts(addonSource);
-          const updated = updateInstalled(config, framework, provider, counts, {
-            version: manifest.version ?? (await getVersionInfo()).version,
-            source: 'bundled',
-            manifestHash: await hashManifest(manifestPath),
-            asPrimary: Boolean(explicitAddonProvider),
-          });
-          await writeAiwgConfig(projectDir, updated);
-          config = updated;
-        } catch (error) {
-          ui.warn(`Addon registry update failed for '${framework}': ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-
-      // Profile picker for addons with memory topology and multiple templates
-      try {
-        const profileManifestPath = path.join(addonSource, 'manifest.json');
-        const profileManifestContent = await fs.readFile(profileManifestPath, 'utf-8');
-        const profileManifest = JSON.parse(profileManifestContent);
-
-        const topology = profileManifest.memory?.topology;
-        const templates = profileManifest.templates;
-
-        if (topology && templates && templates.length > 1) {
-          const profileIdx = remainingArgs.findIndex(a => a === '--profile');
-          let selectedProfile: string | undefined;
-
-          if (profileIdx >= 0 && remainingArgs[profileIdx + 1]) {
-            // Explicit --profile flag
-            selectedProfile = remainingArgs[profileIdx + 1];
-            const templateFile = templates.find((t: string) =>
-              t.replace('.md', '') === selectedProfile || t === selectedProfile
-            );
-            if (!templateFile) {
-              ui.warn(`Unknown profile "${selectedProfile}". Available: ${templates.map((t: string) => t.replace('.md', '')).join(', ')}`);
-              selectedProfile = undefined;
-            }
-          } else if (_isBulkIntent || !process.stdin.isTTY) {
-            // Bulk/automation or non-TTY: silently pick 'generic' default.
-            // The profile picker is annoying during `aiwg use all`.
-            selectedProfile = 'generic';
-          } else if (process.stdin.isTTY) {
-            // Interactive profile selection via the shared `listSelect` helper
-            // (POC for spike #926). One call renders the option list, handles
-            // number-or-name matching, threads `ctx.signal` for Ctrl-C
-            // cancellation, and resolves to the fallback on timeout or empty
-            // input. The hand-rolled parse-and-branch that used to live here
-            // is now a one-liner.
-            const { createPromptInterface, listSelect } = await import('../prompt-utils.js');
-            ui.blank();
-            ui.header('  Select a topology profile:');
-            const templateNames = templates.map((t: string) => t.replace('.md', ''));
-            const options = templateNames.map((name: string) => ({
-              label: name === 'generic' ? `${name} (default)` : name,
-              value: name,
-            }));
-
-            const rl = createPromptInterface();
-            try {
-              selectedProfile = await listSelect(
-                rl,
-                '  Enter number or name [generic]: ',
-                options,
-                'generic',
-                ctx.signal,
-              );
-            } finally {
-              rl.close();
-            }
+        if (!dryRunAddon && (provider === 'openclaw' || (provider === 'grokbot' && addonScope === 'user'))) {
+          try {
+            await recordNativeAddonDeploy(addonSource, target, provider, framework);
+          } catch (error) {
+            return { exitCode: 1, message: `Addon user registry update failed: ${error instanceof Error ? error.message : String(error)}` };
           }
+        }
 
-          // Write profile config to project namespace
-          if (selectedProfile && !dryRunAddon) {
-            const namespace = topology.namespace || `.aiwg/${framework}`;
-            const configDir = path.join(target, namespace);
-            await fs.mkdir(configDir, { recursive: true });
-            const profileConfig = {
-              profile: selectedProfile,
-              pageTemplate: `templates/${selectedProfile}.md`,
-              selectedAt: new Date().toISOString(),
+        // Persist the same lifecycle record frameworks and project-local bundles
+        // receive so status, refresh, doctor, and remove can account for this
+        // upstream addon and every provider artifact it actually deployed.
+        if (!dryRunAddon && config) {
+          try {
+            const manifestPath = path.join(addonSource, 'manifest.json');
+            const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
+              version?: string;
             };
-            await fs.writeFile(
-              path.join(configDir, 'config.json'),
-              JSON.stringify(profileConfig, null, 2) + '\n'
-            );
-            ui.success(`Profile "${selectedProfile}" selected → ${namespace}/config.json`);
+            // Provider rule aggregation may rename many source rules into one
+            // managed index. Record this addon's contributed artifact counts,
+            // matching framework registry semantics, rather than trying to
+            // attribute shared aggregate filenames after deployment.
+            const counts = await countBundleSourceArtifacts(addonSource);
+            const updated = updateInstalled(config, framework, provider, counts, {
+              version: manifest.version ?? (await getVersionInfo()).version,
+              source: 'bundled',
+              manifestHash: await hashManifest(manifestPath),
+              asPrimary: Boolean(explicitAddonProvider),
+            });
+            await writeAiwgConfig(projectDir, updated);
+            config = updated;
+          } catch (error) {
+            ui.warn(`Addon registry update failed for '${framework}': ${error instanceof Error ? error.message : String(error)}`);
           }
         }
-      } catch {
-        // Profile selection is optional — don't fail deployment
-      }
 
-      if (framework === 'aiwg-utils' && !['pi', 'omp'].includes(provider) && !remainingArgs.includes('--dry-run')) {
-        const wrapperValidation = await validateDeployedModelWrappers({
-          provider: normalizeProviderDefinitionId(provider) ?? provider,
-          target,
-          frameworkRoot,
-          modelDeployArgs,
-          filtered: remainingArgs.includes('--filter') || remainingArgs.includes('--filter-role'),
-          verbose: remainingArgs.includes('--verbose') || remainingArgs.includes('-v'),
-        });
-        if (wrapperValidation) return wrapperValidation;
+        if (framework === 'aiwg-utils' && !['pi', 'omp'].includes(provider) && !remainingArgs.includes('--dry-run')) {
+          const wrapperValidation = await validateDeployedModelWrappers({
+            provider: normalizeProviderDefinitionId(provider) ?? provider,
+            target,
+            frameworkRoot,
+            modelDeployArgs,
+            filtered: remainingArgs.includes('--filter') || remainingArgs.includes('--filter-role'),
+            verbose: remainingArgs.includes('--verbose') || remainingArgs.includes('-v'),
+          });
+          if (wrapperValidation) return wrapperValidation;
+        }
       }
+      await selectAddonProfile({
+        addonSource, framework, target, args: remainingArgs,
+        dryRunAddon, bulkIntent: _isBulkIntent, signal: ctx.signal,
+      });
 
       ui.blank();
       ui.success(dryRunAddon
