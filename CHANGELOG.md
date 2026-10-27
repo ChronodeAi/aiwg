@@ -7,6 +7,77 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.10] - 2026-10-27
+
+### Added
+
+- Worker groups support constrained templates and project role aliases without
+  widening policy ceilings (#2925, #3651).
+- Reviewed worker-policy proposals atomically update config and models, reject
+  stale approvals and recover interrupted changes (#2928, #3673).
+- Scheduler diagnostics identify starved groups/runs and blocking causes;
+  admission ordering stays unchanged (#2926, #3639).
+- Optional OpenTelemetry worker spans omit content and unknown usage; local-only
+  work cannot export (#2929, #3642).
+- Ralph records continuation/fresh-attempt reasons and shares parent budgets
+  and deadlines across retries (#2927, #3647).
+- Warp receives invocation-bound workspace briefs with collision protection;
+  final extraction remains unavailable (#2905, #3650).
+
+### Changed
+
+- Release announcements follow plain, user-focused writing guidance (#3629).
+
+### Fixed
+
+#### EVAL-OG-01 orchestration fixes
+
+- Worker handoffs tolerate PATH changes while pinning executables, explain
+  missing run-directory parents and accommodate larger verification trees.
+  **Upgrade:** requalify existing approvals (#2918, #3654).
+- Local-only input paths generate conductor read refusals; these remain
+  explicit-reference guards, not an OS sandbox (#3656, #3666).
+- Codex captures prose separately, preserving structured worker finals
+  (#3657, #3667).
+- Trusted verification, simpler retry linkage and persistent MCP serving
+  unblock conductor handoffs (#3658, #3672).
+- CLI reports finish writing before exit, preventing truncated JSON
+  (#3664, #3665).
+- Worker finals validate against `workerClaims` and rehash artifacts;
+  invalid schemas or digests fail (#3675, #3686).
+- Conductor guards refuse protected-path globs and recursive ancestor reads
+  (#3676, #3679).
+- MCP resolution excludes unsupported native-sandbox groups and reports
+  redacted contract pointers (#3678, #3680).
+
+#### Other fixes
+
+- Unknown deployment targets clean up auto-created configuration (#3634).
+- Copilot wrapper verification recognizes `.agent.md` (#2935, #3637).
+- Readiness findings identify config files, keys and affected workers
+  (#2894, #3644).
+- Ollama direct workers receive model-bound briefs through stdin (#2899, #3640).
+- Rule lint resolves canonical bindings without a discovery index (#3643, #3655).
+- Threat assessment distinguishes clause-scoped credential prohibitions from
+  requests (#3636, #3659).
+- Systemd sandbox probes use each CLI's mechanism, avoiding false AppArmor
+  failures (#3663, #3681).
+- Addon deployment records every resolved provider (#3661, #3683).
+- Deployed guidance uses reachable on-demand pointers (#3662, #3684).
+
+### Testing and CI
+
+- Slow deployment tests gain a release lane; shards balance recorded durations
+  (#3630, #3633).
+- Orchestration packs require asserted coverage and add synthetic timing checks
+  (#2886, #3638).
+- Scheduler evidence, telemetry provenance and Muse registration assertions
+  match their contracts (#3645, #3646).
+- Tests isolate homes/corpora and synchronize TERM readiness
+  (#3652, #3653, #3660, #3670, #3671, #3677).
+- Packaging fetches are bounded with actionable diagnostics (#3668, #3669).
+- Doctor fixtures supply fake bwrap independently of the host (#3682).
+
 ## [2026.10.9] - 2026-10-26
 
 ### Added
