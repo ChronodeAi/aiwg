@@ -20,6 +20,8 @@ const { guardRulesInlineBudget } = await importImpl(import.meta.url, 'rules/inli
 const { userConfigFile } = await importImpl(import.meta.url, 'config/user-config-dir.mjs');
 const { resolveProjectAiwgDir } = await importImpl(import.meta.url, 'config/project-artifacts-runtime.mjs');
 import { writeContextFileSync, CONTEXT_STAGE_ENV } from './context-write.mjs';
+import { projectOnDemandReferences, renderRuleKernelIndex } from './rule-presentation.mjs';
+export { renderRuleKernelIndex } from './rule-presentation.mjs';
 const PREPARATION_HOOK = Symbol.for('aiwg.provider-preparation-hook.v1');
 
 export function installRuleDeploymentPreparationHook(hook) {
@@ -298,21 +300,6 @@ export async function prepareRuleDelivery(opts) {
   return { rules, bindings, targets, pins: pinned.rules, pinWarnings: pinned.warnings };
 }
 
-export function renderRuleKernelIndex(rules, nativePaths = false) {
-  const summary = rules.filter(rule => rule.tagged && (rule.canonicalActivation || rule.activation) === 'summary');
-  const paths = rules.filter(rule => rule.tagged && (rule.canonicalActivation || rule.activation) === 'paths');
-  const kernels = rules.filter(rule => rule.tagged && (rule.canonicalActivation || rule.activation) === 'kernel');
-  if (!summary.length && !paths.length && !kernels.length) return '';
-  const lines = ['# Rule kernel index', ''];
-  for (const rule of kernels) lines.push(`- ${rule.name} — ${rule.summary || 'Fetch and follow the full rule before governed work.'} Fetch and follow: \`aiwg show rule ${rule.name} --body\`.`, '');
-  for (const rule of summary) lines.push(`- ${rule.name} — ${rule.summary} Fetch and follow: \`aiwg show rule ${rule.name} --body\`.`, '');
-  if (paths.length) {
-    lines.push(nativePaths ? '## Path rules (native)' : '## Path rules (prompt emulation)', '',
-      nativePaths ? 'The provider loads these rules for matching paths; full contracts remain available through the commands below.' : 'Before reading or changing files, compare intended project-relative paths with the globs below and fetch matching rules before their first read/write. If paths are initially unknown, check when they become known. An agent-only task has no path match. This is prompt emulation, not a filesystem hook.', '');
-    for (const rule of paths) lines.push(`- ${rule.name} | ${rule.paths.map(glob => `\`${glob}\``).join(', ')} | ${rule.summary} | \`aiwg show rule ${rule.name} --body\``, '');
-  }
-  return lines.join('\n');
-}
 
 function managed(content, opts) {
   return addManagedMarker(content, opts.deployVersion, opts.deploySource || 'bundled');
@@ -334,7 +321,7 @@ function putStartup(file, body) {
 
 /** Tagged rules bypass legacy aggregate writers. Untagged projections retain their tier policy. */
 function projectRules(opts, provider) {
-  const { rules } = opts.ruleDelivery;
+  const rules = projectOnDemandReferences(opts.ruleDelivery.rules, ['claude', 'cursor'].includes(provider.name));
   if (opts.contextFiles !== false && provider.name === 'hermes') {
     // The old context generator carries hardcoded corpus directives. Only the
     // selected contracts below may activate policy; preserve operator prose.
