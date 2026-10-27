@@ -396,17 +396,12 @@ describe('Runtime Info Command Handler', () => {
   });
 
   describe('scheduler backend detection (#2623 / #2627)', () => {
-    // Detection now goes through the shared `resolveActiveProvider` path
-    // instead of an ad-hoc CLAUDE_CODE_VERSION/ANTHROPIC_API_KEY check, so
-    // this must be hermetic against whatever Claude-Code-shaped env vars
-    // the host running this test suite happens to have set (this suite
-    // may itself be invoked from inside a live Claude Code session).
+    // Shared provider detection reads both session markers and CODEX_HOME.
+    // Clear inherited signals, including a Codex home exported by the host session,
+    // so each fixture determines the active provider.
     const PROVIDER_ENV_KEYS = [
-      'CLAUDE_CODE_VERSION',
-      'ANTHROPIC_API_KEY',
-      'CLAUDECODE',
-      'CLAUDE_CODE_ENTRYPOINT',
-      'CLAUDE_CODE_DESKTOP_APP_VERSION',
+      'CLAUDE_CODE_VERSION', 'ANTHROPIC_API_KEY', 'CLAUDECODE',
+      'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_DESKTOP_APP_VERSION', 'CODEX_HOME',
     ];
     const saved = new Map<string, string | undefined>();
 

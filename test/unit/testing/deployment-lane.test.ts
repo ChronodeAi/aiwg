@@ -42,6 +42,7 @@ describe('required provider deployment lane', () => {
     });
     for (const file of deploymentFiles) expect(base.test.exclude).toContain(file);
     expect(deployment.test.globalSetup).toEqual([
+      './test/helpers/default-home-setup.mjs',
       './test/helpers/prebuilt-relations-setup.mjs',
       './test/helpers/deployment-cache-setup.mjs',
     ]);

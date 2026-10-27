@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 describe('deployment cache test-lane setup', () => {
   it('preserves both setup hooks, isolates per-file environment and cleans its owned cache', async () => {
     const config = (await import('../../../config/vitest.config.js')).default;
-    expect(config.test.globalSetup).toEqual(['./test/helpers/prebuilt-relations-setup.mjs', './test/helpers/deployment-cache-setup.mjs']);
+    expect(config.test.globalSetup).toEqual(['./test/helpers/default-home-setup.mjs', './test/helpers/prebuilt-relations-setup.mjs', './test/helpers/deployment-cache-setup.mjs']);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-cache-config-'));
     try {
       fs.symlinkSync(path.join(root, 'node_modules'), path.join(dir, 'node_modules'));
