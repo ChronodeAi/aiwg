@@ -342,6 +342,8 @@ describe('provider output characterization for registry migration', () => {
     tmpDirs.push(homeDir, projectDir);
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('USERPROFILE', homeDir);
+    // Exercise HOME fallback even when the host session exports CODEX_HOME.
+    vi.stubEnv('CODEX_HOME', undefined);
 
     const { getProviderConfigPath, SUPPORTED_PROVIDERS } = await import('../../../src/mcp/registry.mjs');
     const {

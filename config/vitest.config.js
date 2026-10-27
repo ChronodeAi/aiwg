@@ -10,7 +10,7 @@ process.env.CHOKIDAR_USEPOLLING ??= '1';
 export default defineConfig({
   root: path.resolve(import.meta.dirname, '..'),
   test: {
-    globalSetup: ['./test/helpers/prebuilt-relations-setup.mjs', './test/helpers/deployment-cache-setup.mjs'],
+    globalSetup: ['./test/helpers/default-home-setup.mjs', './test/helpers/prebuilt-relations-setup.mjs', './test/helpers/deployment-cache-setup.mjs'],
     setupFiles: ['./test/helpers/deployment-cache-isolation.mjs'],
     // Test file patterns
     include: [
