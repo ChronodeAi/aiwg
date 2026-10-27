@@ -16,6 +16,7 @@ import { isMain } from '../_is-main.mjs';
 
 const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 const { cliCommand } = await importImpl(import.meta.url, 'process/cli-command.mjs');
+const { resolveAiwgProbeCommand, probeNotOnPathDetail } = await importImpl(import.meta.url, 'process/aiwg-probe-command.mjs');
 import { scanStartupContext,
   subagentDispatchHeadroom,
   SUBAGENT_AGENT_DEF_TOKENS,
@@ -1772,10 +1773,13 @@ export async function runDoctor() {
   // installed system. Surfaces missing surfaces loudly so an operator/agent
   // knows the install is degraded before they try to use it.
   const { spawnSync } = await import('node:child_process');
-  const aiwgBin = process.env.AIWG_BIN || 'aiwg';
+  // Self-probes run the current entrypoint (process.execPath + the invoked
+  // bin/aiwg.mjs) so discovery checks pass for installs that are not on
+  // PATH (#3635). Only a bare-name probe that cannot resolve reports PATH.
+  const aiwgProbe = resolveAiwgProbeCommand({ packageRoot: getPackageRoot() });
   const probeCommand = (name, args, expectStdout = null, validateStdout = null) => {
     try {
-      const r = spawnSync(aiwgBin, args, {
+      const r = spawnSync(aiwgProbe.file, [...aiwgProbe.prefix, ...args], {
         encoding: 'utf-8',
         // Framework discovery can legitimately take longer than ten seconds
         // while the release suite is concurrently packing and rebuilding
@@ -1786,10 +1790,15 @@ export async function runDoctor() {
         killSignal: 'SIGKILL',
       });
       if (r.error || r.status !== 0) {
-        const detail = r.error
-          ? `spawn failed: ${r.error.code || r.error.message}`
-          : `exit=${r.status ?? '?'} ${(r.stderr || '').trim().split('\n')[0] || 'no stderr'}`;
-        return { ok: false, detail };
+        const notOnPath = Boolean(r.error)
+          && r.error.code === 'ENOENT'
+          && aiwgProbe.via === 'path';
+        const detail = notOnPath
+          ? probeNotOnPathDetail()
+          : r.error
+            ? `spawn failed: ${r.error.code || r.error.message}`
+            : `exit=${r.status ?? '?'} ${(r.stderr || '').trim().split('\n')[0] || 'no stderr'}`;
+        return { ok: false, detail, notOnPath };
       }
       if (expectStdout && !(r.stdout || '').includes(expectStdout)) {
         return { ok: false, detail: `stdout missing expected marker '${expectStdout}'` };
@@ -1848,10 +1857,12 @@ export async function runDoctor() {
 
   let discoverOk = false;
   let discoveryDegraded = false;
+  let discoveryNotOnPath = false;
   for (const probe of discoveryProbes) {
     const r = probeCommand(probe.label, probe.args, null, probe.validateStdout);
     if (probe.args[0] === 'discover') discoverOk = r.ok;
     if (r.ok) {
+      discoveryNotOnPath = false;
       check(probe.label, 'ok', `\`aiwg ${probe.args.join(' ')}\` succeeded`);
     } else if (probe.globalTolerant && discoverOk && /No artifact index found/i.test(r.detail || '')) {
       // No project-local index in a global/home-dir context (OpenClaw etc.).
@@ -1862,6 +1873,7 @@ export async function runDoctor() {
     } else {
       // Warn (not error) — discovery is degraded but doctor itself still works.
       discoveryDegraded = true;
+      if (r.notOnPath) discoveryNotOnPath = true;
       check(probe.label, 'warn', `${probe.hint} — ${r.detail}`);
     }
   }
@@ -1870,12 +1882,20 @@ export async function runDoctor() {
   // consumer project, and the two-command repair runs in two different working
   // directories — which is what made it hard to act on (#2530).
   if (discoveryDegraded) {
-    const installRoot = AIWG_ROOT;
-    check('Discovery: repair', 'info',
-      `Rebuild the framework graph at the install root, then sync here: `
-      + `\`cd ${installRoot} && aiwg index build --graph framework --force\` then `
-      + `\`cd ${process.cwd()} && aiwg index sync --backend fortemi-core --graph framework\`. `
-      + `Immediate workaround: \`aiwg discover --backend local\`.`);
+    if (discoveryNotOnPath) {
+      // Every probe failed only because the bare `aiwg` name does not
+      // resolve — rebuilding the index cannot help. Point at PATH instead.
+      check('Discovery: repair', 'info',
+        'Probes cannot resolve the `aiwg` name on PATH; the install itself was not exercised. '
+        + 'Add the npm global bin to PATH (`npm config get prefix`/bin) or invoke the install entrypoint directly.');
+    } else {
+      const installRoot = AIWG_ROOT;
+      check('Discovery: repair', 'info',
+        `Rebuild the framework graph at the install root, then sync here: `
+        + `\`cd ${installRoot} && aiwg index build --graph framework --force\` then `
+        + `\`cd ${process.cwd()} && aiwg index sync --backend fortemi-core --graph framework\`. `
+        + `Immediate workaround: \`aiwg discover --backend local\`.`);
+    }
   }
 
   // 8d. Component-to-driver coverage (#1958).
