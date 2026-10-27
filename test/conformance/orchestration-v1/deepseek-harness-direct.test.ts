@@ -268,7 +268,7 @@ describe('T-OG-15 DeepSeek Harness direct command contract', () => {
         const proof = (outcome: any) => ({ ...outcome, mode: 'systemd-unit', unit: 'aiwg-worker-dsh-fixture' });
         return launched?.then ? launched.then(proof) : proof(launched);
       },
-      isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }),
+      isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0, result: 'success' }),
       isolation: { mode: 'degraded', reason: 'synthetic' }, allowDegraded: true });
     expect(result.termination).toBe('confirmed');
     const record = JSON.parse(await readFile(recordPath, 'utf8'));

@@ -30,7 +30,7 @@ async function workspace() {
 describe('T-OG-15/23 artifact ownership and stop proof (#2905)', () => {
   it.each([true, false])('retains artifacts after an uncertain degraded exit (recovery gate %s)', async gated => {
     const f = await workerInvocationFixture({ artifacts: [artifact] }, { roots, breakers });
-    const result = await f.launch(gated ? {} : { scopedBreaker: null });
+    const result = await f.launch({ sampleIdentity: () => null, ...(gated ? {} : { scopedBreaker: null }) });
     expect(result.termination).toBe('uncertain');
     expect(result.artifactCleanup).toEqual({ status: 'retained', reason: 'stop-proof-uncertain' });
     expect(await readFile(path.join(f.runDir, 'artifact-patch'), 'utf8')).toBe(artifact.content);

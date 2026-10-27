@@ -171,7 +171,7 @@ describe('worker isolation detection', () => {
       expect(options.env).toMatchObject({ XDG_RUNTIME_DIR: '/conductor/runtime', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/conductor/bus', SYSTEMD_BUS_ADDRESS: 'unix:path=/conductor/systemd-bus' });
       expect(options.env).not.toHaveProperty('NODE_OPTIONS'); expect(options.env).not.toHaveProperty('AIWG_UNLISTED_SECRET');
       calls.push(args.join(' '));
-      return { status: 0, stdout: args.includes('ControlGroup') ? '/synthetic/group\n' : args.includes('ActiveState') ? 'ActiveState=active\nResult=success\nExecMainStatus=0\nMemoryMax=1024\n' : 'Version=259\n' };
+      return { status: 0, stdout: args.includes('ActiveState') ? 'ActiveState=active\nResult=success\nExecMainStatus=0\nMemoryMax=1024\n' : args.includes('ControlGroup') ? '/synthetic/group\n' : 'Version=259\n' };
     }) as never;
     expect(detectWorkerIsolation({ spawn }).mode).toBe('systemd-unit');
     workerIsolation.resolveManagerEnvNames({ spawn });

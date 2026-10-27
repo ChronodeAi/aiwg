@@ -556,35 +556,7 @@ export function launchIsolatedWorker({
   });
 }
 
-/**
- * Read retained service state after launch/exit without reaping or mutation.
- * `memoryMax` is bytes. Query failures throw rather than reporting success.
- */
-export function getWorkerIsolationStatus(unit, { spawn = spawnSync, timeoutMs = 10000 } = {}) {
-  if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) {
-    throw new Error('Worker isolation requires a unit-safe unit name');
-  }
-  const shown = spawn(resolveSystemdClient('systemctl'), ['--user', 'show', unit, '-p', 'ActiveState',
-    '-p', 'Result', '-p', 'ExecMainStatus', '-p', 'ExecMainCode', '-p', 'MainPID', '-p', 'MemoryMax'], { encoding: 'utf8', timeout: timeoutMs, env: buildSystemdClientEnv({ envNames: [] }) });
-  if (shown.error || shown.status !== 0) {
-    throw new Error(`worker status unavailable: ${shown.error?.message ?? String(shown.stderr ?? '').trim()}`);
-  }
-  const fields = Object.fromEntries(String(shown.stdout ?? '').trim().split('\n').map(line => {
-    const index = line.indexOf('=');
-    return [line.slice(0, index), line.slice(index + 1)];
-  }));
-  if (!fields.ActiveState || !fields.Result || !fields.ExecMainStatus || !fields.MemoryMax) {
-    throw new Error('worker status unavailable: missing systemd properties');
-  }
-  return {
-    active: ['active', 'activating', 'deactivating', 'reloading'].includes(fields.ActiveState),
-    result: fields.Result,
-    execMainStatus: Number(fields.ExecMainStatus),
-    memoryMax: fields.MemoryMax === 'infinity' ? Infinity : Number(fields.MemoryMax),
-    ...(fields.MainPID ? { mainPid: Number(fields.MainPID) } : {}),
-    ...(fields.ExecMainCode ? { execMainCode: Number(fields.ExecMainCode) } : {}),
-  };
-}
+export { getWorkerIsolationStatus } from './worker-isolation-status.mjs';
 
 /**
  * Request the unit's cgroup be torn down (`KillMode=control-group` is already

@@ -51,6 +51,9 @@ export { assertManagedWorkerLaunch } from './lib/managed-worker-attempt.mjs';
 import { buildSessionEnvironment } from './lib/session-environment.mjs';
 import { withWorkerPath, boundedPrivateRead } from './lib/worker-inputs.mjs';
 import { collectWorkerFinal } from './lib/worker-final.mjs';
+import { verifyRetryPredecessor } from './lib/worker-retry-evidence.mjs';
+import { observeWorkerTermination, terminationRemedy } from './lib/worker-termination.mjs';
+import { buildWorkerInvocationEnvironment, WORKER_INVOCATION_MARKER } from './lib/worker-invocation-processes.mjs';
 import { resolveRetryReference } from './lib/worker-launch-cli.mjs';
 import { launcherRecoveryEvidence, observeLauncherRecoveryOutcome, recordLauncherRecoveryHint } from './lib/launcher-recovery-evidence.mjs';
 export { observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence.mjs';
@@ -409,7 +412,7 @@ async function launchOneWorker(owner, options) {
   let verifiedPreviousAttemptId = null;
   if (options?.retryOf !== undefined) {
     const exitRecord = await verifyRetryPredecessor(await resolveRetryReference(options.retryOf, { inspect }),
-      { newInvocationPath: options?.invocationPath, inspect, workerWritableRoots: writableRoots });
+      { newInvocationPath: options?.invocationPath, inspect, workerWritableRoots: writableRoots, checkDescendants: options.checkDescendants });
     verifiedPreviousAttemptId = exitRecord.invocationId;
   }
   const paths = (await importImpl(import.meta.url, 'serve/worker-invocation-paths.js')).workerOutputPaths(invocation);
@@ -675,13 +678,13 @@ async function launchOneWorker(owner, options) {
       executedArgvDigest: qualificationDigest(artifacts.argv),
       artifacts: (invocation.artifacts ?? []).map(artifact => ({ name: artifact.name,
         byteLength: Buffer.byteLength(artifact.content), sha256: bytesDigest(artifact.content) })),
-      envNames: invocation.envNames, stdin: invocation.stdin,
+      envNames: [...new Set([...invocation.envNames, WORKER_INVOCATION_MARKER])], stdin: invocation.stdin,
       prompt: { path: invocation.briefPath, digest: invocation.briefDigest }, cwd: invocation.cwd,
       worktree: { path: invocation.cwd, baseRevision: null }, paths, captures, outputFraming: profile.health?.outputFraming ?? 'opaque',
       health: invocation.health ?? null, transport: invocation.transport,
       isolation: { mode: isolation.mode, memoryMaxGb: isolation.mode === 'native-sandbox' ? null : options.memoryMaxGb ?? 4 },
       limits: invocation.limits, maxOutputBytes: Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) });
-    await publish('process.json', { invocationId, origin: 'launcher', supervisor, worker: null,
+    await publish('process.json', { invocationId, invocationMarker: invocationId, origin: 'launcher', supervisor, worker: null,
       launchTime, monotonicStart, ownership: 'unknown', isolation: isolation.mode });
     // All captures (including the reserved final) open successfully BEFORE spawn.
     for (const filename of [...Object.values(paths), ...Object.values(captures)]) {
@@ -695,8 +698,7 @@ async function launchOneWorker(owner, options) {
       paths: await Promise.all([invocation.cwd, runDir].map(workerDispatchPath)) });
     if (!gate.ok) throw workerDispatchRefusal(gate);
     if (bytesDigest(await boundedPrivateRead(invocation.briefPath, 262144, inspect)) !== invocation.briefDigest) throw new Error('Worker prompt changed before spawn');
-    const environment = Object.fromEntries(invocation.envNames.filter(name => process.env[name] !== undefined)
-      .map(name => [name, process.env[name]]));
+    const environment = buildWorkerInvocationEnvironment(invocation.envNames, invocationId);
     const baselineContent = await sampleOwnedWorktreeContent(invocation.cwd, { files: options.healthArtifacts });
     // #2915 round 8 (D2, replaces the former "debit immediately before this
     // call" comment): the ledger debit now happens INSIDE the dispatch-
@@ -757,7 +759,7 @@ async function launchOneWorker(owner, options) {
       command: artifacts.argv[0], args: artifacts.argv.slice(1), cwd: invocation.cwd,
       memoryMaxGb: options.memoryMaxGb ?? 4, gate, config: inputs.snapshot.config, isolation, workerGroup: invocation.selected.group,
       allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
-      env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir,
+      ...environment, stdin: invocation.stdin, runDir,
       ...(onDispatchCommit ? { onDispatchCommit } : {}) });
     outcome = typeof launchResult?.then === 'function' ? await launchResult : launchResult;
     if (!outcome?.child) throw workerLaunchRefusal(outcome);
@@ -1088,7 +1090,7 @@ async function captureOneWorker(owner, ctx) {
   for (const stream of streams) stream.on('error', () => { errorCode = 'CAPTURE_WRITE'; stop(); });
   child.stdin?.on('error', error => { if (error.code !== 'EPIPE') { errorCode = 'STDIN_WRITE'; stop(); } });
   child.stdin?.end(ctx.stdinBytes ?? undefined);
-  const recordProcess = () => publish('process.json', { invocationId, origin: 'launcher', supervisor,
+  const recordProcess = () => publish('process.json', { invocationId, invocationMarker: invocationId, origin: 'launcher', supervisor,
     transportProcess: hasTransport ? sampleWorkerIdentity(child.pid) : null,
     nativeSupervisor,
     worker: identity ?? reportedWorker, identityObservation, launchTime, monotonicStart, ownership: identity ? 'owned-group' : 'unknown',
@@ -1115,10 +1117,9 @@ async function captureOneWorker(owner, ctx) {
     for (const stream of streams) await new Promise(resolve => { if (stream.destroyed) resolve(); else stream.end(resolve); });
     const native = outcome.mode === 'systemd-unit' ? readNative() : null;
     const members = identity ? sampleWorkerGroup(identity.pgid) : null;
-    // An unconfined group can escape via setsid. Empty PGID alone never proves
-    // descendant termination; keep the explicit degraded stop uncertain.
-    const confirmed = outcome.mode === 'systemd-unit' ? native?.active === false && [1, 2, 3].includes(native.execMainCode)
-      : child.pid === undefined;
+    // Require positive kernel evidence of owned containment being empty.
+    const confirmed = (outcome.mode !== 'systemd-unit' && child.pid === undefined) || observeWorkerTermination({ mode: outcome.mode, native,
+      workerExited: sawExit, identity, supervisor, invocationId }).confirmed;
     // `worker-exit.json`/`worker-identity.json` are written into a directory
     // the worker itself can reach (same UID, no filesystem confinement), so a
     // worker can plant either file before the trusted transport ever writes
@@ -1154,7 +1155,7 @@ async function captureOneWorker(owner, ctx) {
       : outcome.mode === 'systemd-unit' && native?.execMainCode === 1 ? native.execMainStatus : waitCode;
     const result = { invocationId, exitCode, signal: resultSignal,
       endedAt: new Date().toISOString(), termination: confirmed ? 'confirmed' : 'uncertain',
-      descendants: confirmed ? 'stopped' : 'unknown', timedOut: resultTimedOut,
+      descendants: confirmed ? 'none' : 'unknown', timedOut: resultTimedOut,
       cancelled: stopReason === 'CANCELLED', stopReason, errorCode: errorCode ?? null, capturedBytes: Math.min(total, output.length),
       // Unauthenticated: reported by the worker-writable transport record, not
       // kernel-observed. Never used above for exitCode/signal/termination.
@@ -1173,9 +1174,8 @@ async function captureOneWorker(owner, ctx) {
     // ExecMainCode/Status when applicable, launcher-detected errors,
     // timeout and explicit cancellation) — never worker stderr/stdout text
     // or worker-writable records. A degraded-isolation attempt can reach
-    // 'succeeded' here even though its `termination` stays 'uncertain'
-    // forever (no descendant-stop confirmation is possible without a
-    // systemd unit) — this is exactly the #2915 final-review fix: "give
+    // 'succeeded' here even when descendant-stop evidence is unavailable.
+    // This preserves the #2915 final-review fix: "give
     // degraded successful execution a valid recovery-success path without
     // falsely declaring descendant termination confirmed."
     const directChildCleanExit = sawExit && waitCode === 0 && waitSignal == null;
@@ -1555,13 +1555,13 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
       executedArgvDigest: qualificationDigest(artifacts.argv),
       artifacts: (invocation.artifacts ?? []).map(artifact => ({ name: artifact.name,
         byteLength: Buffer.byteLength(artifact.content), sha256: bytesDigest(artifact.content) })),
-      envNames: invocation.envNames, stdin: invocation.stdin,
+      envNames: [...new Set([...invocation.envNames, WORKER_INVOCATION_MARKER])], stdin: invocation.stdin,
       prompt: { path: invocation.briefPath, digest: invocation.briefDigest }, cwd: invocation.cwd,
       worktree: { path: invocation.cwd, baseRevision: null }, paths, captures, outputFraming: profile.health?.outputFraming ?? 'opaque',
       health: invocation.health ?? null, transport: invocation.transport,
       isolation: { mode: isolation.mode, memoryMaxGb: isolation.mode === 'native-sandbox' ? null : options.memoryMaxGb ?? 4 },
       limits: invocation.limits, maxOutputBytes: Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) });
-    await publish('process.json', { invocationId, origin: 'launcher', supervisor, worker: null,
+    await publish('process.json', { invocationId, invocationMarker: invocationId, origin: 'launcher', supervisor, worker: null,
       launchTime, monotonicStart, ownership: 'unknown', isolation: isolation.mode });
     // All captures (including the reserved final) open successfully BEFORE spawn.
     for (const filename of [...Object.values(paths), ...Object.values(captures)]) {
@@ -1575,8 +1575,7 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
       paths: await Promise.all([invocation.cwd, runDir].map(workerDispatchPath)) });
     if (!localGate.ok) throw workerDispatchRefusal(localGate);
     if (bytesDigest(await boundedPrivateRead(invocation.briefPath, 262144, inspect)) !== invocation.briefDigest) throw new Error('Worker prompt changed before spawn');
-    const environment = Object.fromEntries(invocation.envNames.filter(name => process.env[name] !== undefined)
-      .map(name => [name, process.env[name]]));
+    const environment = buildWorkerInvocationEnvironment(invocation.envNames, invocationId);
     const baselineContent = await sampleOwnedWorktreeContent(invocation.cwd, { files: options.healthArtifacts });
     // The real `launchIsolatedWorker`, called with no `onDispatchCommit`
     // (never passed anywhere in this frozen function), is synchronous —
@@ -1598,7 +1597,7 @@ async function launchOneWorkerBaseline(owner, options, ctx) {
         options.managedDeadlineAtMs = Math.min(options.managedDeadlineAtMs, admitted.deadlineAtMs);
       } } : {}),
       ...(options.managedAdmission ? { onSpawnAttempt: () => { managedSpawnAttempted = true; } } : {}),
-      env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
+      ...environment, stdin: invocation.stdin, runDir });
     outcome = typeof launchResult?.then === 'function' ? await launchResult : launchResult;
     if (!outcome?.child) throw workerLaunchRefusal(outcome);
     return await captureOneWorkerBaseline(owner, { child: outcome.child, outcome, invocation, invocationId, supervisor,
@@ -1757,7 +1756,7 @@ async function captureOneWorkerBaseline(owner, ctx) {
   for (const stream of streams) stream.on('error', () => { errorCode = 'CAPTURE_WRITE'; stop(); });
   child.stdin?.on('error', error => { if (error.code !== 'EPIPE') { errorCode = 'STDIN_WRITE'; stop(); } });
   child.stdin?.end(ctx.stdinBytes ?? undefined);
-  const recordProcess = () => publish('process.json', { invocationId, origin: 'launcher', supervisor,
+  const recordProcess = () => publish('process.json', { invocationId, invocationMarker: invocationId, origin: 'launcher', supervisor,
     transportProcess: hasTransport ? sampleWorkerIdentity(child.pid) : null,
     nativeSupervisor,
     worker: identity ?? reportedWorker, identityObservation, launchTime, monotonicStart, ownership: identity ? 'owned-group' : 'unknown',
@@ -1785,8 +1784,8 @@ async function captureOneWorkerBaseline(owner, ctx) {
     for (const stream of streams) await new Promise(resolve => { if (stream.destroyed) resolve(); else stream.end(resolve); });
     const native = outcome.mode === 'systemd-unit' ? readNative() : null;
     const members = identity ? sampleWorkerGroup(identity.pgid) : null;
-    const confirmed = outcome.mode === 'systemd-unit' ? native?.active === false && [1, 2, 3].includes(native.execMainCode)
-      : child.pid === undefined;
+    const confirmed = (outcome.mode !== 'systemd-unit' && child.pid === undefined) || observeWorkerTermination({ mode: outcome.mode, native,
+      workerExited: sawExit, identity, supervisor, invocationId }).confirmed;
     const workerExit = hasTransport ? await transportRecord('worker-exit.json') : null;
     if (!identity && hasTransport && nativeSupervisor) {
       const workerStart = await transportRecord('worker-identity.json');
@@ -1805,7 +1804,7 @@ async function captureOneWorkerBaseline(owner, ctx) {
     const result = { invocationId, exitCode, signal: resultSignal,
       ...(options.managedAdmission ? { managedAdmission: options.managedAdmission } : {}),
       endedAt: new Date().toISOString(), termination: confirmed ? 'confirmed' : 'uncertain',
-      descendants: confirmed ? 'stopped' : 'unknown', timedOut: resultTimedOut,
+      descendants: confirmed ? 'none' : 'unknown', timedOut: resultTimedOut,
       cancelled: stopReason === 'CANCELLED', stopReason, errorCode: errorCode ?? null, capturedBytes: Math.min(total, output.length),
       workerTermination: hasTransport ? workerExit && !workerExit.errorCode ? 'confirmed' : 'uncertain' : sawExit ? 'confirmed' : 'uncertain',
       workerReportedExit: workerExit ? { exitCode: workerExit.exitCode, signal: workerExit.signal, errorCode: workerExit.errorCode ?? null } : null,
@@ -2015,13 +2014,13 @@ export const UNBOUND_RETRY_EVIDENCE_CODE = 'UNBOUND_RETRY_EVIDENCE';
  * retry and is surfaced with a code the conductor can act on — it must never
  * silently spawn a duplicate writer.
  */
-export function stopBeforeRetryGate(previousResult, { expectedInvocationId = null } = {}) {
+export function stopBeforeRetryGate(previousResult, { expectedInvocationId = null, runDir, missing } = {}) {
   if (previousResult?.termination !== 'confirmed') {
     return {
       ok: false,
       code: STOP_BEFORE_RETRY_CODE,
       reason: `Previous attempt termination is '${previousResult?.termination ?? 'unknown'}', not confirmed: `
-        + 'retry is blocked until owned stop is proven (no duplicate writer while the old tree may continue).',
+        + 'retry is blocked until owned stop is proven (no duplicate writer while the old tree may continue). ' + (missing ? `Missing: ${missing}. ` : '') + terminationRemedy(previousResult, runDir),
       previousResult: previousResult === undefined ? undefined : (previousResult ?? null),
     };
   }
@@ -3138,74 +3137,7 @@ export async function releaseLedgerPolicy({ captureRoot, taskChainDigest } = {})
  * Returns the predecessor's verified `exit.json` record on success; throws
  * on any refusal.
  */
-export async function verifyRetryPredecessor(retryOf, { newInvocationPath, inspect, workerWritableRoots } = {}) {
-  const fail = (reason) => {
-    const error = new Error(`Retry predecessor evidence refused: ${reason}`);
-    error.code = UNBOUND_RETRY_EVIDENCE_CODE;
-    throw error;
-  };
-  if (!retryOf || typeof retryOf.invocationId !== 'string' || !retryOf.invocationId
-    || typeof retryOf.runDir !== 'string' || !retryOf.runDir) {
-    fail('retryOf requires both a non-empty invocationId and runDir');
-  }
-  const { invocationId: prevId, runDir: prevRunDir } = retryOf;
-  // #2915 review 4 (finding 4): the minimal directory-authority repair —
-  // reject a predecessor location inside any worker-writable root, exactly
-  // like `launchOneWorker` already refuses for a NEW run directory. This
-  // closes the easiest forgery (planting a complete, well-formed fake
-  // predecessor inside the worktree the worker itself can write to) but is
-  // explicitly NOT a defense against an unconfined malicious same-UID
-  // worker in general: such a worker can still write anywhere this
-  // conductor process can (e.g. directly under a configured capture root,
-  // if that root is not itself outside every worker-writable path, or by
-  // racing a legitimate predecessor's own directory before this check
-  // runs). A real guarantee needs an enforced filesystem/process boundary
-  // protecting conductor-owned metadata, or a different execution
-  // identity — same-UID alone never provides it.
-  if (Array.isArray(workerWritableRoots)) {
-    for (const root of workerWritableRoots) {
-      if (await realBeneath(root, prevRunDir)) fail('predecessor location is inside a worker-writable root');
-    }
-  }
-  if (!await inspect(prevRunDir, 'directory')) fail('predecessor run directory is missing');
-  const dirStat = await lstat(prevRunDir);
-  if (dirStat.uid !== process.getuid() || (dirStat.mode & 0o077)) fail('predecessor run directory is not privately owned');
-  let ownerBytes, invocationBytes, exitBytes;
-  try {
-    // #2915 review 4 (finding 4): `rejectInsecureMode: true` — an insecure
-    // mode on predecessor metadata REFUSES the retry instead of silently
-    // chmod-repairing it and proceeding (the former behaviour the review
-    // found: "the probe's 0666 files were accepted and changed to 0600").
-    ownerBytes = await boundedPrivateRead(join(prevRunDir, '.launch-owner'), 256, inspect, true, true);
-    invocationBytes = await boundedPrivateRead(join(prevRunDir, 'invocation.json'), 1048576, inspect, true, true);
-    exitBytes = await boundedPrivateRead(join(prevRunDir, 'exit.json'), 1048576, inspect, true, true);
-  } catch (error) { fail(`predecessor metadata is missing, insecurely-moded, or not a bounded, privately-owned, unaliased regular file (${error.message})`); }
-  if (ownerBytes.toString('utf8') !== prevId) fail('.launch-owner does not match retryOf.invocationId');
-  let invocationRecord, exitRecord;
-  try {
-    invocationRecord = JSON.parse(invocationBytes.toString('utf8'));
-    exitRecord = JSON.parse(exitBytes.toString('utf8'));
-  } catch { fail('predecessor metadata is not valid JSON'); }
-  if (invocationRecord?.invocationId !== prevId || invocationRecord?.origin !== 'launcher') {
-    fail('invocation.json identity does not match retryOf (or is not launcher-written)');
-  }
-  if (exitRecord?.invocationId !== prevId) fail('exit.json identity does not match retryOf');
-  if (newInvocationPath !== undefined) {
-    // #2915 review 4 (finding 4): the SAME stable task-chain identity
-    // `launchOneWorker` publishes — role/task/group plus the brief CONTENT
-    // digest, never `final_output`/`brief`/`workdir` PATHS, which legitimately
-    // differ between a confirmed predecessor and this fresh attempt.
-    let newTaskDigest;
-    try {
-      const newPlanBytes = await boundedPrivateRead(newInvocationPath, 1048576, inspect);
-      const newPlan = JSON.parse(newPlanBytes.toString('utf8'));
-      newTaskDigest = await stableTaskChainDigest(newPlan.request, newPlan.invocation?.briefDigest ?? null);
-    } catch { fail('new attempt plan is missing or invalid; cannot bind the retry to a task'); }
-    if (invocationRecord.taskDigest !== newTaskDigest) fail('predecessor task does not match the new attempt (task-chain binding)');
-  }
-  assertStopBeforeRetry(exitRecord, { expectedInvocationId: prevId });
-  return exitRecord;
-}
+export { verifyRetryPredecessor } from './lib/worker-retry-evidence.mjs';
 
 /**
  * One corrected startup retry (#2915, 03 §11.5 step 1). A failed start may

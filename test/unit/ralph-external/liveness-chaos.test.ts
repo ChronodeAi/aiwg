@@ -1,3 +1,4 @@
+import { trackWorkerProcess } from '../../fixtures/ralph-external/worker-process-inventory.mjs';
 import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -12,7 +13,6 @@ import { CodexAdapter } from '../../../tools/ralph-external/lib/codex-adapter.mj
 import { ScopedFailureBreaker, attributeFailureScope } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
 import { qualificationDigest } from '../../../src/models/qualification-digest.mjs';
 import { signalChild } from '../../../src/process/signal-child.mjs';
-
 function monotonicClock() {
   let time = 0;
   return { now: () => time, advance(ms: number) {
@@ -124,9 +124,9 @@ async function fixture({ missing = false, effort = 'medium', retained = false, s
     checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
     launchIsolated: (options: any) => {
       const launch = () => {
-        const child = spawn(options.command, options.args, { cwd: options.cwd, env: {}, detached: true,
+        const child = spawn(options.command, options.args, { cwd: options.cwd, env: options.env, detached: true,
           stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
-        f.child = child;
+        f.child = child; trackWorkerProcess(child.pid);
         f.closed = bounded(new Promise<void>(resolve => child.once('close', () => resolve())));
         f.identity = sampleWorkerIdentity(child.pid);
         return { mode: 'degraded', child };
@@ -394,9 +394,9 @@ describe('T-OG-20–23 deterministic direct lifecycle traces', () => {
     await f.step('final');
     f.child.send({ step: 'exit' });
     const result = await bounded(f.result);
-    // Degraded isolation cannot prove descendant stop, even with a valid final.
-    expect(result).toMatchObject({ exitCode: 0, termination: 'uncertain' });
-    expect(stopBeforeRetryGate(result).ok).toBe(false);
+    // A confirmed exit plus ESRCH proves the owned group empty despite degraded health.
+    expect(result).toMatchObject({ exitCode: 0, termination: 'confirmed', descendants: 'none' });
+    expect(stopBeforeRetryGate(result).ok).toBe(true);
   });
 
   it.each([false, true])('detects stall with partial edit=%s despite identical output churn', async edit => {
@@ -415,7 +415,7 @@ describe('T-OG-20–23 deterministic direct lifecycle traces', () => {
     f.launcher.workerStop('NO_PROGRESS');
     const result = await bounded(f.result);
     expect(result.health.state).not.toBe('completed');
-    expect(stopBeforeRetryGate(result).ok).toBe(false);
+    expect(stopBeforeRetryGate(result).ok).toBe(true);
     if (edit) expect(await readFile(path.join(f.cwd, 'partial.txt'), 'utf8')).toBe('synthetic partial work\n');
   });
 
@@ -424,8 +424,8 @@ describe('T-OG-20–23 deterministic direct lifecycle traces', () => {
     if (final) await f.step('final');
     f.child.send({ step: 'crash' });
     const result = await bounded(f.result);
-    expect(result).toMatchObject({ exitCode: 17, termination: 'uncertain' });
-    expect(f.trace).toEqual(['launching', 'started', 'active', 'crashed']);
+    expect(result).toMatchObject({ exitCode: 17, termination: 'confirmed', descendants: 'none' });
+    expect(f.trace).toEqual(['launching', 'started', 'active', 'failed']);
     expect(await readFile(path.join(f.cwd, 'partial.txt'), 'utf8')).toBe('synthetic partial work\n');
     expect(result.health.state).not.toBe('completed');
   });
@@ -469,7 +469,7 @@ describe('T-OG-20–23 deterministic direct lifecycle traces', () => {
       monotonicNow: () => Number(BigInt(processRecord.monotonicStart)) / 1e6 + 1000,
       bootId: f.identity.bootId, sampleIdentity: () => null });
     expect(status.workers).toHaveLength(1);
-    expect(status.workers[0]).toMatchObject({ counters: { exitCode: 17 }, termination: 'uncertain', terminal: false });
+    expect(status.workers[0]).toMatchObject({ counters: { exitCode: 17 }, termination: 'confirmed', terminal: true });
     expect(await evidence()).toEqual(before);
     expect(await readFile(path.join(f.cwd, 'partial.txt'), 'utf8')).toBe('synthetic partial work\n');
   });
@@ -527,7 +527,7 @@ describe('T-OG-20–23 deterministic direct lifecycle traces', () => {
     await f.step('churn'); // Parent acknowledged after TERM; it really ignored TERM.
     expect(f.cancel('SIGKILL')).toBe(true);
     const result = await bounded(f.result);
-    expect(result).toMatchObject({ signal: 'SIGKILL', termination: 'uncertain' });
+    expect(result).toMatchObject({ signal: 'SIGKILL', termination: 'confirmed', descendants: 'none' });
     expect(f.signals).toEqual([[-f.identity.pgid, 'SIGTERM'], [-f.identity.pgid, 'SIGKILL']]);
     expect(sampleWorkerGroup(f.identity.pgid).filter((member: any) => member.state !== 'Z')).toEqual([]);
     expect(await readFile(path.join(f.cwd, 'partial.txt'), 'utf8')).toBe('synthetic partial work\n');

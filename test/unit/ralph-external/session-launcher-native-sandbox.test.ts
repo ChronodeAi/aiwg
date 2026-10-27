@@ -67,7 +67,7 @@ async function fixture(mode: 'systemd-unit' | 'native-sandbox' = 'systemd-unit',
     invocationPath, runDir, inputs, now: f.request.now, scopedBreaker: null,
     checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
     isolation: { mode: 'systemd-unit', reason: 'Synthetic manager' }, probeNativeSandbox, launchIsolated,
-    isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) };
+    isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0, result: 'success' }) };
   return { ...f, root, runDir, plan, resolve, group, inputs, launcher, options, syncSpawn, asyncSpawn, launchIsolated, probeNativeSandbox };
 }
 

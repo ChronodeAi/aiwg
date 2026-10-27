@@ -174,7 +174,7 @@ describe('T-OG-15/23 workspace-relative artifacts (#2905)', () => {
     return { ...f, plan, filename: path.join(f.cwd, artifact(plan.invocation!.invocationId!).relativePath),
       launch: (extra: any = {}) => f.launcher.launchWorker({ ...options,
         launchIsolated: withStopProof,
-        isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }), ...extra }) };
+        isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0, result: 'success' }), ...extra }) };
   }
   it('creates one private file under cwd, substitutes its path and keeps shared prefixes', async () => {
     const f = await workspace();
