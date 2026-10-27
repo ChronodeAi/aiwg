@@ -1,3 +1,5 @@
+import { postDeploy } from './claude-post-deploy.mjs';
+export { postDeploy };
 import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * Claude Code Provider
@@ -43,7 +45,6 @@ import {
   pruneStaleAiwgSkills,
   computeAllKernelNames,
   parseFrontmatter,
-  initializeFrameworkWorkspace,
   filterAgentFiles,
   getAddonAgentFiles,
   getAddonCommandFiles,
@@ -395,34 +396,6 @@ export function createAgentsMd(target, srcRoot, dryRun) {
 // Post-Deployment
 // ============================================================================
 
-export async function postDeploy(targetDir, opts) {
-  // Initialize framework workspace structure
-  initializeFrameworkWorkspace(targetDir, opts.mode, opts.dryRun, opts.srcRoot);
-
-  // Claude-specific post-deployment (settings.json, etc.)
-  const claudeDir = path.join(targetDir, '.claude');
-  const settingsPath = path.join(claudeDir, 'settings.json');
-
-  // If settings.json doesn't exist, create a minimal one
-  if (!fs.existsSync(settingsPath) && !opts.dryRun) {
-    ensureDir(claudeDir);
-    const settings = {
-      version: '1.0',
-      created: new Date().toISOString(),
-      aiwg: {
-        enabled: true,
-        mode: opts.mode || 'all'
-      }
-    };
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
-    console.log('Created .claude/settings.json');
-  }
-
-  // Hook file architecture: write AIWG.md and wire @AIWG.md into CLAUDE.md
-  if (opts.srcRoot && opts.contextFiles !== false) {
-    deployHookFile(targetDir, opts);
-  }
-}
 
 /**
  * Deploy the AIWG.md hook file and add @AIWG.md directive to CLAUDE.md.
@@ -444,7 +417,7 @@ function interpolateHookTokens(content, counts, targetDir) {
   });
 }
 
-function deployHookFile(targetDir, opts) {
+export function deployHookFile(targetDir, opts) {
   const { srcRoot, dryRun, counts } = opts;
   const templatePath = path.join(srcRoot, 'agentic', 'code', 'frameworks', 'sdlc-complete', 'templates', 'project', 'AIWG.md');
   const hookDest = path.join(targetDir, 'AIWG.md');

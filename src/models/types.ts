@@ -235,6 +235,8 @@ export interface WorkerModelObservation {
 }
 
 export interface WorkerDataPolicy {
+  /** Literal project-relative files/subtrees denied to conductors at provider deploy. */
+  localOnlyPaths?: string[];
   allowedProcessing?: Array<'local' | 'remote'>;
   allowProductImprovement?: boolean;
   allowUnknown?: boolean;

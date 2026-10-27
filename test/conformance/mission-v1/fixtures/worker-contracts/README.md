@@ -53,6 +53,14 @@ extension round trips; other consumers advertise no worker support in
 
 ## Disposition and consumer ownership
 
+### #3656 conductor input guard amendment
+
+The existing data-policy objects add `localOnlyPaths` (literal project-relative
+files/subtrees). Worker-selection and parallelism fragments and manifest digests
+are amended together; strict production-owner equality is preserved. Deployment
+blocks explicit conductor references; arbitrary shell programs remain outside
+this guard's containment boundary. No schema family or runtime qualification is added.
+
 ### #2925 template and constrained alias amendment
 
 The parallelism fragment combines #2925 group templates, group effort/data

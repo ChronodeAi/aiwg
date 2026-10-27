@@ -631,6 +631,15 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "localOnlyPaths": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_.@+,-]+(?:/[A-Za-z0-9_.@+,-]+)*$(?![\\s\\S])"
+              },
+              "description": "Literal project-relative local-only files or directory subtrees; deployed conductor guards have limited shell coverage."
+            },
             "allowedProcessing": {
               "type": "array",
               "items": {
@@ -818,6 +827,15 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "localOnlyPaths": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_.@+,-]+(?:/[A-Za-z0-9_.@+,-]+)*$(?![\\s\\S])"
+              },
+              "description": "Literal project-relative local-only files or directory subtrees; deployed conductor guards have limited shell coverage."
+            },
             "allowedProcessing": {
               "type": "array",
               "items": {

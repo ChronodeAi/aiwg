@@ -1,5 +1,6 @@
 /** Offline S1 health readiness projection; never launch authority or a probe. */
 import { homedir } from 'node:os';
+import { collectLocalOnlyPaths } from './conductor-data-policy.mjs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { resolveParallelism, validateParallelismConfig, resolveWorkerGroupInstallation, workerConfigDigest, type ParallelismConfig } from '../config/aiwg-config.js';
 import { assertWorkerHealthQualification } from './provider-policy.js';
@@ -121,6 +122,11 @@ export function diagnoseWorkerHealthReadiness(snapshot: WorkerPlanSnapshot,
   const add = (finding: FindingInput, members = membersFor(finding.pointer, finding.role)): void => {
     report.findings.push(contextualize(finding, members));
   };
+  const localOnlyPaths = collectLocalOnlyPaths(snapshot.models.defaults.workerSelection, p);
+  if (localOnlyPaths.length) add({ code: 'CONDUCTOR_LOCAL_ONLY_PATHS', status: 'info',
+    pointer: '/defaults/workerSelection/dataPolicy/localOnlyPaths', role: null,
+    message: `Declared local-only conductor inputs: ${localOnlyPaths.join(', ')}. Deploy provider guards before opening task inputs; shell coverage is limited.`,
+    nextAction: 'deploy-provider-data-guards' });
   if (!report.enabled) {
     add({ code: 'WORKER_HEALTH_DISABLED', status: 'info', pointer: '/parallelism/worker_dispatch',
       message: 'Group dispatch is disabled; legacy execution has no worker health readiness requirement.',
