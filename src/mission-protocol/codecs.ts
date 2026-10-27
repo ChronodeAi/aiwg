@@ -1,3 +1,4 @@
+import { workerSemanticErrors, contractValidationPointer } from './worker-contract-diagnostics.js';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -272,6 +273,7 @@ export function encodeMission(value: CanonicalMission, target: MissionTarget, op
 
 interface WorkerValidatorSet {
   schemaId: string;
+  schema: Record<string, unknown>;
   bundleDigest: string;
   validators: Map<WorkerDefinitionName, ValidateFunction>;
 }
@@ -302,7 +304,7 @@ function loadWorkerValidators(): WorkerValidatorSet {
     ajv.addSchema(schema);
     const validators = new Map<WorkerDefinitionName, ValidateFunction>();
     for (const definition of WORKER_DEFINITIONS) validators.set(definition, ajv.compile({ $ref: `${schema.$id}#/$defs/${definition}` }));
-    cachedWorkerValidators = { schemaId: schema.$id, bundleDigest: workerBundleDigestFor(schema), validators };
+    cachedWorkerValidators = { schema, schemaId: schema.$id, bundleDigest: workerBundleDigestFor(schema), validators };
   }
   return cachedWorkerValidators;
 }
@@ -339,36 +341,9 @@ export interface WorkerPayloadValidation {
 export const WORKER_MAX_JSON_BYTES = 262_144;
 export const WORKER_MAX_NESTING_DEPTH = 16;
 
-function workerSemanticErrors(value: unknown): string[] {
-  const ancestors = new Set<object>();
-  function visit(node: unknown, depth: number): string | undefined {
-    if (!node || typeof node !== 'object') return undefined;
-    if (depth > WORKER_MAX_NESTING_DEPTH) return `JSON nesting depth exceeds ${WORKER_MAX_NESTING_DEPTH}`;
-    if (ancestors.has(node)) return 'Worker JSON must not contain cycles';
-    ancestors.add(node);
-    for (const child of Object.values(node)) {
-      const error = visit(child, depth + 1);
-      if (error) return error;
-    }
-    ancestors.delete(node);
-    return undefined;
-  }
-  // Root object/array is depth 1; scalar leaves do not add a nesting level.
-  const depthError = visit(value, 1);
-  if (depthError) return [depthError];
-  try {
-    const bytes = JSON.stringify(value);
-    if (bytes === undefined) return ['Worker payload must be JSON serializable'];
-    if (Buffer.byteLength(bytes, 'utf8') > WORKER_MAX_JSON_BYTES) return [`Serialized UTF-8 JSON exceeds ${WORKER_MAX_JSON_BYTES} bytes`];
-  } catch {
-    return ['Worker payload must be JSON serializable'];
-  }
-  return [];
-}
-
 /** Validate a worker payload against its bundled definition. Closed shapes reject unknown fields. */
 export function validateWorkerPayload(definition: WorkerDefinitionName, value: unknown): WorkerPayloadValidation {
-  const semanticErrors = workerSemanticErrors(value);
+  const semanticErrors = workerSemanticErrors(value, WORKER_MAX_JSON_BYTES, WORKER_MAX_NESTING_DEPTH);
   if (semanticErrors.length) return { valid: false, errors: semanticErrors };
   const validate = loadWorkerValidators().validators.get(definition);
   if (!validate) throw new WorkerContractError('OG_CONTRACT_INVALID', `Unknown worker definition '${definition}'.`);
@@ -392,7 +367,12 @@ export function validateWorkerPayload(definition: WorkerDefinitionName, value: u
 
 export function assertValidWorkerPayload(definition: WorkerDefinitionName, value: unknown): void {
   const { valid, errors } = validateWorkerPayload(definition, value);
-  if (!valid) throw new WorkerContractError('OG_CONTRACT_INVALID', `Invalid ${definition}: ${errors.join('; ') || 'shape mismatch'}.`);
+  if (!valid) {
+    const { schema, validators } = loadWorkerValidators();
+    throw Object.assign(new WorkerContractError('OG_CONTRACT_INVALID', `Invalid ${definition}: ${errors.join('; ') || 'shape mismatch'}.`),
+      { pointer: contractValidationPointer(definition, workerSemanticErrors(value, WORKER_MAX_JSON_BYTES, WORKER_MAX_NESTING_DEPTH).length
+        ? null : validators.get(definition)?.errors, schema) });
+  }
 }
 
 /** The producer is supplied by trusted calling code, never read from payload data. */

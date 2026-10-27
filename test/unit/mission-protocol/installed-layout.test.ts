@@ -24,7 +24,7 @@ describe('Mission schema loader in offline installed layouts', () => {
       mkdirSync(path.join(installed, 'schemas'));
       writeFileSync(path.join(installed, 'package.json'), JSON.stringify(manifest));
       cpSync(path.join(ROOT, 'schemas/mission-v1.schema.json'), path.join(installed, 'schemas/mission-v1.schema.json'));
-      for (const file of ['types', 'codecs']) {
+      for (const file of ['types', 'codecs', 'worker-contract-diagnostics']) {
         const source = readFileSync(path.join(ROOT, `src/mission-protocol/${file}.ts`), 'utf8');
         const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } });
         writeFileSync(path.join(modules, `${file}.js`), compiled.outputText);
@@ -49,6 +49,10 @@ describe('Mission schema loader in offline installed layouts', () => {
       expect(installedCodecs.validateWorkerPayload('workerClaims', claims).valid).toBe(true);
       expect(installedCodecs.decodeWorkerPayload('workerClaims', installedCodecs.encodeWorkerPayload('workerClaims', claims))).toEqual(claims);
       expect(() => installedCodecs.encodeWorkerPayload('workerClaims', { ...claims, version: 999 })).toThrow(/Invalid workerClaims/);
+      let contractFailure;
+      try { installedCodecs.assertValidWorkerPayload('workerClaims', { ...claims, status: 'invalid' }); }
+      catch (error) { contractFailure = error; }
+      expect(contractFailure).toMatchObject({ code: 'OG_CONTRACT_INVALID', pointer: '/workerClaims/status' });
       const mission = { apiVersion: 'mission.aiwg.io/v1', extensions: { 'aiwg.worker-dispatch': { version: 999 } } };
       expect(() => installedCodecs.decodeMission(mission, 'canonical')).toThrow(/OG_CONTRACT_UNSUPPORTED/);
     } finally {
