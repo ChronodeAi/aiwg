@@ -118,6 +118,21 @@ export const SessionSourceSchema = z.object({
   extensions: NativeExtensionsSchema.prefault({}),
 });
 
+/**
+ * Content-addressed reference to a tool-output image whose bytes live in
+ * the catalog blob store instead of inline in the event (#3265). The
+ * persisted shape's schema is this zod contract (session events have no
+ * JSON-schema file; see `lint:schemas`).
+ */
+export const SessionImageRefSchema = z.object({
+  digest: DigestSchema,
+  mediaType: z.string().min(1),
+  byteLength: integer().nonnegative(),
+  locatorClass: z.string().min(1).optional(),
+  offset: integer().nonnegative().optional(),
+});
+export type SessionImageRef = z.infer<typeof SessionImageRefSchema>;
+
 export const SessionEventSchema = z.object({
   contractVersion: z.literal(SESSION_CONTRACT_VERSION),
   eventId: z.string().min(1),
@@ -145,6 +160,12 @@ export const SessionEventSchema = z.object({
   originRule: z.string().min(1).default('legacy:unknown'),
   originClassifierVersion: VersionSchema.default('1.0.0'),
   searchableText: z.string(),
+  /**
+   * Image references extracted from inline payloads at import. Optional so
+   * pre-#3265 catalog rows (inline bytes, field absent) still parse; readers
+   * must tolerate `undefined` as "no references".
+   */
+  imageRefs: z.array(SessionImageRefSchema).optional(),
   digest: DigestSchema,
   rawReference: z.object({
     locatorClass: z.string().min(1),

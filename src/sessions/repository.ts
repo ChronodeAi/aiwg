@@ -19,6 +19,12 @@ import {
   type SessionCoverageReport,
 } from './batch-contracts.js';
 import { redactSessionText, redactSessionValue, sanitizeSessionEvent, sanitizeNativeExtensions } from './policy.js';
+import {
+  extractBatchEventImages,
+  isImageDigest,
+  type ExtractedSessionImage,
+  type ResolvedSessionImage,
+} from './image-blobs.js';
 import type { TimelineInput } from './timeline.js';
 import { effectiveSessionLifecycle } from './lifecycle.js';
 import {
@@ -55,6 +61,13 @@ export interface NormalizedImportBatch {
   sessions: Session[];
   events: SessionEvent[];
   batchRunId?: string;
+  /**
+   * Image bytes extracted from inline payloads during normalization
+   * (#3265). Carried beside the events because event JSON itself must only
+   * hold the content-hash reference; the store persists these with
+   * INSERT OR IGNORE so identical images share one row per catalog.
+   */
+  imageBlobs?: ExtractedSessionImage[];
 }
 export interface ImportReceipt {
   operationId: string;
@@ -369,6 +382,17 @@ export class SessionRepository {
       );
       CREATE TABLE IF NOT EXISTS session_catalog_meta (
         key TEXT PRIMARY KEY, value TEXT NOT NULL
+      );
+      -- Content-addressed tool-output image bytes (#3265). One row per
+      -- content hash per catalog: repeat imports of identical images share
+      -- the row (INSERT OR IGNORE). Events reference blobs by digest and
+      -- keep only a bracketed image placeholder (sha256, type, size) in
+      -- searchableText, so image bytes never reach FTS. Pre-#3265 rows with
+      -- inline bytes are left untouched (no destructive migration).
+      CREATE TABLE IF NOT EXISTS session_image_blobs (
+        digest TEXT PRIMARY KEY, media_type TEXT NOT NULL,
+        byte_length INTEGER NOT NULL, source_locator TEXT,
+        source_offset INTEGER, bytes BLOB NOT NULL
       );
       CREATE TABLE IF NOT EXISTS session_analytics_facts (
         fact_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
@@ -853,6 +877,18 @@ export class SessionRepository {
     checkpoint: ImportCheckpoint,
     publish = true,
   ): ImportReceipt {
+    // Lift inline image payloads out of event text before redaction (#3265):
+    // base64 data URLs in text survive redaction and would otherwise be
+    // stored inline. Provider image blocks in extensions keep their existing
+    // redaction to markers; their bytes are not retained.
+    // Idempotent -- placeholder text from an earlier pass matches no image
+    // pattern, so importer-extracted batches and direct writers converge.
+    // Bytes are parked beside the batch: the redaction pass below walks
+    // every value and would flatten Uint8Array into plain objects.
+    const extracted = extractBatchEventImages(batch);
+    const imageBlobs = extracted.imageBlobs;
+    batch = { ...batch, events: extracted.events };
+    delete batch.imageBlobs;
     // Guard callers that submit normalized batches directly as well as adapters.
     batch = redactSessionValue({
       ...batch,
@@ -928,6 +964,25 @@ export class SessionRepository {
           merged.lifecycle,
           JSON.stringify(merged),
           merged.sessionId,
+        );
+      }
+      // Persist image bytes once per content hash per catalog (#3265).
+      // INSERT OR IGNORE keeps the first-seen row when identical images
+      // arrive in later batches or replayed records.
+      const insertImageBlob = this.db.prepare(
+        `INSERT OR IGNORE INTO session_image_blobs
+         (digest, media_type, byte_length, source_locator, source_offset, bytes)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      for (const image of imageBlobs) {
+        if (!isImageDigest(image.digest)) continue;
+        insertImageBlob.run(
+          image.digest,
+          image.mediaType,
+          image.byteLength,
+          image.locatorClass ?? null,
+          image.offset ?? null,
+          Buffer.from(image.bytes),
         );
       }
       const insertEvent = this.db.prepare(
@@ -1398,6 +1453,73 @@ export class SessionRepository {
        ORDER BY e.sequence_no, e.event_id`,
     ).all(...(workspaceId ? [sessionId, workspaceId] : [sessionId]))
       .map((row) => JSON.parse(String(row.data)) as SessionEvent);
+  }
+
+  /**
+   * Distinct image blobs in this catalog. Identical images share one row
+   * per content hash, so this counts unique images, not references (#3265).
+   */
+  countImageBlobs(): number {
+    return Number(this.db.prepare(
+      'SELECT COUNT(*) AS count FROM session_image_blobs',
+    ).get()?.count ?? 0);
+  }
+
+  /**
+   * Fetch one image blob by content digest. Returns null when the blob is
+   * unknown or the digest is malformed -- callers report that as an
+   * "unavailable" reference rather than failing the whole read (#3265).
+   * Pre-#3265 rows carry inline bytes instead of references and never reach
+   * this lookup; they load verbatim through `listEvents`.
+   */
+  getImageBlob(digest: string): {
+    digest: string;
+    mediaType: string;
+    byteLength: number;
+    sourceLocator: string | null;
+    sourceOffset: number | null;
+    bytes: Uint8Array;
+  } | null {
+    if (!isImageDigest(digest)) return null;
+    const row = this.db.prepare(
+      `SELECT digest, media_type, byte_length, source_locator, source_offset, bytes
+       FROM session_image_blobs WHERE digest=?`,
+    ).get(digest);
+    if (!row) return null;
+    return {
+      digest: String(row.digest),
+      mediaType: String(row.media_type),
+      byteLength: Number(row.byte_length),
+      sourceLocator: row.source_locator === null ? null : String(row.source_locator),
+      sourceOffset: row.source_offset === null ? null : Number(row.source_offset),
+      bytes: Uint8Array.from(row.bytes as Uint8Array),
+    };
+  }
+
+  /**
+   * Resolve an event's image references against the blob store. Entries
+   * whose bytes are present resolve `available`; entries whose blob is
+   * missing (pruned catalog, legacy reference) resolve `unavailable` with
+   * the reference metadata intact so callers can report it (#3265). Events
+   * without references -- including pre-#3265 inline rows -- resolve to [].
+   */
+  resolveEventImages(event: Pick<SessionEvent, 'imageRefs'>): ResolvedSessionImage[] {
+    return (event.imageRefs ?? []).map((ref) => {
+      const stored = this.getImageBlob(ref.digest);
+      if (!stored) return { ...ref, status: 'unavailable' as const };
+      return {
+        digest: ref.digest,
+        mediaType: stored.mediaType,
+        byteLength: stored.byteLength,
+        ...(ref.locatorClass !== undefined
+          ? { locatorClass: ref.locatorClass }
+          : stored.sourceLocator !== null ? { locatorClass: stored.sourceLocator } : {}),
+        ...(ref.offset !== undefined
+          ? { offset: ref.offset }
+          : stored.sourceOffset !== null ? { offset: stored.sourceOffset } : {}),
+        status: 'available' as const,
+      };
+    });
   }
 
   listTimelineInputs(workspaceId: string): TimelineInput[] {
