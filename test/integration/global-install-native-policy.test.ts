@@ -14,6 +14,7 @@ import {
 } from '../fixtures/web-resource-release.js';
 import { acquireDirectoryLock } from '../../src/artifacts/prebuilt-build-lock.js';
 import { hasSevenDayReleaseAge } from '../helpers/npm-release-age.js';
+import { formatNpmInstallFailure } from '../helpers/npm-install-diagnostics.js';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 let tempRoot = '';
@@ -141,7 +142,17 @@ describe('global install native lifecycle-script policy', () => {
 
     const prefix = path.join(tempRoot, 'prefix');
     const npmrc = path.join(tempRoot, 'npmrc');
-    await writeFile(npmrc, 'ignore-scripts=false\n');
+    const npmLogs = path.join(tempRoot, 'npm-logs');
+    await mkdir(npmLogs);
+    // Three 20s attempts plus 1s/5s backoff leave headroom in the 240s install budget.
+    await writeFile(npmrc, [
+      'ignore-scripts=false',
+      'fetch-timeout=20000',
+      'fetch-retries=2',
+      'fetch-retry-mintimeout=1000',
+      'fetch-retry-maxtimeout=5000',
+      '',
+    ].join('\n'));
     const cleanEnv = Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith('npm_config_') || key.toLowerCase() === 'npm_config_offline'),
     );
@@ -159,13 +170,17 @@ describe('global install native lifecycle-script policy', () => {
     );
     expect(policy.status, policy.stderr).toBe(0);
     expect(hasSevenDayReleaseAge(policy.stdout, policyStartedAt, Date.now()), policy.stdout).toBe(true);
+    const installStartedAt = Date.now();
     const install = spawnSync(
       process.platform === 'win32' ? 'npm.cmd' : 'npm',
-      installArgs,
+      [...installArgs, '--loglevel=verbose', '--logs-dir', npmLogs],
       { cwd: tempRoot, encoding: 'utf8', timeout: 240_000, env: cleanEnv },
     );
+    const installElapsedMs = Date.now() - installStartedAt;
     installOutput = `${install.stdout}\n${install.stderr}`;
-    if (install.status !== 0) throw new Error(installOutput);
+    if (install.status !== 0) {
+      throw new Error(await formatNpmInstallFailure(install, installElapsedMs, npmLogs));
+    }
     installRoot = process.platform === 'win32'
       ? path.join(prefix, 'node_modules', 'aiwg')
       : path.join(prefix, 'lib', 'node_modules', 'aiwg');
