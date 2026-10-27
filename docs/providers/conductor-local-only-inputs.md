@@ -40,8 +40,15 @@ Claude deployment merges absolute `Read(...)` deny rules into
 refuses explicit file/path tool arguments and literal Bash references, including
 compound commands such as `ls && cat eval-work/local.txt | head`. It resolves
 relative paths against the tool event's cwd and checks existing symlink aliases
-without reading protected contents. Unrelated calls proceed; malformed hook events
-are refused. Operator permissions and hooks are preserved.
+without reading protected contents. It also matches unquoted Bash glob components
+(`*`, `?`, `[...]` and `**`) against protected path names and subtrees, including
+loops such as `for f in eval-work/*.txt; do cat "$f"; done`. Common recursive
+ancestor searches (`grep -r`, `rg` and `find`, including `find ... -exec cat`)
+are refused, with the event cwd used for implicit search roots. A plain
+`ls eval-work`, an unrelated literal file and a glob such as `eval-work/*.json`
+that cannot match a protected `eval-work/local.txt` remain allowed. Quoted or
+escaped wildcard characters are literal. Operator permissions and hooks are
+preserved; malformed hook events are refused.
 
 Codex deployment writes `.codex/rules/aiwg-local-only.rules` with forbidden
 `prefix_rule` entries for explicit `cat`, `head`, `tail`, `less`, `more`, `sed`,
@@ -51,13 +58,17 @@ trusted project rules. They do not restrict native file-reading tools. Options
 before the path, descendant arguments and shell wrappers are outside these exact
 prefix rules; do not treat their presence as filesystem containment.
 
-These guards prevent the reported explicit reads, with stronger coverage in
-Claude than Codex. They are not an OS read sandbox: glob expansion, variable-built
-paths, recursive searches of an ancestor directory, hardlink aliases, encoded
-programs, unrecognized tools, disabled hooks/rules, policy tampering and filesystem
-races can bypass them. Even Claude's shell hook can conservatively refuse a benign
-command that merely mentions a protected path. Keep sensitive data outside the
-cloud conductor's accessible filesystem when comprehensive containment is needed.
+These guards prevent the reported explicit reads, with glob and common recursive
+search coverage in Claude only. They are not an OS read sandbox: variable-built
+paths, other shell indirection (including brace expansion and command substitution),
+wildcard symlink aliases, hardlink aliases, encoded programs, unrecognized recursive
+readers or tools, disabled hooks/rules, policy tampering and filesystem races can
+bypass them. The hook checks names and filesystem metadata, never protected file
+contents, and does not interpret a full shell program or changes of directory
+within it. Even Claude's hook can conservatively refuse a benign command that
+merely mentions a protected path or searches an ancestor with exclusion filters.
+Keep sensitive data outside the cloud conductor's accessible filesystem when
+comprehensive containment is needed.
 A task label or `allowedProcessing: ["local"]` alone cannot identify filesystem
 paths; declare those paths before exploration instead of opening files to classify
 them.

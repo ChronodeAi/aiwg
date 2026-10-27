@@ -60,6 +60,39 @@ describe('T-OG-01 conductor data guard provider deployment', () => {
     expect(() => readFileSync(path.join(root, '.claude/hooks/aiwg-local-only.mjs'))).toThrow();
     expect(() => readFileSync(path.join(root, '.codex/rules/aiwg-local-only.rules'))).toThrow();
   });
+  it('deployed Claude hook refuses glob expansion and recursive ancestor reads', async () => {
+    await claudePostDeploy(root, { contextFiles: false });
+    for (const command of [
+      'for f in eval-work/*.json eval-work/*.txt .eval-control/policy.md; do echo "=== $f ==="; cat "$f"; done',
+      'grep -r x eval-work', 'rg x eval-work', 'find eval-work -exec cat {} \\;',
+      'cat eval-work/loc?l.txt', 'cat eval-work/[kl]ocal.txt', 'cat **/local.txt',
+    ]) {
+      const denied = hook(event('Bash', { command }));
+      expect(denied.status, denied.stderr).toBe(0);
+      expect(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision, command).toBe('deny');
+      expect(denied.stdout).not.toContain('SYNTHETIC-PRIVATE-CONTENT');
+    }
+    for (const command of ['cat eval-work/public.txt', 'ls eval-work', 'cat eval-work/*.json', 'cat "eval-work/*.txt"']) {
+      const allowed = hook(event('Bash', { command }));
+      expect(allowed.status, allowed.stderr).toBe(0);
+      expect(allowed.stdout, command).toBe('');
+    }
+    for (const malformed of ['invalid-json', null, {}, { tool_name: 'Bash' }]) {
+      expect(hook(malformed).status).toBe(2);
+    }
+  });
+  it('deployed Claude hook protects directory subtrees reached by a glob', async () => {
+    mkdirSync(path.join(root, 'private-inputs'));
+    writeFileSync(path.join(root, 'private-inputs/input.txt'), 'SYNTHETIC-PRIVATE-CONTENT');
+    writeFileSync(path.join(root, 'models.json'), JSON.stringify({ defaults: { workerSelection: {
+      dataPolicy: { localOnlyPaths: ['private-inputs'] },
+    } } }));
+    await claudePostDeploy(root, { contextFiles: false });
+    const denied = hook(event('Bash', { command: 'cat private-inputs/*' }));
+    expect(denied.status, denied.stderr).toBe(0);
+    expect(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(denied.stdout).not.toContain('SYNTHETIC-PRIVATE-CONTENT');
+  });
   it('Codex emits forbidden explicit reader prefixes in project rules', async () => {
     await codexPostDeploy(root, { contextFiles: false });
     const rules = readFileSync(path.join(root, '.codex/rules/aiwg-local-only.rules'), 'utf8');
