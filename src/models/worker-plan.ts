@@ -259,6 +259,13 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
     const groupPolicy = narrowed.policy;
     const permissions = { ...group.execution, transport: group.execution?.transport ?? 'shell' };
     const transport = permissions.transport;
+    if (request.transport === 'mcp' && permissions.launchMode === 'native-sandbox') {
+      const reason = diagnostic('OG_POLICY_RELAXATION', `/parallelism/groups/${groupId}/execution/launchMode`,
+        'MCP worker-invoke does not support native-sandbox isolation. Use models resolve --transport shell and the shell launcher, or select a group with systemd-unit isolation.');
+      for (const member of group.members ?? []) plan.exclusions.push({ group: groupId, member: member.id, model: member.model, effort: null, diagnostics: [reason] });
+      if (request.group === groupId) plan.diagnostics.push(reason);
+      continue;
+    }
     // Priority is guidance only. Preserve declaration order for ties; fallback order stays explicit.
     const members = (group.members ?? []).map((member, index) => ({ member, index })).sort((a, b) =>
       (a.member.priority ?? 100) - (b.member.priority ?? 100) || a.index - b.index);

@@ -12,8 +12,7 @@
  *   - #2890 ProviderAdapter.parseWorkerFinal + assembleWorkerResult
  *     (tools/ralph-external/lib/provider-adapter.mjs, mission-protocol/codecs.ts)
  *
- * This module is the FIRST MCP-side consumer of that pipeline end-to-end,
- * without a shell/CLI round trip and without Mission/MC state. It is
+ * This bridge runs without a shell/CLI round trip or Mission/MC state. It is
  * intentionally conservative where the pipeline cannot yet produce a fully
  * attested identity: verification is always left `pending` here (never
  * self-accepted) — a separate verifier is required before a direct result is
@@ -157,6 +156,7 @@
  * @issues #2892, #2896 (review reference, not reused as-is)
  */
 
+import { workerFailureDiagnostics } from './worker-failure-diagnostics.mjs';
 import { signalChild } from '../../process/signal-child.mjs';
 import { z } from 'zod';
 
@@ -1901,7 +1901,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // diagnostic below. A duplicate-key/planted-marker probe showed
           // this exact kind of path can otherwise reflect attacker/worker-
           // controlled input text straight back out to the caller.
-          return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [typeof error?.code === 'string' ? error.code : 'OG_BRIEF_NOT_STRUCTURED'] });
+          return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: workerFailureDiagnostics(error, 'workerDirectBrief', 'OG_BRIEF_NOT_STRUCTURED') });
         }
         mcpBriefDigest = `sha256:${createHash('sha256').update(briefBytes).digest('hex')}`;
       }
@@ -2022,7 +2022,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // parser error message, which can echo attacker/worker-controlled
         // input text back out (a duplicate-key probe reflected a planted
         // marker through this exact path before the fix).
-        return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: [typeof error?.code === 'string' ? error.code : 'OG_WORKER_FINAL_INVALID'] });
+        return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: workerFailureDiagnostics(error, 'workerClaims', 'OG_WORKER_FINAL_INVALID') });
       }
       const assembled = await tryAssembleDirectResult({ request, invocation, observation, claims, root,
         briefDigest: mcpBriefDigest, requireStructuredBrief: invocation.transport === 'mcp' });
@@ -2228,7 +2228,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // #2915 review 6 (finding 4): zero workers dispatched — same
           // proven-never-dispatched settlement as above.
           settleRecovery({ kind: 'uncertain', confirmedStop: true });
-          return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [typeof error?.code === 'string' ? error.code : 'OG_BRIEF_NOT_STRUCTURED'] });
+          return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: workerFailureDiagnostics(error, 'workerDirectBrief', 'OG_BRIEF_NOT_STRUCTURED') });
         }
         mcpBriefDigest = `sha256:${createHash('sha256').update(briefBytes).digest('hex')}`;
       }
@@ -2590,7 +2590,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // parser error message, which can echo attacker/worker-controlled
         // input text back out (a duplicate-key probe reflected a planted
         // marker through this exact path before the fix).
-        return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: [typeof error?.code === 'string' ? error.code : 'OG_WORKER_FINAL_INVALID'] });
+        return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: workerFailureDiagnostics(error, 'workerClaims', 'OG_WORKER_FINAL_INVALID') });
       }
       const assembled = await tryAssembleDirectResult({ request, invocation, observation, claims, root,
         briefDigest: mcpBriefDigest, requireStructuredBrief: invocation.transport === 'mcp' });

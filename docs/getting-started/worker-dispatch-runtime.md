@@ -262,6 +262,14 @@ Config validation rejects `approval: "on-request"`, `network: "allowlisted"`,
 and any group member whose installation uses a non-Codex adapter in this mode.
 The MCP `worker-invoke` tool's `run` operation refuses pinned `native-sandbox`
 invocations with `OG_POLICY_RELAXATION` until it supports this launch boundary.
+`models resolve --transport mcp` excludes these groups before rendering an
+invocation and identifies `/parallelism/groups/<group>/execution/launchMode`
+with `OG_POLICY_RELAXATION`. Use `--transport shell` and the shell launcher for
+these groups, or select a group with systemd-unit isolation for MCP dispatch.
+MCP contract failures preserve `OG_CONTRACT_INVALID` and include a structured
+diagnostic with the failing payload pointer (for example, `/workerClaims/status`).
+Malformed output points to `/workerClaims`; parser messages and payload values
+remain private.
 
 The launcher uses its owned process group without a systemd unit and skips the
 unit namespace probe. **There is no cgroup memory limit or cgroup kill scope; the
