@@ -44,7 +44,7 @@ const MODEL_MAP = {
  *
  *   codex --no-daemon exec --ignore-user-config -m M \
  *     -c model_reasoning_effort="E" -s S -C W -c approval_policy="never" \
- *     --skip-git-repo-check -o F --json - < briefPath
+ *     --skip-git-repo-check -o F.last-message --json - < briefPath
  *
  * `--no-daemon` is a root-level flag and `--ignore-user-config` is an
  * `exec`-level flag (root `--help` lists no `--ignore-user-config`;
@@ -206,7 +206,7 @@ export class CodexAdapter extends ProviderAdapter {
    * model, explicit effort as one `-c model_reasoning_effort="E"` token
    * (TOML `"E"` quoting via `JSON.stringify`; there is no shell in argv),
    * explicit sandbox/approval (`never` only), the conductor workdir as
-   * `-C`, the final file as `-o`, the JSONL event stream as `--json` and
+   * `-C`, a separate last-message capture as `-o`, the JSONL stream as `--json` and
    * `-` as the prompt argument so the brief arrives on stdin
    * (`stdin: 'brief-text'`). Permission flags from the legacy Ralph loop
    * (`--dangerously-bypass-approvals-and-sandbox`), guessed step caps and
@@ -260,7 +260,7 @@ export class CodexAdapter extends ProviderAdapter {
       '-C', cwd,
       '-c', `approval_policy=${JSON.stringify(approval)}`,
       '--skip-git-repo-check',
-      '-o', finalPath,
+      '-o', `${finalPath}.last-message`,
       '--json',
       '-',
     ];

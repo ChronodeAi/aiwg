@@ -236,7 +236,7 @@ describe('Codex version-bound profile (B-OG-07)', () => {
       qualification: { status: 'unqualified' } });
     expect(adapter.invocation.argv).toEqual(['--no-daemon', 'exec', '--ignore-user-config', '-m', '${model}', '-c',
       'model_reasoning_effort="${effort}"', '-s', '${sandbox}', '-C', '${workspace}', '-c',
-      'approval_policy="${approval}"', '--skip-git-repo-check', '-o', '${final}', '--json', '-']);
+      'approval_policy="${approval}"', '--skip-git-repo-check', '-o', '${final}.last-message', '--json', '-']);
     expect(adapter.invocation.argv.join(' ')).not.toMatch(/bypass|dangerous|ultra|--effort|--fallback|--force/);
     expect(adapter.invocation.argv.join(' ')).not.toContain("'\"");
     expect(adapter.invocation.envAllowlist).toEqual(['CODEX_HOME', 'HOME', 'PATH']);
@@ -294,7 +294,7 @@ describe('Codex version-bound profile (B-OG-07)', () => {
       { selected: { model: MODEL, effort: { value: 'medium' } }, cwd: '/w', brief: 'b', finalPath: '/w/f.json' },
       null, {})).toEqual(['--no-daemon', 'exec', '--ignore-user-config', '-m', MODEL,
       '-c', 'model_reasoning_effort="medium"', '-s', 'workspace-write', '-C', '/w',
-      '-c', 'approval_policy="never"', '--skip-git-repo-check', '-o', '/w/f.json', '--json', '-']);
+      '-c', 'approval_policy="never"', '--skip-git-repo-check', '-o', '/w/f.json.last-message', '--json', '-']);
     expect(CODEX_DIRECT_STDIN).toBe('brief-text');
   });
 
@@ -346,7 +346,7 @@ describe('T-OG-15 Codex direct command contract', () => {
     expect(invocation.stdin).toBe('brief-text');
     expect(invocation.argv.slice(2)).toEqual(['--no-daemon', 'exec', '--ignore-user-config', '-m', MODEL,
       '-c', 'model_reasoning_effort="medium"', '-s', 'workspace-write', '-C', workdir,
-      '-c', 'approval_policy="never"', '--skip-git-repo-check', '-o', invocation.finalPath, '--json', '-']);
+      '-c', 'approval_policy="never"', '--skip-git-repo-check', '-o', `${invocation.finalPath}.last-message`, '--json', '-']);
     // The brief travels on stdin only: no argv token carries brief bytes,
     // and the marker appears nowhere in argv.
     expect(invocation.argv.at(-1)).toBe('-');
@@ -365,13 +365,13 @@ describe('T-OG-15 Codex direct command contract', () => {
     const record = JSON.parse(await readFile(recordPath, 'utf8'));
     expect(record).toMatchObject({ noDaemon: true, ignoreUserConfig: true, model: MODEL, effort: 'medium',
       sandbox: 'workspace-write', approval: 'never', workdir, skipGitRepoCheck: true, jsonStream: true, cwd: workdir,
-      outputFile: invocation.finalPath, stdinEof: true, stdinBytes: Buffer.byteLength(payload), promptViaStdin: true });
+      outputFile: `${invocation.finalPath}.last-message`, stdinEof: true, stdinBytes: Buffer.byteLength(payload), promptViaStdin: true });
     expect(record.prompt).toBe(payload);
     expect(record.argv).toEqual(invocation.argv.slice(2));
     expect(JSON.stringify(record.argv)).not.toContain(MARKER);
     expect(record.envNames.filter((name: string) => !['PWD', 'SHLVL', '_'].includes(name))).toEqual(['AIWG_FAKE_WORKER_CONFIG', 'PATH']);
     expect(existsSync(path.join(root, 'injected'))).toBe(false);
-    const final = owner.parseOutput(await readFile(invocation.finalPath, 'utf8'));
+    const final = owner.parseOutput(await readFile(`${invocation.finalPath}.last-message`, 'utf8'));
     expect(final).toEqual({ response: `synthetic reply (${payload.length} chars)` });
     const events = (await readFile(invocation.stdoutPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     expect(events.map(event => owner.observeHealthEvent(event, { kind: 'stdout', id: 'stdout', generation: 0, offset: 0 },
@@ -556,7 +556,7 @@ describe('T-OG-15 Codex direct command contract', () => {
       cwd: '/w', brief: 'Synthetic brief', finalPath: '/w/final.json' }, null, { sandbox });
     expect(argv).toEqual(['--no-daemon', 'exec', '--ignore-user-config', '-m', MODEL,
       '-c', 'model_reasoning_effort="medium"', '-s', flag, '-C', '/w', '-c', 'approval_policy="never"',
-      '--skip-git-repo-check', '-o', '/w/final.json', '--json', '-']);
+      '--skip-git-repo-check', '-o', '/w/final.json.last-message', '--json', '-']);
   });
 
   it('CX05 the driver argv carries no brief anywhere and refuses guessed or stale controls', () => {
@@ -565,7 +565,7 @@ describe('T-OG-15 Codex direct command contract', () => {
     const argv = owner.buildWorkerArgs(input, null, { sandbox: 'workspace-write', approval: 'never' });
     expect(argv).toEqual(['--no-daemon', 'exec', '--ignore-user-config', '-m', MODEL, '-c', 'model_reasoning_effort="medium"',
       '-s', 'workspace-write', '-C', '/w', '-c', 'approval_policy="never"',
-      '--skip-git-repo-check', '-o', '/w/final.json', '--json', '-']);
+      '--skip-git-repo-check', '-o', '/w/final.json.last-message', '--json', '-']);
     expect(argv.join(' ')).not.toContain(MARKER);
     expect(argv.join(' ')).not.toMatch(/bypass|dangerous|yolo|skip-permissions|--fallback|--force|--effort/);
     const xhigh = owner.buildWorkerArgs(
@@ -642,7 +642,7 @@ describe('T-OG-20/21/23 Codex run identity, stall and security signals', () => {
     expect(stdout.filter(event => event.type === 'item.completed').map(event => event.item.id))
       .toEqual(['codex-fixture-item-1', 'codex-fixture-item-2']);
     const snapshot = o.finish({ exitCode: result.code, termination: 'confirmed',
-      finalValid: owner.parseOutput(await readFile(finalPath, 'utf8')) !== null });
+      finalValid: owner.parseOutput(await readFile(`${finalPath}.last-message`, 'utf8')) !== null });
     expect(snapshot).toMatchObject({ state: 'completed' });
     expect(snapshot.lastProgressAt).not.toBeNull();
     expect(snapshot.unavailableSignals).toEqual(expect.arrayContaining(['semantic-start']));
@@ -681,11 +681,11 @@ describe('T-OG-20/21/23 Codex run identity, stall and security signals', () => {
     const { file: malformedFile } = await fakeConfig(root, 'malformed');
     const malformed = await run(process.execPath, argv(workdir, finalPath), { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: malformedFile } });
     expect(malformed.code).toBe(0);
-    expect(owner.parseOutput(await readFile(finalPath, 'utf8'))).toBeNull();
+    expect(owner.parseOutput(await readFile(`${finalPath}.last-message`, 'utf8'))).toBeNull();
     const p = observer({ t: 0 });
     p.processStarted({ pid: 1, startTicks: 'fixture', executable: process.execPath });
     expect(p.finish({ exitCode: 0, termination: 'confirmed', finalValid: false }).reasonCode).toBe('FINAL_INVALID');
-    await expect(owner.parseWorkerFinal(await readFile(finalPath, 'utf8'), {
+    await expect(owner.parseWorkerFinal(await readFile(`${finalPath}.last-message`, 'utf8'), {
       observation: { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 },
     })).rejects.toThrow();
   });
@@ -785,7 +785,7 @@ describe('T-OG-20/21/23 Codex run identity, stall and security signals', () => {
     expect(record.envNames).not.toContain('CODEX_API_KEY');
     const stdout = await readFile(plan.invocation!.stdoutPath, 'utf8');
     expect(stdout).not.toContain(secret);
-    const final = owner.parseOutput(await readFile(plan.invocation!.finalPath, 'utf8'));
+    const final = owner.parseOutput(await readFile(`${plan.invocation!.finalPath}.last-message`, 'utf8'));
     expect(final?.response).toContain('touch');
     expect(existsSync(marker)).toBe(false); // worker-returned commands are never executed
   });
@@ -814,7 +814,7 @@ describe('T-OG-20/21/23 Codex run identity, stall and security signals', () => {
       onStart: child => o.processStarted({ pid: child.pid!, startTicks: 'fixture', executable: process.execPath }) });
     expect(result.code).toBe(1);
     feedLines(o, result.stdout);
-    expect(owner.parseOutput(await readFile(finalPath, 'utf8'))).toBeNull();
+    expect(owner.parseOutput(await readFile(`${finalPath}.last-message`, 'utf8'))).toBeNull();
     expect(o.finish({ exitCode: result.code, termination: 'confirmed', finalValid: false }).state).not.toBe('completed');
   });
 });

@@ -2,7 +2,7 @@ import { WorkerRequestArgumentError, type WorkerCommandRequest } from './worker-
 export { parseWorkerCommandArgs, type WorkerCommandRequest } from './worker-command-request.js';
 /** One nonlaunching typed renderer shared by models resolve and Ralph. */
 import path from 'node:path';
-import { inspectWorkerPath as inspectPath, readBrief, assertConductorWorkerPlan } from './worker-invocation-paths.js';
+import { inspectWorkerPath as inspectPath, workerOutputPaths, readBrief, assertConductorWorkerPlan } from './worker-invocation-paths.js';
 export { inspectWorkerPath } from './worker-invocation-paths.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { resolveWorkerPlan, type WorkerPlanSnapshot, type WorkerResolutionPlan } from '../models/resolver.js';
@@ -304,6 +304,10 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
     const transport = await buildWorkerInvocationTransport(driver, { invocationId, selected: structuredClone(selected), permissions: structuredClone(tuple.permissions),
       cwd: request.workdir, briefPath: request.brief, brief: bytes?.toString('utf8') ?? '', finalPath, limits: structuredClone(limits),
       health: structuredClone(effectiveHealth), role: request.role });
+    for (const output of Object.values(workerOutputPaths({ ...transport, selected, transport: tuple.transport, finalPath, stdoutPath, stderrPath }))) {
+      await inspectPath(output, 'output');
+      if (path.resolve(request.brief) === output) throw new Error('Brief and output paths must be distinct');
+    }
     pointer = '/invocation/buildInvocation';
     if (transport.stdin === 'adapter-frame' && typeof driver.buildWorkerStdinFrame !== 'function') throw new Error('Installed adapter stdin framer is required');
     if (transport.mcp?.timeoutSeconds !== undefined) effectiveHealth = resolveWorkerEffectiveHealth(healthConfig,
