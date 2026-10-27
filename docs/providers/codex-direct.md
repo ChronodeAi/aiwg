@@ -15,13 +15,18 @@ qualifier reviews a live run. The adapter
 codex --no-daemon exec --ignore-user-config -m <model> \
   -c model_reasoning_effort="<effort>" -s <sandbox> -C <workspace> \
   -c approval_policy="<approval>" --skip-git-repo-check \
-  -o <final> --json - < <brief>
+  -o <final>.last-message --json - < <brief>
 ```
 
 The brief always travels on stdin (the trailing `-` prompt argument); it
 never appears in argv. Effort and approval travel only as `-c` config
 overrides — there is no `--effort` flag, and `approval_policy` is restricted
 to `"never"` (non-prompting execution only).
+
+The worker writes schema-valid `workerClaims` JSON to the exact `--final-output`
+path (`output.resultPath` in the brief). Codex writes its last response to the
+separate `<final>.last-message` capture. The launcher validates the worker-written
+structured final; prose in the capture cannot satisfy that contract.
 
 ## Manual smoke run
 
@@ -34,7 +39,7 @@ mkdir -p /tmp/codex-smoke && cd /tmp/codex-smoke
 echo 'Reply with exactly: codex-smoke-ok' | codex --no-daemon exec \
   --ignore-user-config -m gpt-6-luna -c model_reasoning_effort="low" \
   -s read-only -C "$PWD" -c approval_policy="never" \
-  --skip-git-repo-check -o final.json --json - ; echo "exit=$?"
+  --skip-git-repo-check -o smoke.last-message --json - ; echo "exit=$?"
 ```
 
 ### Reading the result
@@ -46,10 +51,10 @@ echo 'Reply with exactly: codex-smoke-ok' | codex --no-daemon exec \
   '"type":"turn.completed"'`. A run that exits 0 without a `turn.completed`
   (or that emits a standalone `"type":"error"` event anywhere in the stream)
   is a fail — a clean exit code alone is not sufficient.
-- **`-o final.json`**: must exist and contain the final response text. An
-  empty or truncated `final.json` alongside exit 0 is still a fail.
+- **`-o smoke.last-message`**: must exist and contain the final response text. An
+  empty or truncated `smoke.last-message` alongside exit 0 is still a fail.
 
 Record the installed `codex --version` output, the command above, and the
-pass/fail outcome (exit code + `turn.completed` + `final.json` contents) on
+pass/fail outcome (exit code + `turn.completed` + `smoke.last-message` contents) on
 the tracking issue. This manual run is evidence only; it never marks the
 registry profile as qualified for automated dispatch.

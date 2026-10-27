@@ -1,5 +1,5 @@
 {
-  "note": "Synthetic shared renderer characterization captured before #2991/#3002/#2998; excludes the two intentionally changed provider deliveries. No live CLI or credentials.",
+  "note": "Synthetic shared renderer characterization captured before #2991/#3002/#2998; excludes the two intentionally changed provider deliveries. Codex last-message capture intentionally separated from the structured final in #3657; other rows unchanged. No live CLI or credentials.",
   "rows": [
     {
       "provider": "claude",
@@ -55,7 +55,7 @@
         "approval_policy=\"${approval}\"",
         "--skip-git-repo-check",
         "-o",
-        "${final}",
+        "${final}.last-message",
         "--json",
         "-"
       ],

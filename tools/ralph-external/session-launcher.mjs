@@ -459,8 +459,8 @@ async function launchOneWorker(owner, options) {
       { newInvocationPath: options?.invocationPath, inspect, workerWritableRoots: writableRoots });
     verifiedPreviousAttemptId = exitRecord.invocationId;
   }
-  const paths = { stdout: invocation.stdoutPath, stderr: invocation.stderrPath, final: invocation.finalPath };
-  if (new Set(Object.values(paths)).size !== 3 || Object.values(paths).some(filename =>
+  const paths = (await importImpl(import.meta.url, 'serve/worker-invocation-paths.js')).workerOutputPaths(invocation);
+  if (new Set(Object.values(paths)).size !== Object.keys(paths).length || Object.values(paths).some(filename =>
     filename === options.invocationPath || filename === invocation.briefPath
     || dirname(filename) === runDir && basename(filename).startsWith('artifact-')
     || ['invocation.json', 'process.json', 'exit.json', 'health.json', 'final-evidence.json', 'worker-start.json', 'worker-identity.json', 'worker-exit.json',
@@ -1001,7 +1001,7 @@ async function captureOneWorker(owner, ctx) {
   // For systemd-unit mode the unit's MainPID is not known synchronously; it
   // is still resolved once inside observeIdentity.
   let nativeSupervisor = hasTransport && outcome.mode !== 'systemd-unit' ? sampleNativeSupervisor(child.pid) : null;
-  const streams = [handles[0], handles[1], handles[3], handles[4]].map(handle => createWriteStream('', { fd: handle.fd, autoClose: false }));
+  const streams = [handles[0], handles[1], handles[Object.keys(paths).length], handles[Object.keys(paths).length + 1]].map(handle => createWriteStream('', { fd: handle.fd, autoClose: false }));
   let identityObservation = 'pending';
   let reportedWorker = null;
   let output = Buffer.alloc(0);
@@ -1693,7 +1693,7 @@ async function captureOneWorkerBaseline(owner, ctx) {
   let identity = immediate?.pid === child.pid && immediate?.pid === immediate?.pgid
     && immediate?.uid === process.getuid?.() && immediate?.parentPid === process.pid ? immediate : null;
   let nativeSupervisor = hasTransport && outcome.mode !== 'systemd-unit' ? sampleNativeSupervisor(child.pid) : null;
-  const streams = [handles[0], handles[1], handles[3], handles[4]].map(handle => createWriteStream('', { fd: handle.fd, autoClose: false }));
+  const streams = [handles[0], handles[1], handles[Object.keys(paths).length], handles[Object.keys(paths).length + 1]].map(handle => createWriteStream('', { fd: handle.fd, autoClose: false }));
   let identityObservation = 'pending';
   let reportedWorker = null;
   let output = Buffer.alloc(0);

@@ -3,7 +3,19 @@ import path from 'node:path';
 import { constants } from 'node:fs';
 import { lstat, realpath, open } from 'node:fs/promises';
 import { workerConfigDigest } from '../config/aiwg-config.js';
+import type { WorkerResolvedInvocation } from '../mission-protocol/types.js';
 import type { WorkerCommandPlan, WorkerInvocationDriver } from './worker-invocation.js';
+
+/** Include the Codex transport capture in the existing output ownership checks. */
+export function workerOutputPaths(invocation: Pick<WorkerResolvedInvocation,
+  'stdoutPath' | 'stderrPath' | 'finalPath' | 'selected' | 'transport' | 'argv'>): Record<string, string> {
+  const paths: Record<string, string> = { stdout: invocation.stdoutPath!, stderr: invocation.stderrPath!, final: invocation.finalPath! };
+  const lastMessage = `${invocation.finalPath}.last-message`;
+  if (invocation.transport === 'shell' && invocation.selected.cli === 'codex' && invocation.argv?.includes(lastMessage)) {
+    paths.lastMessage = lastMessage;
+  }
+  return paths;
+}
 
 export async function inspectWorkerPath(filename: string, kind: 'file' | 'directory' | 'output'): Promise<boolean> {
   if (!path.isAbsolute(filename) || filename.includes('\0')) throw new Error('Absolute NUL-free paths are required');

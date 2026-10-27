@@ -510,7 +510,7 @@
             "approval_policy=\"${approval}\"",
             "--skip-git-repo-check",
             "-o",
-            "${final}",
+            "${final}.last-message",
             "--json",
             "-"
           ],
@@ -575,7 +575,7 @@
               },
               "finalOutput": {
                 "support": "unqualified",
-                "mapping": "[-o/--output-last-message F] last-message file; --json carries the JSONL thread/turn/item/error event stream on stdout",
+                "mapping": "[-o/--output-last-message F.last-message] launcher-owned last-message capture, separate from worker-written workerClaims JSON at F (brief output.resultPath / --final-output); --json carries the JSONL thread/turn/item/error event stream on stdout",
                 "evidence": "H: codex-cli 0.161.0 exec --help documents -o/--output-last-message and --json; unqualified until live evidence"
               },
               "stdin": {
