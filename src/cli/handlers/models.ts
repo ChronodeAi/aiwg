@@ -1,3 +1,7 @@
+import { MODELS_HELP } from './models-help.js';
+import { updateJson } from '../../models/config-writer.js';
+import { atomicConfigWrite as atomicWrite } from '../../config/worker-write.js';
+import { handleWorkerAdoptionArgs } from '../../config/worker-adoption-cli.js';
 import { resolveParallelism } from '../../config/aiwg-config.js';
 /**
  * Safe model-policy audit, resolution, and mutation commands.
@@ -10,7 +14,7 @@ import path from 'node:path';
 import { glob } from 'glob';
 import { load as loadYaml } from 'js-yaml';
 import {
-  compileModelPolicy, validateCanonicalModelPolicy, validateUserProjectModelConfig,
+  compileModelPolicy, validateCanonicalModelPolicy,
   loadProviderModelCapabilities, WorkerPolicyError, assertWorkerRoleEffort,
   type ProviderModelCatalog,
 } from '../../models/provider-policy.js';
@@ -278,26 +282,6 @@ function print(value: unknown, json: boolean): void {
   } else if (typeof value === 'string') console.log(value);
   else console.log(JSON.stringify(value, null, 2));
 }
-async function atomicWrite(file: string, content: string): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const temporary = `${file}.tmp-${process.pid}`;
-  let mode = 0o600;
-  try { mode = (await fs.stat(file)).mode; } catch { /* new file */ }
-  await fs.writeFile(temporary, content, { encoding: 'utf8', mode });
-  await fs.rename(temporary, file);
-}
-async function updateJson(file: string, mutate: (value: Record<string, any>) => void, dryRun: boolean) {
-  let value: Record<string, any> = {};
-  try { value = JSON.parse(await fs.readFile(file, 'utf8')); } catch (error: any) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  mutate(value);
-  const validation = validateUserProjectModelConfig(value);
-  if (!validation.valid) throw new Error(validation.diagnostics.map(item => item.message).join('; '));
-  const content = `${JSON.stringify(value, null, 2)}\n`;
-  if (!dryRun) await atomicWrite(file, content);
-  return { file, beforeWrite: value, dryRun };
-}
 async function effectiveCatalog(
   ctx: HandlerContext,
   target: string,
@@ -349,53 +333,6 @@ function replaceFrontmatter(raw: string, item: Artifact, tier: string): string {
   }
   return `---\n${frontmatter}\n---\n${match[2]}`;
 }
-const MODELS_HELP = `Usage: aiwg models <subcommand> [options]
-
-Subcommands:
-  list                         List discovered agent and skill model policies
-  audit                        Compile selected policies and report diagnostics
-  resolve                      Resolve artifact policies, or a direct worker invocation
-  validate                     Validate selected artifact policies (not worker configuration)
-  sources                      Show the effective model catalog without network refresh
-  refresh                      Refresh model discovery (may access the network)
-  set-default <TIER>           Write defaults.tier to models.json
-  set --tier <TIER>            Update selected agent/skill frontmatter; requires a selector or --all
-  migrate                      Add canonical role/tier hints to legacy skills
-
-Artifact selectors and options:
-  --agent <name>  --skill <name>  --glob <pattern>  --role <role>
-  --tier <tier>  --framework <name>  --all
-  --provider <provider>         Provider for artifact compilation (default: claude)
-  --model <id>                  Explicit Grok Build model for artifact resolve
-  --target <directory>         Artifact/project root (default: current directory)
-  --scope project|user         set-default destination (default: project)
-  --dry-run                    Preview mutations without writing
-  --json                       Emit JSON
-  --drift                      Include catalog drift for sources/refresh
-  --url <url>                  Remote catalog URL for refresh
-  --help, -h                   Show this reference
-  TIER: economy | standard | premium | max-quality
-
-Direct worker resolution (plans an invocation; does not launch it):
-  aiwg models resolve --role <role> --task <class> --group <group>
-    --brief <file> --workdir <tree> --final-output <file>
-    [--transport shell|mcp] [--format json|shell] [--authorize-premium]
-  --role                       efficiency | coding | reasoning | configured project alias
-  --task                       Task class from defaults.workerSelection.taskClasses
-                               Built-ins: inventory, implementation, architecture, review
-  --group                      Group from parallelism.groups and the role's guidance
-  --brief                      Absolute path to the task brief
-  --workdir                    Absolute path to the worker tree
-  --final-output               Absolute path for the final result
-  --transport                  Must match group execution transport (default: shell)
-  --format                     JSON plan or POSIX shell command (default: json)
-  --json                       Alias for --format json
-  --authorize-premium          Authorize premium for this resolution only
-                               Agents require explicit human confirmation of escalation
-
-Worker groups live in .aiwg/aiwg.config; role guidance lives in project-root models.json.
-Configure both, then run aiwg doctor --probe-workers --qualify.
-See docs/getting-started/worker-dispatch.md for a complete example.`;
 
 async function execute(ctx: HandlerContext, services: ModelsWorkerServices = { load: loadWorkerInputs }): Promise<HandlerResult> {
   if (ctx.args.length === 0 || ctx.args[0] === 'help' || ctx.args.includes('--help') || ctx.args.includes('-h')) {
@@ -407,6 +344,7 @@ async function execute(ctx: HandlerContext, services: ModelsWorkerServices = { l
     /^--(?:task|group|brief|workdir|final-output|transport|format|authorize-premium)(?:=|$)/.test(arg))) {
     return resolveDirect(ctx, services);
   }
+  if (await handleWorkerAdoptionArgs(ctx.args, ctx.cwd, 'models', ctx.signal, ctx.dryRun)) return { exitCode: 0 };
   const parsed = parseArgs(ctx.args);
   if (parsed.subcommand === 'resolve') {
     const supported = new Set(['agent', 'skill', 'glob', 'role', 'tier', 'framework', 'all', 'target', 'provider', 'model', 'json', 'help', 'dry-run']);

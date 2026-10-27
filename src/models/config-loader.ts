@@ -1,3 +1,4 @@
+import { workerDispatchBlocked, isWorkerMaintenance, workerRecoveryDiagnostic } from '../config/worker-write.js';
 /**
  * Model Configuration Loader
  * Loads and merges model configurations from multiple sources with proper precedence
@@ -42,6 +43,8 @@ export interface ConfigLoaderOptions {
    * than ever writing `process.env.AIWG_HOME` themselves.
    */
   aiwgHome?: string;
+  /** Internal candidate validation; never a dispatch input. */
+  workerCandidate?: { projectModels: UserProjectConfig | null };
 }
 
 /**
@@ -53,7 +56,7 @@ export class ConfigLoader {
   private inputDigests: Pick<WorkerActivation, 'projectModelsDigest' | 'userModelsDigest' | 'builtinModelsDigest'> | null = null;
   private readonly locations: ConfigLocations;
 
-  constructor(projectPath?: string, options?: ConfigLoaderOptions) {
+  constructor(projectPath?: string, private readonly options?: ConfigLoaderOptions) {
     const aiwgHome = options?.aiwgHome || process.env.AIWG_HOME
       || findPackageRoot(dirname(fileURLToPath(import.meta.url)));
     if (!aiwgHome) throw new Error('Failed to load AIWG default config: could not locate the running AIWG package root');
@@ -71,13 +74,16 @@ export class ConfigLoader {
    * Precedence: project > user > AIWG default
    */
   async load(parallelism?: ParallelismConfig): Promise<MergedModelConfig> {
+    if (!isWorkerMaintenance() && workerDispatchBlocked(dirname(this.locations.projectConfig))) {
+      throw new Error(workerRecoveryDiagnostic(dirname(this.locations.projectConfig)));
+    }
     const expansion = expandWorkerGroupTemplates(parallelism, getConfigPath(dirname(this.locations.projectConfig)));
     const errors = validateParallelismConfig(parallelism);
     if (errors.length) throw new Error(errors.join('; '));
     // Load all configs
     const aiwgDefault = await this.loadAiwgDefault();
     const userConfig = await this.loadUserConfig();
-    const projectConfig = await this.loadProjectConfig();
+    const projectConfig = this.options?.workerCandidate ? this.options.workerCandidate.projectModels : await this.loadProjectConfig();
 
     const digest = workerConfigDigest([aiwgDefault, userConfig, projectConfig, parallelism]);
     if (this.cache && this.cacheDigest === digest) return this.cache;

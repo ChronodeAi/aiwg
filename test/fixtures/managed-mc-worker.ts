@@ -39,6 +39,8 @@ export async function managedMcWorkerFixture(root: string, options: {
   for (const row of f.snapshot.catalog.discovery!.instances!.codex.models) row.worker!.contextTokens = 32768;
   cfg.parallelism!.activation = { revision: 1, ...workerActivationDigests(cfg), ...f.snapshot.modelDigests,
     snapshotRef: 'fixture:managed-activation' };
+  await mkdir(join(root, '.aiwg'), { recursive: true });
+  await writeFile(join(root, '.aiwg/aiwg.config'), JSON.stringify(cfg));
   const paths = { workdir: join(root, 'work'), brief: join(root, 'work', 'brief.json'),
     intent: join(root, 'work', 'intent.json'), decision: join(root, 'work', 'decision.json'),
     dispatch: join(root, 'dispatch.json'), final: join(root, 'work', 'final.json'), runDir: join(root, 'run') };
