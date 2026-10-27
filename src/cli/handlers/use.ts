@@ -36,7 +36,7 @@ import {
 import { translateSkillsToCommands, providerNeedsCommands } from '../../plugin/skill-command-translator.js';
 import * as ui from '../ui.js';
 import { readAiwgConfig, writeAiwgConfig, updateInstalled, hashManifest, emptyConfig, getProjectDir, getConfigPath } from '../../config/aiwg-config.js';
-import { appendGitignore } from '../../config/gitignore.js';
+import { AIWG_RUNTIME_PATTERNS, appendGitignore } from '../../config/gitignore.js';
 import { getLogger } from '../log.js';
 import { installCockpit } from './cockpit.js';
 import { initHandler } from './init.js';
@@ -622,15 +622,24 @@ const PROVIDER_GENERATED_GITIGNORE_PATTERNS: Record<string, string[]> = {
   codex: ['.codex/', '.agents/'],
 };
 
-async function ensureProviderGeneratedDirsIgnored(
+/**
+ * Patterns `aiwg use` ensures in the project's .gitignore on every deploy:
+ * the AIWG runtime subdirs doctor expects, plus any provider-generated dirs.
+ * Append-only via appendGitignore — operator content is never rewritten (#3635).
+ */
+export function gitignorePatternsForDeploy(provider: string): string[] {
+  return [...AIWG_RUNTIME_PATTERNS, ...(PROVIDER_GENERATED_GITIGNORE_PATTERNS[provider] ?? [])];
+}
+
+export async function ensureProviderGeneratedDirsIgnored(
   projectRoot: string,
   provider: string,
   opts: { dryRun: boolean; verbose: boolean },
 ): Promise<void> {
   if (opts.dryRun) return;
 
-  const patterns = PROVIDER_GENERATED_GITIGNORE_PATTERNS[provider];
-  if (!patterns || patterns.length === 0) return;
+  const patterns = gitignorePatternsForDeploy(provider);
+  if (patterns.length === 0) return;
 
   try {
     const result = await appendGitignore(projectRoot, patterns);

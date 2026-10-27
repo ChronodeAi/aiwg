@@ -254,11 +254,40 @@ const LEGACY_MANIFESTS = [
   '.aiwg/security/repo-access.manifest.yaml',
 ];
 
+/**
+ * Factory delivery defaults written by `aiwg init`/`aiwg use`
+ * (emptyConfig in src/config/aiwg-config.ts). Kept as a literal here —
+ * rather than importing the config module — because aiwg-config already
+ * imports this module for authorization validation, so a value import
+ * would be a cycle. A unit test pins this literal against
+ * emptyConfig().delivery (#3635).
+ */
+const DEFAULT_DELIVERY_POLICY: Record<string, unknown> = {
+  mode: 'pr-required',
+  default_branch: 'main',
+  require_ci_green: true,
+  auto_close_issues: true,
+  issue_comment_on_cycle: true,
+  force_push_policy: 'never',
+};
+
+/** True when the delivery block is exactly what the tool writes for a fresh project. */
+export function isDefaultDeliveryPolicy(delivery: unknown): boolean {
+  if (!delivery || typeof delivery !== 'object') return false;
+  const actual = delivery as Record<string, unknown>;
+  const actualKeys = Object.keys(actual);
+  return actualKeys.length === Object.keys(DEFAULT_DELIVERY_POLICY).length
+    && actualKeys.every((key) => actual[key] === DEFAULT_DELIVERY_POLICY[key]);
+}
+
 export async function auditLegacyPermissions(projectDir: string, config: AiwgConfig | null): Promise<AuthorizationDiagnostic[]> {
   const out = validateAuthorization(config?.authorization);
   if (!config?.authorization && config?.repos?.some(repo => repo.allowed?.length)) out.push({ severity: 'warning', code: 'legacy-repos-allowed', source: '.aiwg/aiwg.config', message: 'repos[].allowed should be normalized into authorization roles and assignments.' });
   if (!config?.authorization && Object.keys(config?.repo_maintainer?.tiers ?? {}).length) out.push({ severity: 'warning', code: 'legacy-maintainer-tiers', source: '.aiwg/aiwg.config', message: 'repo_maintainer.tiers should be represented by normalized role assignments.' });
-  if (!config?.authorization && config?.delivery) out.push({ severity: 'warning', code: 'legacy-delivery-policy', source: '.aiwg/aiwg.config', message: 'delivery and signing operations should be normalized into scoped role assignments.' });
+  // Tool-written delivery defaults are not operator legacy input: a fresh
+  // `aiwg use` must not produce something that needs migration (#3635).
+  // Operator-edited delivery (any key added, removed, or changed) still flags.
+  if (!config?.authorization && config?.delivery && !isDefaultDeliveryPolicy(config.delivery)) out.push({ severity: 'warning', code: 'legacy-delivery-policy', source: '.aiwg/aiwg.config', message: 'delivery and signing operations should be normalized into scoped role assignments.' });
   for (const path of LEGACY_MANIFESTS) {
     try {
       await access(join(projectDir, path));
