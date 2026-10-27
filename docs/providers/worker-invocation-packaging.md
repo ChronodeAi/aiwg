@@ -218,11 +218,19 @@ finding no same-uid process carrying this invocation's `AIWG_WORKER_INVOCATION_I
 The launcher adds that marker through the worker environment allowlist without
 changing its own environment. The scan catches descendants that call `setsid()`
 or `setpgid()`; it is bounded to 100 ms, 4096 inventory entries and 1 MiB per
-environment. Unreadable same-uid environments are ignored only when `/proc/<pid>/stat`
-proves they started strictly before the recorded worker leader on the same host
-and boot. Equal/later starts, unreadable start times, missing worker start times,
-unknown ownership, exceeded bounds, absent marker bindings and non-Linux hosts
-leave escaped-descendant evidence unknown. Immediate observation and
+environment. A process that started strictly before the recorded worker leader
+on the same host and boot cannot descend from it and is ignored. Any other
+unreadable same-uid environment (hardened, non-dumpable workers hide
+`/proc/<pid>/environ` but not `/proc/<pid>/stat` or `/proc/<pid>/cgroup`) is
+decided from readable links: a possible escaped descendant only when its ppid
+ancestry reaches the recorded leader, it keeps the worker's original session
+or process group, or it shares the worker's private cgroup (a cgroup shared
+with the launcher proves nothing and ancestry decides). An ancestry reaching
+another live process that predates the worker — a different conductor's
+parallel worker, a sibling subtree, a session manager — is not ours.
+Reparented-to-init/subreaper processes with no other link, unreadable start
+times, missing worker start times, unknown ownership, exceeded bounds, absent
+marker bindings and non-Linux hosts leave escaped-descendant evidence unknown. Immediate observation and
 `--check-descendants` both use the recorded leader start ticks. Observer coverage
 can remain degraded. A `/proc` group count of zero, a sent stop signal, or a
 worker-reported identity never proves emptiness.

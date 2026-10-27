@@ -20,7 +20,14 @@ export function observeWorkerTermination({ mode, native, workerExited, identity,
   }
   try { kill(-identity.pgid, 0); }
   catch (error) {
-    if (error.code === 'ESRCH') return scan({ invocationId, startTicks: identity.startTicks, uid: identity.uid, deadline });
+    // Pass the recorded leader so the marker scan can tell a parallel
+    // hardened (non-dumpable) worker's tree apart from a genuine escapee via
+    // readable stat/cgroup links instead of failing closed on every
+    // unreadable post-start process.
+    if (error.code === 'ESRCH') {
+      return scan({ invocationId, startTicks: identity.startTicks, uid: identity.uid, deadline,
+        workerPid: identity.pid, workerPgid: identity.pgid, workerSession: identity.sessionId });
+    }
     return { confirmed: false, missing: `empty owned process group (signal-0 returned ${error.code ?? 'unknown'})` };
   }
   return { confirmed: false, missing: 'empty owned process group (signal-0 still finds members)' };
@@ -56,7 +63,11 @@ export async function recheckWorkerTermination({ processRecord, exitRecord,
   for (let attempt = 0; attempt < 21; attempt++) {
     if (evidence && now() >= deadline) return evidence;
     let native = null;
-    if (processRecord.isolation === 'systemd-unit') {
+    // Use the unit's retained exit state whenever a unit name is recorded,
+    // not only when the recorded mode already says systemd-unit: launch-mode
+    // selection is unchanged, but unit (cgroup) evidence is preferred
+    // wherever it is available. Non-unit modes still ignore it below.
+    if (typeof processRecord.unit === 'string' && processRecord.unit !== '') {
       try { native = status(processRecord.unit, { timeoutMs: Math.max(1, Math.min(100, deadline - now())) }); }
       catch { /* Unavailable is never empty. */ }
     }

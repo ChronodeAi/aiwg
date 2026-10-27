@@ -1,6 +1,7 @@
 // Bind worker environments to an invocation and find surviving marked processes.
 import { opendirSync, statSync, openSync, readSync, closeSync, constants } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
+import { classifyUnreadableWorkerProcess, readProcCgroup } from './worker-invocation-ancestry.mjs';
 
 export const WORKER_INVOCATION_MARKER = 'AIWG_WORKER_INVOCATION_ID';
 
@@ -34,6 +35,7 @@ export function buildWorkerInvocationEnvironment(envNames, invocationId, inherit
 export function scanWorkerInvocationProcesses({ invocationId, startTicks, uid = process.getuid?.(),
   platform = process.platform, procRoot = '/proc', now = () => performance.now(),
   deadline = now() + 100, maxEntries = 4096, maxEnvironmentBytes = 1048576,
+  workerPid, workerPgid, workerSession, workerCgroup, selfCgroup, maxAncestryDepth,
   fs = { opendirSync, statSync, openSync, readSync, closeSync } } = {}) {
   const unknown = detail => ({ confirmed: false,
     missing: `escaped-descendant evidence: ${detail}` });
@@ -41,6 +43,17 @@ export function scanWorkerInvocationProcesses({ invocationId, startTicks, uid = 
   if (!Number.isInteger(uid) || typeof invocationId !== 'string' || !invocationId || invocationId.includes('\0')) {
     return unknown('launcher-bound invocation marker and uid');
   }
+  // Ancestry discrimination needs the recorded worker leader. Without it the
+  // scan keeps the legacy fail-closed behaviour for every unreadable
+  // post-start process.
+  const workerKnown = Number.isSafeInteger(workerPid) && workerPid > 1
+    && typeof startTicks === 'string' && /^\d+$/.test(startTicks);
+  let resolvedWorkerCgroup = workerCgroup;
+  if (resolvedWorkerCgroup === undefined && workerKnown) {
+    resolvedWorkerCgroup = readProcCgroup(fs, `${procRoot}/${workerPid}`);
+  }
+  let resolvedSelfCgroup = selfCgroup;
+  if (resolvedSelfCgroup === undefined) resolvedSelfCgroup = readProcCgroup(fs, `${procRoot}/self`);
   const marker = `${WORKER_INVOCATION_MARKER}=${invocationId}`;
   const present = () => ({ ...unknown('same-uid process still carries invocation marker (possible escaped descendant)'), markerPresent: true });
   const gone = error => ['ENOENT', 'ESRCH'].includes(error.code);
@@ -80,8 +93,28 @@ export function scanWorkerInvocationProcesses({ invocationId, startTicks, uid = 
       } catch (error) {
         // An escaped descendant cannot predate its worker leader. Ownership
         // failures and unreadable/missing start times still cannot prove absence.
-        if (!gone(error) && !(sameUid && startedBeforeWorker(fs, path, startTicks))) {
+        if (gone(error)) continue;
+        if (!sameUid) {
           uncertain = unknown('unreadable same-uid process environment or ownership');
+          continue;
+        }
+        if (!workerKnown) {
+          if (!startedBeforeWorker(fs, path, startTicks)) {
+            uncertain = unknown('unreadable same-uid process environment or ownership');
+          }
+          continue;
+        }
+        // Hardened (non-dumpable, e.g. Codex) processes hide their environment
+        // but not their stat/cgroup links: a parallel worker's tree reaches a
+        // live process that predates this worker and is provably not ours,
+        // while a genuine escapee still links to the leader, its session or
+        // group, or its private cgroup.
+        const verdict = classifyUnreadableWorkerProcess({ fs, procRoot, pid: Number(entry.name), uid,
+          workerPid, workerPgid, workerSession, workerStart: startTicks,
+          workerCgroup: resolvedWorkerCgroup, selfCgroup: resolvedSelfCgroup,
+          now, deadline, ...(maxAncestryDepth === undefined ? {} : { maxDepth: maxAncestryDepth }) });
+        if (verdict === 'possible-descendant') {
+          uncertain = unknown('unreadable same-uid process links to the worker (ancestry, session, group or cgroup)');
         }
       } finally { if (fd !== undefined) fs.closeSync(fd); }
     }

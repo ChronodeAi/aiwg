@@ -3116,10 +3116,17 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
           inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
           checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
           isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+          // Termination is incidental to this breaker test: pin the
+          // worker-side sampler so no launcher-owned group identity is
+          // observed through the attached transport (timing-independent),
+          // keeping termination uncertain for the still-valid reason of
+          // unknown ownership. Scope closure below follows the launcher-
+          // verified success, never the descendant proof.
+          sampleIdentity: () => null,
         });
         // The attempt genuinely succeeded (clean direct-child exit, strict
-        // final validated) even though degraded descendant stop is, as
-        // always, architecturally uncertain.
+        // final validated) even though no owned containment was observed, so
+        // descendant termination stays uncertain.
         expect(canaryResult.attemptOutcome).toBe('succeeded');
         expect(canaryResult.termination).toBe('uncertain');
       } finally {

@@ -1115,7 +1115,10 @@ async function captureOneWorker(owner, ctx) {
     await drainChildStdio(child, graceMs);
     child.stdout.destroy(); child.stderr.destroy(); child.stdin?.destroy(); child.unref();
     for (const stream of streams) await new Promise(resolve => { if (stream.destroyed) resolve(); else stream.end(resolve); });
-    const native = outcome.mode === 'systemd-unit' ? readNative() : null;
+    // Prefer the unit's retained state whenever a unit name is recorded
+    // (#3674 round 4): launch-mode selection is unchanged, but unit (cgroup)
+    // evidence is used wherever it is available.
+    const native = outcome.unit ? readNative() : null;
     const members = identity ? sampleWorkerGroup(identity.pgid) : null;
     // Require positive kernel evidence of owned containment being empty.
     const confirmed = (outcome.mode !== 'systemd-unit' && child.pid === undefined) || observeWorkerTermination({ mode: outcome.mode, native,
@@ -1782,7 +1785,10 @@ async function captureOneWorkerBaseline(owner, ctx) {
     await drainChildStdio(child, graceMs);
     child.stdout.destroy(); child.stderr.destroy(); child.stdin?.destroy(); child.unref();
     for (const stream of streams) await new Promise(resolve => { if (stream.destroyed) resolve(); else stream.end(resolve); });
-    const native = outcome.mode === 'systemd-unit' ? readNative() : null;
+    // Prefer the unit's retained state whenever a unit name is recorded
+    // (#3674 round 4): launch-mode selection is unchanged, but unit (cgroup)
+    // evidence is used wherever it is available.
+    const native = outcome.unit ? readNative() : null;
     const members = identity ? sampleWorkerGroup(identity.pgid) : null;
     const confirmed = (outcome.mode !== 'systemd-unit' && child.pid === undefined) || observeWorkerTermination({ mode: outcome.mode, native,
       workerExited: sawExit, identity, supervisor, invocationId }).confirmed;

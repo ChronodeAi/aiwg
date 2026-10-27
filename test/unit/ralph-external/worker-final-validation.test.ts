@@ -40,7 +40,7 @@ async function fixture(recovery: boolean, adapter = new CodexAdapter()) {
           child.emit('exit', exitCode, null); child.emit('close', exitCode, null);
         });
         return degraded ? { mode: 'degraded', child } : { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-final' };
-      }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: exitCode, result: 'success' }) });
+      }, isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: exitCode, result: 'success' }) });
     const evidence = JSON.parse(await readFile(path.join(f.runDir, 'final-evidence.json'), 'utf8').catch(error => {
       if (error.code === 'ENOENT') return 'null';
       throw error;

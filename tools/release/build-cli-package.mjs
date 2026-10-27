@@ -116,6 +116,7 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     'tools/ralph-external/lib/worker-retry-evidence.mjs',
     'tools/ralph-external/lib/worker-termination.mjs',
     'tools/ralph-external/lib/worker-invocation-processes.mjs',
+    'tools/ralph-external/lib/worker-invocation-ancestry.mjs',
     'tools/ralph-external/lib/systemd-client.mjs',
     'tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs',
     'tools/ralph-external/lib/launcher-recovery-evidence.mjs',

@@ -279,7 +279,135 @@ describe('bounded invocation-marker evidence', () => {
       ownership: 'owned-group', worker: identity },
       exitRecord: { invocationId: 'exact', isolation: 'degraded', exitCode: 0 }, observe })).toMatchObject({ confirmed: true });
     expect(scan).toHaveBeenCalledTimes(2);
-    for (const [input] of scan.mock.calls) expect(input).toMatchObject({ invocationId: 'exact', startTicks: '100' });
+    for (const [input] of scan.mock.calls) expect(input).toMatchObject({ invocationId: 'exact', startTicks: '100',
+      workerPid: 2147483646, workerPgid: 2147483646, workerSession: supervisor.sessionId });
+  });
+
+  // Fake-/proc fixtures for ancestry discrimination: every entry is a real
+  // temp file, but `openSync` refuses the listed environ paths with EACCES to
+  // simulate hardened (non-dumpable) workers whose stat/cgroup stay readable.
+  async function ancestryFixture(entries, { deniedEnviron = [], uid = process.getuid() } = {}) {
+    const procRoot = await mkdtemp(join(tmpdir(), 'aiwg-ancestry-proc-')); roots.push(procRoot);
+    for (const [pid, spec] of Object.entries(entries)) {
+      await mkdir(join(procRoot, pid));
+      await writeFile(join(procRoot, pid, 'environ'), spec.environ ?? '');
+      if (spec.stat !== undefined) await writeFile(join(procRoot, pid, 'stat'), spec.stat);
+      if (spec.cgroup !== undefined) await writeFile(join(procRoot, pid, 'cgroup'), spec.cgroup);
+    }
+    const denied = new Set(deniedEnviron.map(String));
+    const fixtureFs = { ...fs, openSync: (filename, ...args) => {
+      const match = /\/(\d+)\/environ$/.exec(String(filename));
+      if (match && denied.has(match[1])) throw Object.assign(new Error(), { code: 'EACCES' });
+      return fs.openSync(filename, ...args);
+    } };
+    return { procRoot, platform: 'linux', invocationId: 'exact', uid, fs: fixtureFs };
+  }
+
+  // Stat fields after comm: state, ppid, pgrp, session, then 15 counters,
+  // then the start time at index 19.
+  const ancestryStat = (pid, comm, ppid, pgrp, session, start) =>
+    `${pid} (${comm}) S ${ppid} ${pgrp} ${session} ${Array(15).fill('0').join(' ')} ${start} 0 0\n`;
+
+  const ancestryBase = { invocationId: 'exact', platform: 'linux', startTicks: '500',
+    workerPid: 100, workerPgid: 100, workerSession: 100,
+    workerCgroup: '/worker/unit', selfCgroup: '/session/shared' };
+
+  it('confirms an unrelated unreadable post-start process owned by another parent', async () => {
+    // The worker leader (100) has already exited, as in a retry recheck; the
+    // parallel worker (200) descends from an older conductor (150).
+    const fixture = await ancestryFixture({
+      150: { stat: ancestryStat(150, 'conductor', 1, 150, 150, '100'), cgroup: '0::/session/shared\n' },
+      200: { stat: ancestryStat(200, 'codex', 150, 200, 200, '600'), cgroup: '0::/session/shared\n' },
+    }, { deniedEnviron: ['200'] });
+    expect(scanWorkerInvocationProcesses({ ...ancestryBase, ...fixture }))
+      .toMatchObject({ confirmed: true, missing: null });
+  });
+
+  it('refuses an unreadable setsid child whose ppid chain reaches the worker leader', async () => {
+    const fixture = await ancestryFixture({
+      90: { stat: ancestryStat(90, 'launcher', 1, 90, 90, '100'), cgroup: '0::/session/shared\n' },
+      100: { stat: ancestryStat(100, 'worker', 90, 100, 100, '500'), cgroup: '0::/worker/unit\n' },
+      201: { stat: ancestryStat(201, 'escapee', 100, 201, 201, '600'), cgroup: '0::/session/shared\n' },
+    }, { deniedEnviron: ['201'] });
+    expect(scanWorkerInvocationProcesses({ ...ancestryBase, ...fixture }))
+      .toMatchObject({ confirmed: false, missing: expect.stringContaining('links to the worker') });
+  });
+
+  it('refuses a cgroup-shared unreadable process even with an unrelated ancestry', async () => {
+    const fixture = await ancestryFixture({
+      150: { stat: ancestryStat(150, 'conductor', 1, 150, 150, '100'), cgroup: '0::/session/shared\n' },
+      202: { stat: ancestryStat(202, 'codex', 150, 202, 202, '600'), cgroup: '0::/worker/unit\n' },
+    }, { deniedEnviron: ['202'] });
+    expect(scanWorkerInvocationProcesses({ ...ancestryBase, ...fixture }))
+      .toMatchObject({ confirmed: false, missing: expect.stringContaining('links to the worker') });
+  });
+
+  it('keeps a reparented-to-init unreadable process unknown', async () => {
+    const fixture = await ancestryFixture({
+      203: { stat: ancestryStat(203, 'orphan', 1, 203, 203, '600'), cgroup: '0::/session/shared\n' },
+    }, { deniedEnviron: ['203'] });
+    expect(scanWorkerInvocationProcesses({ ...ancestryBase, ...fixture }))
+      .toMatchObject({ confirmed: false, missing: expect.stringContaining('links to the worker') });
+  });
+
+  it('refuses an unreadable process that keeps the worker process group', async () => {
+    const fixture = await ancestryFixture({
+      150: { stat: ancestryStat(150, 'conductor', 1, 150, 150, '100'), cgroup: '0::/session/shared\n' },
+      204: { stat: ancestryStat(204, 'escapee', 150, 100, 204, '600'), cgroup: '0::/session/shared\n' },
+    }, { deniedEnviron: ['204'] });
+    expect(scanWorkerInvocationProcesses({ ...ancestryBase, ...fixture }))
+      .toMatchObject({ confirmed: false, missing: expect.stringContaining('links to the worker') });
+  });
+
+  it('lets ancestry clear an unrelated process when the worker shares the launcher cgroup', async () => {
+    // A degraded worker shares its session cgroup with every sibling, so the
+    // cgroup match alone must not block: the older ancestry clears it.
+    const fixture = await ancestryFixture({
+      150: { stat: ancestryStat(150, 'conductor', 1, 150, 150, '100'), cgroup: '0::/session/shared\n' },
+      200: { stat: ancestryStat(200, 'codex', 150, 200, 200, '600'), cgroup: '0::/session/shared\n' },
+    }, { deniedEnviron: ['200'] });
+    expect(scanWorkerInvocationProcesses({ ...ancestryBase, ...fixture,
+      workerCgroup: '/session/shared', selfCgroup: '/session/shared' }))
+      .toMatchObject({ confirmed: true, missing: null });
+  });
+
+  it('reads the worker cgroup from /proc when the caller does not supply it', async () => {
+    const fixture = await ancestryFixture({
+      100: { stat: ancestryStat(100, 'worker', 90, 100, 100, '500'), cgroup: '0::/worker/unit\n' },
+      150: { stat: ancestryStat(150, 'conductor', 1, 150, 150, '100'), cgroup: '0::/session/shared\n' },
+      202: { stat: ancestryStat(202, 'codex', 150, 202, 202, '600'), cgroup: '0::/worker/unit\n' },
+    }, { deniedEnviron: ['202'] });
+    expect(scanWorkerInvocationProcesses({ ...ancestryBase, ...fixture, workerCgroup: undefined }))
+      .toMatchObject({ confirmed: false, missing: expect.stringContaining('links to the worker') });
+  });
+
+  it('reconciles a recorded systemd-unit scope from retained unit state', async () => {
+    const supervisor = sampleWorkerIdentity(process.pid);
+    const processRecord = { invocationId: 'unit-one', origin: 'launcher', supervisor,
+      isolation: 'systemd-unit', unit: 'synthetic-unit', identityObservation: 'stable-owned-group',
+      ownership: 'owned-group', worker: supervisor, invocationMarker: 'unit-one' };
+    const exitRecord = { invocationId: 'unit-one', isolation: 'systemd-unit', exitCode: 0 };
+    const status = vi.fn(() => ({ active: false, cgroupEmpty: true,
+      execMainCode: 1, execMainStatus: 0, result: 'success' }));
+    expect(await recheckWorkerTermination({ processRecord, exitRecord, status,
+      now: () => 0, wait: async () => {} })).toMatchObject({ confirmed: true });
+    expect(status).toHaveBeenCalledWith('synthetic-unit', expect.anything());
+    const unavailable = () => { throw new Error('no manager'); };
+    expect((await recheckWorkerTermination({ processRecord, exitRecord, status: unavailable,
+      now: () => 0, wait: async () => {} })).confirmed).toBe(false);
+  });
+
+  it('queries a recorded unit whenever present but confirms from it only in unit mode', async () => {
+    const supervisor = sampleWorkerIdentity(process.pid);
+    const status = vi.fn(() => ({ active: false, cgroupEmpty: true,
+      execMainCode: 1, execMainStatus: 0, result: 'success' }));
+    const result = await recheckWorkerTermination({
+      processRecord: { invocationId: 'unit-one', invocationMarker: 'unit-one', origin: 'launcher',
+        supervisor, isolation: 'degraded', unit: 'synthetic-unit' },
+      exitRecord: { invocationId: 'unit-one', isolation: 'degraded', exitCode: 0 },
+      status, now: () => 0, wait: async () => {} });
+    expect(status).toHaveBeenCalledWith('synthetic-unit', expect.anything());
+    expect(result.confirmed).toBe(false);
   });
 
   it('fails closed at time, entry and environment byte bounds and on non-Linux platforms', async () => {
