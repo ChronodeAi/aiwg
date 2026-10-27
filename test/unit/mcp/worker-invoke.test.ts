@@ -1977,6 +1977,50 @@ setInterval(() => {}, 1000);
     }
   }, 6 * 2000 * 3);
 
+  // #3691: the same degraded-overflow shape with a payload exactly one byte
+  // over the frame cap. At cap+1 the worker has fully flushed and idles, so
+  // unlike the 12 MiB worker it cannot die via EPIPE — the stop authority
+  // itself must stop it. Single iteration; the six-iteration test above
+  // keeps the 12 MiB payload unchanged.
+  it.skipIf(process.platform !== 'linux' || !supportsCapturedWorkerStdio)('stops a worker writing exactly one byte over the frame cap', async () => {
+    const root = await tempRoot();
+    const script = path.join(root, 'hostile-worker.mjs');
+    const pidPath = path.join(root, 'worker.pid');
+    await writeFile(script, `import { writeFileSync } from 'node:fs';
+writeFileSync(process.argv[2], String(process.pid));
+process.on('SIGTERM', () => {});
+process.stdout.write(Buffer.alloc(${MAX_MCP_FRAME_BYTES + 1}, 120));
+setInterval(() => {}, 1000);
+`);
+    const f = mcpFixture(root, path.join(root, 'unused-config.json'));
+    f.drivers.codex.mcpRegistry = {
+      get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath, args: [script, pidPath] }),
+    };
+    resetInProcessAllowanceLedger();
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    let pid: number | undefined;
+    try {
+      const result = await invoke(root, '', {}, { registry, loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }) });
+      pid = Number(await readFile(pidPath, 'utf8'));
+      const body = JSON.parse(result.content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('uncertain');
+      expect(body.termination).toBe('uncertain');
+      expect(body.diagnostics.join('; ')).toContain('OG_WORKER_MCP_FRAME_TOO_LARGE');
+      const [entry] = registry.values();
+      expect(entry.terminalAt).toBeNull();
+      expect(entry.control?.stop).toBeTypeOf('function');
+      expect(registry.canStart()).toBe(false);
+      // SIGKILL delivery precedes process exit and reaping.
+      await vi.waitFor(() => {
+        expect(() => process.kill(pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
+      }, { timeout: 2000, interval: 25 });
+      await rm(path.join(root, 'work', 'final.json'), { force: true });
+    } finally {
+      pid ??= Number(await readFile(pidPath, 'utf8').catch(() => '0'));
+      if (pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch { /* already reaped */ } }
+    }
+  }, 30000);
+
   it.each(['confirmed', 'uncertain'])('awaits %s overflow evidence and releases capacity only with proof repeatedly', async termination => {
     const root = await tempRoot();
     const registry = createInvocationRegistry({ maxActive: 1 });

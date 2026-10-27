@@ -3,7 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, constants, createReadStream, mkdtempSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ChildProcessTransport } from '../../../src/mcp/tools/worker-invoke.mjs';
+import { ChildProcessTransport, MAX_MCP_FRAME_BYTES } from '../../../src/mcp/tools/worker-invoke.mjs';
 import { stopOverflowWorker } from '../../../tools/ralph-external/lib/worker-overflow.mjs';
 import { sampleWorkerGroup, sampleWorkerIdentity } from '../../../tools/ralph-external/process-monitor.mjs';
 
@@ -176,6 +176,71 @@ setInterval(() => {}, 1000);
       stdout?.destroy();
       closeSync(reader);
       for (const pid of [workerPid, descendantPid]) if (pid) { try { process.kill(pid, 'SIGKILL'); } catch { /* already exited */ } }
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await closed;
+    }
+  }, 30000);
+
+  // #3691: a worker exactly one byte over the frame cap has fully flushed
+  // and idles — unlike a still-writing oversized worker, it cannot die via
+  // EPIPE when the transport destroys the pipe, so it survives unless the
+  // stop authority itself delivers a signal. When the owned-group signal
+  // refuses (unreadable /proc membership scan, non-leader topology), the
+  // authority must still stop the re-verified worker PID directly instead
+  // of reporting the overflow while leaving the worker running.
+  it.skipIf(process.platform !== 'linux')('stops an idle cap-plus-one worker when the group signal refuses', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'aiwg-worker-overflow-')); roots.push(root);
+    const script = path.join(root, 'worker.mjs');
+    const pidFile = path.join(root, 'worker.pid');
+    const fifo = path.join(root, 'stdout.fifo');
+    expect(spawnSync('mkfifo', [fifo], { stdio: 'ignore', timeout: 10000 }).status).toBe(0);
+    // The FIFO lets the worker flush all cap+1 bytes even when native child
+    // stdio pipes are prohibited, so it is idle (not mid-write) at overflow.
+    const writer = openSync(fifo, constants.O_RDWR);
+    const reader = openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK);
+    writeFileSync(script, `import { writeFileSync } from 'node:fs';
+writeFileSync(process.argv[2], String(process.pid));
+process.on('SIGTERM', () => {});
+process.stdout.write(Buffer.alloc(${MAX_MCP_FRAME_BYTES + 1}, 120));
+setInterval(() => {}, 1000);
+`);
+    const child = spawn(process.execPath, [path.resolve('tools/ralph-external/lib/worker-isolation.mjs'),
+      '--worker-environment', '[]', '--', process.execPath, script, pidFile],
+    { stdio: ['ignore', writer, writer] });
+    closeSync(writer);
+    const closed = new Promise<void>((resolve, reject) => { child.once('close', () => resolve()); child.once('error', reject); });
+    let workerPid = 0;
+    let stdout: ReturnType<typeof createReadStream> | undefined;
+    try {
+      const deadline = Date.now() + 5000;
+      while (!workerPid && Date.now() < deadline) {
+        try { workerPid = Number(readFileSync(pidFile, 'utf8')); } catch { /* startup */ }
+        if (!workerPid) await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(workerPid).toBeGreaterThan(0);
+      stdout = createReadStream(fifo);
+      const killPid = vi.fn((pid: number, signal: NodeJS.Signals) => process.kill(pid, signal));
+      const transport = new ChildProcessTransport({ stdout, once: child.once.bind(child) }, {
+        terminate: () => stopOverflowWorker({ mode: 'degraded', child, transportSupervisor: true },
+          { signal: () => false, killPid }),
+      });
+      const overflow = new Promise<Error>(resolve => { transport.onerror = resolve; });
+      await transport.start();
+      const failure = await overflow;
+      expect(failure).toMatchObject({ code: 'OG_WORKER_MCP_FRAME_TOO_LARGE' });
+      expect(await transport._termination).toEqual({ termination: 'uncertain', delivered: true,
+        diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
+      // The fallback addresses the re-verified worker PID itself.
+      expect(killPid).toHaveBeenCalledWith(workerPid, 'SIGKILL');
+      // SIGKILL delivery precedes process exit and reaping.
+      await vi.waitFor(() => {
+        expect(() => process.kill(workerPid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
+      }, { timeout: 2000, interval: 25 });
+      await closed;
+    } finally {
+      stdout?.destroy();
+      closeSync(reader);
+      if (workerPid) { try { process.kill(workerPid, 'SIGKILL'); } catch { /* already exited */ } }
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       await closed;
     }

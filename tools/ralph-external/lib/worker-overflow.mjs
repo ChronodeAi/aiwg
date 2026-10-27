@@ -9,7 +9,8 @@ export async function stopOverflowWorker(launch, {
   deadlineMs = 2000, pollIntervalMs = 25,
   stopUnit = stopWorkerUnit, unitStatus = getWorkerIsolationStatus,
   sample = sampleWorkerIdentity, children = sampleWorkerChildren, platform = process.platform,
-  signal = signalOwnedWorker, clock = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  signal = signalOwnedWorker, killPid = (pid, sig) => process.kill(pid, sig),
+  clock = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
 } = {}) {
   let delivered = false;
   const uncertain = diagnostic => ({ termination: 'uncertain', diagnostic, delivered });
@@ -36,7 +37,22 @@ export async function stopOverflowWorker(launch, {
     if (!worker || launch.transportSupervisor && worker.parentPid !== supervisor.pid
       || !sameWorkerIdentity(supervisor, sample(supervisor.pid))) return uncertain('OG_WORKER_MCP_STOP_UNCONFIRMED');
     // Reuse the launcher's birth/session/UID checks; never signal a bare PID.
-    if (!(delivered = !!signal(worker, 'SIGKILL'))) return uncertain('OG_WORKER_MCP_STOP_FAILED');
+    if (!(delivered = !!signal(worker, 'SIGKILL'))) {
+      // #3691 last resort: the owned-group signal can refuse for a fully
+      // verified supervised worker (e.g. its group-membership scan cannot
+      // enumerate /proc). A worker that already flushed its whole frame —
+      // exactly cap+1 bytes — then idles, so unlike a still-writing worker
+      // it cannot die via EPIPE when the transport destroys the pipe; doing
+      // nothing here would report the overflow as handled while leaving the
+      // worker running. Re-verify this exact PID against the kernel (same
+      // birth, still our supervisor's child) and signal it directly.
+      // Termination stays uncertain: descendants are still unproven.
+      const fresh = launch.transportSupervisor ? sample(worker.pid) : null;
+      if (fresh && sameWorkerIdentity(worker, fresh) && fresh.parentPid === supervisor.pid) {
+        try { killPid(worker.pid, 'SIGKILL'); delivered = true; } catch { delivered = false; }
+      }
+      if (!delivered) return uncertain('OG_WORKER_MCP_STOP_FAILED');
+    }
     // Descendants can escape the group, so its termination stays uncertain.
     return uncertain('OG_WORKER_MCP_STOP_UNCONFIRMED');
   }
