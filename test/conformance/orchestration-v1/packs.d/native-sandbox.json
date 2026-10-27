@@ -1,0 +1,6 @@
+{
+  "T-OG-04": [
+    "test/unit/ralph-external/worker-native-sandbox.test.ts",
+    "test/unit/cli/doctor-worker-sandbox.test.ts"
+  ]
+}

@@ -167,9 +167,9 @@ harness sandbox**, using Claude Code `sandbox.excludedCommands` or an unsandboxe
 provide isolation. Never nest sandboxes: a CLI sandbox inside a conductor
 sandbox fails.
 
-If the worker's own sandbox cannot start on the host (for example, Muse under
-Ubuntu's AppArmor user-namespace restriction), explicitly opt in through a
-separate group. Merge this example with your existing configuration; keep the
+If the worker's actual sandbox mechanism fails on the host and you choose to
+disable it for trusted tasks, explicitly opt in through a separate group. Merge
+this example with your existing configuration; keep the
 usual sandbox policy for other groups and add `muse-external` to the coding
 role's `groups` in `models.json`:
 
@@ -212,25 +212,29 @@ or MCP `worker-invoke`; no Mission/MC session or daemon is required. Operators
 may run the raw resolved shell command, which has no launcher records or scope.
 
 Launcher workers use a systemd user unit by default (`execution.launchMode: "systemd-unit"`),
-with cgroup memory limits and a cgroup kill scope. For Codex `read-only` and
-`workspace-write` sandboxes, the launcher first runs a bounded, non-inference
-user/network namespace probe inside a transient user unit using the worker's
-client environment handling. `aiwg doctor --probe-workers` reports this same
-check in `sandboxChecks` with `scope: "systemd-launcher"`. A blocked check is a
-warning, not a qualification failure: resolution stays ready, and
-the launcher re-probes and refuses at launch time.
+with cgroup memory limits and a cgroup kill scope. For Codex and Muse `read-only`
+and `workspace-write` shell sandboxes, the launcher first probes `bwrap` inside a
+bounded transient user unit using the worker's client environment handling. It
+prefers executable `/usr/bin/bwrap`, then an executable on the worker's absolute
+PATH, and runs `--ro-bind / / --unshare-user --unshare-net -- /usr/bin/true`.
+Other CLI mechanisms can supply their own launcher-owned probe hook.
 
-Ubuntu hosts can restrict unprivileged user namespaces inside systemd user units
-through AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`) even when
-sandboxing works in an interactive shell. A failed
-probe refuses launch before creating run metadata with
-`OG_NATIVE_SANDBOX_UNAVAILABLE`, the bounded probe failure, and remediation.
-The same code identifies known runtime `uid_map` and bwrap loopback permission
-failures. A host administrator can configure an AppArmor allowance for the worker
-launch path.
+`aiwg doctor --probe-workers` reports this same check in `sandboxChecks` with
+`scope: "systemd-launcher"` and the probed mechanism. A blocked check is a warning,
+not a qualification failure: resolution stays ready, and the launcher re-probes
+and refuses at launch time with `OG_NATIVE_SANDBOX_UNAVAILABLE`, the mechanism,
+and a bounded failure detail. Check the named executable and its sandbox support
+inside the worker unit environment. Known runtime `uid_map` and bwrap loopback
+permission failures use the same code.
 
-Alternatively, explicitly select the CLI sandbox as the launch boundary in the
-project's `.aiwg/aiwg.config`, for each affected worker group:
+Ubuntu's stock AppArmor policy can deny plain `unshare` both interactively and in
+user units while allowing system `bwrap`. The launcher probes the CLI's mechanism;
+a failed `unshare` command does not establish that Codex or Muse sandboxing fails.
+No host-wide AppArmor relaxation or launch-mode change is needed when `bwrap`
+works inside the unit.
+
+For a separately chosen boundary without cgroup limits, explicitly select the CLI
+sandbox in the project's `.aiwg/aiwg.config`:
 
 ```json
 {

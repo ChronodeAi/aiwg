@@ -42,7 +42,7 @@ export async function checkWorkerSandboxLaunches({ projectDir, config, registry,
         else {
           const profileRef = config.parallelism.clis?.[cliId]?.invocationProfile ?? 'direct-shell';
           const envNames = adapter.invocationProfiles?.[profileRef]?.envAllowlist ?? ['PATH', 'HOME'];
-          const probe = await probeNativeSandbox({ cwd: projectDir, envNames,
+          const probe = await probeNativeSandbox({ adapter, cwd: projectDir, envNames,
             env: Object.fromEntries(envNames.filter(name => process.env[name] !== undefined).map(name => [name, process.env[name]])) });
           check.probe = probe;
           check.status = probe.ok ? 'passed' : 'blocked';
