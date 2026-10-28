@@ -1,7 +1,8 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { MODEL_WRAPPER_DEFINITIONS } from '../../../src/models/wrapper-definitions.js';
 import {
   MODEL_WRAPPERS,
   loadProviderModelMetadata,
@@ -81,5 +82,26 @@ describe('provider model metadata', () => {
   it('does not advertise providers that are not installed in the workspace', async () => {
     const { root, project } = await fixture([]);
     expect((await loadProviderModelMetadata(project, root))!.providers).toEqual({});
+  });
+
+  it('reports one hint per wrapper definition with a defined source and status', async () => {
+    const { root, project } = await fixture(['claude']);
+    const hints = (await loadProviderModelMetadata(project, root))!.providers.claude;
+    expect(hints.map(hint => hint.wrapper)).toEqual(MODEL_WRAPPER_DEFINITIONS.map(item => item.name));
+    for (const hint of hints) {
+      expect(['native', 'remote', 'cache', 'static']).toContain(hint.source);
+      expect(hint).toMatchObject({ status: 'active', observed: false });
+    }
+  });
+
+  it('omits wrappers whose role has no catalog model', async () => {
+    const { root, project } = await fixture(['claude']);
+    const file = join(root, 'agentic/code/providers/model-catalog.v1.json');
+    const catalog = JSON.parse(await readFile(file, 'utf8'));
+    delete catalog.providers.claude.roles.efficiency;
+    await writeFile(file, JSON.stringify(catalog));
+    const hints = (await loadProviderModelMetadata(project, root))!.providers.claude;
+    expect(hints.map(hint => hint.role)).toEqual(['reasoning', 'coding', 'coding']);
+    expect(hints.map(hint => hint.wrapper)).toEqual([MODEL_WRAPPERS.reasoning, MODEL_WRAPPERS.coding, 'aiwg-model-verifier']);
   });
 });
