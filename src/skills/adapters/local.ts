@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { RegistryAdapter, SkillResult, SkillDetails, InstallOptions } from '../types.js';
+import { discoverLocalSkillOwners, higherLocalSkillOwner, selectSkillOwners, type SkillDiscoveryOptions } from '../collision-discovery.js';
 import {
   getProviderDefinition,
   resolveProviderPathValue,
@@ -152,17 +153,28 @@ export class LocalAdapter implements RegistryAdapter {
 
   private cachedSkills: SkillResult[] | null = null;
 
+  constructor(
+    private readonly discoveryOptions?: SkillDiscoveryOptions,
+    private readonly aiwgRoot = AIWG_ROOT,
+  ) {}
+
+  private withLocalOwners(skills: SkillResult[]): SkillResult[] {
+    return selectSkillOwners([...skills, ...discoverLocalSkillOwners(
+      this.discoveryOptions ?? { projectDir: process.cwd() },
+    )]);
+  }
+
   async isAvailable(): Promise<boolean> {
-    return fs.existsSync(path.join(AIWG_ROOT, 'agentic', 'code'));
+    return fs.existsSync(path.join(this.aiwgRoot, 'agentic', 'code'));
   }
 
   async list(): Promise<SkillResult[]> {
-    if (this.cachedSkills) return this.cachedSkills;
+    if (this.cachedSkills) return this.withLocalOwners(this.cachedSkills);
 
     const skills: SkillResult[] = [];
-    const agenticDir = path.join(AIWG_ROOT, 'agentic', 'code');
+    const agenticDir = path.join(this.aiwgRoot, 'agentic', 'code');
 
-    if (!fs.existsSync(agenticDir)) return skills;
+    if (!fs.existsSync(agenticDir)) return this.withLocalOwners(skills);
 
     // Find all manifest.json files in frameworks/ and addons/
     const frameworksDir = path.join(agenticDir, 'frameworks');
@@ -206,6 +218,7 @@ export class LocalAdapter implements RegistryAdapter {
             name: skill.name,
             description: skill.description,
             source: 'local',
+            origin: 'aiwg-managed',
             package: packageName,
             platforms,
             installed: true,
@@ -250,6 +263,7 @@ export class LocalAdapter implements RegistryAdapter {
           name: skillName,
           description,
           source: 'local',
+          origin: 'aiwg-managed',
           package: packageName,
           platforms,
           installed: true,
@@ -260,7 +274,7 @@ export class LocalAdapter implements RegistryAdapter {
     }
 
     this.cachedSkills = skills;
-    return skills;
+    return this.withLocalOwners(skills);
   }
 
   async search(query: string): Promise<SkillResult[]> {
@@ -279,9 +293,10 @@ export class LocalAdapter implements RegistryAdapter {
     const all = await this.list();
     const match = all.find((s) => s.name === name);
     if (!match) return undefined;
+    if ('path' in match) return match as SkillDetails;
 
     // Find the SKILL.md for full details
-    const agenticDir = path.join(AIWG_ROOT, 'agentic', 'code');
+    const agenticDir = path.join(this.aiwgRoot, 'agentic', 'code');
     const skillMdPaths = this.findSkillMds(agenticDir);
     const skillMdPath = skillMdPaths.find(
       (p) => path.basename(path.dirname(p)) === name
@@ -324,6 +339,10 @@ export class LocalAdapter implements RegistryAdapter {
   }
 
   async install(name: string, options: InstallOptions): Promise<void> {
+    const collision = higherLocalSkillOwner(name, 'aiwg-managed', {
+      ...this.discoveryOptions, projectDir: options.projectDir,
+    });
+    if (collision) throw new Error(`${collision.origin}-owned skill "${name}" takes precedence over aiwg-managed-owned skill at ${collision.path}`);
     const details = await this.info(name);
     if (!details || !details.path) {
       throw new Error(`Skill '${name}' not found in local registry`);
@@ -349,7 +368,11 @@ export class LocalAdapter implements RegistryAdapter {
 
     // Copy skill directory to target
     const sourceDir = path.dirname(details.path);
-    fs.mkdirSync(targetDir, { recursive: true });
+    if (fs.existsSync(targetDir)) {
+      throw new Error(`project/user-owned target "${targetDir}" blocks aiwg-managed-owned skill "${name}"`);
+    }
+    fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+    fs.mkdirSync(targetDir);
 
     const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -357,9 +380,9 @@ export class LocalAdapter implements RegistryAdapter {
       const destPath = path.join(targetDir, entry.name);
 
       if (entry.isFile()) {
-        fs.copyFileSync(srcPath, destPath);
+        fs.copyFileSync(srcPath, destPath, fs.constants.COPYFILE_EXCL);
       } else if (entry.isDirectory()) {
-        fs.cpSync(srcPath, destPath, { recursive: true });
+        fs.cpSync(srcPath, destPath, { recursive: true, errorOnExist: true, force: false });
       }
     }
 

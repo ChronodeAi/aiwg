@@ -31,6 +31,8 @@ export interface ProjectionPolicy {
 }
 
 export interface ProjectionPlan {
+  /** A higher-precedence owner blocks writing to an otherwise supported surface. */
+  blocked?: boolean;
   policy: ProjectionPolicy;
   targetPath: string;
   sourceDigest: string;
