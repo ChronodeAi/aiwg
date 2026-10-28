@@ -30,6 +30,15 @@ commandHint:
 
 Resume a paused or interrupted agent loop.
 
+## HITL authorization checkpoints
+
+Before any confirmation below, read and apply
+[agent-loop authorization checkpoints](../../docs/hitl-authorization.md).
+Call `aiwg config authorization check --action-file "$ACTION_FILE" --target "$TARGET_REPO"`
+for host-classified effects. Only `auto-authorized` with a signed receipt skips
+that workflow prompt; retain existing prompts/refusals otherwise. Platform
+prompts are never bypassed. Limits, regression and threat overrides still require review.
+
 ## Usage
 
 ```

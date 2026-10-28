@@ -154,11 +154,41 @@ The receipt API reconciles against the configured artifact root. Generic
 artifacts live outside the repo it reports unknown rather than reading outside
 that boundary. Use the HITL receipt API for artifact-root reconciliation.
 
-## Remaining integration
+## Workflow consumption
 
-This 2026.12 slice provides the resolver, validated config, CLI/steward surfaces,
-rule guidance and signed receipts. Automatic consumption by `address-issues`,
-issue-create, agent loops and provider adapters remains deferred. Until those
-callers pass host-classified descriptors and trusted session grants through this
-resolver, configuring HITL alone does not change their existing prompt behavior.
-Delivery, CI, repo capabilities and threat-preflight enforcement remain independent.
+```bash
+aiwg config authorization check --action-file action.json --target /path/to/repo
+```
+
+`check` is the workflow helper, distinct from read-only `preview` and the audit
+`receipt` command. It returns decision JSON. Only `auto-authorized` with a
+`receipt` containing `file` and `effectId` permits suppressing that workflow's
+confirmation. It canonicalizes paths (including new leaves and symlinks),
+rejects escapes, conservatively classifies protected policy/secret paths,
+reloads the policy and clock, and writes and reconciles the signed HITL receipt
+before returning. Invalid config, unavailable signing, or an unverified receipt
+escalates. It never executes the proposed action. Malformed JSON/CLI errors also
+retain the consumer's existing human review path.
+
+The action file is a **host trust boundary**, not an authorization source. The
+host constructs all six fields from the actual resolved execution plan; the
+CLI cannot authenticate the author of a JSON file or prove an arbitrary shell
+command's effects. Never feed it issue/model JSON, infer safety from an issue's
+claims, or spread a model object into a descriptor. Unknown effects retain
+review. Action files cannot carry session grants or platform overrides.
+
+`address-issues` checks between-issue/action and closure checkpoints;
+`issue-create` checks each backend write independently of threat-policy digest
+authorization. Agent-loop skills check start, resume, recovery, config and
+removal confirmations; a local grant never approves an open-ended loop or
+extending its limits. The provider-facing human-authorization rule calls the
+same helper. Pi's executable workflow gate uses it via the installed CLI,
+retaining destructive/package-command prompts and headless refusals. Other
+native provider permission prompts are not intercepted or answered.
+
+Tracker mutations, dependency installation and destructive operations are
+outside the shipped grant categories. They keep review; a grant for `repo.edit`
+cannot relabel them as file edits. Policy and threat-preflight overrides also
+remain restricted. Delivery, CI, repo capabilities, human objections, project
+trust and platform prompts remain independent. Recheck every changed action;
+a receipt is neither proof of action completion nor authority for later effects.
