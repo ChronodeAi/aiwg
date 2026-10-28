@@ -7,6 +7,61 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.11.0] - 2026-10-28
+
+### Added
+
+- Grok Bot conversations are account-scoped, so they now import once into a
+  host catalog. Workspace catalogs hold references instead of copies. Workspace
+  list, search and analytics read through those references, and aggregates
+  count each conversation once. Existing copied rows stay readable (#3232).
+- Tool-output images (Codex `view_image`, generated base64 images) are stored
+  once per catalog by content hash instead of inline in event text. Repeated
+  multi-MB images no longer bloat the catalog or reach search (#3265).
+- New orchestration conformance gates: crash-safe admission across two
+  processes, managed-path overhead within the NFR-OG-001 bound, changed-code
+  coverage thresholds for orchestration validators and adapters, and an
+  inventory of every Must requirement. 126 Musts remain on a reviewed
+  allowlist, and any new unmapped Must fails the lint (#3641).
+- Every orchestrated worker gets the AIWG bootstrap:
+  - Worker worktrees deploy all configured providers in one pass.
+  - Muse launches with `--trust-workspace`.
+  - `--launch-worker` and MCP `worker-invoke` refuse to start a worker that has
+    no AIWG context, with `OG_WORKER_CONTEXT_UNAVAILABLE` and a remedy (#3685).
+
+### Fixed
+
+- A signing failure after npm publish is now recoverable:
+  - The cockpit tarball is reproducible.
+  - All three tarballs are retained.
+  - Recovery verifies and reuses the published registry bytes instead of
+    rebuilding.
+  - Signing retries its OIDC token fetch (#3632).
+- Clean-install findings:
+  - Doctor probes the running launcher instead of `aiwg` on PATH.
+  - A fresh `aiwg use` no longer reports its own default delivery settings as
+    a legacy permission source.
+  - The first deploy adds the runtime `.gitignore` patterns (#3635).
+- Every provider declares an explicit session credential allowlist backed by
+  evidence. Windsurf and Grok Bot stay coverage-only (#3624).
+- MCP worker overflow is handled correctly:
+  - Partial frames are no longer copied quadratically, so the
+    degraded-overflow path stays fast under load (#3626).
+  - A worker that wrote exactly one byte over the frame cap and then went idle
+    is now stopped. Under systemd isolation the stop sends SIGKILL to the
+    unit's whole cgroup. In degraded isolation the worker's birth identity is
+    pinned, so it can still be signalled after it is reparented (#3691).
+- The launcher tells escaped descendants apart from unrelated hardened
+  (non-dumpable) processes. A parallel Codex worker no longer makes
+  termination unknown and blocks retries and verification (#3674).
+- Tests:
+  - The multi-graph test no longer treats empty scaffolded SDLC folders as a
+    project corpus (#3696).
+  - Two process-event races in tests are fixed: the locker stderr drain and
+    the timeout termination sample (#3709).
+- Dependencies: fast-uri 3.1.9 and ip-address 10.7.5 (GitHub
+  jmagly/aiwg#375).
+
 ## [2026.10.10] - 2026-10-27
 
 ### Added

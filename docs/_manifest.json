@@ -193,6 +193,7 @@
     "references/REF-003-agentic-development-antipatterns",
     "references/REF-066-mcp-specification-2025",
     "releases",
+    "releases/v2026.11.0-announcement",
     "releases/v2026.10.10-announcement",
     "releases/v2026.10.9-announcement",
     "releases/v2026.10.8-announcement",
@@ -1628,6 +1629,13 @@
       "title": "Releases",
       "summary": "Release notes and changelog",
       "collapsed": true
+    },
+    {
+      "id": "releases/v2026.11.0-announcement",
+      "title": "v2026.11.0 — Leaner Session Catalogs and Steadier Helper CLIs",
+      "summary": "Grok Bot conversations counted once, tool-output images stored once, every helper worker started with project rules, and runaway workers stopped.",
+      "file": "releases/v2026.11.0-announcement.md",
+      "parent": "releases"
     },
     {
       "id": "releases/v2026.10.10-announcement",
