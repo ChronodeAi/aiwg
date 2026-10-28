@@ -7,7 +7,7 @@ export interface RuleFrontmatter extends Record<string, unknown> {
   summary?: string;
   bound_to: RuleBindings;
   paths?: string[];
-  enforcedBy?: unknown;
+  enforcedBy?: string[];
 }
 export interface RuleDiagnostic { severity: 'error' | 'warn' | 'info'; code: string; message: string }
 export type RuleValidationResult =

@@ -309,9 +309,29 @@ and offline, with explicit trust boundaries:
   evaluation). Printed reports carry `attestation: 'offline-cli'`.
 - `show <id>` prints the resolved pack with authored and composed digests.
 - `list [--namespace <ns>] [--rule [<rule-id>]]` lists registered packs.
-  `--rule` enforcedBy coverage is a stub: it reports packs named by rules'
-  `enforcedBy` frontmatter when present and empty otherwise. Full coverage
-  is #2839.
+  `--rule` adds rule coverage rows; a rule id filters both rows and referenced
+  packs. Use the exact filename slug or source-relative path to select a rule.
+- `coverage [--rule <rule-id>] [--json]` lists each rule with its enforcing
+  gate references, or `guidance-only` when none are declared. Text is the
+  default; `--json` returns the same rows as structured data. It scans shipped
+  bundle rules, project `rules/` and `.aiwg/rules/`, project bundle rules, and
+  rules beside explicitly supplied `--pack-dir` bundles. Documentation indexes
+  and compact `.core.md` bodies are excluded. Invalid declarations fail.
+
+Rules may declare an optional list of full gate references:
+
+```yaml
+enforcedBy:
+  - aiwg:decision-engine/absolute-screening#false-support-upper
+```
+
+The existing rule activation schema validates the list shape; rule lint resolves
+each full pack id and gate id through the composed gate registry. Unknown packs
+or gates fail lint. Omitted or empty lists mean guidance-only. A declaration
+does not execute gates, enable a binding, or change activation delivery.
+Coverage describes the named check's scope, not proof that the entire rule is
+mechanically enforced everywhere. For example, the citation-policy and
+executable-feedback mappings cover D29 held-out screening only.
 
 The decision-engine addon ships
 `agentic/code/addons/decision-engine/gate-packs/integrity-ceiling.gatepack.yaml`
@@ -343,8 +363,7 @@ addon/extension provider loading exists only as the experimental,
 default-off isolated runner with config-allowlist trust and records
 reproduction (#2831 rework; CLI re-runs from a records file are still
 pending) — and D29 is the only study migrated to bindings (#2833, offline
-only). Rule `enforcedBy`
-coverage stays a stub (#2839). The discovery relevance fixture covers the
+only). The discovery relevance fixture covers the
 shipped integrity-ceiling pack plus the `coverage-floor` conformance fixture
 pack (`test/conformance/gates-v1/fixtures/`); live discovery ranking against
 a full index is not asserted. No live criterion is met; the harness above is

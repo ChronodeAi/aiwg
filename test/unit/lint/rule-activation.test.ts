@@ -44,9 +44,28 @@ describe('activation lint in the existing runner (#2938)', () => {
     expect(result.summary).toMatchObject({ errors: 0, warnings: 1, passed: true, rulesApplied: 1 });
     expect(result.diagnostics[0]).toMatchObject({ file: 'rules/example.md', severity: 'warn', message: expect.stringContaining('on-demand') });
   });
-  it('reports opaque enforcedBy with no effect', async () => {
-    const result = await lint('---\nactivation: kernel\nenforcedBy: {future: [hook]}\n---\nBody');
-    expect(result.summary).toMatchObject({ errors: 0, infos: 1 });
+  it('resolves enforcedBy against real gate identities and rejects unknown packs or gates', async () => {
+    vi.stubEnv('AIWG_ROOT', dir);
+    const packs = join(dir, 'agentic/code/addons/example/gate-packs');
+    await mkdir(packs, { recursive: true });
+    await writeFile(join(packs, 'checks.gatepack.json'), JSON.stringify({
+      apiVersion: 'gates.aiwg.io/v1alpha1', kind: 'GatePack',
+      metadata: { id: 'aiwg:example/checks', version: '1.0.0', description: 'Synthetic lint gates' },
+      spec: { metrics: {}, gates: [{ id: 'ceiling', kind: 'upstream-ceiling', scope: { mode: 'all' },
+        direction: 'higher-is-stricter', onFail: 'HOLD' }], combine: { rule: 'max-severity' } },
+    }));
+    const source = (ref: string) => `---\nactivation: kernel\nenforcedBy: ["${ref}"]\n---\nBody`;
+    expect((await lint(source('aiwg:example/checks#ceiling'))).summary).toMatchObject({ passed: true, errors: 0, infos: 0 });
+    for (const ref of ['aiwg:example/checks#missing', 'aiwg:example/missing#ceiling']) {
+      const result = await lint(source(ref));
+      expect(result.summary).toMatchObject({ passed: false, errors: 1 });
+      expect(result.diagnostics[0].message).toContain(ref);
+      expect(result.diagnostics[0].message).toMatch(/unknown gate/);
+    }
+  });
+  it('rejects opaque enforcedBy metadata now that the field has a contract', async () => {
+    expect((await lint('---\nactivation: kernel\nenforcedBy: {future: [hook]}\n---\nBody')).summary)
+      .toMatchObject({ passed: false, errors: 1 });
   });
   it('errors on missing, ambiguous, wrong-type, title guesses, and wildcard binding targets', async () => {
     const source = (target: string) => `---\nactivation: bound\nsummary: Fix source.\nbound_to:\n  agents: ["${target}"]\n---\nBody`;

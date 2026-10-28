@@ -7,13 +7,15 @@ import { collectRuleBindingEntries } from '../artifacts/index-builder.js';
 import { resolveFrameworkIndexRoot } from '../artifacts/framework-index-paths.js';
 import { parseRuleFrontmatter, RULE_BINDING_TYPES, coreBodyPath, validateCoreBody } from '../rules/activation.mjs';
 import type { LintDiagnostic, LintRuleset } from './types.js';
+import { buildGatesRegistry } from '../gates/driver.js';
+import { ruleGateReferenceErrors } from '../rules/gate-references.js';
 
 export const ruleActivationRuleset: LintRuleset = {
   id: 'rule-activation', name: 'Rule activation', framework: 'core', version: '1.0.0',
   description: 'Validate rule and behavior activation contracts and exact source bindings',
   rules: [{
     id: 'rules/activation', name: 'Rule activation contract', severity: 'error',
-    description: 'Validate activation, summaries, paths, bindings, and migration fallback',
+    description: 'Validate activation, summaries, paths, bindings, gate references, and migration fallback',
     appliesTo: { glob: '**/{rules/**/*.md,behaviors/**/BEHAVIOR.md}' },
     checks: [{ type: 'rule-activation' }],
   }],
@@ -41,6 +43,16 @@ export function lintRuleActivation(
     file, severity: item.code === 'missing-activation' && shipped ? 'error' as const : item.severity, message: item.message,
   }));
   if (!result.rule) return diagnostics;
+  if (result.rule.enforcedBy?.length) {
+    let errors: string[];
+    try {
+      const { registry } = buildGatesRegistry({ cwd: projectRoot, aiwgRoot: resolveFrameworkIndexRoot(projectRoot) });
+      errors = ruleGateReferenceErrors(result.rule.enforcedBy, registry);
+    } catch (error) {
+      errors = [`enforcedBy registry: ${error instanceof Error ? error.message : String(error)}`];
+    }
+    for (const message of errors) diagnostics.push({ ruleId: 'rules/activation', ruleName: 'Rule activation contract', file, severity: 'error', message });
+  }
   if (result.rule.activation === 'core') {
     const body = coreBodyPath(absolutePath ?? (path.isAbsolute(file) ? file : path.resolve(projectRoot, file)));
     const problems = fs.existsSync(body)

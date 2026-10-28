@@ -56,10 +56,17 @@ describe('shared rule activation contract (#2938)', () => {
   it.each(['/etc/**', '../src/**', 'src/../**', 'C:/src/**', '\\server\\share', 'src\\**', '', '  '])('rejects unsafe glob %j', glob => {
     expect(validateRuleFrontmatter({ activation: 'paths', summary, paths: [glob] }).valid).toBe(false);
   });
-  it.each([null, false, 'hook', [], { arbitrary: { payload: true } }])('preserves opaque enforcedBy %j without effect', enforcedBy => {
+  it.each([[], ['aiwg:example/checks#check'], ['project:local#check', 'addon:example/checks#check']].map(enforcedBy => ({ enforcedBy })))('accepts gate reference lists $enforcedBy without changing activation', ({ enforcedBy }) => {
     const result = validateRuleFrontmatter({ activation: 'kernel', enforcedBy });
     expect(result.rule?.enforcedBy).toEqual(enforcedBy);
-    expect(result.diagnostics).toContainEqual(expect.objectContaining({ severity: 'info', code: 'reserved-enforcedBy' }));
+    expect(result.rule?.activation).toBe('kernel');
+    expect(result.diagnostics).toEqual([]);
+  });
+  it.each([null, false, 'hook', { arbitrary: true }, ['check'], ['aiwg:example/checks'],
+    ['aiwg:example/checks#'], ['project:local#check#other'], ['project:local#two words'],
+    ['project:local#check', 'project:local#check']].map(enforcedBy => ({ enforcedBy })))('rejects malformed gate declarations $enforcedBy', ({ enforcedBy }) => {
+    expect(validateRuleFrontmatter({ activation: 'kernel', enforcedBy }).valid).toBe(false);
+    expect(validateRuleFrontmatter({ enforcedBy }).valid).toBe(false);
   });
   it('parses nested YAML, preserves body and metadata, normalizes missing binding lists', () => {
     const result = parseRuleFrontmatter('---\r\nactivation: bound\r\nsummary: Fix the source.\r\nbound_to:\r\n  agents: [debugger]\r\nlegacy: preserved\r\n---\r\n# Body\r\n');

@@ -1,6 +1,8 @@
 ---
 enforcement: critical
 activation: "kernel"
+enforcedBy:
+  - aiwg:decision-engine/absolute-screening#false-support-upper
 summary: "Retrieve and verify corpus sources before citing; never invent references, quotes or locations, and match claim strength to evidence quality."
 triggers:
   - "verify citations before making claims"
@@ -19,6 +21,11 @@ triggers:
 These rules enforce rigorous citation standards across all AIWG operations, agents, and generated documentation. Violations constitute intellectual dishonesty and undermine framework credibility. Every factual claim requires a corpus-backed citation, an explicit evidence-gap acknowledgment, or removal.
 
 ## Mandatory Rules
+
+Gate coverage is scoped to D29 held-out citation screening: the
+`aiwg:decision-engine/absolute-screening#false-support-upper` gate caps the
+Wilson upper bound on citation false-support. It does not verify every citation
+or enforce the rest of this policy outside that study.
 
 ### Rule 1: Never Generate Citations Without Retrieval
 **FORBIDDEN**: inventing a citation from memory ("According to Smith et al. (2024)..."). **REQUIRED**: cite only after retrieving the source from `.aiwg/research/` (`@.aiwg/research/sources/smith-2024.pdf (p. 15)`), OR acknowledge the gap ("Requires literature review for authoritative citation").
