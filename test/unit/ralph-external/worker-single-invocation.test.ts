@@ -417,7 +417,20 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
     await waitForCondition(async () => { try { await lstat(f.recordPath); return true; } catch { return false; } });
     await vi.advanceTimersByTimeAsync(100);
     await waitForCondition(() => observations.some(value => value.ownership === 'owned-group'));
-    await vi.advanceTimersByTimeAsync(1000);
+    // The launcher samples the group 100 ms (fake) after SIGKILL. Advance in small
+    // steps and, once a group signal is out, let the kernel empty the group in real
+    // time first; one large fake jump outran reaping on a loaded CI runner.
+    const groupGone = (group: number) => { try { process.kill(group, 0); return false; } catch { return true; } };
+    let reaped = false;
+    for (let elapsed = 0; elapsed < 1000; elapsed += 25) {
+      await vi.advanceTimersByTimeAsync(25);
+      const sent = kill.mock.calls.filter(call => call[1] !== 0 && typeof call[0] === 'number' && call[0] < 0);
+      if (!reaped && sent.length) {
+        const group = sent[0][0] as number;
+        const killed = sent.some(call => call[1] === 'SIGKILL');
+        try { await waitForCondition(() => groupGone(group), killed ? 10000 : 300); reaped = true; } catch { if (killed) throw new Error('group survived SIGKILL'); }
+      }
+    }
     const result = await done;
     expect(result).toMatchObject({ timedOut: true, exitCode: null, termination: 'confirmed' });
     expect(['SIGTERM', 'SIGKILL']).toContain(result.signal);

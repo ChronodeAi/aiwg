@@ -41,8 +41,19 @@ function waitForLocker(child: ChildProcess, timeoutMs = 5_000): Promise<void> {
     };
     const onDiagnostic = (chunk: Buffer) => { diagnostic = (diagnostic + chunk.toString('utf8')).slice(-2_048); };
     const onError = (error: Error) => finish(new Error(`Locker spawn failed: ${error.message}`));
+    let exited = false;
     const onClose = (code: number | null, signal: string | null) => {
-      finish(new Error(`Locker closed before readiness (code=${code}, signal=${signal}): ${diagnostic}`));
+      if (exited) return;
+      exited = true;
+      const report = () => finish(new Error(`Locker closed before readiness (code=${code}, signal=${signal}): ${diagnostic}`));
+      // 'exit' can fire before stderr is drained. Wait for stderr to end, bounded,
+      // since inherited stdio can stay open after the locker exits.
+      const stderr = child.stderr;
+      if (!stderr || stderr.readableEnded || stderr.destroyed) { report(); return; }
+      const drained = setTimeout(done, 250);
+      function done() { clearTimeout(drained); stderr!.off('end', done); stderr!.off('close', done); report(); }
+      stderr.once('end', done);
+      stderr.once('close', done);
     };
     const timer = setTimeout(() => finish(new Error(`Locker readiness timed out: ${diagnostic}`)), timeoutMs);
     child.stdout?.on('data', onData);
@@ -194,6 +205,18 @@ describe('SQLite locker readiness protocol', () => {
     expect(child.stderr?.listenerCount('data')).toBe(0);
     child.stdout?.destroy();
     child.stderr?.destroy();
+  });
+
+  it('keeps stderr that arrives after the exit event (exit can precede stdio drain)', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, signalCode: null,
+    }) as unknown as ChildProcess;
+    const ready = waitForLocker(child, 1_000);
+    child.emit('exit', 9, null);
+    child.stderr!.write('late-useful-tail');
+    child.stderr!.end();
+    await expect(ready).rejects.toThrow(/code=9.*late-useful-tail/);
+    child.stdout?.destroy();
   });
 
   it('retains only a bounded stderr tail when startup fails', async () => {
