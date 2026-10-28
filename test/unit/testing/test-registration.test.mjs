@@ -14,13 +14,14 @@ const baseline = 'test/unit/control.test.ts';
 const vitestSource = "import { it } from 'vitest'; throw new Error('SOURCE_MUST_NOT_EXECUTE'); it('source-only fixture', () => {});\n";
 const nodeSource = "import { test } from 'node:test'; throw new Error('SOURCE_MUST_NOT_EXECUTE'); test('source-only fixture', () => {});\n";
 
-function project({ files = {}, include = ['test/unit/**/*.test.ts', 'agentic/code/frameworks/*/test/unit/**/*.test.ts'], nodeFiles = [], scripts, ci = 'npm run test', withBaseline = true } = {}) {
+function project({ files = {}, include = ['test/unit/**/*.test.ts', 'agentic/code/frameworks/*/test/unit/**/*.test.ts'], nodeFiles = [], scripts, ci = 'npm run test', withBaseline = true, packages = {}, optIns = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-registration-gate-'));
   roots.push(root);
   const entries = {
     'package.json': JSON.stringify({ type: 'module', scripts: scripts ?? { test: 'vitest run --config config/vitest.config.js' } }),
     '.gitea/workflows/ci.yml': JSON.stringify({ jobs: { test: { steps: [{ run: ci }] } } }),
-    'config/test-lanes.mjs': `export const nodeFiles = ${JSON.stringify(nodeFiles)};\n`,
+    'config/test-lanes.mjs': `export const nodeFiles = ${JSON.stringify(nodeFiles)};\nexport const optInPackageTests = ${JSON.stringify(optIns)};\n`,
+    ...Object.fromEntries(Object.entries(packages).map(([dir, pkg]) => [`${dir}/package.json`, JSON.stringify(pkg)])),
     'config/vitest.config.js': `export default ${JSON.stringify({ test: { include, exclude: [] } })};\n`,
     ...(withBaseline ? { [baseline]: vitestSource } : {}),
     ...files,
@@ -136,12 +137,80 @@ describe('test runner registration gate', () => {
     ]);
   });
 
+  it.each([
+    ['tool', 'tools/example/contract.test.mjs', nodeSource],
+    ['addon', 'agentic/code/addons/example/test/contract.test.mjs', nodeSource],
+    ['unsuffixed tool', 'tools/example/check.mjs', nodeSource],
+    ['inline', 'src/example.ts', "if (import.meta.vitest) { const { it } = import.meta.vitest; it('inline', () => {}); }\n"],
+  ])('rejects an unassigned %s suite outside the original census', (_kind, file, body) => {
+    const { child, report } = run(project({ files: { [file]: body } }));
+    expect(child.status).toBe(1);
+    expect(report.errors).toEqual([`${file}: unassigned test file`]);
+    expect(report.files.find(row => row.file === file)?.lanes).toEqual([]);
+  });
+
+  it('accepts a tool and addon only when their Node lane reaches CI', () => {
+    const files = ['tools/eval/test/yaml.test.mjs', 'agentic/code/addons/example/test/bridge.test.mjs'];
+    const { child, report } = run(project({
+      nodeFiles: files, ci: `npm run test && node --test ${files.join(' ')}`,
+      files: Object.fromEntries(files.map(file => [file, nodeSource])),
+    }));
+    expect(child.status).toBe(0);
+    expect(report.errors).toEqual([]);
+    for (const file of files) expect(report.files).toContainEqual({ file, runner: 'node', lanes: [{ id: 'node', live: false }] });
+  });
+
+  it('requires includeSource to own inline Vitest while ignoring source strings and templates', () => {
+    const file = 'src/arithmetic.ts';
+    const { child, report } = run(project({ files: {
+      [file]: "if (import.meta.vitest) { const { it } = import.meta.vitest; it('inline', () => {}); }\n",
+      'src/generator.ts': 'export const template = "import.meta.vitest";\n',
+      'agentic/code/addons/example/templates/oracle.example.test.mjs': nodeSource,
+      'config/vitest.config.js': `export default ${JSON.stringify({ test: { include: [baseline], includeSource: [file] } })};`,
+    } }));
+    expect(child.status).toBe(0);
+    expect(report.errors).toEqual([]);
+    expect(report.files.map(row => row.file)).toEqual([file, baseline]);
+    expect(report.files[0].lanes).toEqual([{ id: 'config/vitest.config.js', live: false }]);
+  });
+
+  it.each(['deployment', 'wasm'])('rejects duplicate default/%s ownership using discovered files', lane => {
+    const config = `config/vitest.${lane}.config.js`;
+    const { child, report } = run(project({
+      ci: `npm run test && vitest run --config ${config}`,
+      files: { [config]: `export default ${JSON.stringify({ test: { include: [baseline] } })};` },
+    }));
+    expect(child.status).toBe(1);
+    expect(report.errors).toEqual([`${baseline}: test has multiple owning lanes`]);
+    expect(report.files[0].lanes.map(owner => owner.id)).toEqual(['config/vitest.config.js', config]);
+  });
+
+  it.each(['deployment', 'wasm', 'uat-live'])('rejects a configured %s lane discovering zero files', lane => {
+    const config = `config/vitest.${lane}.config.js`;
+    const { child, report } = run(project({
+      ci: `npm run test && vitest run --config ${config}`,
+      files: { [config]: `export default ${JSON.stringify({ test: { include: ['test/missing/**/*.test.ts'] } })};` },
+    }));
+    expect(child.status).toBe(1);
+    expect(report.totalFiles).toBe(1);
+    expect(report.errors).toEqual([`${config}: lane discovers zero files`]);
+    expect(child.stderr.trim()).toBe(report.errors[0]);
+  });
+
+  it('rejects a reachable Node lane discovering zero files', () => {
+    const pattern = 'tools/missing/*.test.mjs';
+    const { child, report } = run(project({ nodeFiles: [pattern], ci: `npm run test && node --test ${pattern}` }));
+    expect(child.status).toBe(1);
+    expect(report.totalFiles).toBe(1);
+    expect(report.errors).toEqual(['node: lane discovers zero files']);
+  });
+
   it('rejects an empty test population', () => {
     const { child, report } = run(project({ withBaseline: false }));
     expect(child.status).toBe(1);
     expect(report.totalFiles).toBe(0);
     expect(report.files).toEqual([]);
-    expect(report.errors).toEqual(['No candidate test files found']);
+    expect(report.errors).toEqual(['config/vitest.config.js: lane discovers zero files', 'No candidate test files found']);
   });
 
   it('rejects offline config absent from canonical CI', () => {
@@ -167,12 +236,12 @@ describe('test runner registration gate', () => {
   it('rejects a declared Node ownership pattern absent from canonical CI', () => {
     const { child, report } = run(project({ nodeFiles: ['test/unit/ralph/*.test.mjs'] }));
     expect(child.status).toBe(1);
-    expect(report.errors).toEqual(['Node ownership pattern is absent from canonical CI: test/unit/ralph/*.test.mjs']);
+    expect(report.errors).toEqual(['node: lane discovers zero files', 'Node ownership pattern is absent from canonical CI: test/unit/ralph/*.test.mjs']);
   });
 
   it('preserves Node runner and legacy file-harness ownership', () => {
     const { child, report } = run(project({
-      withBaseline: false, nodeFiles: ['tools/ralph-external/*.test.mjs', 'test/unit/ralph/*.test.mjs'],
+      nodeFiles: ['tools/ralph-external/*.test.mjs', 'test/unit/ralph/*.test.mjs'],
       ci: 'npm run test && node --test tools/ralph-external/*.test.mjs test/unit/ralph/*.test.mjs',
       files: {
         'tools/ralph-external/legacy.test.mjs': "import assert from 'node:assert/strict'; assert.equal(1, 1);\n",
@@ -182,6 +251,7 @@ describe('test runner registration gate', () => {
     expect(child.status).toBe(0);
     expect(report.errors).toEqual([]);
     expect(report.files).toEqual([
+      { file: baseline, runner: 'vitest', lanes: [{ id: 'config/vitest.config.js', live: false }] },
       { file: 'test/unit/ralph/native.test.mjs', runner: 'node', lanes: [{ id: 'node', live: false }] },
       { file: 'tools/ralph-external/legacy.test.mjs', runner: 'node-file-harness', lanes: [{ id: 'node', live: false }] },
     ]);
@@ -262,6 +332,50 @@ describe('test runner registration gate', () => {
         : mode === 'missing-script' ? ['Release workflow references missing npm script test:release-slow', `Release lane is not reachable from its workflow: ${releaseConfig}`]
           : [`Release lane is not reachable from its workflow: ${releaseConfig}`]);
     if (mode === 'valid') expect(report.files.find(row => row.file === file).lanes).toEqual([{ id: releaseConfig, live: false }]);
+  });
+
+  it('rejects a workspace package test script invoked by no CI job', () => {
+    const { child, report } = run(project({
+      packages: { 'apps/widget': { name: '@scope/widget', scripts: { test: 'node --test test/*.test.mjs' } } },
+    }));
+    expect(child.status).toBe(1);
+    expect(report.errors).toEqual(['Workspace package test has no invoking CI job: @scope/widget test']);
+    expect(child.stderr).toContain(report.errors[0]);
+  });
+
+  it('accepts a workspace package test script invoked by a CI job', () => {
+    const { child, report } = run(project({
+      ci: 'npm run test && npm --prefix apps/widget run test',
+      packages: { 'apps/widget': { name: '@scope/widget', scripts: { test: 'node --test test/*.test.mjs', 'test:web': 'vitest run' } } },
+    }));
+    // Only `test` is CI-invoked; `test:web` stays unowned without an opt-in.
+    expect(child.status).toBe(1);
+    expect(report.errors).toEqual(['Workspace package test has no invoking CI job: @scope/widget test:web']);
+  });
+
+  it('accepts a reasoned opt-in alongside a CI-owned workspace package script', () => {
+    const { child, report } = run(project({
+      ci: 'npm run test && npm --prefix apps/widget run test',
+      packages: { 'apps/widget': { name: '@scope/widget', scripts: { test: 'node --test test/*.test.mjs', 'test:web': 'vitest run' } } },
+      optIns: [{ package: '@scope/widget', script: 'test:web', reason: 'Manual browser-only lane; no headless runner in CI.' }],
+    }));
+    expect(child.status).toBe(0);
+    expect(report.errors).toEqual([]);
+  });
+
+  it.each([
+    ['reasonless', { reason: '  ' }, 'Opt-in package test has no reason: @scope/widget test'],
+    ['unknown package', { package: '@scope/gone', script: 'test', reason: 'Stale entry.' }, 'Opt-in package test references unknown package: @scope/gone test'],
+    ['missing script', { package: '@scope/widget', script: 'test:gone', reason: 'Stale entry.' }, 'Opt-in package test references missing script: @scope/widget test:gone'],
+    ['redundant', { package: '@scope/widget', script: 'test', reason: 'Stale entry.' }, 'Opt-in package test is owned by CI; remove it: @scope/widget test'],
+  ])('rejects a %s opt-in package test entry', (_kind, optIn, error) => {
+    const { child, report } = run(project({
+      ci: 'npm run test && npm --prefix apps/widget run test',
+      packages: { 'apps/widget': { name: '@scope/widget', scripts: { test: 'node --test test/*.test.mjs' } } },
+      optIns: [{ package: '@scope/widget', script: 'test', reason: 'Stale entry.', ...optIn }],
+    }));
+    expect(child.status).toBe(1);
+    expect(report.errors).toContain(error);
   });
 
 });

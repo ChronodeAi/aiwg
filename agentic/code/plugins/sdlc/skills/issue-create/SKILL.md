@@ -29,7 +29,6 @@ commandHint:
 >
 > Only kernel-listed skills (`aiwg-doctor`, `aiwg-refresh`, `aiwg-status`, `aiwg-help`, `use`, `steward`) are directly invokable as slash commands. See [skill-discovery rule](https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/aiwg-utils/rules/skill-discovery.md).
 
-
 # Issue Create
 
 ## Semantic Label Contract (#1789)
@@ -46,11 +45,9 @@ Reject any write route whose authenticated login is listed in the target
 member's `forbid_actors`.
 
 ## Purpose
-
 Create a new ticket/issue for tracking work items, bugs, features, or tasks. Automatically uses the configured ticketing provider (Gitea, GitHub, Jira, Linear) or falls back to local file-based tracking.
 
 ## Task
-
 Given a ticket title and optional description:
 
 1. **Resolve the target member and authorization**, then load its `.aiwg/aiwg.config`
@@ -187,92 +184,9 @@ When `provider === 'unknown'` (self-hosted instances we can't classify by URL), 
 **Override warning**: if `--provider` differs from the auto-resolved one, print:
 `⚠️ Using --provider github (resolved from .aiwg/aiwg.config: gitea)`
 
-### Step 3: Regression Detection (for Bug Reports)
+### Regression detection and configuration validation
 
-**Trigger conditions**:
-- Explicit: `--check-regression` flag provided
-- Automatic: `--labels` contains "bug" OR "regression"
-- Type: Issue is categorized as bug/defect
-
-**Regression check process**:
-
-```bash
-# Detect if regression check should run
-if [[ "$LABELS" == *"bug"* ]] || [[ "$LABELS" == *"regression"* ]] || [[ "$CHECK_REGRESSION" == "true" ]]; then
-  echo "⏳ Running regression check..."
-
-  # Run regression check against main branch
-  /regression-check --baseline main --scope changed-files --format summary > /tmp/regression-results.md
-
-  # Parse results
-  REGRESSION_DETECTED=$(grep "REGRESSIONS DETECTED" /tmp/regression-results.md)
-
-  if [ -n "$REGRESSION_DETECTED" ]; then
-    # Escalate priority and add labels
-    PRIORITY="critical"
-    LABELS="${LABELS},regression-confirmed"
-
-    # Extract regression details for issue body
-    REGRESSION_SUMMARY=$(sed -n '/### Critical Regressions/,/###/p' /tmp/regression-results.md)
-
-    # Append to description
-    DESCRIPTION="${DESCRIPTION}
-
----
-
-## Regression Analysis
-
-${REGRESSION_SUMMARY}
-
-**Full Report**: See attached regression-results.md"
-  else
-    # No regression detected
-    LABELS="${LABELS},no-regression"
-  fi
-fi
-```
-
-**Impact on issue creation**:
-
-| Regression Status | Priority | Labels | Action |
-|-------------------|----------|--------|--------|
-| REGRESSION DETECTED | Critical | bug, regression-confirmed | Escalate, include analysis |
-| NO REGRESSION | Original | bug, no-regression | Standard bug workflow |
-| CHECK FAILED | Original | bug, regression-check-failed | Create issue, note failure |
-
-### Step 4: Validate Configuration
-
-**For each provider, validate required fields**:
-
-**Gitea**:
-- [ ] `url` present and valid URL
-- [ ] `owner` present
-- [ ] `repo` present
-- [ ] Token file exists and readable
-
-**GitHub**:
-- [ ] `owner` present
-- [ ] `repo` present
-- [ ] `gh` CLI installed (`which gh`)
-- [ ] `gh` authenticated (`gh auth status`)
-
-**Jira**:
-- [ ] `url` present and valid URL
-- [ ] `owner` (project key) present
-- [ ] `JIRA_API_TOKEN` environment variable set
-
-**Linear**:
-- [ ] `url` present (default: `https://api.linear.app`)
-- [ ] `owner` (team ID) present
-- [ ] `LINEAR_API_TOKEN` environment variable set
-
-**Local**:
-- [ ] `.aiwg/issues/` directory exists or can be created
-- [ ] Directory is writable
-
-**Error handling**:
-- If validation fails, report error and suggest fix
-- Optionally fall back to `local` provider with warning
+Read [regression detection and configuration validation](references/regression-validation.md) before continuing.
 
 ### Step 5: Policy-Boundary Composition (Required Before Every Write)
 
@@ -310,247 +224,33 @@ This preflight is mandatory for Gitea MCP, `tea`, GitHub CLI/API, Jira, Linear,
 and local-file routes. Higher-level flows that author issues must call this
 skill or the same composer; they may not jump directly to a tracker create API.
 
-### Step 6: Create Issue (Provider-Specific)
+### Step 6: HITL checkpoint before each write
 
-#### Gitea
-
-Use MCP tool `mcp__gitea__create_issue`:
-
-```bash
-# Load configuration
-TOKEN=$(cat ~/.config/gitea/token)
-URL="https://git.integrolabs.net"
-OWNER="roctinam"
-REPO="ai-writing-guide"
-
-# Prepare issue body
-BODY="${description}"
-
-# Add metadata section if labels/assignee/priority specified
-if [ -n "$LABELS" ] || [ -n "$ASSIGNEE" ] || [ -n "$PRIORITY" ]; then
-  BODY="${BODY}\n\n---\n\n"
-  [ -n "$LABELS" ] && BODY="${BODY}**Labels**: ${LABELS}\n"
-  [ -n "$ASSIGNEE" ] && BODY="${BODY}**Assignee**: @${ASSIGNEE}\n"
-  [ -n "$PRIORITY" ] && BODY="${BODY}**Priority**: ${PRIORITY}\n"
-fi
-
-# Create issue via MCP
-# Note: Use actual MCP tool invocation here
-```
-
-**MCP Tool Parameters**:
-- `owner`: Organization/user name
-- `repo`: Repository name
-- `title`: Issue title
-- `body`: Issue description (markdown)
-- `assignee`: Username (optional)
-- `labels`: Array of label names (optional)
-
-**Return format**:
-```
-✅ Issue created: ISSUE-42
-
-View at: https://git.integrolabs.net/roctinam/ai-writing-guide/issues/42
-
-Title: Implement user auth
-Status: open
-Labels: feature, high-priority
-```
-
-#### GitHub
-
-Use `gh` CLI:
+Build the six-field descriptor from the resolved backend's actual pending
+effects, never from the draft body, composition output, or model claims:
+category, resolved repo, execution environment, every affected repo-relative
+path, reversibility, and impact. Local file creation with a complete rollback
+is `repo.edit`; remote tracker creation/cross-links are `tracker.write` and
+remain subject to explicit review. Include index/metadata writes and sibling
+links; do not describe remote writes as local file edits. Policy-preflight
+exceptions are `threat.override`, which cannot be auto-authorized.
 
 ```bash
-# Basic creation
-gh issue create \
-  --repo "${OWNER}/${REPO}" \
-  --title "${TITLE}" \
-  --body "${DESCRIPTION}"
-
-# With labels
-gh issue create \
-  --repo "${OWNER}/${REPO}" \
-  --title "${TITLE}" \
-  --body "${DESCRIPTION}" \
-  --label "${LABELS}"
-
-# With assignee
-gh issue create \
-  --repo "${OWNER}/${REPO}" \
-  --title "${TITLE}" \
-  --body "${DESCRIPTION}" \
-  --assignee "${ASSIGNEE}"
-
-# With milestone
-gh issue create \
-  --repo "${OWNER}/${REPO}" \
-  --title "${TITLE}" \
-  --body "${DESCRIPTION}" \
-  --milestone "${MILESTONE}"
+aiwg config authorization check --action-file "$ACTION_FILE" --target "$TARGET_REPO"
 ```
 
-**Return format**:
-```
-✅ Issue created: #42
+Use a private temporary action file built by the host. Only `auto-authorized`
+with a receipt permits that exact write without prompting. The helper writes
+the signed receipt before returning. On `escalate`, retain today's prompt; on
+`deny`, retain today's refusal. Missing receipt, invalid output, or errors keep
+the existing review path. Platform prompts are never bypassed. Recheck every
+new segment, cross-link, retry, or changed effect. This check never satisfies
+Step 5's issue-specific threat-policy authorization; preserve its digest gate,
+blocked disposition, recovery markers, and workspace/actor restrictions.
 
-View at: https://github.com/jmagly/aiwg/issues/42
+### Provider-specific issue writes
 
-Title: Implement user auth
-Status: open
-Labels: feature, high-priority
-```
-
-#### Jira
-
-Use Jira REST API v3:
-
-```bash
-# Prepare JSON payload
-cat > /tmp/jira-issue.json <<EOF
-{
-  "fields": {
-    "project": {
-      "key": "${PROJECT_KEY}"
-    },
-    "summary": "${TITLE}",
-    "description": {
-      "type": "doc",
-      "version": 1,
-      "content": [
-        {
-          "type": "paragraph",
-          "content": [
-            {
-              "type": "text",
-              "text": "${DESCRIPTION}"
-            }
-          ]
-        }
-      ]
-    },
-    "issuetype": {
-      "name": "Task"
-    },
-    "priority": {
-      "name": "${PRIORITY:-Medium}"
-    }
-  }
-}
-EOF
-
-# Create issue
-curl -X POST "${JIRA_URL}/rest/api/3/issue" \
-  -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d @/tmp/jira-issue.json
-```
-
-**Return format**:
-```
-✅ Issue created: PROJECT-42
-
-View at: https://yourcompany.atlassian.net/browse/PROJECT-42
-
-Title: Implement user auth
-Status: To Do
-Priority: High
-```
-
-#### Linear
-
-Use Linear GraphQL API:
-
-```bash
-# Prepare GraphQL mutation
-cat > /tmp/linear-mutation.json <<EOF
-{
-  "query": "mutation IssueCreate(\$teamId: String!, \$title: String!, \$description: String) { issueCreate(input: { teamId: \$teamId, title: \$title, description: \$description }) { success issue { id identifier url } } }",
-  "variables": {
-    "teamId": "${TEAM_ID}",
-    "title": "${TITLE}",
-    "description": "${DESCRIPTION}"
-  }
-}
-EOF
-
-# Create issue
-curl -X POST https://api.linear.app/graphql \
-  -H "Authorization: ${LINEAR_API_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d @/tmp/linear-mutation.json
-```
-
-**Return format**:
-```
-✅ Issue created: ENG-42
-
-View at: https://linear.app/team/issue/ENG-42
-
-Title: Implement user auth
-Status: Backlog
-Priority: High
-```
-
-#### Local
-
-Create markdown file in `.aiwg/issues/`:
-
-```bash
-# Determine next ticket number
-mkdir -p .aiwg/issues
-NEXT_NUM=$(ls .aiwg/issues/ISSUE-*.md 2>/dev/null | wc -l)
-NEXT_NUM=$((NEXT_NUM + 1))
-TICKET_ID=$(printf "ISSUE-%03d" $NEXT_NUM)
-TICKET_FILE=".aiwg/issues/${TICKET_ID}.md"
-
-# Create ticket file
-cat > "${TICKET_FILE}" <<EOF
----
-id: ${TICKET_ID}
-title: ${TITLE}
-status: open
-created: $(date +%Y-%m-%d)
-updated: $(date +%Y-%m-%d)
-assignee: ${ASSIGNEE:-unassigned}
-labels: ${LABELS:-none}
-priority: ${PRIORITY:-medium}
----
-
-# ${TICKET_ID}: ${TITLE}
-
-**Status**: open
-**Created**: $(date +%Y-%m-%d)
-**Updated**: $(date +%Y-%m-%d)
-**Assignee**: ${ASSIGNEE:-unassigned}
-**Priority**: ${PRIORITY:-medium}
-
-## Description
-
-${DESCRIPTION}
-
-## Acceptance Criteria
-
-- [ ] (Add acceptance criteria here)
-
-## Comments
-
-### $(date +%Y-%m-%d\ %H:%M)
-
-Issue created.
-EOF
-```
-
-**Return format**:
-```
-✅ Issue created: ISSUE-001
-
-File: .aiwg/issues/ISSUE-001.md
-
-Title: Implement user auth
-Status: open
-Priority: medium
-```
+Read [provider-specific issue writes](references/provider-writes.md) before continuing.
 
 ### Step 7: Attach Regression Report (if applicable)
 
@@ -593,158 +293,9 @@ fi
 - To list tickets, discover and load `issue-list`.
 ```
 
-## Examples
+### Issue creation examples
 
-### Example 1: Create Feature Request (Gitea)
-
-**Request**:
-```bash
-Create a high-priority feature issue titled "Add dark mode" with body "Implement theme toggle for light/dark mode preferences" and labels "feature,ui".
-```
-
-**Config** (`.aiwg/config.yaml`):
-```yaml
-ticketing:
-  provider: gitea
-  url: https://git.integrolabs.net
-  owner: roctinam
-  repo: ai-writing-guide
-```
-
-**Output**:
-```
-✅ Issue created: ISSUE-42
-
-View at: https://git.integrolabs.net/roctinam/ai-writing-guide/issues/42
-
-**Title**: Add dark mode
-**Status**: open
-**Priority**: high
-**Labels**: feature, ui
-**Assignee**: unassigned
-
-## Next Steps
-
-- View ticket: https://git.integrolabs.net/roctinam/ai-writing-guide/issues/42
-- Update status by loading `issue-update` for ISSUE-42.
-- Add comments through `issue-update`.
-- List feature tickets by loading `issue-list`.
-```
-
-### Example 2: Create Bug Report with Regression Check (Local)
-
-**Request**:
-```bash
-Create a critical bug issue titled "Login broken after deployment" with body "Users unable to authenticate since v2.1.4 deployment" and run the regression check.
-```
-
-**Output**:
-```
-⏳ Running regression check...
-✓ Regression analysis complete: 2 critical regressions detected
-
-✅ Issue created: ISSUE-003
-
-File: .aiwg/issues/ISSUE-003.md
-
-**Title**: Login broken after deployment
-**Status**: open
-**Priority**: critical
-**Labels**: bug, critical, regression-confirmed
-**Assignee**: unassigned
-
-⚠️ **Regression Detected**: 2 critical regressions found
-   - Authentication validation failing at token refresh
-   - Session state not persisting across requests
-
-**Regression Report**: .aiwg/issues/ISSUE-003-regression-report.md
-
-## Next Steps
-
-- View ticket: cat .aiwg/issues/ISSUE-003.md
-- View regression details: cat .aiwg/issues/ISSUE-003-regression-report.md
-- Update status by loading `issue-update` for ISSUE-003.
-- Run regression analysis through the regression-check capability.
-- List regression issues by loading `issue-list`.
-```
-
-### Example 3: Create Task with Assignee (GitHub)
-
-**Request**:
-```bash
-Create an issue titled "Security audit" with body "Run penetration test on authentication endpoints", assign security-team, add labels "security,high-priority", and set milestone "Q1-2026".
-```
-
-**Config** (`CLAUDE.md`):
-```markdown
-## Issueing Configuration
-
-- **Provider**: github
-- **Owner**: jmagly
-- **Repo**: ai-writing-guide
-```
-
-**Output**:
-```
-✅ Issue created: #128
-
-View at: https://github.com/jmagly/aiwg/issues/128
-
-**Title**: Security audit
-**Status**: open
-**Priority**: medium (default)
-**Labels**: security, high-priority
-**Assignee**: @security-team
-**Milestone**: Q1-2026
-
-## Next Steps
-
-- View ticket: gh issue view 128
-- Update status by loading `issue-update` for #128.
-- Add comments through `issue-update`.
-- List security tickets by loading `issue-list`.
-```
-
-### Example 4: Bug Report with Auto-Detected Regression Check
-
-**Request**:
-```bash
-Create a payments bug issue titled "Payment calculation incorrect" with body "Discount not applying for orders > $1000".
-```
-
-**Output**:
-```
-ℹ️ Bug report detected, running automatic regression check...
-⏳ Running regression check against baseline main...
-✓ Regression confirmed: Introduced in commit abc1234
-
-✅ Issue created: ISSUE-025
-
-**Title**: Payment calculation incorrect
-**Status**: open
-**Priority**: critical (escalated due to regression)
-**Labels**: bug, payments, regression-confirmed
-**Assignee**: unassigned
-
-⚠️ **Regression Confirmed**:
-   - Introduced in: commit abc1234 (2026-01-15)
-   - Root cause: Integer division in discount calculation
-   - Blast radius: 12 unit tests, 3 integration tests affected
-
-**Actions**:
-   - Priority escalated to CRITICAL
-   - Regression analyst assigned
-   - Full report attached
-
-**Regression Report**: .aiwg/issues/ISSUE-025-regression-report.md
-
-## Next Steps
-
-- View regression analysis: cat .aiwg/issues/ISSUE-025-regression-report.md
-- Assign to developer: `/issue-update ISSUE-025 --assignee developer-name`
-- Review introducing commit: git show abc1234
-- Run targeted regression tests: npm test -- --grep "discount calculation"
-```
+Read [issue creation examples](references/examples.md) before continuing.
 
 ## Error Handling
 

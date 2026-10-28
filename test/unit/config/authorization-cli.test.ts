@@ -150,3 +150,22 @@ describe('authorization config integration', () => {
   });
 
 });
+
+describe('authorization check CLI', () => {
+  it('prints the verified receipt decision as JSON and requires an action file', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-27T01:00:00Z'));
+    vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('AIWG_EFFECT_LEDGER_TEST_KEY', 'a'.repeat(64));
+    try {
+      const { dir } = await fixture(); const file = join(dir, 'action.json'); await writeFile(file, JSON.stringify(action()));
+      const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+      await authorizationCli(['check', '--action-file', file, '--target', dir], dir);
+      expect(JSON.parse(String(output.mock.calls.at(-1)![0]))).toMatchObject({
+        decision: 'auto-authorized', receipt: { effectId: expect.any(String) },
+      });
+      await writeFile(file, JSON.stringify({ ...action(), resources: ['../outside.ts'] }));
+      await authorizationCli(['check', '--action-file', file, '--target', dir], dir);
+      expect(JSON.parse(String(output.mock.calls.at(-1)![0]))).toMatchObject({ decision: 'escalate' });
+      await expect(authorizationCli(['check', '--target', dir], dir)).rejects.toThrow('--action-file is required');
+    } finally { vi.useRealTimers(); }
+  });
+});

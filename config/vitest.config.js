@@ -45,6 +45,8 @@ export default defineConfig({
       // teardown (UnregisterWasmAllocation, #3073); no test can catch it.
       ...wasmFiles,
       'test/uat/**',
+      // The offline conformance lane owns this TypeScript suite too.
+      'test/conformance/network-analysis-v1/**',
       // Evidence traces use their dedicated single-fork lane and change cwd.
       'test/evidence/**',
       'tools/ralph-external/**',

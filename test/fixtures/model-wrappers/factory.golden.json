@@ -1,0 +1,70 @@
+{
+  "aiwg-model-reasoning-worker": {
+    "name": "aiwg-model-reasoning-worker",
+    "description": "Choose for architecture, synthesis, difficult analysis, and high-consequence review",
+    "model": "heavy",
+    "reasoningEffort": "high",
+    "tools": [
+      "Create",
+      "Edit",
+      "Execute",
+      "Grep",
+      "Read"
+    ],
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-coding-worker": {
+    "name": "aiwg-model-coding-worker",
+    "description": "Choose for implementation, tests, debugging, and routine technical delivery",
+    "model": "medium",
+    "reasoningEffort": "medium",
+    "tools": [
+      "Create",
+      "Edit",
+      "Execute",
+      "Grep",
+      "Read"
+    ],
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-efficiency-worker": {
+    "name": "aiwg-model-efficiency-worker",
+    "description": "Choose for discovery, inventory, focused edits, and bounded low-cost work",
+    "model": "light",
+    "reasoningEffort": "low",
+    "tools": [
+      "Create",
+      "Edit",
+      "Execute",
+      "Grep",
+      "Read"
+    ],
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-explorer": {
+    "name": "aiwg-model-explorer",
+    "description": "Choose to explore codebase, search files, inspect docs or logs, and return cited findings",
+    "model": "light",
+    "reasoningEffort": "low",
+    "tools": [
+      "Execute",
+      "Glob",
+      "Grep",
+      "Read"
+    ],
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-verifier": {
+    "name": "aiwg-model-verifier",
+    "description": "Choose for fresh-context verification and adversarial review using the supplied verification oracle",
+    "model": "medium",
+    "reasoningEffort": "medium",
+    "tools": [
+      "Execute",
+      "Glob",
+      "Grep",
+      "Read"
+    ],
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  }
+}

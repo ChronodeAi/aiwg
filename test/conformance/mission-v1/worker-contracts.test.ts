@@ -173,7 +173,8 @@ describe('production worker codecs (B-OG-30 #2879; T-OG-08/14)', () => {
     expect(production.$id).toBe('https://aiwg.io/schemas/mission.aiwg.io/v1');
     expect(production.$id).toBe(schemas.mission.$id);
     const frozen = fixtureJson('mission-definitions.patch.json').$defs;
-    for (const definition of WORKER_DEFINITIONS) {
+    expect([...WORKER_DEFINITIONS].sort()).toEqual(Object.keys(frozen).sort());
+    for (const definition of Object.keys(frozen)) {
       expect(production.$defs[definition], definition).toEqual(frozen[definition]);
     }
     expect(production.$defs.extensions.properties).toEqual({ 'aiwg.worker-dispatch': { $ref: '#/$defs/workerDispatch' } });
@@ -204,7 +205,12 @@ describe('production worker codecs (B-OG-30 #2879; T-OG-08/14)', () => {
   it.each(vectors.filter(v => !v.valid))('rejects invalid $id in production codecs', vector => {
     const value = materialize(vector, vectors);
     expect(validateWorkerPayload(vector.definition as (typeof WORKER_DEFINITIONS)[number], value).valid).toBe(false);
-    expect(() => encodeWorkerPayload(vector.definition as (typeof WORKER_DEFINITIONS)[number], value)).toThrowError(WorkerContractError);
+    const code = vector.id === 'unknown-required-feature' ? 'OG_CONTRACT_UNSUPPORTED' : 'OG_CONTRACT_INVALID';
+    for (const codec of [encodeWorkerPayload, decodeWorkerPayload]) {
+      const reject = () => codec(vector.definition as (typeof WORKER_DEFINITIONS)[number], value);
+      expect(reject).toThrowError(WorkerContractError);
+      expect(reject).toThrowError(expect.objectContaining({ code }));
+    }
   });
 
   it('blocks gated payloads before validation when the consumer is old', () => {

@@ -1,3 +1,4 @@
+import { integrityOutcomes, integrityVariants, syntheticIntegrity } from './integrity-ceiling-fixtures.js';
 // Synthetic context-pruning inputs for the shared outcome regression table.
 import { describe, expect, it } from 'vitest';
 import {
@@ -170,7 +171,7 @@ function report(
   options: { gate?: 'PROMOTE' | 'HOLD' | 'ROLLBACK'; preregistration?: ContextPruningPreregistration;
     holdoutAccessedAt?: string | null; trustedDigest?: `sha256:${string}`; missingInputs?: string[];
     runs?: PruningRunEvidence[]; trustedReceiptSetDigest?: `sha256:${string}`;
-    evaluationNow?: () => number } = {},
+    evaluationNow?: () => number; integrity?: QualificationIntegrityMetadata } = {},
 ) {
   // By default the preregistration froze exactly the pair set being reported.
   const preregistration = options.preregistration ?? preregister({}, now(), metrics.pairs);
@@ -179,7 +180,7 @@ function report(
     preregistration,
     trustedPreregistrationDigest: options.trustedDigest ?? preregistration.digest,
     holdoutAccessedAt: options.holdoutAccessedAt === undefined ? HOLDOUT_AT : options.holdoutAccessedAt,
-    integrity: integrity(options.gate ?? 'PROMOTE'),
+    integrity: options.integrity ?? integrity(options.gate ?? 'PROMOTE'),
     metrics,
     pruningRuns: runs,
     trustedReceiptSetDigest: options.trustedReceiptSetDigest ?? contextPruningReceiptSetDigest(runs.flatMap(run => run.receipts)),
@@ -218,4 +219,32 @@ describe('context pruning shared lattice (#2829)', () => {
       }
     }
   });
+});
+
+it.each(integrityOutcomes)('upstream-ceiling preserves context-pruning verdicts and findings for %s', upstream => {
+  for (const variant of integrityVariants) {
+    const metadata = syntheticIntegrity({ ...variant.patch, release_gate: { decision: upstream, reasons: [] } });
+    const result = report(goodMetrics(), { integrity: metadata });
+    const expected = upstream === 'ROLLBACK' ? 'ROLLBACK' : upstream === 'HOLD' || variant.contextHold ? 'HOLD' : 'PROMOTE';
+    expect(result.decision, variant.name).toBe(expected);
+    expect(result.upstreamDecision).toBe(upstream);
+    const findings = [...(variant.contextHold ? ['integrity-not-verified'] : []),
+      ...(upstream === 'ROLLBACK' ? ['upstream-rollback'] : upstream === 'HOLD' ? ['upstream-hold'] : [])].sort();
+    expect(result.findings, variant.name).toEqual(findings);
+    const { digest: reportDigest, ...fields } = result;
+    expect(contextPruningDigest(fields)).toBe(reportDigest);
+  }
+});
+
+it('rejects tampered preregistration and receipts before applying the integrity ceiling', () => {
+  const metrics = goodMetrics();
+  const preregistration = preregister({}, now(), metrics.pairs);
+  const changed = structuredClone(preregistration);
+  changed.thresholds.minimumOverallN += 1;
+  expect(() => report(metrics, { preregistration: changed })).toThrow('digest mismatch');
+  expect(() => report(metrics, { trustedReceiptSetDigest: digest('wrong receipt set') })).toThrow('trusted receipt-set digest');
+  const runs = structuredClone(fixtureRuns(metrics.pairs));
+  const trustedReceiptSetDigest = contextPruningReceiptSetDigest(runs.flatMap(run => run.receipts));
+  runs[0]!.receipts[0]!.proposedAction = 'drop';
+  expect(() => report(metrics, { runs, trustedReceiptSetDigest })).toThrow();
 });

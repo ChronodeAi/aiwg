@@ -333,8 +333,14 @@ Normative field/type/name/YAML errors block strict and compatible validation.
   digest.
 - Source bytes remain immutable under the managed import until an explicit
   update succeeds.
-- Project-owned skills outrank user-owned skills, which outrank explicit
-  imports, which outrank packaged AIWG-managed skills.
+- Project-owned skills outrank user-owned (operator) skills, which outrank
+  account-synced skills, which outrank explicit imports, which outrank packaged
+  AIWG-managed skills. This retains the existing project/user/import/packaged
+  order and inserts the account-synced cache below operator ownership.
+  Synced skills are discovered at `~/.claude/skills/synced/<name>/SKILL.md`.
+  Discovery reports both origins for a name collision; equal-origin ties use
+  sorted paths. Deploy refuses higher-precedence owners, including synced
+  skills, and never writes into the synced cache or overwrites operator files.
 - Deployment and uninstall refuse user-owned target collisions, even when a
   partial or forged marker is present.
 

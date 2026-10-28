@@ -57,6 +57,29 @@ export function validateRuleFrontmatter(data) {
   };
 }
 
+/** Maximum summary length in Unicode code points after trimming (#3728). */
+export const RULE_SUMMARY_MAX_LENGTH = 240;
+
+/**
+ * Render a rule frontmatter failure as one line naming the file, the field
+ * and the limit. Shared by deployment and `aiwg doctor --project-local`
+ * (#3728) so both surfaces report the same reason; the raw Ajv pattern
+ * message encodes the limit only as a regex, so a too-long summary gets an
+ * explicit sentence.
+ */
+export function formatRuleFrontmatterError(file, data, diagnostics) {
+  const detail = diagnostics.map((item) => item.message).join('; ');
+  const summary = typeof data?.summary === 'string' ? data.summary.trim() : null;
+  if (
+    summary !== null
+    && [...summary].length > RULE_SUMMARY_MAX_LENGTH
+    && diagnostics.some((item) => item.message.includes('/summary'))
+  ) {
+    return `${file}: summary is ${[...summary].length} characters; the limit is ${RULE_SUMMARY_MAX_LENGTH} characters (single line). ${detail}`;
+  }
+  return `${file}: ${detail}`;
+}
+
 /** Parse complete Markdown source, preserving authored body and opaque metadata. */
 export function parseRuleFrontmatter(content) {
   const source = content.replace(/^\uFEFF/, '');

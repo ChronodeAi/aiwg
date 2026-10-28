@@ -1,0 +1,55 @@
+{
+  "aiwg-model-reasoning-worker": {
+    "name": "aiwg-model-reasoning-worker",
+    "description": "Choose for architecture, synthesis, difficult analysis, and high-consequence review",
+    "tools": [
+      "terminal",
+      "search/codebase",
+      "edit"
+    ],
+    "model": "claude-opus-4.6",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-coding-worker": {
+    "name": "aiwg-model-coding-worker",
+    "description": "Choose for implementation, tests, debugging, and routine technical delivery",
+    "tools": [
+      "terminal",
+      "search/codebase",
+      "edit"
+    ],
+    "model": "claude-sonnet-4.6",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-efficiency-worker": {
+    "name": "aiwg-model-efficiency-worker",
+    "description": "Choose for discovery, inventory, focused edits, and bounded low-cost work",
+    "tools": [
+      "terminal",
+      "search/codebase",
+      "edit"
+    ],
+    "model": "gpt-5.1-codex-mini",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-explorer": {
+    "name": "aiwg-model-explorer",
+    "description": "Choose to explore codebase, search files, inspect docs or logs, and return cited findings",
+    "tools": [
+      "search/codebase",
+      "terminal"
+    ],
+    "model": "gpt-5.1-codex-mini",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-verifier": {
+    "name": "aiwg-model-verifier",
+    "description": "Choose for fresh-context verification and adversarial review using the supplied verification oracle",
+    "tools": [
+      "search/codebase",
+      "terminal"
+    ],
+    "model": "claude-sonnet-4.6",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  }
+}

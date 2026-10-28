@@ -2,12 +2,13 @@
 // assigned requests with busy-lock retry and reports admitted counts over IPC.
 import { FileAdmissionStore, SharedHostScheduler } from '../../src/serve/shared-host-scheduler.js';
 
-const [storePath, policyJson, assignmentsJson, tag] = process.argv.slice(2);
+const [storePath, policyJson, assignmentsJson, tag, pauseAfter] = process.argv.slice(2);
 const policy = JSON.parse(policyJson);
 const assignments = JSON.parse(assignmentsJson) as Array<{ requestId: string; request: unknown }>;
 const store = new FileAdmissionStore(storePath);
 const scheduler = new SharedHostScheduler(store, policy);
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+let reported = 0;
 
 for (const { requestId, request } of assignments) {
   let state = 'unknown';
@@ -26,7 +27,9 @@ for (const { requestId, request } of assignments) {
     const member = record.managed?.member ?? 'unscoped';
     members[member] = (members[member] ?? 0) + 1;
   }
-  process.send?.({ tag, requestId, state, admitted: admitted.length, members });
+  process.send?.({ tag, pid: process.pid, requestId, state, admitted: admitted.length, members });
+  // Hold the owned child alive at the crash boundary until the parent kills it.
+  if (++reported === Number(pauseAfter)) await new Promise(resolve => process.once('message', resolve));
 }
-process.send?.({ tag, done: true });
+process.send?.({ tag, pid: process.pid, done: true });
 process.exit(0);

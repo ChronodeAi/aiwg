@@ -8,6 +8,7 @@ import {
   type AdmissionRequest, type AdmissionStore, type SharedHostPolicy,
 } from '../../../src/serve/shared-host-scheduler.js';
 import type { WorkerHealthSummary, WorkerUsage } from '../../../src/mission-protocol/types.js';
+import { observeChildClose, stopAndReap } from '../../helpers/worker-lifecycle.mjs';
 
 const epoch = Date.parse('2026-10-22T12:00:00Z');
 const directories: string[] = [];
@@ -229,21 +230,30 @@ describe('T-OG-06 NFR-OG-003 two-process crash admission', () => {
         allowance: { runId: 'crash-run', taskId: requestId, reservation: { tokens: 10, costUsd: 1 } } } };
     });
     const children: ChildProcess[] = [];
+    const closed: Promise<unknown>[] = [];
     const seen = new Set<string>();
     const states = new Set<string>();
     let maxAdmitted = 0; const maxMembers: Record<string, number> = {};
     let crashed = false;
+    let crashSignal: NodeJS.Signals | null = null;
+    let restarted = false;
+    let stopping = false;
     let resolveDone!: () => void; let rejectDone!: (error: Error) => void;
     const completed = new Promise<void>((resolvePromise, rejectPromise) => {
       resolveDone = resolvePromise; rejectDone = rejectPromise;
     });
     const spawn = (tag: string, ids: typeof assignments) => {
-      const child = fork(resolve('node_modules/tsx/dist/cli.mjs'),
-        [resolve('test/fixtures/crash-admission-worker.mts'), storePath, JSON.stringify(crashPolicy), JSON.stringify(ids), tag],
-        { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+      const child = fork(resolve('test/fixtures/crash-admission-worker.mts'),
+        [storePath, JSON.stringify(crashPolicy), JSON.stringify(ids), tag,
+          tag === 'bravo' ? '15' : '0'],
+        { execArgv: ['--import', 'tsx'], stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
       children.push(child);
+      closed.push(observeChildClose(child));
       let reported = 0;
       child.on('message', (message: any) => {
+        if (message?.pid !== child.pid) {
+          rejectDone(new Error('admission writer must be the directly owned child')); return;
+        }
         if (message?.done) return;
         seen.add(message.requestId); states.add(message.state);
         maxAdmitted = Math.max(maxAdmitted, message.admitted);
@@ -253,20 +263,23 @@ describe('T-OG-06 NFR-OG-003 two-process crash admission', () => {
         if (seen.size === 100) resolveDone();
         if (tag === 'bravo' && !crashed && (reported += 1) === 15) {
           crashed = true;
-          child.kill('SIGKILL');
+          if (!child.kill('SIGKILL')) rejectDone(new Error('crash worker refused SIGKILL'));
         }
       });
-      child.on('exit', (code, signal) => {
+      child.on('close', (code, signal) => {
+        if (stopping) return;
         if (tag === 'bravo' && crashed && signal === 'SIGKILL') {
-          // The killed holder can leave the non-blocking store lock behind;
-          // with the holder dead the supervisor clears it before restarting.
-          rmSync(`${storePath}.lock`, { force: true });
+          crashSignal = signal;
+          // The IPC gate is between commits, so this writer holds no lock.
+          // The surviving writer may own the lock; leave it untouched.
           spawn('bravo-restart', ids);
+          restarted = true;
         } else if (code !== 0) rejectDone(new Error(`crash worker ${tag} exited with ${code ?? signal}`));
       });
       child.on('error', rejectDone);
     };
     const timer = setTimeout(() => {
+      stopping = true;
       for (const child of children) child.kill('SIGKILL');
       rejectDone(new Error('crash admission did not complete within 40 seconds'));
     }, 40_000);
@@ -275,10 +288,13 @@ describe('T-OG-06 NFR-OG-003 two-process crash admission', () => {
       spawn('bravo', assignments.slice(50));
       await completed;
     } finally {
+      stopping = true;
       clearTimeout(timer);
-      for (const child of children) child.kill('SIGKILL');
+      await Promise.all(children.map((child, index) => stopAndReap(child, closed[index])));
     }
     expect(crashed).toBe(true);
+    expect(crashSignal).toBe('SIGKILL');
+    expect(restarted).toBe(true);
     expect(seen.size).toBe(100);
     for (const state of states) expect(['admitted', 'queued']).toContain(state);
     expect(maxAdmitted).toBeLessThanOrEqual(4);

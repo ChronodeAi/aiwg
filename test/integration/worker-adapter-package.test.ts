@@ -6,8 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import ts from 'typescript';
-import { findRelativeImportSpecifiers } from '../helpers/packed-relative-imports.mjs';
+import { inspectCliPackageClosure } from '../helpers/cli-package-closure.mjs';
 import { buildCliPackage } from '../../tools/release/build-cli-package.mjs';
 import { fixtureJson, fixtureRoot } from '../conformance/mission-v1/worker-contract-fixtures.js';
 import { workerInputSchema } from '../fixtures/ralph-worker-protocol.mjs';
@@ -27,7 +26,7 @@ afterEach(async () => {
 });
 
 describe('T-OG-14 published package installed adapter paths', () => {
-  it('@aiwg/cli packs the complete worker-invoke runtime import graph', async () => {
+  it('@aiwg/cli packs the runtime import graph from every shipped entry point', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-worker-closure-'));
     roots.push(root);
     const stage = path.join(root, 'stage');
@@ -38,41 +37,12 @@ describe('T-OG-14 published package installed adapter paths', () => {
         npm_config_cache: path.join(root, 'cache'), npm_config_update_notifier: 'false' },
     });
     const files = new Set(JSON.parse(stdout)[0].files.map((file: any) => file.path));
-    // These URL-based imports construct their paths rather than using literal
-    // specifiers. Literal importImpl/loadRalphExternal calls are followed below.
-    const constructedImports: Record<string, string[]> = {
-      'dist/src/mcp/tools/worker-invoke.mjs': ['tools/_resolve-impl.mjs'],
-      'dist/src/mcp/tools/worker-shell-control.mjs': ['tools/ralph-external/lib/systemd-client.mjs'],
-      'tools/ralph-external/lib/session-environment.mjs': ['agentic/code/providers/model-capabilities.v1.json'],
-      'tools/scripts/resource-preflight.mjs': [
-        'dist/src/config/dispatch-thresholds-runtime.mjs', 'dist/src/config/project-artifacts-runtime.mjs',
-      ],
-    };
-    const pending = ['dist/src/mcp/tools/worker-invoke.mjs'];
-    const visited = new Set<string>();
-    while (pending.length) {
-      const filename = pending.pop()!;
-      if (visited.has(filename)) continue;
-      visited.add(filename);
-      const source = await readFile(path.resolve(filename), 'utf8');
-      const imports = findRelativeImportSpecifiers(filename, source)
-        .map(({ spec }: { spec: string }) => path.posix.join(path.posix.dirname(filename), spec));
-      imports.push(...(constructedImports[filename] ?? []));
-      const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true);
-      const visit = (node: ts.Node) => {
-        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-          const arg = node.arguments[node.arguments.length - 1];
-          if (arg && ts.isStringLiteralLike(arg)) {
-            if (node.expression.text === 'importImpl') imports.push(`dist/src/${arg.text}`);
-            if (node.expression.text === 'loadRalphExternal') imports.push(`tools/ralph-external/${arg.text}`);
-          }
-        }
-        ts.forEachChild(node, visit);
-      };
-      visit(ast);
-      pending.push(...imports);
-    }
-    expect([...visited].filter(filename => !files.has(filename))).toEqual([]);
+    const result = inspectCliPackageClosure(process.cwd(), [...files]);
+    expect(result.visited).toContain('dist/src/mcp/tools/worker-invoke.mjs');
+    expect(result.visited).toContain('dist/src/api/index.js');
+    expect(result.violations).toEqual([]);
+    // Preserve the worker environment's constructed data dependency as well.
+    expect(files.has('agentic/code/providers/model-capabilities.v1.json')).toBe(true);
   }, 60_000);
 
   it.each(['aiwg', '@aiwg/cli'])('%s loads session environment policy from an extracted package', async target => {

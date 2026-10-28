@@ -12,7 +12,7 @@ import {
   addManagedMarker, contentHash, replaceBoundRulesBlock, deployEmulatedBehaviors, filterAgentFiles,
 } from './base.mjs';
 
-const { parseRuleFrontmatter, inferRuleActivation, readCoreBody, validateCoreSet, CORE_RULES_START, CORE_RULES_END } = await importImpl(import.meta.url, 'rules/activation.mjs');
+const { parseRuleFrontmatter, inferRuleActivation, readCoreBody, validateCoreSet, formatRuleFrontmatterError, CORE_RULES_START, CORE_RULES_END } = await importImpl(import.meta.url, 'rules/activation.mjs');
 const { resolveDeployVersion } = await importImpl(import.meta.url, 'providers/deploy-version.mjs');
 const { trackTemporaryDirectory } = await importImpl(import.meta.url, 'utils/temporary-directory.js');
 const { loadRulePinConfigs, installedRuleCapabilities, resolveRulePins } = await importImpl(import.meta.url, 'rules/pins.mjs');
@@ -20,7 +20,7 @@ const { guardRulesInlineBudget } = await importImpl(import.meta.url, 'rules/inli
 const { userConfigFile } = await importImpl(import.meta.url, 'config/user-config-dir.mjs');
 const { resolveProjectAiwgDir } = await importImpl(import.meta.url, 'config/project-artifacts-runtime.mjs');
 import { writeContextFileSync, CONTEXT_STAGE_ENV } from './context-write.mjs';
-import { captureProviderPathDescriptors, setStagedProviderPath, restoreProviderPaths } from './provider-paths-staging.mjs';
+import { captureProviderPathDescriptors, setStagedProviderPath, restoreProviderPaths, logicalProviderOutputPath } from './provider-paths-staging.mjs';
 import { resolveDeliveryRuleBindings } from './rule-binding-targets.mjs';
 import { projectOnDemandReferences, renderRuleKernelIndex } from './rule-presentation.mjs';
 export { renderRuleKernelIndex } from './rule-presentation.mjs';
@@ -135,7 +135,7 @@ export async function prepareRuleDelivery(opts) {
   const rules = collectDeploymentRuleSources(opts).map(file => {
     const content = fs.readFileSync(file, 'utf8');
     const parsed = parseRuleFrontmatter(content);
-    if (!parsed.valid) throw new Error(`${file}: ${parsed.diagnostics.map(d => d.message).join('; ')}`);
+    if (!parsed.valid) throw new Error(formatRuleFrontmatterError(opts.logicalInputPath ? opts.logicalInputPath(file) : file, parsed.data, parsed.diagnostics));
     const behavior = path.basename(file) === 'BEHAVIOR.md';
     const rule = { ...parsed.rule, file, content, body: parsed.body, behavior,
       name: behavior ? `behavior/${path.basename(path.dirname(file))}` : parsed.data.name || path.basename(file, '.md') };
@@ -1116,7 +1116,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
     }
     delivery.bindings = remappedBindings;
     preimages.push(...snapshotPreimages([...delivery.rules.map(rule => rule.file), ...delivery.targets.map(entry => entry.source), path.join(target, '.aiwg', 'aiwg.config')]));
-    const opts = { ...original, target: stage, dryRun: false, ruleDelivery: delivery,
+    const opts = { ...original, target: stage, dryRun: false, ruleDelivery: delivery, logicalOutputPath: file => logicalProviderOutputPath(file, stage, target, mappings),
       kernelSkillsPath: kernel, deploymentHome: home, activeWorkspace, hermesLegacySkills, legacyCodexSkills, staging: true };
     await deploySelectedSurface(opts, provider, deploy);
     if (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly && opts.deployBehaviors !== false) {

@@ -3,10 +3,22 @@ import {
   captureProviderPathDescriptors,
   setStagedProviderPath,
   restoreProviderPaths,
+  logicalProviderOutputPath,
 } from '../../../tools/agents/providers/provider-paths-staging.mjs';
 import { paths as grokbotPaths } from '../../../tools/agents/providers/grokbot.mjs';
 
 describe('provider paths staging (#3648)', () => {
+  it('reports final project and home paths without remapping similarly prefixed siblings', () => {
+    const stage = '/tmp/synthetic-stage/project';
+    const target = '/tmp/synthetic-target';
+    const mappings = [{ to: '/tmp/synthetic-stage/home', from: '/tmp/synthetic-home' }];
+    expect(logicalProviderOutputPath(`${stage}/.claude/rules/rule.md`, stage, target, mappings))
+      .toBe(`${target}/.claude/rules/rule.md`);
+    expect(logicalProviderOutputPath('/tmp/synthetic-stage/home/.codex/prompts/rule.md', stage, target, mappings))
+      .toBe('/tmp/synthetic-home/.codex/prompts/rule.md');
+    expect(logicalProviderOutputPath(`${stage}-other/file`, stage, target, mappings)).toBe(`${stage}-other/file`);
+  });
+
   afterEach(() => {
     delete process.env.AIWG_GROKBOT_SKILLS_DIR;
   });

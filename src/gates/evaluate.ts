@@ -1,5 +1,5 @@
 import { ceilingDecision, maxOutcome } from './lattice.js';
-import { qualificationIntegrityAllowlistProblems, type QualificationIntegrityMetadata } from '../decision/qualification/release.js';
+import { evaluateUpstreamCeiling, type QualificationIntegrityMetadata } from './upstream-ceiling.js';
 import { artifactDigest } from '../decision/validate.js';
 import { evaluatePredicate } from '../decision/predicates.js';
 import { clopperPearsonInterval } from './stats/clopper-pearson.js';
@@ -434,13 +434,10 @@ function evaluateObservation(gate: GateDefinition, observation: MetricObservatio
     case 'upstream-ceiling': {
       if (upstream === null) return { ...base, status: 'insufficient', reason: 'upstream-missing',
         statistic: { method: 'upstream-integrity' } };
-      const problems = qualificationIntegrityAllowlistProblems(upstream.metadata);
+      const { problems, compromised } = evaluateUpstreamCeiling(upstream.metadata);
       if (!problems.length) {
         return { ...base, status: 'pass', reason: 'upstream-clean', statistic: { method: 'upstream-integrity' } };
       }
-      const compromised = problems.includes('compromised')
-        || (upstream.metadata as { release_gate?: { decision?: string } }).release_gate?.decision === 'ROLLBACK'
-        || (upstream.metadata as { integrity_state?: string }).integrity_state === 'compromised';
       return { ...base, status: 'fail', reason: compromised ? 'upstream-compromised' : 'upstream-allowlist',
         statistic: { method: 'upstream-integrity' } };
     }
@@ -488,14 +485,7 @@ function rerunProviderOrFail(
 }
 
 function upstreamOutcome(upstream: UpstreamCeiling | null): { ceiling: GateOutcome; problems: string[] } {
-  if (upstream === null) return { ceiling: 'HOLD', problems: ['upstream-ceiling-missing'] };
-  const problems = qualificationIntegrityAllowlistProblems(upstream.metadata);
-  const release = (upstream.metadata as { release_gate?: { decision?: GateOutcome } }).release_gate?.decision;
-  const compromised = problems.includes('compromised')
-    || release === 'ROLLBACK'
-    || (upstream.metadata as { integrity_state?: string }).integrity_state === 'compromised';
-  return { ceiling: ceilingDecision(release ?? 'HOLD', compromised ? 'ROLLBACK' : 'PROMOTE',
-    problems.length ? 'HOLD' : 'PROMOTE'), problems };
+  return evaluateUpstreamCeiling(upstream?.metadata ?? null);
 }
 
 /**

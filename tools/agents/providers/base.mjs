@@ -890,7 +890,7 @@ export function deployFiles(files, destDir, opts, transformFn) {
     if (a.type === 'deploy') {
       if (dryRun) console.log(`[dry-run] deploy ${a.src} -> ${a.dest} (${a.reason})`);
       else writeFile(a.dest, a.content, false);
-      if (verbose) console.log(`deployed ${path.basename(a.src)} -> ${path.relative(process.cwd(), a.dest)} (${a.reason})`);
+      if (verbose) console.log(`deployed ${path.basename(a.src)} -> ${path.relative(process.cwd(), opts.logicalOutputPath?.(a.dest) || a.dest)} (${a.reason})`);
       deployedEntries.push({ filename: path.basename(a.dest), hash: a.hash, frameworkSlug: a.frameworkSlug, sourcePath: path.resolve(a.src) });
     } else if (a.type === 'skip') {
       if (verbose) console.log(`skip (${a.reason}): ${path.basename(a.dest)}`);
@@ -1577,7 +1577,7 @@ function pruneMissingStandardSkills(destDir, opts) {
 export function deploySkillDir(skillDir, destDir, opts) {
   const { force = false, dryRun = false, provider, transformSkillMd } = opts;
   const verbose = opts.verbose === true;
-  const skillName = path.basename(skillDir);
+  const skillName = opts.skillName || path.basename(skillDir);
 
   // Check SKILL.md for explicit platform restriction before deploying anything
   const skillMdPath = path.join(skillDir, 'SKILL.md');
@@ -1592,7 +1592,7 @@ export function deploySkillDir(skillDir, destDir, opts) {
   const destSkillDir = path.join(destDir, skillName);
   const previous = readSidecarManifest(destSkillDir);
   const frameworkSlug = extractFrameworkSlug(skillMdPath);
-  if (!canDeploySkill(previous, skillDir, opts)) return;
+  if (!canDeploySkill(previous, skillDir, opts)) return false;
   const managed = {};
   if (!dryRun) ensureDir(destSkillDir);
 

@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 /**
  * Cursor IDE Provider
  *
@@ -17,7 +18,6 @@
  *   - $ARGUMENTS -> [arguments] conversion for rules
  *   - Delegates rules deployment to deploy-rules-cursor.mjs
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -56,14 +56,11 @@ import {
   loadRuntimeModelCatalog
 } from './base.mjs';
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'cursor';
 export const aliases = [];
-
 export const paths = {
   agents: '.cursor/agents/',
   commands: '.cursor/commands/',
@@ -99,7 +96,8 @@ export const capabilities = {
  * Transform agent content for Cursor
  * Cursor uses conventional deployment - minimal transformation needed
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('cursor', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const model = content.match(/^model:\s*(.+)$/m)?.[1]?.trim().replace(/['"]/g, '');
   if (!model) return content;
   const roles = modelCatalog.providers.cursor.roles;

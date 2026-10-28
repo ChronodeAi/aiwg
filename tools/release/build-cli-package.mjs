@@ -3,6 +3,7 @@
 import { chmod, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cliToolFiles } from './cli-package-files.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
@@ -61,15 +62,6 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     path.join(repoRoot, 'agentic', 'code', 'providers', 'model-catalog.v1.json'),
     path.join(repoRoot, 'dist', 'src', 'process', 'bounded-child-process.mjs'),
     path.join(repoRoot, 'dist', 'src', 'process', 'signal-child.mjs'),
-    path.join(repoRoot, 'tools', '_resolve-impl.mjs'),
-    path.join(repoRoot, 'tools', 'cli', 'decision-offload-report.mjs'),
-    path.join(repoRoot, 'tools', 'cli', 'workspace-status.mjs'),
-    path.join(repoRoot, 'tools', 'agents', 'deploy-agents.mjs'),
-    path.join(repoRoot, 'tools', 'providers', 'antigravity-transport.mjs'),
-    path.join(repoRoot, 'tools', 'commands', 'deploy-prompts-codex.mjs'),
-    path.join(repoRoot, 'tools', 'plugin', 'package-plugins.mjs'),
-    path.join(repoRoot, 'tools', 'plugin', 'plugin-links.mjs'),
-    path.join(repoRoot, 'tools', 'skills', 'deploy-skills-codex.mjs'),
   ];
   for (const filename of required) await readFile(filename);
 
@@ -101,48 +93,8 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
   }
   await cp(path.join(repoRoot, 'schemas', 'mission-v1.schema.json'), path.join(outputDir, 'schemas', 'mission-v1.schema.json'));
   await cp(path.join(repoRoot, 'schemas', 'models'), path.join(outputDir, 'schemas', 'models'), { recursive: true });
-  // Installed adapters and the worker-invoke runtime closure. The packaged
-  // import-graph regression test guards this list without shipping Ralph fixtures.
-  const workerAdapterFiles = [
-    'tools/ralph-external/session-launcher.mjs',
-    'tools/ralph-external/process-monitor.mjs',
-    'tools/ralph-external/lib/session-environment.mjs',
-    'tools/ralph-external/lib/worker-inputs.mjs',
-    'tools/ralph-external/lib/worker-final.mjs',
-    'tools/ralph-external/lib/worker-launch-cli.mjs',
-    'tools/ralph-external/lib/worker-isolation.mjs',
-    'tools/ralph-external/lib/worker-native-sandbox.mjs',
-    'tools/ralph-external/lib/worker-isolation-status.mjs',
-    'tools/ralph-external/lib/worker-retry-evidence.mjs',
-    'tools/ralph-external/lib/worker-termination.mjs',
-    'tools/ralph-external/lib/worker-invocation-processes.mjs',
-    'tools/ralph-external/lib/worker-invocation-ancestry.mjs',
-    'tools/ralph-external/lib/worker-context.mjs',
-    'tools/ralph-external/lib/systemd-client.mjs',
-    'tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs',
-    'tools/ralph-external/lib/launcher-recovery-evidence.mjs',
-    'tools/ralph-external/lib/recovery-probe.mjs',
-    'tools/ralph-external/lib/worker-overflow.mjs',
-    'tools/scripts/resource-preflight.mjs',
-    'tools/ralph-external/lib/provider-adapter.mjs',
-    'tools/ralph-external/lib/strict-worker-json.mjs',
-    'tools/ralph-external/lib/session-attempt.mjs',
-    'tools/ralph-external/lib/managed-worker-attempt.mjs',
-    'tools/ralph-external/lib/worker-health.mjs',
-    'tools/ralph-external/lib/worker-artifacts.mjs',
-    'tools/ralph-external/lib/claude-adapter.mjs',
-    'tools/ralph-external/lib/codex-adapter.mjs',
-    'tools/ralph-external/lib/opencode-adapter.mjs',
-    'tools/ralph-external/lib/factory-adapter.mjs',
-    'tools/ralph-external/lib/pi-adapter.mjs',
-    'tools/ralph-external/lib/omp-adapter.mjs',
-    'tools/ralph-external/lib/deepseek-harness-adapter.mjs',
-    'tools/ralph-external/lib/muse-adapter.mjs',
-    'tools/ralph-external/lib/openhuman-adapter.mjs',
-    'tools/providers/omp-transport.mjs',
-    'tools/providers/deepseek-harness-transport.mjs',
-  ];
-  for (const filename of workerAdapterFiles) {
+  // The package manifest is the sole tool inventory, including directory entries.
+  for (const filename of cliToolFiles(repoRoot, cli.files)) {
     const destination = path.join(outputDir, filename);
     await mkdir(path.dirname(destination), { recursive: true });
     await cp(path.join(repoRoot, filename), destination);
@@ -164,27 +116,6 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     path.join(outputDir, 'schemas', 'dataset'),
     { recursive: true },
   );
-  await mkdir(path.join(outputDir, 'tools', 'agents'), { recursive: true });
-  await mkdir(path.join(outputDir, 'tools', 'cli'), { recursive: true });
-  await mkdir(path.join(outputDir, 'tools', 'commands'), { recursive: true });
-  await mkdir(path.join(outputDir, 'tools', 'plugin'), { recursive: true });
-  await mkdir(path.join(outputDir, 'tools', 'providers'), { recursive: true });
-  await mkdir(path.join(outputDir, 'tools', 'skills'), { recursive: true });
-  await cp(path.join(repoRoot, 'tools', '_resolve-impl.mjs'), path.join(outputDir, 'tools', '_resolve-impl.mjs'));
-  await cp(path.join(repoRoot, 'tools', 'cli', 'decision-offload-report.mjs'), path.join(outputDir, 'tools', 'cli', 'decision-offload-report.mjs'));
-  await cp(path.join(repoRoot, 'tools', 'cli', 'workspace-status.mjs'), path.join(outputDir, 'tools', 'cli', 'workspace-status.mjs'));
-  await cp(path.join(repoRoot, 'tools', 'agents', 'deploy-agents.mjs'), path.join(outputDir, 'tools', 'agents', 'deploy-agents.mjs'));
-  await cp(
-    path.join(repoRoot, 'tools', 'agents', 'providers'),
-    path.join(outputDir, 'tools', 'agents', 'providers'),
-    { recursive: true },
-  );
-  await cp(path.join(repoRoot, 'tools', 'commands', 'deploy-prompts-codex.mjs'), path.join(outputDir, 'tools', 'commands', 'deploy-prompts-codex.mjs'));
-  for (const filename of ['package-plugins.mjs', 'plugin-links.mjs']) {
-    await cp(path.join(repoRoot, 'tools', 'plugin', filename), path.join(outputDir, 'tools', 'plugin', filename));
-  }
-  await cp(path.join(repoRoot, 'tools', 'providers', 'antigravity-transport.mjs'), path.join(outputDir, 'tools', 'providers', 'antigravity-transport.mjs'));
-  await cp(path.join(repoRoot, 'tools', 'skills', 'deploy-skills-codex.mjs'), path.join(outputDir, 'tools', 'skills', 'deploy-skills-codex.mjs'));
   await cp(path.join(repoRoot, 'bin', 'aiwg.mjs'), path.join(outputDir, 'bin', 'aiwg.mjs'));
   await chmod(path.join(outputDir, 'bin', 'aiwg.mjs'), 0o755);
   await cp(path.join(repoRoot, 'LICENSE'), path.join(outputDir, 'LICENSE'));

@@ -666,6 +666,15 @@ aiwg sessions export verify --input ./export/evidence.shard
 aiwg sessions export unpack --input ./export/evidence.shard --out ./recovered
 ```
 
+This exact sequence -- import, list/search selection, plan, build
+(`--include-bytes`), verify, unpack with byte-exact attachment recovery --
+runs offline against the packaged CLI (`node bin/aiwg.mjs` in a mkdtemp
+workspace) in
+`test/unit/cli/handlers/sessions-export-packaged.test.ts`, reusing the
+`claude/web-export.json` fixture. The same file covers the negative paths:
+a missing attachment, digest drift after planning (`SCHEMA_DRIFT`), and an
+existing shard or recovery without `--force` (`OUTPUT_EXISTS`).
+
 What the archive contains: one `aiwg.session` record per selected session,
 one `aiwg.session-event` record per event (linked to its parent session via a
 `parent-session` relationship), and one `aiwg.session-output` record per
@@ -744,16 +753,19 @@ as supported; everything else is unverified, not assumed to work.
 
 | Combination | Status | Evidence |
 |---|---|---|
-| Claude local JSONL/hook -> `export plan/build/verify/unpack` | Verified | `test/unit/cli/handlers/sessions-export.test.ts`; manual CLI smoke test against a rebuilt `dist/` |
-| Claude web/account `manual-export` -> `export plan/build/verify/unpack` | Verified | same test file, using the `web-export.json` fixture |
+| Packaged CLI (`node bin/aiwg.mjs`, built by `npm run build:cli`) in a mkdtemp workspace: import -> list/search select -> `export plan/build --include-bytes/verify/unpack`, exact attachment set recovered | Verified | `test/unit/cli/handlers/sessions-export-packaged.test.ts`, reusing the `claude/web-export.json` fixture |
+| Missing attachment, digest drift after planning, existing shard/recovery without `--force` | Verified (fail closed) | `test/unit/cli/handlers/sessions-export-packaged.test.ts` (`SCHEMA_DRIFT`, `OUTPUT_EXISTS`); stale-plan, tag-drift, and corrupt-shard paths in `test/unit/cli/handlers/sessions-export.test.ts` |
+| Claude local JSONL/hook -> `export plan/build/verify/unpack` | Verified | `test/unit/cli/handlers/sessions-export.test.ts`; packaged-CLI journey in `test/unit/cli/handlers/sessions-export-packaged.test.ts` |
+| Claude web/account `manual-export` -> `export plan/build/verify/unpack` | Verified | same two test files, using the `web-export.json` fixture |
 | Registered output lineage (#2566) included in the built shard | Verified | `test/unit/sessions/output-lineage.test.ts`, `test/unit/cli/handlers/sessions-export.test.ts` |
 | Built shard is a genuine, lossless `full-v1`/`2.0.0` archive (`@fortemi/core`'s own conversion report) | Verified | `test/unit/sessions/fortemi-export-mapping.test.ts`, `test/unit/cli/handlers/sessions-export.test.ts` |
 | Built shard recovers exactly via the purpose-built full-v1 reader (not `aiwgFortemiIndexFromKnowledgeShard`, which only supports `core-v1`) | Verified | `test/unit/sessions/fortemi-shard-recovery.test.ts` |
-| Index-level wrapper (`source.repo`/`privacy`) recovered from a `full-v1` archive via the synthetic export-manifest record | Verified | `test/unit/sessions/fortemi-shard-recovery.test.ts`, `test/unit/cli/handlers/sessions-export.test.ts`; manual CLI smoke test against a rebuilt `dist/` |
+| Index-level wrapper (`source.repo`/`privacy`) recovered from a `full-v1` archive via the synthetic export-manifest record | Verified | `test/unit/sessions/fortemi-shard-recovery.test.ts`, `test/unit/cli/handlers/sessions-export.test.ts`, `test/unit/cli/handlers/sessions-export-packaged.test.ts` |
 | Codex -> `export plan/build/verify` | Verified | `test/unit/cli/handlers/sessions-export.test.ts`, using the `codex/threads.app-server.jsonl` fixture |
-| Remaining provider sources (Copilot, Cursor, Hermes, OpenCode, etc.) -> `export plan/build` | Unverified but expected to work | The mapping in `src/sessions/fortemi-export-mapping.ts` reads only the normalized `Session`/`SessionEvent` catalog, not provider-specific fields -- Claude and Codex both pass through it unmodified, but no dedicated test exercises the remaining providers through the export pipeline yet |
+| OpenCode -> `export plan/build/unpack` with provider-native attachment payloads omitted by import policy | Verified | `test/unit/cli/handlers/sessions-export.test.ts`, using the `opencode/complete.json` fixture (plan carries zero attachments; no `attachments/` directory is recovered) |
+| Registered-output bytes embedded with `--include-bytes` and recovered exactly | Verified | `test/unit/cli/handlers/sessions-export.test.ts`; packaged-CLI journey in `test/unit/cli/handlers/sessions-export-packaged.test.ts`; native BLAKE3 blob sidecars validated by `@fortemi/core` |
+| Remaining provider sources (Copilot, Cursor, Hermes, etc.) -> `export plan/build` | Unverified but expected to work | The mapping in `src/sessions/fortemi-export-mapping.ts` reads only the normalized `Session`/`SessionEvent` catalog, not provider-specific fields -- Claude and Codex both pass through it unmodified, but no dedicated test exercises the remaining providers through the export pipeline yet |
 | A real external Fortemi consumer application importing the built shard | Verified (CI job `producer-consumer-receipt`) | `.gitea/workflows/fortemi-shard-conformance.yml` imports the synthetic Claude fixture into a temporary catalog and builds a full-v1 shard. It then checks the pinned Fortemi consumer's import, note and provenance APIs, and semantic re-export. First passing run: Gitea Actions run 92878 (2026-10-28). The job reruns on every main push that touches the session-export paths. |
-| Locally present OpenCode data-URL and registered-output bytes embedded and recovered exactly | Verified with `--include-bytes` | `test/unit/cli/handlers/sessions-export.test.ts`; native BLAKE3 blob sidecars validated by `@fortemi/core` |
 | Remote or provider-reference-only attachment bytes | Not available | Never fetched; providers such as Claude web exports expose metadata/extracted text rather than original bytes |
 | Edited or branched Claude web-export conversations | Unverified | No fixture represents this; see `docs/providers/claude-code-sessions.md` known limitations |
 | `export unpack` re-importing recovered records back into a session catalog | Not implemented | `unpack` writes the recovered record graph to `index.json`; it does not reconstruct catalog rows |

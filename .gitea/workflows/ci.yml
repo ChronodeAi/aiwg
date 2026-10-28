@@ -220,6 +220,15 @@ jobs:
         # `test:node` set is gated here. Deterministic, no network.
         run: npm run test:node
 
+      - name: Run Cockpit UI and smoke suites (#3729)
+        # @aiwg/cockpit owns its own runner: 15 web UI suites (vitest/jsdom via
+        # test:web) plus four deterministic offline smoke harnesses. Uses the
+        # package's own install (via build:web) and test commands. The two poc
+        # harnesses stay manual-only (see optInPackageTests): kill-bridge needs
+        # fixed ports plus SIGKILL timing, and security-checks touches the real
+        # $HOME runtime file.
+        run: npm --prefix apps/cockpit run build:web && npm --prefix apps/cockpit run test:web && npm --prefix apps/cockpit run smoke
+
       - name: Run storage backend conformance gate (#2190/#2191)
         # Enforces the zero-dependency golden corpus, migration safety/fault
         # protocol, qualification negative controls, and PostgreSQL transport

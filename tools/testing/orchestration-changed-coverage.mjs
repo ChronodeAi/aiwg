@@ -168,9 +168,11 @@ function runVitestBucket(bucket, files, rangesByFile) {
   fs.mkdirSync(path.join(root, REPORT_PARENT), { recursive: true });
   const configPath = path.join(root, REPORT_PARENT, `${bucket}.config.mjs`);
   const reportPath = path.join(root, reportsDirectory, 'coverage-final.json');
-  fs.rmSync(reportPath, { force: true });
+  const casesPath = path.join(root, REPORT_PARENT, `${bucket}.tests.json`);
+  for (const file of [reportPath, casesPath]) fs.rmSync(file, { force: true });
   fs.writeFileSync(configPath, `import base from ${JSON.stringify('../../config/vitest.config.js')};
 export default { ...base, test: { ...base.test, include: ${JSON.stringify(FOCUSED_TESTS)},
+  reporters: ['default', 'json'], outputFile: { json: ${JSON.stringify(casesPath)} },
   coverage: { enabled: true, provider: 'v8', include: ${JSON.stringify(files)},
     exclude: ['test/**'], reporter: ['text', 'json-summary', 'json'],
     reportsDirectory: ${JSON.stringify(reportsDirectory)} } } };
@@ -183,6 +185,10 @@ export default { ...base, test: { ...base.test, include: ${JSON.stringify(FOCUSE
   }
   let failed = Number(Boolean(result.error || result.signal || result.status !== 0));
   try {
+    const cases = JSON.parse(fs.readFileSync(casesPath, 'utf8'));
+    if (!(cases.numTotalTests > 0 && cases.numPassedTests + cases.numFailedTests > 0)) {
+      throw new Error('no executed test cases; coverage cannot pass without cases');
+    }
     failed |= checkCoverageReport(JSON.parse(fs.readFileSync(reportPath, 'utf8')), files, rangesByFile, thresholds);
   } catch (error) {
     console.error(`orchestration-changed-coverage: ${bucket}: ${error.message}`);
@@ -209,7 +215,7 @@ export function runGate({ base, runGit = gitLines, env = process.env } = {}) {
   const { validators, 'adapters-recovery': adapters, outOfScope } = buckets;
   console.log(`orchestration-changed-coverage: base ${baseline}, ${validators.length} validator, ${adapters.length} adapter/recovery, ${outOfScope.length} out-of-scope changed files`);
   if (!validators.length && !adapters.length) {
-    console.log('orchestration-changed-coverage: no changed files in scope; gate passes');
+    console.log('orchestration-changed-coverage: no changed files in scope; skipped (0 executed cases)');
     return 0;
   }
   try {

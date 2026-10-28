@@ -3,13 +3,8 @@ import { normalizeProviderDefinitionId } from '../providers/provider-definitions
 import { collectProviderInventory } from '../providers/provider-inventory.js';
 import { resolveDynamicModelCatalog } from './model-discovery.js';
 
-export const MODEL_WRAPPERS = {
-  reasoning: 'aiwg-model-reasoning-worker',
-  coding: 'aiwg-model-coding-worker',
-  efficiency: 'aiwg-model-efficiency-worker',
-} as const;
-
-export type ModelRole = keyof typeof MODEL_WRAPPERS;
+import { MODEL_WRAPPER_DEFINITIONS, type ModelRole } from './wrapper-definitions.js';
+export { MODEL_WRAPPERS, MODEL_WRAPPER_DEFINITIONS, type ModelRole } from './wrapper-definitions.js';
 
 interface CatalogRole {
   id: string;
@@ -89,14 +84,14 @@ export async function loadProviderModelMetadata(
   for (const provider of installed) {
     const roles = catalog.providers[provider]?.roles;
     if (!roles) continue;
-    providers[provider] = (Object.keys(MODEL_WRAPPERS) as ModelRole[])
-      .flatMap(role => {
+    providers[provider] = MODEL_WRAPPER_DEFINITIONS
+      .flatMap(({ role, name }) => {
         const model = roles[role];
         return model ? [{
           provider,
           role,
           model: model.id,
-          wrapper: MODEL_WRAPPERS[role],
+          wrapper: name,
           status: model.status ?? 'unknown',
           observed: model.observed ?? false,
           source: catalog.discovery?.providers?.[provider]?.source

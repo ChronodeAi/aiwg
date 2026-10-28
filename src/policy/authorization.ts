@@ -11,6 +11,8 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 import type { HitlPolicy } from './hitl-types.js';
 export { resolveHitlAuthorization } from './hitl.js';
+// checkHitlAuthorization lives in ./hitl-check.js. Do not re-export it here: it
+// loads the effects host and current config into every importer of this module.
 import type { AiwgConfig, WorkspaceRepoAction } from '../config/aiwg-config.js';
 import { projectAiwgPath, projectControlPath } from '../config/project-artifacts.js';
 

@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 /** Google Antigravity CLI project resource deployment, qualified against 1.1.26. */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,7 +16,6 @@ import {
   normalizeDeploymentMode,
   resolveAiwgRoot,
 } from './base.mjs';
-
 export const name = 'antigravity';
 export const aliases = ['agy'];
 export const paths = { agents: '.agents/agents', commands: '', skills: '.agents/skills', rules: '' };
@@ -29,9 +29,7 @@ export const capabilities = {
   homeDirectoryDeploy: false,
   parallelCommandAndSkillSurfaces: false,
 };
-
 export const mapModel = model => model;
-
 const ANTIGRAVITY_TOOL_MAP = new Map([
   ['Read', 'view_file'],
   ['Write', 'write_to_file'],
@@ -39,7 +37,6 @@ const ANTIGRAVITY_TOOL_MAP = new Map([
   ['Grep', 'grep_search'],
   ['Bash', 'run_command'],
 ]);
-
 function mapTools(value) {
   if (!value) return [];
   return value
@@ -49,7 +46,8 @@ function mapTools(value) {
     .filter(Boolean);
 }
 
-export function transformAgent(_source, content) {
+export const transformAgent = withModelWrapper('antigravity', translateAgent);
+function translateAgent(_source, content) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) return content;
   const frontmatter = match[1];

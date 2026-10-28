@@ -6,6 +6,7 @@ import YAML from 'yaml';
 import { importImpl } from '../../_resolve-impl.mjs';
 import { withRuleDeployment, collectFrameworkArtifacts, getAddonFiles, isKernelSkill, listMdFiles, listSkillDirs, normalizeDeploymentMode, resolveAiwgRoot } from './base.mjs';
 
+import { withModelWrapper } from './model-wrapper.mjs';
 import { writeContextFileSync } from './context-write.mjs';
 export const name = 'omp';
 export const aliases = ['oh-my-pi'];
@@ -23,7 +24,8 @@ function diagnostic(opts, message) { opts.diagnostics?.push(message); if (!opts.
 // Resolved through the shared resolver: an installed package ships these
 // modules under dist/src, not src, so a literal path into src fails there.
 const { resolveOmpPaths } = await importImpl(import.meta.url, 'providers/omp-paths.mjs');
-const { transformAgent, mapModel } = await importImpl(import.meta.url, 'providers/omp-agent.mjs');
+const { transformAgent: translateAgent, mapModel } = await importImpl(import.meta.url, 'providers/omp-agent.mjs');
+const transformAgent = withModelWrapper('omp', translateAgent);
 export { transformAgent, mapModel };
 const array = value => Array.isArray(value) ? value : typeof value === 'string' ? value.split(',').map(s => s.trim()).filter(Boolean) : [];
 export function transformCommand(src, content, opts = {}) {

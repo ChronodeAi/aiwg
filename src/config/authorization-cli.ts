@@ -6,16 +6,20 @@ import { getProjectDir, readAiwgConfig, writeAiwgConfig } from './aiwg-config.js
 import { ensureAuthorization, loadHitlLayers } from '../policy/hitl-config.js';
 import { resolveHitlAuthorization } from '../policy/hitl.js';
 import { validateHitlPolicy } from '../policy/hitl-validation.js';
+import { checkHitlAuthorization } from '../policy/hitl-check.js';
 import type { HitlPolicy } from '../policy/hitl-types.js';
 
 export const authorizationUsage = `aiwg config authorization (also aiwg steward authorization)
   inspect | validate [--target DIRECTORY]
   preview --action-file FILE [--target DIRECTORY]
+  check --action-file FILE [--target DIRECTORY]
   enable --policy-file FILE [--target DIRECTORY]
   revoke [--profile NAME] [--target DIRECTORY]
   receipt --action-file FILE [--target DIRECTORY]
 Preview is read-only. Receipt writes the decision to the existing signed effect ledger;
-it does not perform the proposed action. Action files cannot supply session authorization.`;
+it does not perform the proposed action. Check writes a verified receipt before returning
+auto-authorized; failures escalate. Action files must be host-classified descriptors,
+never issue/model output. Action files cannot supply session authorization. Platform prompts remain authoritative.`;
 const usageError = (message: string) => new AiwgError({ code: 'ERR_AUTHORIZATION_USAGE', message, exitCode: EXIT_CODES.USAGE });
 async function jsonFile(file: string): Promise<unknown> {
   try { return JSON.parse(await readFile(file, 'utf8')); }
@@ -26,7 +30,7 @@ export async function authorizationCli(args: string[], cwd = process.cwd()): Pro
   const [operation, ...rest] = args;
   const flags: Record<string, string> = {};
   const allowed = ['--target', ...(operation === 'enable' ? ['--policy-file'] : []),
-    ...(['preview', 'receipt'].includes(operation) ? ['--action-file'] : []), ...(operation === 'revoke' ? ['--profile'] : [])];
+    ...(['preview', 'receipt', 'check'].includes(operation) ? ['--action-file'] : []), ...(operation === 'revoke' ? ['--profile'] : [])];
   for (let i = 0; i < rest.length; i += 2) {
     if (!allowed.includes(rest[i]) || !rest[i + 1] || rest[i + 1].startsWith('--') || flags[rest[i]]) throw usageError('Invalid authorization option');
     flags[rest[i]] = rest[i + 1];
@@ -37,9 +41,13 @@ export async function authorizationCli(args: string[], cwd = process.cwd()): Pro
     console.log(JSON.stringify(operation === 'inspect' ? loaded : { valid: true, layers: loaded.layers.length }, null, 2));
     return;
   }
-  if (operation === 'preview' || operation === 'receipt') {
+  if (operation === 'preview' || operation === 'receipt' || operation === 'check') {
     if (!flags['--action-file']) throw usageError('--action-file is required');
     const action = await jsonFile(resolve(cwd, flags['--action-file']));
+    if (operation === 'check') {
+      console.log(JSON.stringify(await checkHitlAuthorization(target, action), null, 2));
+      return;
+    }
     const loaded = await loadHitlLayers(target);
     const context = { now: new Date().toISOString(), layers: loaded.layers };
     if (operation === 'preview') console.log(JSON.stringify(resolveHitlAuthorization(action, context), null, 2));

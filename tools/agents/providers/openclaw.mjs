@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 /**
  * OpenClaw Provider
  *
@@ -17,7 +18,6 @@
  *
  * See: docs/openclaw-guide.md
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -52,14 +52,11 @@ import {
   createAgentsMdFromTemplate,
   createManagedMdFromTemplate,
 } from './base.mjs';
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'openclaw';
 export const aliases = [];
-
 const openclawHome = path.join(os.homedir(), '.openclaw');
 
 export const paths = {
@@ -141,7 +138,8 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
 // Content Transformation (passthrough — OpenClaw uses AIWG native format)
 // ============================================================================
 
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('openclaw', translateAgent);
+function translateAgent(srcPath, content, opts) {
   // AIWG's catalog intentionally records configured/<role> placeholders for
   // OpenClaw because the exact provider/model namespace is installation
   // specific. Omit the portable Markdown pin and inherit the configured

@@ -1,0 +1,9 @@
+{
+  "T-OG-14": ["test/unit/ralph-external/worker-launch-boundaries.test.ts"],
+  "T-OG-20": [
+    "test/unit/ralph-external/worker-launch-boundaries.test.ts",
+    "test/unit/ralph-external/worker-launch-capture.test.ts",
+    "test/unit/ralph-external/worker-launch-settlement.test.ts"
+  ],
+  "T-OG-23": ["test/unit/ralph-external/worker-launch-boundaries.test.ts"]
+}

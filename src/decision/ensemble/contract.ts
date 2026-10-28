@@ -1,4 +1,5 @@
-import { assertDecisionCeiling, ceilingDecision, GATE_RANK, GateDecisionUpgradeError } from '../../gates/lattice.js';
+import { evaluateUpstreamCeiling, integrityProblems } from '../../gates/upstream-ceiling.js';
+import { assertDecisionCeiling, GATE_RANK, GateDecisionUpgradeError } from '../../gates/lattice.js';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -269,17 +270,7 @@ export function validateEnsembleAggregate(value: unknown): DecisionEnsembleAggre
 
 /** D17 findings derived from the carried #2037/#2048 integrity fields alone. */
 export function integrityMetadataFindings(integrity: DecisionEnsembleIntegrityReport['integrity'], minimumPairs: number): string[] {
-  const findings: string[] = [];
-  if (integrity.integrity_state !== 'verified') findings.push('integrity-not-verified');
-  if (integrity.integrity_mode === 'standard') findings.push('integrity-mode-standard');
-  if (integrity.trusted_score_source === 'local-unverified') findings.push('untrusted-score-source');
-  if (integrity.fresh_workspace_required && !integrity.fresh_workspace_verified) findings.push('fresh-workspace-unverified');
-  if (integrity.uncertainty === null) findings.push('uncertainty-missing');
-  if (integrity.paired_baseline === null) findings.push('paired-baseline-missing');
-  if (integrity.weak_signal_reason !== null) findings.push('weak-signal');
-  if (integrity.compromise_labels.length > 0) findings.push('compromised');
-  if (integrity.sample_n < minimumPairs) findings.push('insufficient-samples');
-  return findings;
+  return integrityProblems(integrity, 'ensemble', minimumPairs);
 }
 
 /** The finding for one paired delta against its preregistered threshold, or null when it passes. */
@@ -293,9 +284,7 @@ export function pairedDeltaFinding(threshold: PairedMetricThreshold, item: { del
 
 /** Upstream ROLLBACK or any compromise gives ROLLBACK; upstream HOLD or any finding gives HOLD. */
 export function ensembleIntegrityDecision(integrity: DecisionEnsembleIntegrityReport['integrity'], findingCount: number): IntegrityGateDecision {
-  const upstream = integrity.release_gate.decision;
-  const compromised = integrity.integrity_state === 'compromised' || integrity.compromise_labels.length > 0;
-  return ceilingDecision(upstream, compromised ? 'ROLLBACK' : 'PROMOTE', findingCount > 0 ? 'HOLD' : 'PROMOTE');
+  return evaluateUpstreamCeiling(integrity, { policy: 'upstream', findings: findingCount }).ceiling;
 }
 
 /** A D17 report may keep or tighten the upstream #2037/#2048 decision, never loosen it. Every

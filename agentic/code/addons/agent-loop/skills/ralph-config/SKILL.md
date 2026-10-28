@@ -30,6 +30,15 @@ commandHint:
 
 View and modify Al's runtime configuration. Settings control loop behavior defaults such as iteration limits, timeouts, provider selection, and commit behavior. Changes persist to `.aiwg/ralph/config.json` and apply to all subsequent loops unless overridden per-invocation.
 
+## HITL authorization checkpoints
+
+Before any confirmation below, read and apply
+[agent-loop authorization checkpoints](../../docs/hitl-authorization.md).
+Call `aiwg config authorization check --action-file "$ACTION_FILE" --target "$TARGET_REPO"`
+for host-classified effects. Only `auto-authorized` with a signed receipt skips
+that workflow prompt; retain existing prompts/refusals otherwise. Platform
+prompts are never bypassed. Limits, regression and threat overrides still require review.
+
 ## Natural Language Triggers
 
 Users may say:
