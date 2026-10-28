@@ -209,8 +209,8 @@ async function writeFixtures() {
       lossless: generated.receipt.lossless, losses: generated.receipt.losses },
     consumers: {
       session: { phase: 'producer', clock: fixtureClock,
-        producer_sources: ['src/sessions/fortemi-export-mapping.ts', 'src/sessions/fortemi-shard-recovery.ts',
-          'src/cli/handlers/sessions.ts'].map((path) => ({ path, sha256: digest(readFileSync(resolve(root, path))) })),
+        // Bind the shard producer itself, not the CLI router, which changes for unrelated verbs.
+        producer_sources: ['src/sessions/fortemi-export-mapping.ts', 'src/sessions/fortemi-shard-recovery.ts'].map((path) => ({ path, sha256: digest(readFileSync(resolve(root, path))) })),
         session_count: generated.receipt.totals.sessionCount, event_count: generated.receipt.totals.eventCount },
       fortemi: { repository: template.consumers.fortemi.repository, commit: template.consumers.fortemi.commit,
         status: 'pending', reason: 'Native Docker consumer verification and the main CI run are pending; no consumer success is claimed.' },
