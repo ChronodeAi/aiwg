@@ -1,4 +1,13 @@
 /** Stage and restore provider path overrides without writing through getter-only accessors. */
+import { sep } from 'node:path';
+
+export function logicalProviderOutputPath(file, stage, target, mappings = []) {
+  const mapping = [...mappings].sort((a, b) => b.to.length - a.to.length)
+    .find(item => file === item.to || file.startsWith(`${item.to}${sep}`));
+  if (mapping) return mapping.from + file.slice(mapping.to.length);
+  return file === stage || file.startsWith(`${stage}${sep}`) ? target + file.slice(stage.length) : file;
+}
+
 export function captureProviderPathDescriptors(provider) {
   return Object.getOwnPropertyDescriptors(provider.paths);
 }
