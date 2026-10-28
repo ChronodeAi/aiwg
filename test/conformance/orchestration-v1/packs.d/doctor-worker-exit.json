@@ -1,0 +1,5 @@
+{
+  "T-OG-12": {
+    "testFiles": ["test/unit/cli/doctor-worker-exit.test.ts"]
+  }
+}
