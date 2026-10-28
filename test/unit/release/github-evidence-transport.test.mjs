@@ -142,8 +142,24 @@ describe('authenticated GitHub release evidence transport', () => {
     expect(fs.readFileSync(result.archivePath, 'utf8')).toBe('archive');
     expect(requests[0].options.headers.Authorization).toBe('Bearer secret');
     expect(requests[1].options.headers.Authorization).toBeUndefined();
+    // #3716: the API hop must ask for the JSON media type; only the redirect target is binary.
+    expect(requests[0].options.headers.Accept).toBe('application/vnd.github+json');
+    expect(requests[1].options.headers.Accept).toBe('application/octet-stream');
     const bad = createGithubEvidenceTransport({ token: 'secret', approvalIssue: 1, fetchImpl: async () => new Response(null, { status: 302, headers: { location: 'https://evil.example/archive' } }) });
     await expect(bad.downloadArtifact({ repository: 'owner/repo', artifactId: 4, destination: root })).rejects.toThrow(/Untrusted/);
+  });
+  it('downloads through an API that rejects non-JSON Accept on the zip endpoint (#3716)', async () => {
+    const root = temp();
+    const transport = createGithubEvidenceTransport({ token: 'secret', approvalIssue: 1, fetchImpl: async (url, options) => {
+      if (String(url).endsWith('/actions/artifacts/9/zip')) {
+        return options.headers.Accept === 'application/vnd.github+json'
+          ? new Response(null, { status: 302, headers: { location: 'https://pipelines.actions.githubusercontent.com/archive' } })
+          : new Response('unsupported', { status: 415 });
+      }
+      return new Response('archive');
+    } });
+    const result = await transport.downloadArtifact({ repository: 'owner/repo', artifactId: 9, destination: root });
+    expect(fs.readFileSync(result.archivePath, 'utf8')).toBe('archive');
   });
   it('extracts ordinary files and rejects traversal, duplicates, symlinks and expansion bombs', () => {
     const root = temp(), good = path.join(root, 'good'); fs.mkdirSync(good);
