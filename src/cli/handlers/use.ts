@@ -1504,6 +1504,19 @@ function projectLocalDeployVersion(bundle: ProjectLocalBundle): string {
  *
  * @implements #1035
  */
+/**
+ * First non-blank line of a captured deploy failure, so non-verbose `aiwg
+ * use` output names the actual validation reason (#3728).
+ */
+function firstFailureLine(message: string | undefined): string {
+  if (!message) return '';
+  for (const line of message.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return '';
+}
+
 async function deployOneProjectLocalBundle(opts: {
   bundle: ProjectLocalBundle;
   ctx: HandlerContext;
@@ -1514,7 +1527,7 @@ async function deployOneProjectLocalBundle(opts: {
   verbose: boolean;
   quiet: boolean;
   modelArgs: string[];
-}): Promise<{ exitCode: number; counts: { agents: number; commands: number; skills: number; rules: number } }> {
+}): Promise<{ exitCode: number; counts: { agents: number; commands: number; skills: number; rules: number }; message?: string }> {
   const { bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, modelArgs } = opts;
   const sourceCounts = await countBundleSourceArtifacts(bundle.artifactPath);
   const artifactTotal = sourceCounts.agents + sourceCounts.commands + sourceCounts.skills + sourceCounts.rules;
@@ -1539,6 +1552,7 @@ async function deployOneProjectLocalBundle(opts: {
   }
 
   let exitCode = 0;
+  let deployFailureMessage = '';
   if (artifactTotal > 0) {
     const runner = createUseScriptRunner(frameworkRoot);
     const args: string[] = [
@@ -1590,6 +1604,10 @@ async function deployOneProjectLocalBundle(opts: {
       env: { AIWG_ROOT: frameworkRoot },
     });
     exitCode = result.exitCode;
+    // In non-verbose mode the deployer's stderr is captured, not inherited —
+    // keep the reason so the caller can print it instead of a bare exit code
+    // (#3728).
+    deployFailureMessage = result.message ?? '';
     if (exitCode === 0 && !dryRun) {
       try {
         await reconcileDeployedSkillAssets(bundle.artifactPath, target, provider, { force: ctx.args.includes('--force') });
@@ -1619,7 +1637,7 @@ async function deployOneProjectLocalBundle(opts: {
     ? await countBundleDeployedArtifacts(bundle.artifactPath, target, provider)
     : sourceCounts;
   void ctx;
-  return { exitCode, counts };
+  return exitCode === 0 ? { exitCode, counts } : { exitCode, counts, message: deployFailureMessage };
 }
 
 /**
@@ -1739,7 +1757,10 @@ async function deployProjectLocalBundles(opts: {
 
     if (result.exitCode !== 0) {
       failed++;
-      ui.warn(`Failed to deploy project-local bundle '${bundle.id}' (exit ${result.exitCode})`);
+      // Surface the deployer's reason (e.g. the rule frontmatter file,
+      // field and limit) even in non-verbose output (#3728).
+      const reason = firstFailureLine(result.message);
+      ui.warn(`Failed to deploy project-local bundle '${bundle.id}' (exit ${result.exitCode})${reason ? `: ${reason}` : ''}`);
       if (!dryRun) {
         await appendProjectLocalActivity({
           event: 'deploy-failed',

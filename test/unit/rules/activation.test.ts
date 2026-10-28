@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import Ajv from 'ajv';
-import { parseRuleFrontmatter, validateRuleFrontmatter, ruleFrontmatterSchema, inferRuleActivation } from '../../../src/rules/activation.mjs';
+import { parseRuleFrontmatter, validateRuleFrontmatter, ruleFrontmatterSchema, inferRuleActivation, formatRuleFrontmatterError, RULE_SUMMARY_MAX_LENGTH } from '../../../src/rules/activation.mjs';
 
 const summary = 'Fix the canonical source before regenerating output.';
 
@@ -88,5 +88,14 @@ describe('shared rule activation contract (#2938)', () => {
     const validate = new Ajv({ strict: true }).compile(ruleFrontmatterSchema);
     expect(validate({ activation: 'kernel' })).toBe(true);
     expect(validate({})).toBe(false);
+  });
+  it('formats a too-long summary naming the file, the field and the limit (#3728)', () => {
+    expect(RULE_SUMMARY_MAX_LENGTH).toBe(240);
+    const parsed = parseRuleFrontmatter(`---\nactivation: summary\nsummary: ${'word '.repeat(60)}\n---\n\nBody.\n`);
+    expect(parsed.valid).toBe(false);
+    const message = formatRuleFrontmatterError('rules/repro-addon.md', parsed.data, parsed.diagnostics);
+    expect(message).toContain('rules/repro-addon.md');
+    expect(message).toContain('summary');
+    expect(message).toContain('240');
   });
 });

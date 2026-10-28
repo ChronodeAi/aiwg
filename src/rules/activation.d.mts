@@ -19,6 +19,8 @@ export const ruleFrontmatterSchema: Record<string, unknown>;
 export function inferRuleActivation(enforcement?: unknown): 'on-demand';
 export function validateRuleFrontmatter(data: unknown): RuleValidationResult;
 export function parseRuleFrontmatter(content: string): RuleValidationResult & { data: unknown; body: string };
+export const RULE_SUMMARY_MAX_LENGTH: number;
+export function formatRuleFrontmatterError(file: string, data: unknown, diagnostics: RuleDiagnostic[]): string;
 export const CORE_BODY_MAX_BYTES: number;
 export const CORE_TOTAL_MAX_BYTES: number;
 export const CORE_RULES_START: string;

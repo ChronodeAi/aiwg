@@ -87,6 +87,23 @@ describe('BundleManifestSchema', () => {
       expect(BundleManifestSchema.safeParse(m).success).toBe(false);
     });
 
+    it('accepts pi and hermes platform keys (#3724)', () => {
+      const m = { ...baseValid(), platforms: { claude: 'full', pi: 'full', hermes: 'full' } };
+      expect(BundleManifestSchema.safeParse(m).success).toBe(true);
+    });
+
+    it('rejects an unknown platform key and names it (#3724)', () => {
+      const m = { ...baseValid(), platforms: { claude: 'full', bogus: 'full' } };
+      const result = BundleManifestSchema.safeParse(m);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const errors = zodErrorToValidationErrors(result.error, '/path/to/manifest.json', m);
+        expect(errors.length).toBeGreaterThan(0);
+        const text = errors.map(error => `${error.field} ${error.expected} ${error.actual}`).join('\n');
+        expect(text).toContain('bogus');
+      }
+    });
+
     it('rejects missing required fields', () => {
       const m = baseValid();
       delete m.id;

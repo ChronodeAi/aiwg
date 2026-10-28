@@ -14,7 +14,9 @@
  */
 
 import { join } from 'path';
+import { readFile, readdir } from 'fs/promises';
 import { discoverProjectLocalBundles } from './project-local-discovery.js';
+import { parseRuleFrontmatter, formatRuleFrontmatterError } from '../rules/activation.mjs';
 import { buildUpstreamRegistry } from './upstream-registry.js';
 import { resolveShadows } from './shadow-resolver.js';
 import { checkBundleManifestIgnored } from './project-local-gitignore.js';
@@ -78,6 +80,50 @@ const TYPE_DIR: Record<ProjectLocalType, string> = {
   provider: 'providers',
 };
 
+/**
+ * Rule files `aiwg use` validates at deploy time via the shared frontmatter
+ * contract (`parseRuleFrontmatter` in `src/rules/activation.mjs`, #3728).
+ * Mirrors deploy's selection for a bundle source root: top-level `rules/`
+ * markdown (minus deploy's excluded/generated names) plus every
+ * `BEHAVIOR.md` under `behaviors/`.
+ */
+const RULE_MD_EXCLUDED = new Set([
+  'README.md', 'manifest.md', 'agent-template.md', 'openai-compat.md',
+  'factory-compat.md', 'windsurf-compat.md', 'DEVELOPMENT_GUIDE.md',
+]);
+
+async function collectBundleRuleFiles(artifactPath: string): Promise<string[]> {
+  const files: string[] = [];
+  try {
+    const entries = await readdir(join(artifactPath, 'rules'), { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
+      if (RULE_MD_EXCLUDED.has(entry.name)) continue;
+      const lower = entry.name.toLowerCase();
+      if (lower.endsWith('.soul.md') || lower.endsWith('.core.md')) continue;
+      if (/^(RULES-INDEX|RULES-ONDEMAND)\.(md|mdc)$/.test(entry.name)) continue;
+      files.push(join(artifactPath, 'rules', entry.name));
+    }
+  } catch {
+    // Absent rules dir — nothing to validate.
+  }
+  const walkBehaviors = async (dir: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) await walkBehaviors(full);
+      else if (entry.isFile() && entry.name === 'BEHAVIOR.md') files.push(full);
+    }
+  };
+  await walkBehaviors(join(artifactPath, 'behaviors'));
+  return files;
+}
+
 export async function buildProjectLocalDoctorSection(
   opts: BuildOptions,
 ): Promise<DoctorSectionResult> {
@@ -123,8 +169,31 @@ export async function buildProjectLocalDoctorSection(
     }
   }
 
+  // Rule frontmatter validation (#3728): the same validator `aiwg use`
+  // applies at deploy time, so a bundle that would fail deployment is
+  // flagged here instead of passing with a clean bill of health.
+  const ruleErrors: string[] = [];
+  for (const bundle of discovery.bundles) {
+    for (const file of await collectBundleRuleFiles(bundle.artifactPath)) {
+      let content: string;
+      try {
+        content = await readFile(file, 'utf-8');
+      } catch {
+        continue;
+      }
+      const parsed = parseRuleFrontmatter(content);
+      if (!parsed.valid) {
+        ruleErrors.push(formatRuleFrontmatterError(
+          projectRelativePathIfInside(projectDir, file) ?? file,
+          parsed.data,
+          parsed.diagnostics,
+        ));
+      }
+    }
+  }
+
   // Validation
-  const validationErrors = discovery.errors.length + quickrefErrors.length;
+  const validationErrors = discovery.errors.length + quickrefErrors.length + ruleErrors.length;
   if (validationErrors === 0) {
     if (!quiet) lines.push(`  Validation: ✓ all manifests${quickrefAudit.exists ? ' and project quickref source' : ''} valid`);
   } else {
@@ -132,7 +201,12 @@ export async function buildProjectLocalDoctorSection(
     for (const e of discovery.errors.slice(0, 10)) {
       lines.push(`    ✗ ${e.path}: ${e.field} — ${e.actual}`);
     }
-    for (const error of quickrefErrors.slice(0, Math.max(0, 10 - discovery.errors.length))) {
+    const quickrefShown = quickrefErrors.slice(0, Math.max(0, 10 - discovery.errors.length));
+    for (const error of quickrefShown) {
+      lines.push(`    ✗ ${error}`);
+    }
+    const ruleShown = ruleErrors.slice(0, Math.max(0, 10 - discovery.errors.length - quickrefShown.length));
+    for (const error of ruleShown) {
       lines.push(`    ✗ ${error}`);
     }
     if (validationErrors > 10) {

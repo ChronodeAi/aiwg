@@ -400,4 +400,21 @@ describe('project-local-doctor (DC-1)', () => {
     });
     expect(r.output).toContain('lack artifactHashes');
   });
+
+  it('flags a rule whose summary exceeds 240 characters with file, field and limit (#3728)', async () => {
+    writeBundle(projectDir, 'long-summary', {
+      ruleBody: `---\nactivation: summary\nsummary: ${'word '.repeat(60)}\n---\n\nBody.\n`,
+    });
+    const config = makeConfig('long-summary', {});
+
+    const r = await buildProjectLocalDoctorSection({
+      projectDir, frameworkRoot, config,
+    });
+    expect(r.validationErrors).toBe(1);
+    expect(r.output).toContain('Validation: ✗ 1 error');
+    expect(r.output).toContain('r1.md');
+    expect(r.output).toContain('summary');
+    expect(r.output).toContain('240');
+    expect(r.hasFailures).toBe(true);
+  });
 });

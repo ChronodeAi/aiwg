@@ -369,12 +369,19 @@ export function zodErrorToValidationErrors(
       && issue.path.length === 3 && issue.path[0] === 'providerConfig'
       && issue.path[1] === 'capabilities'
       && ['nativeFeatures', 'emulation'].includes(String(issue.path[2]))) {
-      return issue.keys.map(key => ({ ...issue, path: [...issue.path, key] }));
+      return issue.keys.map(key => ({ ...issue, path: [...issue.path, key], keys: [key] }));
     }
     return [issue];
   });
   return issues.map((issue) => {
     let actual = 'invalid';
+    if (issue.code === 'unrecognized_keys') {
+      // Name each rejected key so doctor/use output identifies the culprit
+      // (#3724: a typo'd or unknown platform key must not vanish into
+      // a bare "invalid").
+      const keys = issue.keys.map((key) => `"${String(key)}"`).join(', ');
+      actual = `unknown key(s): ${keys}`;
+    }
     if (issue.code === 'invalid_type' && hasInput) {
       let value: unknown = input;
       for (const segment of issue.path) {
