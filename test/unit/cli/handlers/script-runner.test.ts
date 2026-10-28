@@ -91,7 +91,20 @@ describe('DefaultScriptRunner', () => {
       export async function main() { throw new Error('must run as a child'); }
       process.exitCode = 5;
     `);
-    expect(await runner.run(file, [], { ...options, capture: true })).toEqual({ exitCode: 5 });
+    // #3648: every failure carries its message, so a silent child never
+    // produces an empty ERROR line downstream.
+    expect(await runner.run(file, [], { ...options, capture: true })).toEqual({
+      exitCode: 5, message: 'Script exited with code 5: deploy-agents.mjs',
+    });
+  });
+
+  it('reports a non-empty message for silent embedded deployment failures', async () => {
+    const file = deployer(`
+      export async function main() { return 3; }
+    `);
+    expect(await runner.run(file, [], { capture: true })).toEqual({
+      exitCode: 3, message: 'Deployment script exited with code 3: deploy-agents.mjs',
+    });
   });
 
   it('withholds selected resource variables from helpers, including embedded deployment, and restores the parent', async () => {

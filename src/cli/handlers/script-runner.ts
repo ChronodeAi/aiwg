@@ -123,11 +123,13 @@ export class DefaultScriptRunner implements ScriptRunner {
       child.on('close', (code) => {
         if (timeoutId) clearTimeout(timeoutId);
         if (killEscalationId) clearTimeout(killEscalationId);
-        // On failure in capture mode, surface the captured stderr
-        if (options.capture && code !== 0 && capturedStderrBytes > 0) {
+        // On failure in capture mode, surface the captured stderr. Every
+        // failure carries a message so callers never print an empty ERROR.
+        if (options.capture && code !== 0) {
+          const stderr = Buffer.concat(capturedStderr).toString().trim();
           resolve({
             exitCode: code ?? 1,
-            message: Buffer.concat(capturedStderr).toString().trim(),
+            message: stderr || `Script exited with code ${code ?? 1}: ${path.basename(fullPath)}`,
           });
         } else {
           resolve({
@@ -180,8 +182,9 @@ export class DefaultScriptRunner implements ScriptRunner {
         main(args: string[], internal: { capture: boolean }): Promise<number | void>;
       };
       const exitCode = (await deployer.main(args, { capture: options.capture === true })) ?? 0;
-      const message = Buffer.concat(diagnostics).toString().trim();
-      return exitCode && message ? { exitCode, message } : { exitCode };
+      const message = Buffer.concat(diagnostics).toString().trim()
+        || (exitCode ? `Deployment script exited with code ${exitCode}: ${path.basename(fullPath)}` : '');
+      return exitCode || message ? { exitCode, message } : { exitCode };
     } catch (error) {
       const message = Buffer.concat(diagnostics).toString().trim()
         || (error instanceof Error ? error.message : String(error));

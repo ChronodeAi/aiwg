@@ -20,6 +20,7 @@ const { guardRulesInlineBudget } = await importImpl(import.meta.url, 'rules/inli
 const { userConfigFile } = await importImpl(import.meta.url, 'config/user-config-dir.mjs');
 const { resolveProjectAiwgDir } = await importImpl(import.meta.url, 'config/project-artifacts-runtime.mjs');
 import { writeContextFileSync, CONTEXT_STAGE_ENV } from './context-write.mjs';
+import { captureProviderPathDescriptors, setStagedProviderPath, restoreProviderPaths } from './provider-paths-staging.mjs';
 import { resolveDeliveryRuleBindings } from './rule-binding-targets.mjs';
 import { projectOnDemandReferences, renderRuleKernelIndex } from './rule-presentation.mjs';
 export { renderRuleKernelIndex } from './rule-presentation.mjs';
@@ -890,7 +891,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
   const mappings = [];
   const preimages = [...initialPreimages];
   let retained = false;
-  const originals = { ...provider.paths };
+  const originals = captureProviderPathDescriptors(provider);
   const logicalTarget = original.target;
   const priorAiwgRoot = process.env.AIWG_ROOT;
   const priorRegistry = process.env.AIWG_USER_REGISTRY_PATH;
@@ -1028,7 +1029,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
       if (!path.isAbsolute(dir)) continue;
       const to = path.join(temp, 'native', key);
       mount(dir, to);
-      provider.paths[key] = to;
+      setStagedProviderPath(provider, key, to);
     }
     let kernel = provider.kernelSkillsPath;
     if (kernel && path.isAbsolute(kernel)) {
@@ -1224,7 +1225,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
     return plan;
   } finally {
     if (priorContextStage === undefined) delete process.env[CONTEXT_STAGE_ENV]; else process.env[CONTEXT_STAGE_ENV] = priorContextStage;
-    Object.assign(provider.paths, originals);
+    restoreProviderPaths(provider, originals);
     if (priorAiwgRoot === undefined) delete process.env.AIWG_ROOT; else process.env.AIWG_ROOT = priorAiwgRoot;
     if (priorRegistry === undefined) delete process.env.AIWG_USER_REGISTRY_PATH; else process.env.AIWG_USER_REGISTRY_PATH = priorRegistry;
     if (priorArtifacts === undefined) delete process.env.AIWG_ARTIFACTS_PATH; else process.env.AIWG_ARTIFACTS_PATH = priorArtifacts;
