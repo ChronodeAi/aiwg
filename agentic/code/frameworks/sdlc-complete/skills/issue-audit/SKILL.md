@@ -1,6 +1,10 @@
 ---
 namespace: aiwg
 name: issue-audit
+script:
+  entrypoint: scripts/audit.mjs
+  runtime: node
+  cwd: project-root
 platforms: [all]
 description: Audit and triage general issue backlogs with read-only defaults, interactive cleanup decisions, and guidance steering; use this for "audit open issues" instead of aiwg-issue
 requires:
@@ -17,7 +21,7 @@ invariants:
   - separate audit recommendations from implementation work; use address-issues for execution
   - preserve operator guidance verbatim in the audit context and final report
 commandHint:
-  argumentHint: "[--all-open] [--filter \"status:open label:bug\"] [--provider gitea|github|local] [--interactive] [--guidance \"text\"] [--dry-run] [--apply]"
+  argumentHint: "[--filter \"status:open label:bug\"] [--provider gitea|github|local] [--guidance \"text\"] [--checkpoint PATH] [--page-size 25] [--max-items 250] [--format json|markdown]"
   allowedTools: Read, Bash, Grep, Glob, mcp__gitea__*
   model: haiku
   category: project-management
@@ -70,6 +74,46 @@ Users may say:
 - "audit deferred issues"
 
 ## Parameters
+
+### Bounded execution and resume
+
+```bash
+aiwg run skill issue-audit -- --filter "status:open" --guidance "rank release blockers" --page-size 25 --max-items 250 --format json
+# Repeat the same command and checkpoint to continue after a stop.
+aiwg run skill issue-audit -- --checkpoint /path/to/audit.json --max-items 250 --format markdown
+```
+
+The executable is read-only. It resolves the configured tracker and semantic labels,
+pages metadata first (1–100 issues; default 25), and hydrates bodies/comments only
+for selected epic, deferred, duplicate, superseded, or fixed candidates. `--select
+ID,ID` overrides hydration selection. Findings are triage candidates requiring
+review; the executable makes no claim to prove duplicates or completed acceptance.
+
+`--max-items` (250), `--max-pages` (100) and `--max-context-bytes` (262144) bound each invocation;
+`--max-bytes` (65536) bounds a metadata page plus selected hydration. REST list
+responses may include bodies: discard them immediately without passing them to
+audit decisions or checkpoints. Oversized responses stop coverage explicitly.
+
+The default checkpoint is `working/issue-audit/checkpoint.json` beneath the
+configured artifact root; `--checkpoint PATH` selects another file. Atomic item
+checkpoints retain cursor, pending metadata, completed IDs and recommendations,
+never issue bodies/comments. Resume preserves provider, actor, filter, guidance,
+page size and selection; budgets may change. Completed items are not rehydrated
+or duplicated. Local index changes and changed forge page boundaries/totals stop
+with `tracker-changed`; start a separate checkpoint to audit a changed backlog.
+Forge offset APIs cannot guarantee a snapshot of concurrently edited unseen pages.
+
+JSON reports `coverage.totalSeen`, `totalHydrated`, `totalCompleted`, `incomplete`
+and `reason`, plus continuation and batch counts/bytes. Markdown visibly marks
+`INCOMPLETE`. Budget stops, interruptions and provider errors exit 2; completion
+exits 0. SIGINT/SIGTERM preserve the last completed item. Abrupt termination may
+repeat unfinished reads, but never a committed finding. Inspect/recover an orphan
+lock whose owner cannot be proven dead before retrying.
+
+Executable filters support `status:open|closed|all` and repeated `label:NAME` or
+semantic label roles. Unsupported filters fail explicitly. `--apply` and
+`--interactive` require the instructional workflow below and are rejected by the
+executable before tracker access; its default and `--dry-run` never mutate issues.
 
 ### --all-open
 
