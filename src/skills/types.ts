@@ -1,3 +1,4 @@
+import type { AgentSkillProviderExtensions } from './provider-extensions.js';
 /**
  * Skills Registry Types
  *
@@ -205,6 +206,7 @@ export interface AgentSkillExportResult {
   sourceDigest: string;
   exportDigest: string;
   omittedAiwgFields: string[];
+  providers?: AgentSkillProviderExtensions;
   fileCount: number;
   totalBytes: number;
   exportedAt: string;
