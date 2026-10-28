@@ -462,6 +462,16 @@ function providerProfile(
   if (provider === 'factory') return 'documented-project-jsonl';
   if (provider === 'muse') return 'muse-native-session-log-v1';
   if (provider === 'grokbot') return 'grokbot-native-transcript-replica-v1';
+  if (provider === 'grok-build') {
+    return locatorClass === 'grok-build-native-chat-history'
+      ? 'grok-build-native-chat-history-v1'
+      : 'documented-cli-markdown-export';
+  }
+  if (provider === 'hermes') {
+    return locatorClass === 'hermes-consistent-snapshot-jsonl'
+      ? 'native-state-db-backup-snapshot-v1'
+      : 'native-schema-23-export';
+  }
   return 'manual-interchange';
 }
 

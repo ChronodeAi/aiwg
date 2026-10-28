@@ -20,6 +20,7 @@ const crossProviderFiles = [
   'test/unit/sessions/repository-importer.test.ts',
   'test/unit/sessions/import-lease.test.ts',
   'test/unit/sessions/workspace-discovery.test.ts',
+  'test/unit/sessions/hermes-native-discovery.test.ts',
   'test/unit/sessions/muse-workspace-inspection.test.ts',
   'test/unit/sessions/muse-discovery-cli.test.ts',
   'test/unit/sessions/origin-timeline.test.ts',

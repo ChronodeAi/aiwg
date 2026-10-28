@@ -31,6 +31,7 @@ import {
   GrokbotSessionAdapter,
   GROK_BUILD_ADAPTER_VERSION,
   GROK_BUILD_CLI_EXPORT_LOCATOR_CLASS,
+  GROK_BUILD_NATIVE_LOCATOR_CLASS,
   GrokBuildSessionAdapter,
   grokBuildList,
   grokBuildSearch,
@@ -76,6 +77,7 @@ import {
   summarizeSessionAnalyticsFacts,
   discoverWorkspaceHistories,
   createSessionAdapterRegistry,
+  providerDiscoveryCapability,
   coveragePreflight,
   expectedSessionProviders,
   deriveSessionTimeline,
@@ -215,6 +217,9 @@ Options:
   --muse-root <path>  Explicitly authorize a Muse Code sessions root
   --dsh-root <path>  Explicitly authorize a DeepSeek Harness sessions root
   --grokbot-root <path>  Explicitly authorize a Grok Bot sand-client-persistence root
+  --grok-root <path>  Explicitly authorize a Grok Build sessions root (native chat_history.jsonl discovery)
+  --grok-active-sessions <path>  Explicitly authorize active_sessions.json for Grok Build live detection (read-only; requires --grok-root)
+  --hermes-root <path>  Explicitly authorize a Hermes home for a read-only state.db backup snapshot
   --grok-bin <path>  Absolute Grok Build CLI path for grok-list/grok-search/grok-export
                    (default: grok on PATH, then $GROK_HOME/bin/grok)
   --confirm, --yes  Confirm a persistent discovered batch import
@@ -320,7 +325,10 @@ async function executeCommand(
   const command = args.command!;
   if (command === 'sources') {
     const registry = createSessionAdapterRegistry();
-    const reports = registry.list().map((adapter) => providerDisposition(adapter.provider));
+    const reports = registry.list().map((adapter) => ({
+      ...providerDisposition(adapter.provider),
+      discovery: providerDiscoveryCapability(adapter.provider, adapter.supportedOperations),
+    }));
     const preflight = coveragePreflight({ expectedProviders: requestedProviders(args), registry });
     return ok(command, { providers: reports, count: reports.length, preflight });
   }
@@ -1023,6 +1031,8 @@ async function importSource(
   const isGrokbotNative = isGrokbot
     && classifyGrokbotBlobName(basename(input))?.kind === 'transcript-replica';
   const isGrokBuild = provider === 'grok-build';
+  const isGrokBuildNative = isGrokBuild
+    && basename(input) === 'chat_history.jsonl';
   const isMuse = provider === 'muse';
   const isPi = provider === 'pi';
   const isOmp = provider === 'omp';
@@ -1081,7 +1091,7 @@ async function importSource(
                   : isGrokbot
                     ? (isGrokbotNative ? GROKBOT_NATIVE_REPLICA_LOCATOR_CLASS : 'manual-export')
                     : isGrokBuild
-                      ? GROK_BUILD_CLI_EXPORT_LOCATOR_CLASS
+                      ? (isGrokBuildNative ? GROK_BUILD_NATIVE_LOCATOR_CLASS : GROK_BUILD_CLI_EXPORT_LOCATOR_CLASS)
                     : isMuse
                       ? 'manual-export'
                     : isPi
@@ -1120,7 +1130,7 @@ async function importSource(
                       : isGrokbot
                         ? (isGrokbotNative ? 'grokbot-native-transcript-replica-v1' : 'manual-interchange')
                         : isGrokBuild
-                          ? 'documented-cli-markdown-export'
+                          ? (isGrokBuildNative ? 'grok-build-native-chat-history-v1' : 'documented-cli-markdown-export')
                         : isMuse
                           ? 'muse-export-trajectory-v1'
                         : isWarp
@@ -1187,7 +1197,7 @@ async function importSource(
                       : isGrokbot
                         ? { 'native.grokbot': {} }
                         : isGrokBuild
-                          ? { 'native.grok-build': { acquisition: 'grok-cli-export-markdown' } }
+                          ? { 'native.grok-build': { acquisition: isGrokBuildNative ? GROK_BUILD_NATIVE_LOCATOR_CLASS : 'grok-cli-export-markdown' } }
                         : isMuse
                           ? { 'native.muse': {} }
                         : isWarp
@@ -1601,6 +1611,12 @@ async function discoverWorkspace(
       ? resolve(ctx.cwd, args.values.get('--dsh-root')!) : undefined,
     grokbotRoot: args.values.has('--grokbot-root')
       ? resolve(ctx.cwd, args.values.get('--grokbot-root')!) : undefined,
+    grokRoot: args.values.has('--grok-root')
+      ? resolve(ctx.cwd, args.values.get('--grok-root')!) : undefined,
+    grokActiveSessions: args.values.has('--grok-active-sessions')
+      ? resolve(ctx.cwd, args.values.get('--grok-active-sessions')!) : undefined,
+    hermesRoot: args.values.has('--hermes-root')
+      ? resolve(ctx.cwd, args.values.get('--hermes-root')!) : undefined,
     codexRoots: [
       ...(config?.sessions?.codex_roots ?? []).map((root) => resolve(workspace, root)),
       ...args.codexRoots.map((root) => resolve(ctx.cwd, root)),
@@ -1816,10 +1832,10 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
   if (provider === 'hermes') {
     return {
       provider, disposition: 'implemented', operationalState: 'available',
-      supportedOperations: ['inspect', 'stream'],
+      supportedOperations: ['discover', 'inspect', 'stream'],
       acquisitionModes: ['jsonl', 'api', 'sqlite-snapshot'],
       reasonCode: null,
-      remediation: 'Use `hermes sessions export` or an explicitly verified sqlite3.backup() snapshot export.',
+      remediation: 'Pass --hermes-root with an explicitly authorized Hermes home for a read-only state.db backup snapshot; or use `hermes sessions export` and import the explicitly authorized JSONL file.',
       evidence: {
         adapterVersion: HERMES_ADAPTER_VERSION,
         verifiedAt: '2026-07-27',
@@ -1927,10 +1943,10 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
   if (provider === 'grok-build') {
     return {
       provider, disposition: 'implemented', operationalState: 'available',
-      supportedOperations: ['inspect', 'stream'],
-      acquisitionModes: ['manual-export'],
-      reasonCode: 'CLI_EXPORT_REQUIRED',
-      remediation: 'Run `grok sessions list`, then `grok export <session-id> <session-id>.md` and import the explicitly authorized Markdown file. `aiwg sessions grok-list` finds `grok` on PATH or in $GROK_HOME/bin; pass --grok-bin <absolute path> otherwise.',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['manual-export', 'jsonl'],
+      reasonCode: null,
+      remediation: 'Pass --grok-root with an explicitly authorized sessions root for native chat_history.jsonl discovery, optionally with --grok-active-sessions for live detection; or run `grok export <session-id> <session-id>.md` and import the explicitly authorized Markdown file.',
       evidence: {
         adapterVersion: GROK_BUILD_ADAPTER_VERSION,
         verifiedAt: '2026-09-21',
@@ -2242,7 +2258,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     '--entity', '--sensitivity', '--extraction-state', '--page-size', '--max-documents',
     '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
     '--consumer', '--actor-class', '--reason-code', '--dependent-action', '--basis',
-    '--carry-forward', '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--grokbot-root', '--lock-wait-ms', '--min-coverage', '--gap',
+    '--carry-forward', '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--grokbot-root', '--grok-root', '--grok-active-sessions', '--hermes-root', '--lock-wait-ms', '--min-coverage', '--gap',
     '--inactivity-threshold', '--expected-providers', '--exclude', '--max-record-bytes', '--max-source-bytes',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',

@@ -32,11 +32,13 @@ export * from './adapters/copilot.js';
 export * from './adapters/cursor.js';
 export * from './adapters/factory.js';
 export * from './adapters/hermes.js';
+export * from './adapters/hermes-state-db.js';
 export * from './adapters/opencode.js';
 export * from './adapters/openclaw.js';
 export * from './adapters/openhuman.js';
 export * from './adapters/grokbot.js';
 export * from './adapters/grok-build.js';
+export * from './adapters/grok-build-native.js';
 export * from './grok-build-cli.js';
 export * from './adapters/pi.js';
 export * from './adapters/deepseek-harness.js';
@@ -48,3 +50,4 @@ export * from './adapters/omp.js';
 
 export * from './adapter-registry.js';
 export * from './coverage-preflight.js';
+export * from './discovery-capability.js';

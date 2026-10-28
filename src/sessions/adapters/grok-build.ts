@@ -11,6 +11,16 @@ import {
   type SourceProbe,
 } from '../contracts.js';
 import { readBoundedText, type ReaderLimits } from '../readers.js';
+import {
+  discoverGrokBuildNativeChatHistories,
+  GROK_BUILD_NATIVE_DISCOVERY_MAX_FILES,
+  GROK_BUILD_NATIVE_LOCATOR_CLASS,
+  GROK_BUILD_NATIVE_SCHEMA_VERSION,
+  grokBuildNativeSessionId,
+  parseGrokBuildNativeCursor,
+  readGrokBuildNativeChatHistory,
+  toGrokBuildNativeRecord,
+} from './grok-build-native.js';
 
 export const GROK_BUILD_ADAPTER_VERSION = '1.0.0';
 export const GROK_BUILD_CLI_EXPORT_SCHEMA_VERSION = '1.0.0';
@@ -22,30 +32,48 @@ interface ExportBlock {
 }
 
 /**
- * Imports the documented `grok export <session-id> <file>` surface.
+ * Imports the documented `grok export <session-id> <file>` surface plus the
+ * native `chat_history.jsonl` store under an explicitly authorized
+ * sessions root (`--grok-root`).
  *
- * The public export contract is intentionally lossy. Direct reads from
- * $GROK_HOME/sessions are prohibited until a released native schema has been
- * qualified independently.
+ * The public export contract is intentionally lossy. Native reads use the
+ * synthetic v1 schema in grok-build-native.ts (real stores were never
+ * inspected); anything outside it fails closed. AIWG never runs
+ * `grok export` itself: export remains an operator-selected fallback.
  */
 export class GrokBuildSessionAdapter implements SessionSourceAdapter {
   readonly provider = 'grok-build' as const;
   readonly adapterVersion = GROK_BUILD_ADAPTER_VERSION;
   readonly disposition = 'implemented' as const;
-  readonly supportedOperations = ['inspect', 'stream'] as const;
-  readonly acquisitionModes = ['manual-export'] as const;
+  readonly supportedOperations = ['discover', 'inspect', 'stream'] as const;
+  readonly acquisitionModes = ['manual-export', 'jsonl'] as const;
 
-  constructor(private readonly limits?: Partial<ReaderLimits>) {}
+  constructor(
+    private readonly limits?: Partial<ReaderLimits>,
+    private readonly maxFiles = GROK_BUILD_NATIVE_DISCOVERY_MAX_FILES,
+  ) {}
 
-  async *discover(_scope: AuthorizedScope): AsyncIterable<SourceDescriptor> {
-    throw new SessionContractError(
-      'UNSUPPORTED_OPERATION',
-      'Grok Build native-store discovery is disabled. Run `grok sessions list`, then '
-        + '`grok export <session-id> <session-id>.md` and import that authorized export.',
-    );
+  async *discover(scope: AuthorizedScope): AsyncIterable<SourceDescriptor> {
+    if (scope.allowedRoots.length === 0) {
+      throw new SessionContractError(
+        'SOURCE_NOT_AUTHORIZED',
+        'Grok Build native discovery requires an explicitly authorized sessions root; pass --grok-root.',
+      );
+    }
+    for (const root of [...scope.allowedRoots].sort()) {
+      yield* discoverGrokBuildNativeChatHistories(root, this.maxFiles);
+    }
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
+    if (source.locatorClass === GROK_BUILD_NATIVE_LOCATOR_CLASS) {
+      const native = await readGrokBuildNativeChatHistory(source, this.limits);
+      return {
+        sourceSchemaVersion: GROK_BUILD_NATIVE_SCHEMA_VERSION,
+        consistency: native.incompleteTail ? 'provisional' : 'complete',
+        operationalState: 'available',
+      };
+    }
     await this.readSource(source);
     return {
       sourceSchemaVersion: GROK_BUILD_CLI_EXPORT_SCHEMA_VERSION,
@@ -55,6 +83,27 @@ export class GrokBuildSessionAdapter implements SessionSourceAdapter {
   }
 
   async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
+    if (source.locatorClass === GROK_BUILD_NATIVE_LOCATOR_CLASS) {
+      const sessionId = grokBuildNativeSessionId(source.locator);
+      if (!sessionId) {
+        throw new SessionContractError(
+          'SOURCE_NOT_AUTHORIZED',
+          'Grok Build native source must be an explicitly authorized chat_history.jsonl path',
+        );
+      }
+      const native = await readGrokBuildNativeChatHistory(source, this.limits);
+      const start = parseGrokBuildNativeCursor(cursor?.value);
+      let outputIndex = 0;
+      for (const entry of native.records) {
+        const position = outputIndex;
+        outputIndex += 1;
+        if (position < start) continue;
+        const record = toGrokBuildNativeRecord(sessionId, entry);
+        record.sourceCursor = String(outputIndex);
+        yield record;
+      }
+      return;
+    }
     const parsed = await this.readSource(source);
     const start = parseCursor(cursor?.value);
     for (const [sequence, block] of parsed.blocks.entries()) {
@@ -95,8 +144,9 @@ export class GrokBuildSessionAdapter implements SessionSourceAdapter {
     if (source.locatorClass !== GROK_BUILD_CLI_EXPORT_LOCATOR_CLASS) {
       throw new SessionContractError(
         'UNSUPPORTED_OPERATION',
-        'Grok Build accepts only a documented `grok export` Markdown transcript; '
-          + 'native session files, Grok Bot exports, and Cursor stores are not supported.',
+        'Grok Build accepts only a documented `grok export` Markdown transcript or an '
+          + `explicitly authorized \`${GROK_BUILD_NATIVE_LOCATOR_CLASS}\` source; `
+          + 'Grok Bot exports and Cursor stores are not supported.',
       );
     }
     const filename = basename(source.locator, extname(source.locator));

@@ -68,7 +68,7 @@ describe('Hermes session adapter', () => {
       remediation: null,
     })).toMatchObject({
       classification: 'implemented',
-      supportedOperations: ['inspect', 'stream'],
+      supportedOperations: ['discover', 'inspect', 'stream'],
       acquisitionModes: ['jsonl', 'api', 'sqlite-snapshot'],
     });
   });

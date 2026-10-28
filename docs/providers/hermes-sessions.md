@@ -33,6 +33,36 @@ because omitting or racing `state.db-wal` can yield a partial snapshot. A SQLite
 fallback must first be created with SQLite's backup API and converted to the documented
 snapshot JSONL form carrying `snapshotConsistency: "sqlite-backup"`.
 
+## Native discovery (synthetic physical schema v1, unqualified)
+
+```sh
+aiwg sessions discover --workspace /work/project \
+  --expected-providers hermes --hermes-root /home/operator/.hermes --json
+aiwg sessions import-discovered --workspace /work/project --confirm --json
+```
+
+`--hermes-root` authorizes `<root>/state.db` for a read-only backup snapshot
+(needs the optional sqlite backend). The live database is never opened for
+writing and never streamed directly: AIWG takes a `backup()` snapshot into
+owned workspace staging (`.aiwg/sessions/staging/hermes/`), projects only
+workspace-matching sessions to snapshot JSONL, then deletes the whole-DB
+backup. Nothing else under the Hermes home is read. The backup transiently
+copies the whole session database, including other workspaces, before
+filtering; an operator who cannot accept that scope can keep supplying a
+workspace-specific export instead.
+
+Two platform boundaries are enforced and tested. First, WAL reads need the
+provider's shared-memory index, and any first read would create it as a
+provider-tree write — so a database without `state.db-shm` present refuses
+*before any SQLite contact*. In practice native discovery needs Hermes running
+(or at least its sidecars present); a stopped provider fails closed with an
+actionable error and the export fallback covers it. Second, only the synthetic
+physical schema v1 (`meta.native_schema = 'hermes-synthetic-v1'` with the
+allowlisted `sessions`/`messages` columns) projects; real store tables were
+never inspected, so anything else fails closed. Sessions without a resolvable
+workspace `cwd` stay excluded. Fixture seed:
+`test/fixtures/sessions/hermes/state-db-seed.sql` (materialized into mkdtemp).
+
 A caller may instead inject a local Sessions API transport, but it remains unavailable
 until explicitly configured and authorized with operation
 `hermes.local.sessions.read`. The standard CLI import performs no network operations.

@@ -73,6 +73,8 @@ aiwg sessions discover --workspace <path>
                        [--expected-providers <comma-separated-ids>]
                        [--codex-root <authorized-path>]... [--muse-root <authorized-path>]
                        [--omp-root <authorized-path>] [--dsh-root <authorized-path>]
+                       [--grok-root <authorized-path>] [--grok-active-sessions <path>]
+                       [--hermes-root <authorized-path>]
                        [--manifest <path>] [--dry-run] [--json]
 aiwg sessions import-discovered --workspace <path>
                                 [--manifest <path>] [--confirm|--yes]
@@ -184,7 +186,11 @@ in the persisted manifest's `authorizedRoots`.
 
 OMP and DeepSeek Harness also require an
 explicit authorized root through `--omp-root` or `--dsh-root`. Harness imports
-raw v2 JSONL; compressed histories require a reviewed raw export. Providers that
+raw v2 JSONL; compressed histories require a reviewed raw export. Grok Build
+requires `--grok-root` (native `chat_history.jsonl` discovery, synthetic v1
+schema) with optional `--grok-active-sessions` for live detection; Hermes
+requires `--hermes-root` (read-only `state.db` backup snapshot, needs Hermes
+running and the optional sqlite backend). Providers that
 require an API or manual
 export remain visible as `export-required`.
 
