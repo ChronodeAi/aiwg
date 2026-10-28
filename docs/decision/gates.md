@@ -356,6 +356,12 @@ instances and partial templates; the persistence regression suite also checks
 runtime IDs and packaged copies. These checks validate configuration, not runtime
 approval enforcement.
 
+## Authoring gate packs
+
+To write a pack, link rules with `enforcedBy`, or run `aiwg gates coverage`,
+see [the gate-pack authoring guide](gate-pack-authoring.md). A minimal valid
+example is `test/fixtures/gates/example-extension-pack/example-counter.gatepack.yaml`.
+
 ## Pending (not in this phase)
 
 Live Jev calls, real held-out data, human reviewers and production rollout:

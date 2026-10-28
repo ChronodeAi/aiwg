@@ -2873,6 +2873,13 @@
       "parent": "decision"
     },
     {
+      "id": "decision/gate-pack-authoring",
+      "title": "Gate-Pack Authoring",
+      "summary": "Write GatePack files: structure, gate fields, the outcome lattice, floors and ceilings, enforcedBy rule links, and validation",
+      "file": "decision/gate-pack-authoring.md",
+      "parent": "decision"
+    },
+    {
       "id": "getting-started/session-history",
       "title": "Import AI Session History",
       "summary": "Discover, import, and search prior AI conversations across providers in a local, privacy-aware session catalog",
