@@ -119,6 +119,7 @@ import { classifyGrokbotBlobName } from '../../sessions/adapters/grokbot-locator
 import { readAiwgConfig } from '../../config/aiwg-config.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { importFromDir } from './sessions-intake.js';
+import { executeSessionsTail } from './sessions-tail.js';
 
 const JSON_CONTRACT_VERSION = '1.0.0';
 
@@ -179,6 +180,9 @@ Commands:
   list [--workspace <path-or-id>] [--limit N] [--cursor N]  List normalized sessions
   timeline [--workspace <path-or-id>] [--gap 30m]  Report chronological activity segments
   show <session-id> [--workspace <path-or-id>]  Show a session with events and tags
+  tail <session-id> | --provider <p> --latest [--workspace <path-or-id>] [--follow] [--json] [--import]
+                                  Read new native events; --follow polls every 500 ms
+                                  Read-only unless --import; --input <file> authorizes older direct imports
   search <query> [--workspace <path-or-id>]  Search authorized normalized content
   extract [session-id] --workspace <id> Extract structural candidates
   export plan --workspace <id> --out <file> <session-id...>  Select sessions into a reviewable plan
@@ -299,6 +303,7 @@ export const sessionsHandler: CommandHandler = {
       const explicitHelp = parsed.flags.has('--help') || parsed.flags.has('-h');
       return printHelp(ctx, explicitHelp ? EXIT.ok : EXIT.usage);
     }
+    if (parsed.command === 'tail') return executeSessionsTail(ctx, parsed, { databasePath, readAuthorizationContext });
     try {
       const result = await executeCommand(ctx, parsed);
       if (json) await emit(result.envelope);

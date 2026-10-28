@@ -106,23 +106,27 @@ export class GrokBuildSessionAdapter implements SessionSourceAdapter {
     }
     const parsed = await this.readSource(source);
     const start = parseCursor(cursor?.value);
+    let outputIndex = 0;
     for (const [sequence, block] of parsed.blocks.entries()) {
-      if (sequence < start) continue;
       if (block.heading === 'Tools') {
-        for (const tool of parseTools(block.text, sequence)) yield {
-          nativeSessionId: parsed.sessionId,
-          nativeEventId: undefined,
-          sequence: tool.sequence,
-          kind: 'tool-call',
-          role: 'tool',
-          toolName: tool.name,
-          occurredAt: undefined,
-          text: tool.text,
-          rawReference: { locatorClass: source.locatorClass, sequence },
-          extensions: provenance(source, parsed.sessionId, 'Tools'),
-        };
+        for (const tool of parseTools(block.text, sequence)) {
+          if (outputIndex++ < start) continue;
+          yield {
+            nativeSessionId: parsed.sessionId,
+            nativeEventId: undefined,
+            sequence: tool.sequence,
+            kind: 'tool-call',
+            role: 'tool',
+            toolName: tool.name,
+            occurredAt: undefined,
+            text: tool.text,
+            rawReference: { locatorClass: source.locatorClass, sequence },
+            extensions: provenance(source, parsed.sessionId, 'Tools'),
+          };
+        }
         continue;
       }
+      if (outputIndex++ < start) continue;
       yield {
         nativeSessionId: parsed.sessionId,
         nativeEventId: undefined,

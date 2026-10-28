@@ -33,6 +33,7 @@ const KNOWN = new Set([
 
 export class DeepSeekHarnessSessionAdapter implements SessionSourceAdapter {
   readonly provider = 'deepseek-harness' as const;
+  readonly sourceSchemaMajor = 2;
   readonly adapterVersion = DEEPSEEK_HARNESS_ADAPTER_VERSION;
   readonly disposition = 'implemented' as const;
   readonly supportedOperations = ['discover', 'inspect', 'stream'] as const;

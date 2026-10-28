@@ -18,6 +18,7 @@ const adapterFiles = [
 ];
 const crossProviderFiles = [
   'test/unit/sessions/repository-importer.test.ts',
+  'test/unit/sessions/tail.test.ts',
   'test/unit/sessions/import-lease.test.ts',
   'test/unit/sessions/workspace-discovery.test.ts',
   'test/unit/sessions/hermes-native-discovery.test.ts',
@@ -27,6 +28,7 @@ const crossProviderFiles = [
   'test/unit/sessions/provider-conformance.test.ts',
   'test/unit/sessions/regression-corpus.test.ts',
   'test/unit/cli/handlers/sessions.test.ts',
+  'test/unit/cli/handlers/sessions-tail.test.ts',
   'test/integration/sessions-regression-cli.test.ts',
 ];
 
