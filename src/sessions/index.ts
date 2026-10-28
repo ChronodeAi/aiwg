@@ -1,4 +1,5 @@
 export * from './contracts.js';
+export * from './image-blobs.js';
 export * from './fixtures.js';
 export * from './policy.js';
 export * from './discovery.js';

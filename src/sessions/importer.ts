@@ -11,6 +11,7 @@ import {
 import { assertImportByteLimit, DEFAULT_IMPORT_BYTE_LIMITS, resolveImportLimits, type ImportByteLimits } from './import-limits.js';
 import { redactSessionValue, sanitizeSessionEvent, sanitizeNativeExtensions } from './policy.js';
 import type { ImportReceipt } from './repository.js';
+import { extractEventImages, type ExtractedSessionImage } from './image-blobs.js';
 import type { SessionRepositoryPort } from './ports.js';
 import { fingerprintSourcePrefix } from './readers.js';
 import { DEFAULT_INACTIVITY_THRESHOLD_MS } from './lifecycle.js';
@@ -211,6 +212,7 @@ export class IncrementalSessionImporter {
         source: sanitizedSource, run,
         sessions: normalized.sessions, events: normalized.events,
         batchRunId: request.batchRunId,
+        imageBlobs: normalized.imageBlobs,
       }, { ...checkpoint }, request.publish ?? request.source.consistency !== 'complete');
       const memory = process.memoryUsage();
       peakHeap = Math.max(peakHeap, memory.heapUsed);
@@ -329,19 +331,31 @@ function normalizeBatch(
   digests: string[],
   importRunId: string,
   sourceObservedAt?: string,
-): { sessions: Session[]; events: SessionEvent[] } {
+): { sessions: Session[]; events: SessionEvent[]; imageBlobs: ExtractedSessionImage[] } {
   const sessions = new Map<string, Session>();
+  // Extract inline images before sanitization: provider image blocks in
+  // extensions are redacted to markers below, so bytes must be lifted out
+  // first while the raw record is still intact (#3265).
+  const imageBlobs = new Map<string, ExtractedSessionImage>();
   const events = records.map((record, index): SessionEvent => {
     const sessionId = stableSessionId(request.source.provider, request.source.sourceId, record.nativeSessionId);
     const native = sanitizeNativeExtensions(record.extensions ?? {});
     const lineage = request.source.provider === 'codex' && native.value.lineage
       ? { lineage: native.value.lineage } : {};
+    const images = extractEventImages({
+      searchableText: record.text,
+      extensions: record.extensions,
+      rawReference: record.rawReference,
+    });
+    for (const image of images.images) {
+      if (!imageBlobs.has(image.digest)) imageBlobs.set(image.digest, image);
+    }
     const digest = digests[index];
     const origin = classifySessionEventOrigin(request.source.provider, record);
     const lifecycle = sessionLifecycle(request, record, sourceObservedAt);
     const lifecycleEvidence = sessionLifecycleEvidence(request, record, sourceObservedAt);
     const extensions = {
-      [`native.${request.source.provider}`]: record.extensions ?? {},
+      [`native.${request.source.provider}`]: images.extensions,
     };
     const event = sanitizeSessionEvent(SessionEventSchema.parse({
       contractVersion: SESSION_CONTRACT_VERSION,
@@ -361,7 +375,8 @@ function normalizeBatch(
       model: record.model ?? null,
       entities: record.entities ?? [],
       extractionState: record.extractionState ?? null,
-      searchableText: record.text, digest, rawReference: record.rawReference,
+      searchableText: images.searchableText, imageRefs: images.imageRefs,
+      digest, rawReference: record.rawReference,
       adapterVersion: request.adapter.adapterVersion,
       consistency: request.source.consistency,
       sensitivity: { classification: 'none', classes: [] },
@@ -414,7 +429,11 @@ function normalizeBatch(
       events.filter((event) => event.sessionId === session.sessionId),
     );
   }
-  return { sessions: redactSessionValue([...sessions.values()]).value, events };
+  return {
+    sessions: redactSessionValue([...sessions.values()]).value,
+    events,
+    imageBlobs: [...imageBlobs.values()],
+  };
 }
 
 const KNOWN_EVENT_KINDS = new Set(['message', 'tool-call', 'tool-result', 'artifact', 'attachment', 'summary']);

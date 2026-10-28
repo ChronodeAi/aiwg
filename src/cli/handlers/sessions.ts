@@ -453,10 +453,15 @@ async function executeCommand(
         if (!session) throw new CliError('SESSION_NOT_FOUND',
           `session not found: ${id}${scope.hint ? `; ${scope.hint}` : ''}`,
           EXIT.unavailable, { catalogScope: scope });
+        // Image references resolve against the blob store: available blobs
+        // report their reference, missing ones an explicit unavailable
+        // state. Bytes stay out of the response; fetch by digest (#3265).
+        const events = repository.listEvents(session.sessionId, session.workspaceId)
+          .map((event) => ({ ...event, images: repository.resolveEventImages(event) }));
         return ok(command, {
           session,
           tags: repository.listTags(session.sessionId, session.workspaceId),
-          events: repository.listEvents(session.sessionId, session.workspaceId),
+          events,
           catalogScope: catalogScope(ctx, args, repository, session.workspaceId),
         });
       }
@@ -1299,6 +1304,9 @@ async function exportBuild(
   }));
   const index = buildSessionAiwgFortemiIndexExport(
     plan.workspaceId, sessions, eventsBySessionId, outputs, catalogTagsBySessionId,
+    // Resolve image references against the live catalog: available blobs
+    // export as references, missing ones as explicit unavailable (#3265).
+    (event) => repository.resolveEventImages(event),
   );
   // aiwgFortemiIndexToKnowledgeShardWithReport targets the declared
   // full-v1/2.0.0 archive contract and validates losslessness -- unlike the
