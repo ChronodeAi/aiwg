@@ -1,3 +1,4 @@
+import { ceilingDecision } from '../../gates/lattice.js';
 import type {
   QualificationGateDefinition,
   QualificationGateResult,
@@ -91,7 +92,7 @@ export function evaluateQualification(
     schemaVersion: 'decision-qualification-report/v1',
     runId: manifest.runId,
     generatedAt: manifest.generatedAt,
-    decision: mandatoryFailed ? 'HOLD' : 'PROMOTE',
+    decision: ceilingDecision('PROMOTE', mandatoryFailed ? 'HOLD' : 'PROMOTE'),
     gates,
   };
 }

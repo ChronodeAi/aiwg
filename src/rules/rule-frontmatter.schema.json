@@ -66,7 +66,13 @@
       }
     },
     "enforcedBy": {
-      "description": "Opaque reserved metadata for #2839. Has no activation or runtime enforcement effect."
+      "description": "Gate references as <namespaced-pack-id>#<gate-id>. Lint resolves each reference against the gate registry. Declares coverage without changing activation or executing gates.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(?:(?:aiwg|framework|addon|extension):[^/\\s:#]+/[^/\\s:#]+|project:[^/\\s:#]+)#[^\\s#]+$"
+      }
     }
   },
   "allOf": [

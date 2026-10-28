@@ -127,3 +127,19 @@ describe('decision qualification release record', () => {
     expect(() => deriveCacheLayerPins({ ...cacheLayers, resultCache: failed })).toThrow('not verified: resultCache');
   });
 });
+
+// Regression table for the release-record formula migrated to the shared lattice (#2829).
+it('preserves release decisions for every upstream, report and compromise combination', async () => {
+  const executed = await fixture();
+  const outcomes = ['PROMOTE', 'HOLD', 'ROLLBACK'] as const;
+  for (const upstream of outcomes) for (const reportDecision of outcomes) for (const compromised of [false, true]) {
+    const metadata = integrity(compromised ? ['fixture_edit'] : []);
+    metadata.release_gate.decision = upstream;
+    const record = buildQualificationReleaseRecord({ ...executed, report: { ...executed.report, decision: reportDecision } }, {
+      commands: ['synthetic-check'], environment: 'synthetic-node', pins, budgets: { calls: 10 }, actuals: { calls: 0 },
+      reviewer: 'fixture-reviewer', integrity: metadata, benchmark, metrics, integritySnapshot,
+    });
+    expect(record.decision).toBe(upstream === 'ROLLBACK' || reportDecision === 'ROLLBACK' || compromised ? 'ROLLBACK'
+      : upstream === 'HOLD' || reportDecision === 'HOLD' ? 'HOLD' : 'PROMOTE');
+  }
+});

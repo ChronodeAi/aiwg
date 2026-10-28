@@ -125,11 +125,12 @@ Migrate `applies_to`/`scope` intent to explicit `bound_to`; they remain descript
 legacy metadata, not competing activation inputs. Manifest `rules` arrays remain
 inventory only.
 
-Reserve the exact key **`enforcedBy`** for #2839. Do not author it in this wave,
-assign a value schema, dispatch hooks, or infer mechanical enforcement from it.
-If encountered, preserve it as opaque reserved metadata and report that it has
-no effect. #2839 owns its eventual type and enforcement semantics. Activation
-delivers instructions; it is not proof that a runtime enforces them.
+**`enforcedBy`** was reserved during the activation rollout. #2839 defines it as
+an optional list of `<namespaced-pack-id>#<gate-id>` strings, checked by the
+existing rule schema and resolved by lint against the composed gate registry.
+`aiwg gates coverage` reports these declarations and labels unmapped rules
+guidance-only. A declaration does not dispatch hooks or execute gates.
+Activation delivers instructions; it is not proof that a runtime enforces them.
 
 ### Both binding delivery paths are required
 

@@ -1,3 +1,4 @@
+import { ceilingDecision } from '../gates/lattice.js';
 import { ContextBudgetManager, type BudgetConfig, type ContextItem } from '../metrics/context-budget.js';
 import { sha256 } from './compile-cache/identity.js';
 import { admitEntry } from './entry.js';
@@ -816,9 +817,9 @@ export function buildContextPruningEvaluationReport(input: {
   for (const name of missing) findings.add(`missing-input:${name}`);
   // Automatic rollback triggers from the D26 rollout plan: protected miss, demonstrated quality harm, negative
   // economics. An inconclusive non-inferiority result (no evidence of harm) holds instead.
-  const rollback = upstreamDecision === 'ROLLBACK' || findings.has('protected-retention-breach')
+  const rollback = findings.has('protected-retention-breach')
     || findings.has('quality-harm') || findings.has('negative-net-economics');
-  const decision = rollback ? 'ROLLBACK' : upstreamDecision === 'HOLD' || findings.size > 0 ? 'HOLD' : 'PROMOTE';
+  const decision = ceilingDecision(upstreamDecision, rollback ? 'ROLLBACK' : findings.size > 0 ? 'HOLD' : 'PROMOTE');
   const advisory = [...findings].some(item => item.startsWith('insufficient-') || item.startsWith('quality-metric-missing:')
     || item.startsWith('missing-input:') || item.startsWith('quality-outcomes-incomplete:')
     || item.startsWith('quality-non-inferiority-inconclusive:')

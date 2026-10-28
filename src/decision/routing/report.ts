@@ -1,3 +1,4 @@
+import { assertDecisionCeiling } from '../../gates/lattice.js';
 import { canonicalJson } from '../../security/artifact-trust.js';
 import { ensembleIntegrityDecision, integrityMetadataFindings } from '../ensemble/contract.js';
 import { pairedBinaryDifferenceInterval, pairedNonInferiority, type PairedDifferenceInterval } from '../qualification/quality.js';
@@ -36,6 +37,7 @@ export function buildRoutingShadowReport(input: RoutingShadowReportInput): Routi
 export function validateRoutingShadowReport(value: unknown, trustedPreregistrationDigest: RoutingDigest): RoutingShadowReport {
   checkRoutingSchema('shadowReport', value);
   const report = value as RoutingShadowReport;
+  assertDecisionCeiling(report.decision, ensembleIntegrityDecision(report.integrity, report.reasons.length));
   const rebuilt = computeRoutingShadowReport({
     id: report.id, preregistration: report.preregistration, trustedPreregistrationDigest,
     holdoutAccessedAt: report.holdoutAccessedAt, evaluatedAt: report.evaluatedAt,

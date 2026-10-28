@@ -96,3 +96,14 @@ describe('decision qualification gate evaluator', () => {
     expect(report.gates[0]?.missing.slice(0, 2)).toEqual(['case:C01', 'case:C02']);
   });
 });
+
+it('preserves the qualification verdict table for optional and mandatory failures (#2829)', () => {
+  const { cases, evidence } = complete();
+  for (const mandatory of [false, true]) for (const passed of [false, true]) {
+    const report = evaluateQualification({ ...base, cases, evidence: passed ? evidence : [],
+      evidenceFlags: { 'privacy-scan-clean': true }, gateArtifacts },
+      DECISION_RELEASE_GATES.map(gate => ({ ...gate, mandatory })),
+      { artifactsVerified: true, loadArtifactVerified: true });
+    expect(report.decision).toBe(mandatory && !passed ? 'HOLD' : 'PROMOTE');
+  }
+});

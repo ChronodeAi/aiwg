@@ -44,8 +44,6 @@ export function validateRuleFrontmatter(data) {
   }
   if (!tagged) diagnostics.push({ severity: 'warn', code: 'missing-activation',
     message: `Missing activation; inferred ${inferRuleActivation(data.enforcement)} delivery (migration fallback); add explicit activation frontmatter.` });
-  if (Object.hasOwn(data, 'enforcedBy')) diagnostics.push({ severity: 'info', code: 'reserved-enforcedBy',
-    message: 'enforcedBy is opaque reserved metadata (#2839); it has no effect.' });
   const valid = !diagnostics.some(item => item.severity === 'error');
   return {
     valid, diagnostics,
