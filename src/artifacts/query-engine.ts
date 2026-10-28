@@ -13,6 +13,7 @@ import { refreshFrameworkCapabilities, resolveFrameworkCorpusRoot, isCorpusBundl
 import { resolveFrameworkIndexRoot } from './framework-index-paths.js';
 import { ensureRelations, selectPrebuiltRelations, emptyRuleStats, type RelationsReader, type RelationTargetType, type RuleStats } from './relations.js';
 import { minimatch } from 'minimatch';
+import { selectBindingTargetIdentities, preferCanonicalBindingTargets, type BindingTargetIdentityOptions } from './binding-target-identity.js';
 import { inferRuleActivation } from '../rules/activation.mjs';
 import type { DiscoveryShadowRoute } from './discovery-shadow.js';
 import * as fs from 'node:fs';
@@ -1840,8 +1841,8 @@ function findShowMatches(entries: MetadataEntry[], types: string[], needle: stri
 }
 
 /** Preselect exact candidates once; the canonical resolver still owns precedence and ambiguity. */
-export function createRuleBindingTargetResolver(entries: MetadataEntry[]): (
-  type: 'skill' | 'agent' | 'flow', id: string,
+export function createRuleBindingTargetResolver(entries: MetadataEntry[], options: BindingTargetIdentityOptions = {}): (
+  type: 'skill' | 'agent' | 'flow', id: string, bundleRoot?: string,
 ) => MetadataEntry {
   const candidates = new Map<string, MetadataEntry[]>();
   for (const entry of entries) {
@@ -1859,7 +1860,7 @@ export function createRuleBindingTargetResolver(entries: MetadataEntry[]): (
       candidates.set(key, selected);
     }
   }
-  return (type, id) => resolveRuleBindingTarget(candidates.get(`${type}\0${id}`) ?? [], type, id);
+  return (type, id, bundleRoot = options.bundleRoot) => resolveRuleBindingTarget(candidates.get(`${type}\0${id}`) ?? [], type, id, { ...options, bundleRoot });
 }
 
 /** Resolve exact rule binding IDs using the same precedence and ambiguity as show.
@@ -1867,7 +1868,7 @@ export function createRuleBindingTargetResolver(entries: MetadataEntry[]): (
  * Titles and filesystem paths are deliberately excluded (#2938).
  */
 export function resolveRuleBindingTarget(
-  entries: MetadataEntry[], type: 'skill' | 'agent' | 'flow', id: string,
+  entries: MetadataEntry[], type: 'skill' | 'agent' | 'flow', id: string, options: BindingTargetIdentityOptions = {},
 ): MetadataEntry {
   const exact = entries.filter(entry => {
     if (entry.type !== type) return false;
@@ -1878,13 +1879,7 @@ export function resolveRuleBindingTarget(
       : basename.replace(/\.[^.]+$/, '');
     return entry.name === id || discoveryIdForEntry(entry) === id || slug === id;
   });
-  let matches = findShowMatches(exact, [type], id);
-  // Generated plugin copies (agentic/code/plugins/*) mirror canonical framework
-  // and addon artifacts. Prefer the canonical source when it is unambiguous.
-  if (matches.length > 1) {
-    const canonical = matches.filter(entry => !/(^|\/)agentic\/code\/plugins\//.test(normalizeIndexedPath(entry.path)));
-    if (canonical.length === 1) matches = canonical;
-  }
+  const matches = preferCanonicalBindingTargets(findShowMatches(selectBindingTargetIdentities(exact, options), [type], id));
   if (matches.length === 0) throw new Error(`Missing ${type} binding target: ${id}`);
   if (matches.length > 1) throw new Error(`Ambiguous ${type} binding target: ${id}: ${matches.map(entry => entry.path).join(', ')}`);
   return matches[0];
