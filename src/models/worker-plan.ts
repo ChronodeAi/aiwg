@@ -1,3 +1,4 @@
+import { workerReviewLineageDiagnostics } from './worker-review-lineage.js';
 // Resolves eligible worker tuples against current config, catalog and installation snapshots.
 import { isFlagshipModel, flagshipElected, normalizeModelTier } from './tiers.js';
 import { ownWorkerRoleGuidance } from './worker-selection-policy.js';
@@ -11,7 +12,7 @@ import {
 } from '../config/aiwg-config.js';
 import {
   qualifyWorkerInvocationProfile, validateWorkerPolicyRoute, validateWorkerModelObservation,
-  assertWorkerLaunchMode, hasOperatorWorkerNativeRenderer, hasSelectionRelevantConflicts, workerContextHeadroom, workerModelKey, isCanonicalWorkerModelKey,
+  assertWorkerLaunchMode, hasOperatorWorkerNativeRenderer, workerContextHeadroom, workerModelKey, isCanonicalWorkerModelKey,
   WorkerSelectionPolicySchema, validateWorkerCatalogDiscovery,
   type ProviderModelCapabilityRegistry, type WorkerInvocationProfile, type WorkerContextEstimate,
   type WorkerBoundary,
@@ -227,10 +228,7 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
   if (request.member && !request.group) block('OG_CONFIG_REFERENCE', '/request/member', 'Group-local member pins require a group');
   if (request.group && !guidance?.groups.includes(request.group)) block('OG_CONFIG_REFERENCE', '/request/group', 'Group is outside role guidance');
   if ([request.maxParallel, snapshot.constraints?.maxParallel].some(value => value !== undefined && (!Number.isSafeInteger(value) || value < 0))) block('OG_CONFIG_REFERENCE', '/request/maxParallel', 'Capacity ceilings must be nonnegative integers');
-  if (request.requireDifferentFamily && (!request.reviewOf || validateWorkerModelObservation(request.reviewOf).length
-    || hasSelectionRelevantConflicts(request.reviewOf) || !request.reviewOf.family || request.reviewOf.family === 'unknown')) {
-    block('OG_MODEL_UNAPPROVED', '/request/reviewOf', 'Required review needs unambiguous observed source lineage');
-  }
+  plan.diagnostics.push(...workerReviewLineageDiagnostics(request));
   const candidateGroups = request.group ? [request.group] : guidance?.groups ?? [];
   const unqualifiedGroups = new Set(qualificationGaps.map(gapGroup));
   const qualifiedGroups = candidateGroups.filter(groupId => !unqualifiedGroups.has(groupId));
@@ -304,7 +302,7 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
           reasons.push(...validateWorkerPolicyRoute({ policy: groupPolicy, role, inferenceProvider: row.llmProvider, apiModelId: row.apiModelId,
             selectedModel: member.model, effort, identityEvidence: binding.identityEvidence, observation,
             wrapperPin, ...(substitution ? { substitution: request.substitution } : {}), dataClass: request.dataClass, now, context: request.context }));
-          if (request.requireDifferentFamily && (observation.family === 'unknown' || observation.family === request.reviewOf!.family)) deny('OG_MODEL_UNAPPROVED', '/worker/family', 'Required review must use a different observed family');
+          reasons.push(...workerReviewLineageDiagnostics({ ...request, reviewer: observation }));
           try {
             const { adapter } = resolveWorkerGroupInstallation(parallelism, member.cli, snapshot.registry);
             const configuredProfile = parallelism.clis?.[member.cli]?.invocationProfile;

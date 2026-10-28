@@ -24,11 +24,19 @@ describe('Mission schema loader in offline installed layouts', () => {
       mkdirSync(path.join(installed, 'schemas'));
       writeFileSync(path.join(installed, 'package.json'), JSON.stringify(manifest));
       cpSync(path.join(ROOT, 'schemas/mission-v1.schema.json'), path.join(installed, 'schemas/mission-v1.schema.json'));
-      for (const file of ['types', 'codecs', 'worker-contract-diagnostics']) {
+      for (const file of ['types', 'codecs', 'worker-contract-diagnostics', 'worker-contract-json',
+        'canonical-codecs', 'health-trace-codecs', 'health-trace-types', 'worker-review-types', 'worker-review-gate']) {
         const source = readFileSync(path.join(ROOT, `src/mission-protocol/${file}.ts`), 'utf8');
         const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } });
         writeFileSync(path.join(modules, `${file}.js`), compiled.outputText);
       }
+      const modelModules = path.join(installed, 'dist/src/models');
+      mkdirSync(modelModules, { recursive: true });
+      const lineage = ts.transpileModule(readFileSync(path.join(ROOT, 'src/models/worker-review-lineage.ts'), 'utf8'),
+        { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } });
+      writeFileSync(path.join(modelModules, 'worker-review-lineage.js'), lineage.outputText);
+      mkdirSync(path.join(installed, 'schemas/models'));
+      cpSync(path.join(ROOT, 'schemas/models/model-catalog.v1.schema.json'), path.join(installed, 'schemas/models/model-catalog.v1.schema.json'));
       const copied = new Set<string>();
       function copyDependency(dependency: string, requireFrom: ReturnType<typeof createRequire>) {
         if (copied.has(dependency)) return;

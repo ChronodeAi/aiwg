@@ -1,11 +1,7 @@
 // Validates the refreshable model catalog and compiles canonical tier intent.
-import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { integer, dateTime, url, number } from '../schema/zod-validation.mjs';
+import { getCatalogValidators, validateWorkerModelObservation } from './worker-review-lineage.js';
 import { MODEL_TIERS, normalizeModelTier, flagshipElected, isFlagshipModel, type FlagshipAuthority } from './tiers.js';
 import { ProviderSchema, requireModelResource } from './policy-resources.js';
 import { loadProviderModelCapabilities } from './provider-policy.js';
@@ -34,23 +30,8 @@ const CatalogProviderSchema = z.object({
   sourceUrl: url(),
   verifiedAt: z.string().date(),
 });
-let catalogValidators: { catalog: ValidateFunction; observation: ValidateFunction; discovery: ValidateFunction } | undefined;
-function getCatalogValidators(): NonNullable<typeof catalogValidators> {
-  if (!catalogValidators) {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const file = [resolve(here, '../../schemas/models/model-catalog.v1.schema.json'), resolve(here, '../../../schemas/models/model-catalog.v1.schema.json')].find(existsSync);
-    if (!file) throw new Error('Model catalog schema is unavailable');
-    const schema = JSON.parse(readFileSync(file, 'utf8'));
-    const ajv = addFormats(new Ajv2020({ strict: false, allErrors: true }));
-    ajv.addSchema(schema);
-    catalogValidators = { catalog: ajv.getSchema(schema.$id)!, observation: ajv.compile({ $ref: `${schema.$id}#/$defs/workerObservation` }), discovery: ajv.compile({ $ref: `${schema.$id}#/properties/discovery` }) };
-  }
-  return catalogValidators;
-}
-export function validateWorkerModelObservation(input: unknown): string[] {
-  const validate = getCatalogValidators().observation;
-  return validate(input) ? [] : (validate.errors ?? []).map(error => `${error.instancePath}: ${error.message}`);
-}
+// One copy of the catalog validators lives with the lightweight lineage module (#3167).
+export { validateWorkerModelObservation } from './worker-review-lineage.js';
 const WorkerObservationSchema = z.custom<WorkerModelObservation>(input => validateWorkerModelObservation(input).length === 0);
 const DiscoveredWorkerModelSchema = z.looseObject({
   id: z.string().min(1), apiModelId: z.string().optional(), llmProvider: z.string().optional(),

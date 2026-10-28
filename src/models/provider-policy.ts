@@ -14,6 +14,8 @@ import type {
 
 import { ProviderSchema, requireModelResource } from './policy-resources.js';
 import { resetCatalogPolicyCache, validateWorkerModelObservation } from './catalog-policy.js';
+import { hasSelectionRelevantConflicts } from './worker-review-lineage.js';
+export { hasSelectionRelevantConflicts } from './worker-review-lineage.js';
 export * from './catalog-policy.js';
 export * from './worker-invocation-policy.js';
 
@@ -351,11 +353,6 @@ function isWorkerEvidenceStale(observation: { observedAt: string; verifiedAt?: s
     || (verified !== undefined && (verified > now || now - verified > policyDays * 86400000));
 }
 
-/** Optional catalog facts do not veto otherwise qualified selection. */
-export function hasSelectionRelevantConflicts(observation: WorkerModelObservation): boolean {
-  const relevant = /^\/(?:lifecycle|availability|visibility|hidden|efforts|effortSupport|reasoningEfforts|sunsetAt|retiredAt|replacementModelId|supersededBy|dataUse|id|apiModelId|llmProvider|cliId|family|runtimeVersion|accountScope|endpointFingerprint|identityEvidence|contextTokens|maxOutputTokens|qualification)(?:\/|$)/;
-  return observation.conflicts?.some(conflict => relevant.test(conflict.field)) ?? false;
-}
 
 /** Validate a resolved route without launching or creating managed state. */
 export function validateWorkerPolicyRoute(input: {
