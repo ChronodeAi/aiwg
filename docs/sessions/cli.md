@@ -82,6 +82,8 @@ aiwg sessions import-discovered --workspace <path>
                                 [--resume] [--lock-wait-ms <n>]
                                 [--dry-run] [--json]
 aiwg sessions import <file> --source-id <id> [--workspace <id>] [--dry-run] [--json]
+aiwg sessions import --from-dir <dir> [--source-id <prefix>] [--provider <id>]
+                       [--workspace <id>] [--dry-run] [--json]
 aiwg sessions list [--provider <id>] [--workspace <id>] [--tag <tag>]
                    [--limit <1..500>] [--cursor <opaque>]
                    [--min-coverage <0..1>] [--json]
@@ -298,6 +300,32 @@ batch receipt's `interruptedRuns` lists their run IDs and timestamps; single-sou
 imports report the same list beside `receipts`. A resumed batch retains
 `run.interruptedAt` after completion. WAL readers remain available while an
 importer owns the lease.
+
+### Intake-directory batch import
+
+Single-file `import` covers one provider export at a time. When an intake
+directory accumulates several exports -- for example repeated Claude.ai
+account downloads -- import them in one pass with `--from-dir`:
+
+```sh
+aiwg sessions import --from-dir ./claude-intake \
+  --provider claude --source-id claude-admin --workspace default --json
+```
+
+`--from-dir` extends `sessions import`; it adds no new top-level command.
+Files are processed in sorted order. Every recognised file (`.json` or
+`.jsonl`) imports through the same single-file path, with `--source-id` as
+an optional per-file prefix (`claude-admin/<filename>`). Files already
+imported are skipped by content digest; unrecognised files are skipped with a
+reason; failures are reported per file without stopping the rest. The receipt
+holds one entry per file plus a `summary` (`total`, `imported`,
+`alreadyImported`, `skipped`, `rejected`, inserts). Repeating the batch
+imports nothing. `--dry-run` previews the file plan without writing.
+
+The full operator journey -- export download, single and batch import with
+exact commands and expected receipts, read-back, and shard export -- is
+walked through in [Claude admin intake
+walkthrough](../providers/claude-code-sessions.md#claude-admin-intake-walkthrough).
 
 ## Coverage and timeline
 

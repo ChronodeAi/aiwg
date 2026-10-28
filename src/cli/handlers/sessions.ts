@@ -118,6 +118,7 @@ import { resolveImportLimits } from '../../sessions/import-limits.js';
 import { classifyGrokbotBlobName } from '../../sessions/adapters/grokbot-locator.js';
 import { readAiwgConfig } from '../../config/aiwg-config.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
+import { importFromDir } from './sessions-intake.js';
 
 const JSON_CONTRACT_VERSION = '1.0.0';
 
@@ -155,7 +156,7 @@ const EXIT = {
   locked: 7, coverage: 8,
 } as const;
 
-interface Envelope {
+export interface Envelope {
   contractVersion: typeof JSON_CONTRACT_VERSION;
   command: string;
   status: 'ok' | 'error' | 'preview';
@@ -174,6 +175,7 @@ Commands:
   grok-export <id> --workspace <path> --out <dir>  Export one CLI transcript
   grok-id <file> --format json|streaming-json  Read a headless session ID
   import <file> --source-id <id>  Import a supported provider JSONL source
+  import --from-dir <dir> [--source-id <prefix>]  Batch-import every recognised export in a directory
   list [--workspace <path-or-id>] [--limit N] [--cursor N]  List normalized sessions
   timeline [--workspace <path-or-id>] [--gap 30m]  Report chronological activity segments
   show <session-id> [--workspace <path-or-id>]  Show a session with events and tags
@@ -231,6 +233,9 @@ Options:
   --inactivity-threshold <duration>  Historical inactivity threshold (default 24h)
   --min-coverage <0..1>  Fail list/report commands below a coverage ratio
   --provider <id> Filter list or select an import adapter
+  --from-dir <dir>  Batch-import every recognised export file in a directory (import only);
+                   --source-id becomes an optional per-file source-ID prefix;
+                   files already imported are skipped by content digest
   --consumer <id> Select a named memory consumer for promotion
   --tag <tag>, --limit <n>, --cursor <n>
   --page-size <n>  Extraction scan page size (default 250, maximum 500)
@@ -309,7 +314,7 @@ export const sessionsHandler: CommandHandler = {
   },
 };
 
-interface ParsedArgs {
+export interface ParsedArgs {
   command?: string;
   positionals: string[];
   flags: Set<string>;
@@ -1000,13 +1005,7 @@ async function executeCommand(
   }
 }
 
-async function importSource(
-  ctx: HandlerContext,
-  args: ParsedArgs,
-): Promise<{ envelope: Envelope; exitCode: number }> {
-  const limits = await configuredImportLimits(ctx, args);
-  const input = resolve(ctx.cwd, requiredPositional(args, 0, 'file'));
-  const providerInput = args.values.get('--provider') ?? 'generic';
+function assertSupportedImportProvider(providerInput: string): SessionProviderId {
   const provider = assertSessionProviderId(providerInput);
   if (provider !== 'generic' && provider !== 'claude' && provider !== 'codex'
     && provider !== 'copilot' && provider !== 'cursor' && provider !== 'factory'
@@ -1014,6 +1013,61 @@ async function importSource(
     && provider !== 'openhuman' && provider !== 'grokbot' && provider !== 'grok-build' && provider !== 'muse' && provider !== 'pi' && provider !== 'omp' && provider !== 'deepseek-harness' && provider !== 'warp' && provider !== 'devin-desktop') {
     throw new CliError('UNSUPPORTED_OPERATION', `session import is not implemented for ${provider}`, EXIT.unsupported);
   }
+  return provider;
+}
+
+function adapterVersionFor(provider: SessionProviderId): string {
+  switch (provider) {
+    case 'claude': return CLAUDE_ADAPTER_VERSION;
+    case 'codex': return CODEX_ADAPTER_VERSION;
+    case 'copilot': return COPILOT_ADAPTER_VERSION;
+    case 'cursor': return CURSOR_ADAPTER_VERSION;
+    case 'factory': return FACTORY_ADAPTER_VERSION;
+    case 'hermes': return HERMES_ADAPTER_VERSION;
+    case 'opencode': return OPENCODE_ADAPTER_VERSION;
+    case 'openclaw': return OPENCLAW_ADAPTER_VERSION;
+    case 'openhuman': return OPENHUMAN_ADAPTER_VERSION;
+    case 'grokbot': return GROKBOT_ADAPTER_VERSION;
+    case 'grok-build': return GROK_BUILD_ADAPTER_VERSION;
+    case 'muse': return MUSE_ADAPTER_VERSION;
+    case 'pi': return PI_ADAPTER_VERSION;
+    case 'omp': return OMP_ADAPTER_VERSION;
+    case 'deepseek-harness': return DEEPSEEK_HARNESS_ADAPTER_VERSION;
+    case 'warp': return WARP_ADAPTER_VERSION;
+    case 'devin-desktop': return DEVIN_DESKTOP_ADAPTER_VERSION;
+    default: return GENERIC_ADAPTER_VERSION;
+  }
+}
+
+/**
+ * `aiwg sessions import --from-dir <dir>` (#3168). Batch-imports every
+ * recognised provider export file in one intake directory: one receipt per
+ * file plus a summary. Files already imported are skipped by content digest
+ * before any adapter work; unrecognised files are skipped with a reason.
+ * Each remaining file imports through the single-file path, so adapter
+ * selection, redaction, and idempotency semantics are identical.
+ */
+function importFailureReason(error: unknown): string {
+  if (error instanceof CliError) return `${error.code}: ${error.message}`;
+  if (error instanceof SessionContractError) return `${error.code}: ${error.message}`;
+  return `IMPORT_INTERRUPTED: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+async function importSource(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const fromDir = args.values.get('--from-dir');
+  if (fromDir !== undefined) {
+    return importFromDir(ctx, args, resolve(ctx.cwd, fromDir), {
+      assertSupportedImportProvider, normalizeWorkspaceId, isDryRun, preview, ok,
+      openRepository, adapterVersionFor, importSource, importFailureReason,
+    });
+  }
+  const limits = await configuredImportLimits(ctx, args);
+  const input = resolve(ctx.cwd, requiredPositional(args, 0, 'file'));
+  const providerInput = args.values.get('--provider') ?? 'generic';
+  const provider = assertSupportedImportProvider(providerInput);
   const sourceId = requiredValue(args, '--source-id');
   const workspaceId = args.values.has('--workspace')
     ? normalizeWorkspaceId(ctx.cwd, args.values.get('--workspace')!)
@@ -2253,7 +2307,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   const exclude: string[] = [];
   const positionals: string[] = [];
   const valueFlags = new Set([
-    '--db', '--provider', '--workspace', '--tag', '--limit', '--cursor', '--source-id',
+    '--db', '--provider', '--workspace', '--tag', '--limit', '--cursor', '--source-id', '--from-dir',
     '--date-from', '--date-to', '--participant', '--model', '--role', '--tool',
     '--entity', '--sensitivity', '--extraction-state', '--page-size', '--max-documents',
     '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
