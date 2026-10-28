@@ -758,6 +758,7 @@ export class ChildProcessTransport {
     // cap since a long-lived connection could otherwise grow it unbounded.
     this._rawResponses = new Map();
     this._buffer = undefined;
+    this._bufferBytes = 0;
   }
 
   async start() {
@@ -769,7 +770,7 @@ export class ChildProcessTransport {
       try {
         // Check each frame BEFORE concatenation or UTF-8 decoding.
         let offset = 0;
-        let frameBytes = this._buffer?.length ?? 0;
+        let frameBytes = this._bufferBytes;
         while (offset < chunk.length) {
           const newline = chunk.indexOf(10, offset);
           const end = newline === -1 ? chunk.length : newline;
@@ -782,8 +783,7 @@ export class ChildProcessTransport {
           frameBytes = 0;
           offset = newline + 1;
         }
-        this._buffer = this._buffer ? Buffer.concat([this._buffer, chunk]) : chunk;
-        this._drain();
+        this._drain(chunk);
       } catch (error) { this.onerror?.(error); }
     });
     child.stdout?.on('error', error => this.onerror?.(error));
@@ -799,6 +799,7 @@ export class ChildProcessTransport {
     if (this._closed) return;
     this._closed = true;
     this._buffer = undefined;
+    this._bufferBytes = 0;
     this._rawResponses.clear();
     this.onclose?.();
   }
@@ -807,6 +808,7 @@ export class ChildProcessTransport {
     if (this._failure) return;
     this._failure = Object.assign(new Error(code), { code });
     this._buffer = undefined;
+    this._bufferBytes = 0;
     this._rawResponses.clear();
     // Start stopping before pipe closure can exit the leader; onclose rejects
     // pending SDK requests immediately while termination proof is awaited.
@@ -825,14 +827,26 @@ export class ChildProcessTransport {
   // (own-property-preserving, retained in `_rawResponses` — see
   // constructor doc) and once through the SDK's own `JSONRPCMessageSchema`
   // (routed to `onmessage`, unchanged behavior for the Client/Protocol).
-  _drain() {
-    while (this._buffer) {
-      const index = this._buffer.indexOf('\n');
-      if (index === -1) return;
-      const line = this._buffer.toString('utf8', 0, index).replace(/\r$/, '');
-      this._buffer = this._buffer.subarray(index + 1);
+  _drain(chunk) {
+    // Retain fragments without copying or rescanning the growing partial
+    // frame on every pipe read. Join once, only when a newline arrives.
+    let offset = 0;
+    while (offset < chunk.length) {
+      const newline = chunk.indexOf(10, offset);
+      const end = newline === -1 ? chunk.length : newline;
+      if (end > offset) {
+        (this._buffer ??= []).push(chunk.subarray(offset, end));
+        this._bufferBytes += end - offset;
+      }
+      if (newline === -1) return;
+      const frame = this._buffer?.length === 1
+        ? this._buffer[0] : Buffer.concat(this._buffer ?? [], this._bufferBytes);
+      const line = frame.toString('utf8').replace(/\r$/, '');
+      this._buffer = undefined;
+      this._bufferBytes = 0;
       this._handleLine(line);
-      if (this._buffer?.length === 0) this._buffer = undefined;
+      if (this._closed || this._failure) return;
+      offset = newline + 1;
     }
   }
 
@@ -905,6 +919,7 @@ export class ChildProcessTransport {
       try { signalChild(child, 'SIGKILL'); } catch { /* already gone */ }
     }
     this._buffer = undefined;
+    this._bufferBytes = 0;
   }
 }
 
