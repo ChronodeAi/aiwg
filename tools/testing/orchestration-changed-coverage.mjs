@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Changed-code coverage gate for orchestration: thresholds apply to changed
-// files only (diffed against the merge base), never repo-wide.
+// executable added/modified lines only, never whole files or repo-wide.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -68,7 +68,8 @@ export function resolveMergeBase(runGit = gitLines, env = process.env) {
 }
 
 export function listChangedFiles(base, runGit = gitLines) {
-  const tracked = runGit(['diff', '--name-only', '--no-renames', base]) ?? [];
+  const tracked = runGit(['diff', '--name-only', '--no-renames', base]);
+  if (tracked === null) throw new Error(`cannot list changes against ${base}`);
   const untracked = runGit(['ls-files', '--others', '--exclude-standard']) ?? [];
   return [...new Set([...tracked, ...untracked].map(line => String(line).trim()).filter(Boolean))].sort();
 }
@@ -81,16 +82,98 @@ export function bucketConfig(bucket, files) {
   };
 }
 
-function runVitestBucket(bucket, files) {
+// Git hunk coordinates describe the new side; zero-length ranges are deletions.
+export function parseChangedRanges(diff) {
+  return String(diff).split('\n').flatMap(line => {
+    const match = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (!match) return [];
+    const start = Number(match[1]);
+    const count = match[2] === undefined ? 1 : Number(match[2]);
+    return count ? [{ start, end: start + count - 1 }] : [];
+  });
+}
+
+export function changedRanges(base, file, runGit = gitLines) {
+  const diff = runGit(['diff', '--unified=0', '--no-renames', base, '--', file]);
+  if (diff === null) throw new Error(`cannot diff ${file} against ${base}`);
+  // Untracked files have no git diff. Newly tracked files have /dev/null headers.
+  if (diff.includes('--- /dev/null') || (!diff.length
+    && runGit(['cat-file', '-e', `${base}:${file}`]) === null)) {
+    const source = fs.readFileSync(path.join(root, file), 'utf8');
+    const count = source.split('\n').length - Number(source.endsWith('\n'));
+    return count ? [{ start: 1, end: count }] : [];
+  }
+  return parseChangedRanges(diff.join('\n'));
+}
+
+function intersectingLines(location, ranges) {
+  if (!location?.start || !location?.end) return [];
+  const end = location.end.line - Number(location.end.column === 0
+    && location.end.line > location.start.line);
+  return ranges.flatMap(range => {
+    const start = Math.max(range.start, location.start.line);
+    const stop = Math.min(range.end, end);
+    return Array.from({ length: Math.max(0, stop - start + 1) }, (_, i) => start + i);
+  });
+}
+
+export function changedCoverage(coverage, ranges, thresholds) {
+  const uncovered = new Set();
+  const metrics = { statements: { covered: 0, total: 0 }, branches: { covered: 0, total: 0 } };
+  const count = (metric, location, hits) => {
+    const lines = intersectingLines(location, ranges);
+    if (!lines.length) return;
+    metrics[metric].total++;
+    if (hits > 0) metrics[metric].covered++;
+    else lines.forEach(line => uncovered.add(line));
+  };
+  for (const [id, location] of Object.entries(coverage.statementMap)) {
+    count('statements', location, coverage.s[id]);
+  }
+  for (const [id, branch] of Object.entries(coverage.branchMap)) {
+    // A changed decision owns every outcome, including Istanbul's implicit else
+    // outcomes whose individual locations can be empty objects.
+    for (const hits of coverage.b[id]) count('branches', branch.loc, hits);
+  }
+  for (const metric of Object.values(metrics)) {
+    metric.percent = metric.total ? metric.covered / metric.total * 100 : 100;
+  }
+  return { ...metrics, passes: Object.entries(thresholds).every(([key, threshold]) =>
+    metrics[key].percent >= threshold), uncoveredLines: [...uncovered].sort((a, b) => a - b) };
+}
+
+export function checkCoverageReport(report, files, rangesByFile, thresholds) {
+  let failed = false;
+  for (const file of files) {
+    const ranges = rangesByFile.get(file);
+    const coverage = report[path.join(root, file)] ?? report[file];
+    if (ranges.length && !coverage) {
+      console.error(`orchestration-changed-coverage: ${file}: missing coverage data`);
+      failed = true;
+      continue;
+    }
+    const result = changedCoverage(coverage ?? { statementMap: {}, s: {}, branchMap: {}, b: {} }, ranges, thresholds);
+    const format = metric => `${metric.covered}/${metric.total} (${metric.percent.toFixed(2)}%)`;
+    console.log(`orchestration-changed-coverage: ${file}: changed statements ${format(result.statements)}, branches ${format(result.branches)}: ${result.passes ? 'PASS' : 'FAIL'}`);
+    if (!result.passes) {
+      console.error(`orchestration-changed-coverage: ${file}: uncovered changed lines: ${result.uncoveredLines.join(', ')}`);
+      failed = true;
+    }
+  }
+  return Number(failed);
+}
+
+function runVitestBucket(bucket, files, rangesByFile) {
   const { thresholds, reportsDirectory } = bucketConfig(bucket, files);
   fs.mkdirSync(path.join(root, REPORT_PARENT), { recursive: true });
   const configPath = path.join(root, REPORT_PARENT, `${bucket}.config.mjs`);
+  const reportPath = path.join(root, reportsDirectory, 'coverage-final.json');
+  fs.rmSync(reportPath, { force: true });
   fs.writeFileSync(configPath, `import base from ${JSON.stringify('../../config/vitest.config.js')};
 export default { ...base, test: { ...base.test, include: ${JSON.stringify(FOCUSED_TESTS)},
   coverage: { enabled: true, provider: 'v8', include: ${JSON.stringify(files)},
-    exclude: ['test/**'], reporter: ['text', 'json-summary'],
-    reportsDirectory: ${JSON.stringify(reportsDirectory)},
-    thresholds: { perFile: true, ...${JSON.stringify(thresholds)} } } } };
+    exclude: ['test/**'], reporter: ['text', 'json-summary', 'json'],
+    reportsDirectory: ${JSON.stringify(reportsDirectory)} } } };
 `);
   const result = spawnSync(process.execPath, [path.join(root, 'node_modules/vitest/vitest.mjs'), 'run', '--config', configPath], {
     cwd: root, encoding: 'utf8', timeout: 600_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 * 1024,
@@ -98,12 +181,15 @@ export default { ...base, test: { ...base.test, include: ${JSON.stringify(FOCUSE
   for (const [stream, text] of [['stdout', result.stdout], ['stderr', result.stderr]]) {
     if (text) process[stream].write(text);
   }
-  if (result.error || result.signal || result.status !== 0) {
-    console.error(`orchestration-changed-coverage: ${bucket} bucket failed (${files.length} changed files)`);
-    return 1;
+  let failed = Number(Boolean(result.error || result.signal || result.status !== 0));
+  try {
+    failed |= checkCoverageReport(JSON.parse(fs.readFileSync(reportPath, 'utf8')), files, rangesByFile, thresholds);
+  } catch (error) {
+    console.error(`orchestration-changed-coverage: ${bucket}: ${error.message}`);
+    failed = 1;
   }
-  console.log(`orchestration-changed-coverage: ${bucket} bucket passed (${files.length} changed files)`);
-  return 0;
+  console.log(`orchestration-changed-coverage: ${bucket} bucket ${failed ? 'failed' : 'passed'} (${files.length} changed files)`);
+  return failed;
 }
 
 export function runGate({ base, runGit = gitLines, env = process.env } = {}) {
@@ -117,15 +203,29 @@ export function runGate({ base, runGit = gitLines, env = process.env } = {}) {
     console.log('orchestration-changed-coverage: no baseline ref available; skipping changed-file gate');
     return 0;
   }
-  const { validators, 'adapters-recovery': adapters, outOfScope } = splitChangedFiles(listChangedFiles(baseline, runGit));
+  let buckets;
+  try { buckets = splitChangedFiles(listChangedFiles(baseline, runGit)); }
+  catch (error) { console.error(`orchestration-changed-coverage: ${error.message}`); return 1; }
+  const { validators, 'adapters-recovery': adapters, outOfScope } = buckets;
   console.log(`orchestration-changed-coverage: base ${baseline}, ${validators.length} validator, ${adapters.length} adapter/recovery, ${outOfScope.length} out-of-scope changed files`);
   if (!validators.length && !adapters.length) {
     console.log('orchestration-changed-coverage: no changed files in scope; gate passes');
     return 0;
   }
-  if (validators.length && runVitestBucket('validators', validators)) return 1;
-  if (adapters.length && runVitestBucket('adapters-recovery', adapters)) return 1;
-  return 0;
+  try {
+    const ranges = new Map([...validators, ...adapters].map(file => [file, changedRanges(baseline, file, runGit)]));
+    let failed = 0;
+    for (const [bucket, files] of [['validators', validators], ['adapters-recovery', adapters]]) {
+      if (!files.length) continue;
+      if (files.every(file => !ranges.get(file).length)) {
+        failed |= checkCoverageReport({}, files, ranges, bucketConfig(bucket, files).thresholds);
+      } else failed |= runVitestBucket(bucket, files, ranges);
+    }
+    return failed;
+  } catch (error) {
+    console.error(`orchestration-changed-coverage: ${error.message}`);
+    return 1;
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

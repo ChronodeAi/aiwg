@@ -29,6 +29,9 @@
       "testFiles": [
         "test/unit/models/worker-resolution.test.ts",
         "test/unit/models/worker-ceilings.test.ts",
+        "test/unit/models/resolver-election.test.ts",
+        "test/unit/models/policy-resources.test.ts",
+        "test/unit/mission-protocol/canonical-codecs.test.ts",
         "test/unit/serve/worker-command-ceilings.test.ts",
         "test/unit/models/conductor-data-policy.test.ts",
         "test/unit/providers/conductor-data-guard.test.ts",

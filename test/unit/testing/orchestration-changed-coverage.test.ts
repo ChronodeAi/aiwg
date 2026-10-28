@@ -7,10 +7,50 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ADAPTER_THRESHOLDS, bucketConfig, classifyChangedFile, listChangedFiles,
   resolveMergeBase, runGate, splitChangedFiles, VALIDATOR_THRESHOLDS,
+  changedCoverage, parseChangedRanges,
 } from '../../../tools/testing/orchestration-changed-coverage.mjs';
 
 const directories: string[] = [];
 afterEach(() => directories.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true })));
+
+// Exercise the entry point with synthetic Git diffs and coverage-final.json.
+function syntheticGate(diff: string[], hits: number[], options: {
+  branchHits?: number[]; newFile?: boolean; untracked?: boolean; omitReport?: boolean;
+} = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'diff-coverage-')); directories.push(dir);
+  for (const folder of ['tools/testing', 'config', 'src/config', 'node_modules/vitest']) {
+    mkdirSync(join(dir, folder), { recursive: true });
+  }
+  const helper = join(dir, 'tools/testing/orchestration-changed-coverage.mjs');
+  copyFileSync(fileURLToPath(new URL('../../../tools/testing/orchestration-changed-coverage.mjs', import.meta.url)), helper);
+  writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
+  writeFileSync(join(dir, 'config/vitest.config.js'), 'export default { test: {} };');
+  writeFileSync(join(dir, 'src/config/example.ts'), 'const a = 1;\nconst b = 2;\nconst c = 3;\n');
+  const location = (line: number) => ({ start: { line, column: 0 }, end: { line, column: 12 } });
+  const coverage = {
+    statementMap: Object.fromEntries(hits.map((_, i) => [i, location(i + 1)])),
+    s: Object.fromEntries(hits.map((hit, i) => [i, hit])),
+    branchMap: Object.fromEntries((options.branchHits ?? []).map((_, i) => [i, { loc: location(i + 1), locations: [location(i + 1)] }])),
+    b: Object.fromEntries((options.branchHits ?? []).map((hit, i) => [i, [hit]])),
+  };
+  writeFileSync(join(dir, 'node_modules/vitest/vitest.mjs'), `
+    import { mkdirSync, writeFileSync } from 'node:fs';
+    import { pathToFileURL } from 'node:url';
+    const { default: config } = await import(pathToFileURL(process.argv[process.argv.indexOf('--config') + 1]));
+    mkdirSync(config.test.coverage.reportsDirectory, { recursive: true });
+    if (!${Boolean(options.omitReport)}) writeFileSync(config.test.coverage.reportsDirectory + '/coverage-final.json',
+      JSON.stringify({ 'src/config/example.ts': ${JSON.stringify(coverage)} }));
+  `);
+  return spawnSync(process.execPath, ['--input-type=module', '-e', `
+    const { runGate } = await import(process.argv[1]);
+    process.exitCode = runGate({ base: 'base', runGit: args => {
+      if (args.includes('--unified=0')) return ${JSON.stringify(diff)};
+      if (args[0] === 'cat-file') return ${options.newFile || options.untracked ? 'null' : '[]'};
+      if (args[0] === 'ls-files') return ${options.untracked ? "['src/config/example.ts']" : '[]'};
+      return ${options.untracked ? '[]' : "['src/config/example.ts']"};
+    } });
+  `, pathToFileURL(helper).href], { cwd: dir, encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL' });
+}
 
 describe('T-OG-05/06 orchestration changed-code coverage helper', () => {
   it('classifies validators, adapters/recovery and out-of-scope files', () => {
@@ -99,13 +139,22 @@ describe('T-OG-05/06 orchestration changed-code coverage helper', () => {
     writeFileSync(join(dir, 'node_modules/vitest/vitest.mjs'), `
       import { pathToFileURL } from 'node:url';
       const { default: config } = await import(pathToFileURL(process.argv[process.argv.indexOf('--config') + 1]));
+      const { mkdirSync, writeFileSync } = await import('node:fs');
+      mkdirSync(config.test.coverage.reportsDirectory, { recursive: true });
+      writeFileSync(config.test.coverage.reportsDirectory + '/coverage-final.json', JSON.stringify(
+        Object.fromEntries(config.test.coverage.include.map(file => [file, {
+          statementMap: { 0: { start: { line: 2, column: 0 }, end: { line: 2, column: 12 } } },
+          s: { 0: 1 }, branchMap: {}, b: {}
+        }]))));
       console.log('CONFIG=' + JSON.stringify(config.test.coverage));
       console.log('SUITES=' + JSON.stringify(config.test.include));
     `);
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
       const { runGate } = await import(process.argv[1]);
-      process.exitCode = runGate({ base: 'synthetic-base', runGit: () =>
-        ['src/config/worker-context.ts', 'tools/ralph-external/lib/worker-context.mjs'] });
+      process.exitCode = runGate({ base: 'synthetic-base', runGit: args => {
+        if (args.includes('--unified=0')) return ['@@ -2 +2 @@'];
+        return ['src/config/worker-context.ts', 'tools/ralph-external/lib/worker-context.mjs'];
+      } });
     `, pathToFileURL(helper).href], { cwd: dir, encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL' });
     expect(result.status, result.stderr).toBe(0);
     const configs = result.stdout.split('\n').filter(line => line.startsWith('CONFIG='))
@@ -114,10 +163,91 @@ describe('T-OG-05/06 orchestration changed-code coverage helper', () => {
     expect(configs.map(config => config.include)).toEqual([
       ['src/config/worker-context.ts'], ['tools/ralph-external/lib/worker-context.mjs'],
     ]);
-    for (const config of configs) expect(config.exclude).toEqual(['test/**']);
+    for (const config of configs) {
+      expect(config.exclude).toEqual(['test/**']);
+      expect(config.reporter).toEqual(['text', 'json-summary', 'json']);
+      expect(config.thresholds).toBeUndefined();
+    }
     const suites = result.stdout.split('\n').filter(line => line.startsWith('SUITES='))
       .map(line => JSON.parse(line.slice('SUITES='.length)));
     for (const include of suites) expect(include).toContain('test/unit/ralph-external/**/*.test.mjs');
+  });
+
+  it('passes covered changed lines while unchanged statements and branch arms are uncovered', () => {
+    const result = syntheticGate(['@@ -1 +1 @@'], [1, 0, 0], { branchHits: [1, 0, 0] });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('changed statements 1/1 (100.00%), branches 1/1 (100.00%): PASS');
+  });
+
+  it('fails a changed uncovered statement and names its changed line', () => {
+    const result = syntheticGate(['@@ -2 +2 @@'], [1, 0, 1]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('src/config/example.ts: uncovered changed lines: 2');
+  });
+
+  it('fails a changed uncovered branch independently of statement coverage', () => {
+    const result = syntheticGate(['@@ -2 +2 @@'], [1, 1, 1], { branchHits: [1, 0, 1] });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('changed statements 1/1 (100.00%), branches 0/1 (0.00%): FAIL');
+    expect(result.stderr).toContain('uncovered changed lines: 2');
+  });
+
+  it('counts all executable lines in a new file, including untracked files', () => {
+    for (const untracked of [false, true]) {
+      const result = syntheticGate(untracked ? [] : ['--- /dev/null', '@@ -0,0 +1,3 @@'],
+        [1, 0, 1], { newFile: true, untracked });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('changed statements 2/3 (66.67%)');
+      expect(result.stderr).toContain('uncovered changed lines: 2');
+    }
+  });
+
+  it('passes deletion-only changes without running coverage', () => {
+    const result = syntheticGate(['@@ -2,2 +1,0 @@'], [], { omitReport: true });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('changed statements 0/0 (100.00%), branches 0/0 (100.00%): PASS');
+  });
+
+  it('passes changes with no executable statements or branches', () => {
+    const result = syntheticGate(['@@ -1 +1 @@'], []);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('changed statements 0/0 (100.00%), branches 0/0 (100.00%): PASS');
+  });
+
+  it('fails closed when the coverage reporter does not produce its report', () => {
+    const result = syntheticGate(['@@ -1 +1 @@'], [1], { omitReport: true });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('coverage-final.json');
+  });
+
+  it('parses multiple hunks using only new-side added and modified ranges', () => {
+    expect(parseChangedRanges('@@ -1 +1,2 @@\n+added\n@@ -5,2 +6,0 @@\n@@ -9 +10 @@ suffix'))
+      .toEqual([{ start: 1, end: 2 }, { start: 10, end: 10 }]);
+  });
+
+  it('intersects multiline spans, respects exclusive end lines, and applies exact thresholds', () => {
+    const statementMap = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [i, {
+      start: { line: 1, column: 0 }, end: { line: 4, column: 0 },
+    }]));
+    const coverage = { statementMap, s: Object.fromEntries(Array.from({ length: 10 }, (_, i) => [i, i])),
+      branchMap: {}, b: {} };
+    expect(changedCoverage(coverage, [{ start: 3, end: 3 }], VALIDATOR_THRESHOLDS))
+      .toMatchObject({ statements: { covered: 9, total: 10, percent: 90 }, passes: true });
+    expect(changedCoverage(coverage, [{ start: 4, end: 4 }], VALIDATOR_THRESHOLDS))
+      .toMatchObject({ statements: { total: 0 }, passes: true });
+  });
+
+  it('counts all outcomes of a changed branch, including implicit else locations', () => {
+    const location = { start: { line: 2, column: 0 }, end: { line: 3, column: 12 } };
+    const result = changedCoverage({ statementMap: {}, s: {},
+      branchMap: { 0: { loc: location, locations: [location, { start: {}, end: {} }] } }, b: { 0: [1, 0] },
+    }, [{ start: 2, end: 2 }], ADAPTER_THRESHOLDS);
+    expect(result).toMatchObject({ branches: { covered: 1, total: 2, percent: 50 },
+      passes: false, uncoveredLines: [2] });
+  });
+
+  it('fails closed for an invalid explicit baseline', () => {
+    expect(runGate({ base: 'missing', runGit: () => null, env: { CI: 'true' } })).toBe(1);
   });
 
   it('lists real working-tree changes from a disposable git repository', () => {
@@ -131,7 +261,8 @@ describe('T-OG-05/06 orchestration changed-code coverage helper', () => {
     git(['init', '-q']);
     writeFileSync(join(dir, 'tracked.txt'), 'base\n');
     git(['add', 'tracked.txt']);
-    git(['commit', '-qm', 'base']);
+    // Snapshot the index as a baseline tree without creating a commit.
+    const base = git(['write-tree']).stdout.trim();
     const runGit = (args: string[]) => {
       const result = spawnSync('git', args, { cwd: dir, encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL' });
       if (result.status !== 0) return null;
@@ -139,6 +270,6 @@ describe('T-OG-05/06 orchestration changed-code coverage helper', () => {
     };
     writeFileSync(join(dir, 'tracked.txt'), 'changed\n');
     writeFileSync(join(dir, 'added.ts'), 'export const added = 1;\n');
-    expect(listChangedFiles('HEAD', runGit)).toEqual(['added.ts', 'tracked.txt']);
+    expect(listChangedFiles(base, runGit)).toEqual(['added.ts', 'tracked.txt']);
   });
 });
