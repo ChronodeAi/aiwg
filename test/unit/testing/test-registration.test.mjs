@@ -174,12 +174,43 @@ describe('test runner registration gate', () => {
     expect(report.files[0].lanes).toEqual([{ id: 'config/vitest.config.js', live: false }]);
   });
 
+  it.each(['deployment', 'wasm'])('rejects duplicate default/%s ownership using discovered files', lane => {
+    const config = `config/vitest.${lane}.config.js`;
+    const { child, report } = run(project({
+      ci: `npm run test && vitest run --config ${config}`,
+      files: { [config]: `export default ${JSON.stringify({ test: { include: [baseline] } })};` },
+    }));
+    expect(child.status).toBe(1);
+    expect(report.errors).toEqual([`${baseline}: test has multiple owning lanes`]);
+    expect(report.files[0].lanes.map(owner => owner.id)).toEqual(['config/vitest.config.js', config]);
+  });
+
+  it.each(['deployment', 'wasm', 'uat-live'])('rejects a configured %s lane discovering zero files', lane => {
+    const config = `config/vitest.${lane}.config.js`;
+    const { child, report } = run(project({
+      ci: `npm run test && vitest run --config ${config}`,
+      files: { [config]: `export default ${JSON.stringify({ test: { include: ['test/missing/**/*.test.ts'] } })};` },
+    }));
+    expect(child.status).toBe(1);
+    expect(report.totalFiles).toBe(1);
+    expect(report.errors).toEqual([`${config}: lane discovers zero files`]);
+    expect(child.stderr.trim()).toBe(report.errors[0]);
+  });
+
+  it('rejects a reachable Node lane discovering zero files', () => {
+    const pattern = 'tools/missing/*.test.mjs';
+    const { child, report } = run(project({ nodeFiles: [pattern], ci: `npm run test && node --test ${pattern}` }));
+    expect(child.status).toBe(1);
+    expect(report.totalFiles).toBe(1);
+    expect(report.errors).toEqual(['node: lane discovers zero files']);
+  });
+
   it('rejects an empty test population', () => {
     const { child, report } = run(project({ withBaseline: false }));
     expect(child.status).toBe(1);
     expect(report.totalFiles).toBe(0);
     expect(report.files).toEqual([]);
-    expect(report.errors).toEqual(['No candidate test files found']);
+    expect(report.errors).toEqual(['config/vitest.config.js: lane discovers zero files', 'No candidate test files found']);
   });
 
   it('rejects offline config absent from canonical CI', () => {
@@ -205,12 +236,12 @@ describe('test runner registration gate', () => {
   it('rejects a declared Node ownership pattern absent from canonical CI', () => {
     const { child, report } = run(project({ nodeFiles: ['test/unit/ralph/*.test.mjs'] }));
     expect(child.status).toBe(1);
-    expect(report.errors).toEqual(['Node ownership pattern is absent from canonical CI: test/unit/ralph/*.test.mjs']);
+    expect(report.errors).toEqual(['node: lane discovers zero files', 'Node ownership pattern is absent from canonical CI: test/unit/ralph/*.test.mjs']);
   });
 
   it('preserves Node runner and legacy file-harness ownership', () => {
     const { child, report } = run(project({
-      withBaseline: false, nodeFiles: ['tools/ralph-external/*.test.mjs', 'test/unit/ralph/*.test.mjs'],
+      nodeFiles: ['tools/ralph-external/*.test.mjs', 'test/unit/ralph/*.test.mjs'],
       ci: 'npm run test && node --test tools/ralph-external/*.test.mjs test/unit/ralph/*.test.mjs',
       files: {
         'tools/ralph-external/legacy.test.mjs': "import assert from 'node:assert/strict'; assert.equal(1, 1);\n",
@@ -220,6 +251,7 @@ describe('test runner registration gate', () => {
     expect(child.status).toBe(0);
     expect(report.errors).toEqual([]);
     expect(report.files).toEqual([
+      { file: baseline, runner: 'vitest', lanes: [{ id: 'config/vitest.config.js', live: false }] },
       { file: 'test/unit/ralph/native.test.mjs', runner: 'node', lanes: [{ id: 'node', live: false }] },
       { file: 'tools/ralph-external/legacy.test.mjs', runner: 'node-file-harness', lanes: [{ id: 'node', live: false }] },
     ]);

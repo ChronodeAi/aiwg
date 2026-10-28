@@ -132,6 +132,10 @@ export async function inspectTestRegistration(root = repositoryRoot) {
     else if (packageScriptOwned(packageByName.get(entry.package).dir, entry.script)) errors.push(`Opt-in package test is owned by CI; remove it: ${entry.package} ${entry.script}`);
   }
   for (const lane of lanes) {
+    // An undeclared Node lane is absent, but every configured lane must discover files.
+    if (!lane.files.size && (lane.id !== 'node' || nodeFiles.length)) {
+      errors.push(`${lane.id}: lane discovers zero files`);
+    }
     if (releaseReachable.has(lane.id)) {
       if (!releaseReachable.get(lane.id).includes(`--config ${lane.id}`)) errors.push(`Release lane is not reachable from its workflow: ${lane.id}`);
     } else if (lane.id === 'node') {
@@ -143,8 +147,14 @@ export async function inspectTestRegistration(root = repositoryRoot) {
     const owners = lanes.filter(lane => lane.files.has(file));
     if (runner === 'unknown') errors.push(`${file}: unknown test API; declare an explicit owning runner`);
     if (!owners.length) errors.push(`${file}: unassigned test file`);
-    // Coverage overlays predate this gate; release-only files must have exactly
-    // one owner so neither default CI nor another lane repeats their full deploys.
+    // These two coverage overlays deliberately remeasure default-lane suites.
+    const overlays = new Set(['config/vitest.audit-foundations-coverage.config.js',
+      'config/vitest.testing-quality-coverage.config.js']);
+    const executionOwners = owners.filter(owner => !overlays.has(owner.id));
+    if (executionOwners.length > 1 && !owners.some(owner => releaseReachable.has(owner.id))) {
+      errors.push(`${file}: test has multiple owning lanes`);
+    }
+    // Release-only files must have exactly one owner, including coverage overlays.
     if (owners.length > 1 && owners.some(owner => releaseReachable.has(owner.id))) {
       errors.push(`${file}: release test has multiple owning lanes`);
     }
