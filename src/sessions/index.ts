@@ -20,6 +20,7 @@ export * from './importer.js';
 export * from './import-lease.js';
 export * from './batch-contracts.js';
 export * from './batch-import.js';
+export * from './host-catalog.js';
 export * from './workspace-discovery.js';
 export * from './timeline.js';
 export * from './origin.js';

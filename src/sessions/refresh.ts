@@ -1,11 +1,12 @@
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { requireFeaturePackage } from '../features/runtime.js';
 import { readAiwgConfig } from '../config/aiwg-config.js';
 import { createSessionAdapterRegistry } from './adapter-registry.js';
 import { resolveImportExclusions } from './import-exclusions.js';
 import { resolveImportLimits } from './import-limits.js';
-import { acquireImportLease } from './import-lease.js';
+import { acquireImportLease, type ImportLease } from './import-lease.js';
+import { defaultHostCatalogPath, manifestNeedsHostCatalog } from './host-catalog.js';
 import { SessionRepository } from './repository.js';
 import { importDiscoveryManifest, type BatchImportReceipt } from './batch-import.js';
 import {
@@ -78,8 +79,26 @@ export async function refreshSessionCatalog(
     if (!manifests.length) return 'no authorized provider roots';
   }
   const lease = await acquireImportLease(database, `index-refresh-${process.pid}`, { waitMs });
+  let hostLease: ImportLease | undefined;
   try {
     const repository = new SessionRepository(database);
+    // Account-scoped providers import once into the host catalog; the
+    // hourly host refresh (#310) routes them there instead of copying
+    // them into every workspace catalog (#3232). The host catalog is only
+    // opened when a manifest actually holds an account-scoped source.
+    const hostCatalogPath = defaultHostCatalogPath();
+    const needsHost = manifests.some((entry) => manifestNeedsHostCatalog(entry.manifest.sources));
+    let hostRepository: SessionRepository | undefined;
+    if (needsHost) {
+      mkdirSync(path.dirname(hostCatalogPath), { recursive: true, mode: 0o700 });
+      // The workspace lease above does not cover the shared host catalog,
+      // so overlapping refreshes from two workspaces would stage the same
+      // replicas concurrently (#3232). Serialize host writers with the
+      // same lock pattern; the shared checkpoint then turns the second
+      // writer into duplicate references instead of a double import.
+      hostLease = await acquireImportLease(hostCatalogPath, `host-refresh-${process.pid}`, { waitMs });
+      hostRepository = new SessionRepository(hostCatalogPath);
+    }
     try {
       if (full) repository.reindex();
       else {
@@ -89,7 +108,9 @@ export async function refreshSessionCatalog(
           if (prior?.status === 'complete') continue;
           // Persist the exact discovered batch before its confirmed import.
           await writeDiscoveryManifest(entry.path, entry.manifest);
-          const receipt = await importDiscoveryManifest({ manifest: entry.manifest, repository, signal, limits, exclude });
+          const receipt = await importDiscoveryManifest({
+            manifest: entry.manifest, repository, hostRepository, hostCatalogPath, signal, limits, exclude,
+          });
           if (receipt.totals.pending) {
             throw new Error(`session import incomplete: ${receipt.totals.rejected} rejected, ${receipt.totals.pending} pending`);
           }
@@ -99,9 +120,11 @@ export async function refreshSessionCatalog(
         return receipts.length === 1 ? receipts[0] : receipts;
       }
     } finally {
+      hostRepository?.close();
       repository.close();
     }
   } finally {
+    await hostLease?.release();
     await lease.release();
   }
   return undefined;
