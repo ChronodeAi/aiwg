@@ -1,5 +1,6 @@
 // Resolves eligible worker tuples against current config, catalog and installation snapshots.
 import { ownWorkerRoleGuidance } from './worker-selection-policy.js';
+import { resolveWorkerCeilings } from './worker-ceilings.js';
 import { mergeGroupWorkerPolicy } from '../config/worker-group-templates.js';
 import { WORKER_DISPATCH_ENABLE_COMMAND, WORKER_DISPATCH_READINESS_COMMAND } from './worker-dispatch-offer.js';
 import {
@@ -138,7 +139,8 @@ function workerCatalogDigest(catalog: DynamicModelCatalog): string {
 
 /** Pure S1 resolution. No probing, launch, activation, admission, or writes.
  * Recheck against freshly loaded snapshots before preparing an invocation. */
-export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerPlanRequest): WorkerResolutionPlan {
+export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerPlanRequest,
+  ceilingDefaults: WorkerResolutionCeilings = {}): WorkerResolutionPlan {
   let parallelism: ReturnType<typeof resolveParallelism> | NonNullable<WorkerPlanSnapshot['config']['parallelism']> = snapshot.config.parallelism ?? {};
   const policy = snapshot.models.defaults.workerSelection;
   const digests = {
@@ -196,14 +198,10 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
   for (const message of validateWorkerGroupReferences(parallelism, policy)) block('OG_CONFIG_REFERENCE', '/parallelism', message);
   if (plan.diagnostics.length) return plan;
   parallelism = resolveParallelism(parallelism, snapshot.config.providers?.[0]);
-  const ceilingLayers = [parallelism.budgets?.perRun, parallelism.budgets?.perTask,
-    { maxAttempts: parallelism.retry?.maxAttempts ?? 3 }, snapshot.constraints?.ceilings, request.ceilings];
-  for (const key of ['tokens', 'costUsd', 'wallSeconds', 'maxAttempts'] as const) {
-    const values = ceilingLayers.map(layer => (layer as WorkerResolutionCeilings | undefined)?.[key]).filter((value): value is number => value !== undefined);
-    if (values.some(value => !Number.isFinite(value) || value < 0 || key !== 'costUsd' && !Number.isSafeInteger(value))) {
-      block('OG_CONFIG_REFERENCE', `/request/ceilings/${key}`, 'Ceilings must be finite nonnegative values; counts must be integers');
-    } else if (values.length) plan.ceilings[key] = Math.min(...values);
-  }
+  const resolvedCeilings = resolveWorkerCeilings(parallelism, snapshot.constraints?.ceilings, request.ceilings, ceilingDefaults);
+  plan.ceilings = resolvedCeilings.ceilings;
+  plan.origins = { ...plan.origins, ...resolvedCeilings.origins };
+  plan.diagnostics.push(...resolvedCeilings.diagnostics);
   if (plan.ceilings.maxAttempts === 0) block('OG_BUDGET_UNMEASURABLE', '/request/ceilings/maxAttempts', 'No task attempts remain');
   const qualifiedRoles: Record<string, string[]> = {};
   for (const [groupId, group] of Object.entries(parallelism.groups ?? {})) {

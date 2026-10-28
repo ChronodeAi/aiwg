@@ -43,6 +43,12 @@ Direct worker resolution (plans an invocation; does not launch it):
   --transport                  Must match group execution transport (default: shell)
   --format                     JSON plan or POSIX shell command (default: json)
   --json                       Alias for --format json
+  --max-attempts <count>        Tighten total attempts, including the initial attempt
+  --timeout-ms <ms>             Tighten the hard stop; positive multiple of 1000 (whole seconds)
+  --max-output-tokens <count>   Tighten the existing task token budget (tokens)
+  --max-usd <amount>            Tighten the task cost ceiling (costUsd)
+                               Limits may only tighten resolved policy; larger values fail
+                               JSON includes ceilings and their origins
   --authorize-premium          Authorize premium for this resolution only
                                Agents require explicit human confirmation of escalation
 

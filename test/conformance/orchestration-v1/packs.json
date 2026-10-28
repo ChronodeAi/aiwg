@@ -28,6 +28,8 @@
       "status": "partial",
       "testFiles": [
         "test/unit/models/worker-resolution.test.ts",
+        "test/unit/models/worker-ceilings.test.ts",
+        "test/unit/serve/worker-command-ceilings.test.ts",
         "test/unit/models/conductor-data-policy.test.ts",
         "test/unit/providers/conductor-data-guard.test.ts",
         "test/unit/config/worker-policy.test.ts",
@@ -296,6 +298,7 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/unit/serve/worker-command-ceilings.test.ts",
         "test/unit/ralph-external/worker-single-invocation.test.ts",
         "test/unit/ralph-external/worker-final-validation.test.ts",
         "test/unit/cli/handlers/models-direct-invocation.test.ts",

@@ -7,6 +7,7 @@ export { inspectWorkerPath } from './worker-invocation-paths.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { resolveWorkerPlan, type WorkerPlanSnapshot, type WorkerResolutionPlan } from '../models/resolver.js';
 import { workerConfigDigest, validateWorkerHealthConfig } from '../config/aiwg-config.js';
+import { intersectWorkerCeilings } from '../models/worker-ceilings.js';
 import type { McpServerRegistry, McpWorkerQualificationInput } from '../mcp/registry.js';
 import type { McpProfile } from '../mcp/profiles.js';
 import { assertValidWorkerPayload } from '../mission-protocol/codecs.js';
@@ -208,18 +209,19 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
         throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Brief role/task/group/workspace/output differs from request');
       }
     }
+    // Brief and parent authority restrict caller ceilings; neither can overwrite them.
+    const intent = managedIntent ?? brief?.intent;
+    if (intent) snapshot.constraints = { ...snapshot.constraints, ceilings: intersectWorkerCeilings(
+      snapshot.constraints?.ceilings, { ...intent.limits, costUsd: intent.limits.costUsd ?? undefined }) };
     plan = resolveWorkerPlan(snapshot, { role: request.role, taskClass: request.task, group: request.group,
       transport: request.transport, authority: request.authority, now, expectedDigests: expected?.digests,
-      ...(brief ? { dataClass: brief.intent.dataClass, member: brief.intent.pins.member,
-        model: brief.intent.pins.model, effort: brief.intent.pins.effort?.value, ceilings: {
-          ...brief.intent.limits, costUsd: brief.intent.limits.costUsd ?? undefined } } : {}),
-      ...(managedIntent ? { dataClass: managedIntent.dataClass, member: managedIntent.pins.member,
-        model: managedIntent.pins.model, effort: managedIntent.pins.effort?.value,
-        ceilings: { ...managedIntent.limits, costUsd: managedIntent.limits.costUsd ?? undefined } } : {}),
+      ceilings: request.ceilings,
+      ...(intent ? { dataClass: intent.dataClass, member: intent.pins.member,
+        model: intent.pins.model, effort: intent.pins.effort?.value } : {}),
       context: { estimator: 'utf8-byte-upper-bound-v1', briefTokens: bytes?.length ?? 0,
         inputTokens: 0, toolOutputAllowance: 1024, reservedOutput: 1024 },
       requiredControls: snapshot.config.parallelism?.health?.requireStepCap ? ['stepCap'] : [],
-    });
+    }, { tokens: 50000, wallSeconds: 900 });
     plan.request = structuredClone(request);
     if (!plan.selected) return plan;
     if (plan.mode === 'managed' && !managedIntent) {
@@ -267,8 +269,8 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       if (path.resolve(request.brief) === output) throw new Error('Brief and output paths must be distinct');
       if (!await inspectPath(path.dirname(output), 'directory')) outputParentsExist = false;
     }
-    const limits = { tokens: Math.min(50000, plan.ceilings.tokens ?? 50000), costUsd: plan.ceilings.costUsd ?? null,
-      wallSeconds: Math.min(900, plan.ceilings.wallSeconds ?? 900), maxAttempts: plan.ceilings.maxAttempts ?? 3 };
+    const limits = { tokens: plan.ceilings.tokens!, costUsd: plan.ceilings.costUsd ?? null,
+      wallSeconds: plan.ceilings.wallSeconds!, maxAttempts: plan.ceilings.maxAttempts! };
     const observation = snapshot.catalog.discovery!.instances![tuple.cli].models.find(row => row.id === tuple.model || row.apiModelId === tuple.model)!.worker!;
     const profile = adapter.invocationProfiles![tuple.profile];
     const expiresAt = new Date(Math.min(Date.parse(now) + 300000,
@@ -312,6 +314,15 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
     if (transport.stdin === 'adapter-frame' && typeof driver.buildWorkerStdinFrame !== 'function') throw new Error('Installed adapter stdin framer is required');
     if (transport.mcp?.timeoutSeconds !== undefined) effectiveHealth = resolveWorkerEffectiveHealth(healthConfig,
       { ...healthInput, transportSeconds: Math.min(healthInput.transportSeconds ?? Infinity, transport.mcp.timeoutSeconds) });
+    if (request.ceilings?.wallSeconds !== undefined && request.ceilings.wallSeconds > effectiveHealth.hardTimeoutSeconds) {
+      plan.status = 'blocked';
+      plan.selected = null;
+      plan.diagnostics.push({ code: 'OG_POLICY_RELAXATION', pointer: '/request/ceilings/wallSeconds',
+        message: `Requested wallSeconds ceiling ${request.ceilings.wallSeconds} exceeds resolved policy ceiling ${effectiveHealth.hardTimeoutSeconds}.` });
+      return plan;
+    }
+    if (effectiveHealth.hardTimeoutSeconds === limits.wallSeconds) effectiveHealth.origins?.hardTimeoutSeconds.push(
+      ...(plan.origins?.['/ceilings/wallSeconds'] ?? []).map(origin => origin.pointer));
     if (workerConfigDigest(driver.qualification) !== qualificationDigest) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Installation profile digest changed during resolution');
     const invocation: WorkerResolvedInvocation = { version: 1, mode: managedIntent ? 'managed' : 'direct', transport: tuple.transport, selected,
       isolation: tuple.permissions.launchMode ?? 'systemd-unit',
@@ -328,6 +339,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       health: effectiveHealth,
     };
     const invocationQualification: WorkerInvocationQualification = { ...qualification, now: Date.parse(now),
+      ceilings: request.ceilings,
       policy: plan.policy, permissions: tuple.permissions, role: request.role, modelObservation: observation,
       expectedDigests: { policyDigest, catalogDigest: plan.digests.catalogDigest, profileDigest: plan.digests.profileDigest, briefDigest },
       requiredControls: controls };

@@ -6,6 +6,7 @@ import { validateWorkerArtifacts } from './worker-artifacts.mjs';
 import { assertValidWorkerPayload } from '../mission-protocol/codecs.js';
 import type { WorkerResolvedInvocation } from '../mission-protocol/types.js';
 import type { WorkerExecution } from '../config/aiwg-config.js';
+import type { WorkerResolutionCeilings } from '../models/worker-plan.js';
 import { qualificationDigest } from '../models/qualification-digest.mjs';
 import { qualifyWorkerInvocationProfile, assertOperatorWorkerNativeArgv, assertWorkerSelectionAllowed,
   assertWorkerLaunchMode, requiresWorkerExternalBoundary, assertWorkerHealthQualification, WorkerPolicyError,
@@ -25,6 +26,8 @@ export function mcpToolSchemaDigest(schema: unknown): string {
 }
 
 export interface WorkerInvocationQualification extends ParametersContext {
+  /** Explicit task restrictions from the same request used to resolve the plan. */
+  ceilings?: WorkerResolutionCeilings;
   installation?: WorkerInstallationRequest;
   /** Host store bytes bound by the recorded-installation loader, never a brief/cwd lookup. */
   stdinFramerBinding?: { storePath: string; storeDigest: string };
@@ -139,7 +142,9 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
     // The frozen 'closed' value means empty stdin (immediate EOF). 'brief-json'
     // pipes a conductor-built params document framed from the brief file
     // (worker-stdin-frame.mjs), so brief text never enters any argv.
-    const worker = `env -i${environment ? ` ${environment}` : ''} ${result.argv.map(quote).join(' ')}`;
+    const deadline = qualification.ceilings?.wallSeconds === undefined ? ''
+      : `timeout --signal=KILL ${quote(`${Math.min(result.health?.hardTimeoutSeconds ?? Infinity, result.limits.wallSeconds)}s`)} `;
+    const worker = `${deadline}env -i${environment ? ` ${environment}` : ''} ${result.argv.map(quote).join(' ')}`;
     const outputs = `> ${quote(result.stdoutPath)} 2> ${quote(result.stderrPath)}`;
     if (result.stdin === 'brief-json') {
       const framer = fileURLToPath(new URL('./worker-stdin-frame.mjs', import.meta.url));

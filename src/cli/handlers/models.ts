@@ -341,7 +341,7 @@ async function execute(ctx: HandlerContext, services: ModelsWorkerServices = { l
   }
   // Preserve artifact/native resolve when direct-only flags are absent.
   if (ctx.args[0] === 'resolve' && ctx.args.slice(1).some(arg =>
-    /^--(?:task|group|brief|workdir|final-output|transport|format|authorize-premium)(?:=|$)/.test(arg))) {
+    /^--(?:task|group|brief|workdir|final-output|transport|format|authorize-premium|max-attempts|timeout-ms|max-output-tokens|max-usd)(?:=|$)/.test(arg))) {
     return resolveDirect(ctx, services);
   }
   if (await handleWorkerAdoptionArgs(ctx.args, ctx.cwd, 'models', ctx.signal, ctx.dryRun)) return { exitCode: 0 };
