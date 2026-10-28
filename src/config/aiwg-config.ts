@@ -1,3 +1,4 @@
+import { validateHitlPolicy } from '../policy/hitl-validation.js';
 import { normalizeAiwgConfigCandidate } from './config-normalization.js';
 import { atomicConfigWrite, withWorkerWriteLock } from './worker-write.js';
 import { workerConfigDigest } from './worker-config-digest.js';
@@ -1861,6 +1862,9 @@ export async function readAiwgConfigCandidate(projectDir: string): Promise<AiwgC
     throw new Error(`Invalid .aiwg/aiwg.config:\n${workspaceErrors.join('\n')}`);
   }
 
+  const hitlErrors = validateHitlPolicy(parsed.authorization?.hitl);
+  if (hitlErrors.length) throw new Error(hitlErrors.join("\n"));
+
   const authorizationErrors = parsed.authorization
     ? validateAuthorization(parsed.authorization).filter(item => item.severity === 'error')
     : [];
@@ -1931,6 +1935,8 @@ async function writeAiwgConfigUnlocked(projectDir: string, config: AiwgConfig): 
     try { previous = JSON.parse(readFileSync(previousFile, 'utf8')) as AiwgConfig; }
     catch (error) { if (!(error instanceof SyntaxError)) throw error; }
   }
+  const hitlErrors = validateHitlPolicy(config.authorization?.hitl);
+  if (hitlErrors.length) throw new Error(hitlErrors.join("\n"));
   const pinConfigs = loadRulePinConfigs(projectDir, config);
   const currentCapabilities = new Set(installedRuleCapabilities(pinConfigs));
   const removed = previous ? installedRuleCapabilities({ ...pinConfigs, project: previous }).filter(id => !currentCapabilities.has(id)) : [];

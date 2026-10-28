@@ -906,3 +906,7 @@ its own limit. Use small selectors and inspect the preview before overriding.
 `status`, `doctor`, and `show rule <id>` expose local pins and canonical activation;
 discovery `startup_rule_stats` counts pinned contracts as kernel rules while
 `rule_stats` counts the attached rules requiring a fetch.
+
+Bounded project HITL authorization uses the separate `authorization.hitl` block; see
+[policy, preview, revocation and receipts](hitl-authorization.md). It is independent
+of `delivery.mode` and `security.threatAssessment.mode`.

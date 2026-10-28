@@ -153,6 +153,7 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
     aiwg steward models --route --capability-type <agent|skill|rule|workflow>
       --capability <id> --assignment <text> [--provider <name>] [--json]
                                                   Emit a capability-bound wrapper launch envelope
+    aiwg steward authorization                    Bounded HITL policy: inspect/validate/preview/enable/revoke
     aiwg steward permissions audit                Find normalized-model errors and legacy grants
     aiwg steward permissions migrate --dry-run    Preview legacy permission normalization
     aiwg steward permissions migrate --apply      Back up and atomically normalize config
@@ -179,6 +180,12 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
     const { buildDecisionOffloadSnapshot } = await import('../../decision/offload.js');
     const decisionOffload = await buildDecisionOffloadSnapshot({ projectRoot: ctx?.cwd ?? process.cwd(), frameworkRoot: ctx?.frameworkRoot });
     console.log(JSON.stringify(args.includes('--json') ? { decisionOffload } : decisionOffload, null, 2));
+    return;
+  }
+
+  if (subcommand === 'authorization') {
+    const { authorizationCli } = await import('../../config/authorization-cli.js');
+    await authorizationCli(args.slice(1), ctx?.cwd);
     return;
   }
 
@@ -443,6 +450,10 @@ export const stewardHandler: CommandHandler = {
   // sub-namespace help reachable, without executing anything (#2533).
   async help(ctx: HandlerContext): Promise<HandlerResult> {
     const positional = ctx.args.filter((arg) => !arg.startsWith('-'));
+    if (positional[0] === 'authorization') {
+      const { authorizationUsage } = await import('../../config/authorization-cli.js');
+      return { exitCode: 0, message: authorizationUsage, rawOutput: true };
+    }
     if (positional[0] === 'permissions') {
       return { exitCode: 0, message: permissionsUsage(), rawOutput: true };
     }
