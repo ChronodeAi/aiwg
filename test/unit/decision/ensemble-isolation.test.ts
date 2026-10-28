@@ -88,6 +88,7 @@ describe('ENS D17 contract isolation: no adapter, transport or credential path (
         'src/decision/types.ts',
         'src/decision/validate.ts',
         'src/gates/lattice.ts',
+        'src/gates/upstream-ceiling.ts',
         'src/security/artifact-trust.ts',
       ]);
   });
