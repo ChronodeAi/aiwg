@@ -3839,11 +3839,10 @@ export class UseHandler implements CommandHandler {
             const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
               version?: string;
             };
-            // Provider rule aggregation may rename many source rules into one
-            // managed index. Record this addon's contributed artifact counts,
-            // matching framework registry semantics, rather than trying to
-            // attribute shared aggregate filenames after deployment.
-            const counts = await countBundleSourceArtifacts(addonSource);
+            // Record only artifacts actually written for this provider. Bridge-only
+            // providers (e.g. project-scope grokbot) write zero native files,
+            // so source-manifest counts would leave phantom registry entries.
+            const counts = await countBundleDeployedArtifacts(addonSource, target, provider);
             const updated = updateInstalled(config, framework, provider, counts, {
               version: manifest.version ?? (await getVersionInfo()).version,
               source: 'bundled',
