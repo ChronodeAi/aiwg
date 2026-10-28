@@ -1,13 +1,14 @@
 // Exercise the installed worker CLI with synthetic launcher records and clients.
 import { afterEach, describe, expect, it } from 'vitest';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseWorkerVerificationArgs } from '../../../tools/ralph-external/lib/worker-verification-cli.mjs';
 import { parseWorkerLaunchArgs, resolveRetryReference } from '../../../tools/ralph-external/lib/worker-launch-cli.mjs';
 import { verifyRetryPredecessor } from '../../../tools/ralph-external/session-launcher.mjs';
+import { sampleWorkerIdentity } from '../../../tools/ralph-external/process-monitor.mjs';
 import { inspectWorkerPath } from '../../../src/serve/worker-invocation-paths.js';
 
 const repo = fileURLToPath(new URL('../../../', import.meta.url));
@@ -18,6 +19,7 @@ function fixture(mode = 'enforced') {
   const root = mkdtempSync(path.join(tmpdir(), 'aiwg-verify-cli-')); roots.push(root);
   const worktree = path.join(root, 'worker'), run = path.join(root, 'run'), clients = path.join(root, 'clients');
   for (const dir of [worktree, run, clients]) mkdirSync(dir, { mode: 0o700 });
+  mkdirSync(path.join(clients, 'proc'));
   const artifact = path.join(worktree, 'final.json');
   const inputsFixture = path.join(clients, 'inputs.mjs');
   copyFileSync(path.join(repo, 'test/fixtures/ralph-external/verification-inputs.mjs'), inputsFixture);
@@ -91,10 +93,66 @@ describe('T-OG-04 installed CLI trusted verification', () => {
     expect(result.output.evidence).toEqual([]);
   });
 
+  it('rechecks marked empty-group evidence before the independent verification isolation probe', () => {
+    const f = fixture('unavailable');
+    const local = sampleWorkerIdentity(process.pid);
+    f.writeRecord('process.json', { invocationId: 'previous-1', invocationMarker: 'previous-1', origin: 'launcher', isolation: 'native-sandbox',
+      supervisor: local, worker: { ...local, pid: 2147483646, pgid: 2147483646 },
+      identityObservation: 'stable-owned-group', ownership: 'owned-group' });
+    f.writeRecord('exit.json', { invocationId: 'previous-1', exitCode: 0, isolation: 'native-sandbox', termination: 'uncertain' });
+    const result = f.invoke(['--check', f.check(), '--check-descendants']);
+    expect(result.output).toMatchObject({ status: 'blocked', errorCode: 'ISOLATION_UNAVAILABLE' });
+    expect(JSON.parse(readFileSync(path.join(f.run, 'exit.json'), 'utf8'))).toMatchObject({ termination: 'confirmed', descendants: 'none' });
+  });
+
+  it('keeps verification refused while the owned group is live, even with --check-descendants', async () => {
+    const f = fixture();
+    const child = spawn(process.execPath, [path.join(repo, 'test/fixtures/ralph-external/termination-worker.mjs'), 'descendant'],
+      { detached: true, stdio: 'ignore' });
+    try {
+      let identity;
+      for (let n = 0; n < 100 && !identity; n++) {
+        identity = sampleWorkerIdentity(child.pid);
+        if (!identity) await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      expect(identity?.pgid).toBe(child.pid);
+      f.writeRecord('process.json', { invocationId: 'previous-1', invocationMarker: 'previous-1', origin: 'launcher', isolation: 'degraded',
+        supervisor: sampleWorkerIdentity(process.pid), worker: identity,
+        identityObservation: 'stable-owned-group', ownership: 'owned-group' });
+      f.writeRecord('exit.json', { invocationId: 'previous-1', exitCode: 0, isolation: 'degraded', termination: 'uncertain' });
+      const result = f.invoke(['--check', f.check('throw new Error("must not execute")'), '--check-descendants']);
+      expect(result.output).toMatchObject({ status: 'rejected', errorCode: 'VERIFICATION_REQUEST_FAILED', evidence: [] });
+      expect(result.output.findings.join(' ')).toMatch(/signal-0 still finds members.*--check-descendants/);
+      expect(JSON.parse(readFileSync(path.join(f.run, 'exit.json'), 'utf8')).termination).toBe('uncertain');
+    } finally { process.kill(child.pid!, 'SIGKILL'); }
+  });
+
+  it('refuses verification when the group is empty but an escaped marked process survives', async () => {
+    const f = fixture();
+    const child = spawn(process.execPath, [path.join(repo, 'test/fixtures/ralph-external/termination-worker.mjs'), 'descendant'],
+      { detached: true, stdio: 'ignore', env: { AIWG_WORKER_INVOCATION_ID: 'previous-1' } });
+    try {
+      await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+      symlinkSync(`/proc/${child.pid}`, path.join(f.root, 'clients/proc', String(child.pid)));
+      const local = sampleWorkerIdentity(process.pid);
+      f.writeRecord('process.json', { invocationId: 'previous-1', invocationMarker: 'previous-1', origin: 'launcher', isolation: 'native-sandbox',
+        supervisor: local, worker: { ...local, pid: 2147483646, pgid: 2147483646 },
+        identityObservation: 'stable-owned-group', ownership: 'owned-group' });
+      f.writeRecord('exit.json', { invocationId: 'previous-1', exitCode: 0, isolation: 'native-sandbox', termination: 'uncertain' });
+      const result = f.invoke(['--check', f.check('throw new Error("must not execute")'), '--check-descendants']);
+      expect(result.output).toMatchObject({ status: 'rejected', errorCode: 'VERIFICATION_REQUEST_FAILED', evidence: [] });
+      expect(result.output.findings.join(' ')).toMatch(/escaped-descendant evidence: same-uid process still carries invocation marker/);
+      expect(JSON.parse(readFileSync(path.join(f.run, 'exit.json'), 'utf8')).termination).toBe('uncertain');
+    } finally {
+      child.kill('SIGKILL');
+      await new Promise(resolve => child.once('exit', resolve));
+    }
+  });
+
   it('refuses uncertain termination before checks and rejects degraded isolation options', () => {
     const f = fixture();
     f.writeRecord('exit.json', { invocationId: 'previous-1', termination: 'uncertain' });
-    expect(f.invoke().output.findings.join(' ')).toMatch(/not confirmed/);
+    expect(f.invoke().output.findings.join(' ')).toMatch(/not confirmed.*--check-descendants/);
     const args = ['--verify-worker', '--run-dir', f.run, '--check', f.check()];
     expect(() => parseWorkerVerificationArgs([...args, '--allow-degraded-worker'])).toThrow(/Unsupported/);
     expect(() => parseWorkerVerificationArgs([...args.slice(0, -1), JSON.stringify({ id: 'unsafe', command: process.execPath, allowDegradedIsolation: true })])).toThrow(/overrides/);

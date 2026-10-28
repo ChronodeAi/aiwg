@@ -340,11 +340,21 @@ describe('@aiwg/cli packaged web distribution', () => {
       'tools/ralph-external/lib/launcher-recovery-evidence.mjs',
       'tools/ralph-external/lib/recovery-probe.mjs',
       'tools/ralph-external/lib/worker-overflow.mjs',
+      'tools/ralph-external/lib/worker-isolation-status.mjs',
+      'tools/ralph-external/lib/worker-retry-evidence.mjs',
+      'tools/ralph-external/lib/worker-termination.mjs',
+      'tools/ralph-external/lib/worker-invocation-processes.mjs',
+      'tools/ralph-external/lib/worker-invocation-ancestry.mjs',
       // Launch helpers session-launcher imports (#3658).
       'tools/ralph-external/lib/worker-inputs.mjs',
       'tools/ralph-external/lib/worker-launch-cli.mjs',
       // Worker final validation the launcher imports (#3675).
       'tools/ralph-external/lib/worker-final.mjs',
+      // Termination evidence helpers the launcher imports (#3674).
+      'tools/ralph-external/lib/worker-isolation-status.mjs',
+      'tools/ralph-external/lib/worker-retry-evidence.mjs',
+      'tools/ralph-external/lib/worker-termination.mjs',
+      'tools/ralph-external/lib/worker-invocation-processes.mjs',
       'tools/scripts/resource-preflight.mjs',
       'tools/ralph-external/lib/provider-adapter.mjs',
       'tools/ralph-external/lib/strict-worker-json.mjs',

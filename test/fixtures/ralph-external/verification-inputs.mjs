@@ -10,6 +10,19 @@ export async function loadWorkerInputs() {
 
 const self = import.meta.url;
 registerHooks({
+  load(url, context, nextLoad) {
+    const result = nextLoad(url, context);
+    if (url.endsWith('/tools/ralph-external/lib/worker-invocation-processes.mjs')) {
+      // The offline CLI gets a complete synthetic inventory, including any
+      // real fixture descendants linked under clients/proc by the test.
+      const source = String(result.source);
+      const binding = "procRoot = '/proc'";
+      if (!source.includes(binding)) throw new Error('Synthetic proc inventory binding changed');
+      return { ...result, source: source.replace(binding,
+        `procRoot = ${JSON.stringify(fileURLToPath(new URL('./proc', self)))}`) };
+    }
+    return result;
+  },
   resolve(specifier, context, nextResolve) {
     const resolved = nextResolve(specifier, context);
     if (resolved.url.startsWith('file:') && fileURLToPath(resolved.url).endsWith('/dist/src/cli/handlers/models.js')) {

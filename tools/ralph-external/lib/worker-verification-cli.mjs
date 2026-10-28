@@ -7,7 +7,7 @@ import { verifyRetryPredecessor } from '../session-launcher.mjs';
 import { verifyWorkerArtifact } from './trusted-verification.mjs';
 import { missingRequiredCapabilities, probeVerificationIsolationCapabilities } from './verification-isolation.mjs';
 
-const usage = 'Usage: ralph-external --verify-worker --run-dir ABS_DIR --check JSON [--check JSON] [--artifact ABS_FILE] [--json]';
+const usage = 'Usage: ralph-external --verify-worker --run-dir ABS_DIR --check JSON [--check JSON] [--artifact ABS_FILE] [--check-descendants] [--json]';
 const checkKeys = new Set(['id', 'command', 'args', 'cwd', 'envNames', 'timeoutMs']);
 const absolute = value => typeof value === 'string' && isAbsolute(value) && !value.includes('\0');
 
@@ -19,6 +19,7 @@ export function parseWorkerVerificationArgs(args) {
     if (flag !== '--check' && seen.has(flag)) throw new Error(`Duplicate verification option: ${flag}`);
     seen.add(flag);
     if (flag === '--verify-worker') continue;
+    if (flag === '--check-descendants') { result.checkDescendants = true; continue; }
     if (flag === '--json') { result.json = true; continue; }
     if (!['--run-dir', '--artifact', '--check'].includes(flag)) throw new Error(`Unsupported verification option: ${flag}`);
     const value = args[++i];
@@ -44,7 +45,7 @@ export function parseWorkerVerificationArgs(args) {
   return result;
 }
 
-export async function verifyWorkerRun({ runDir, checks, artifactPath }) {
+export async function verifyWorkerRun({ runDir, checks, artifactPath, checkDescendants = false }) {
   const { inspectWorkerPath: inspect } = await importImpl(import.meta.url, 'serve/worker-invocation-paths.js');
   const record = JSON.parse((await boundedPrivateRead(join(runDir, 'invocation.json'), 1048576, inspect, true, true)).toString('utf8'));
   const worktreeRoot = record.worktree?.path;
@@ -59,7 +60,7 @@ export async function verifyWorkerRun({ runDir, checks, artifactPath }) {
   if (!writableRoots.length) throw new Error('Trusted worker installation writable roots are required; run verification from the configured conductor project');
   // Reuse the launcher's owned-record and confirmed-stop checks. Never run checks
   // concurrently with a worker, or read check definitions out of worker metadata.
-  await verifyRetryPredecessor({ runDir, invocationId: record.invocationId }, { inspect, workerWritableRoots: [worktreeRoot, ...writableRoots] });
+  await verifyRetryPredecessor({ runDir, invocationId: record.invocationId }, { inspect, workerWritableRoots: [worktreeRoot, ...writableRoots], checkDescendants });
   const capabilities = probeVerificationIsolationCapabilities();
   const missing = missingRequiredCapabilities(capabilities);
   const runnerRef = new URL('./trusted-verification.mjs', import.meta.url).href;

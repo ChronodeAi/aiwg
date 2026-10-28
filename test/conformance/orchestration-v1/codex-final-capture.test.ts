@@ -51,16 +51,16 @@ async function fixture(scenario = 'structured-final-with-prose', writeProseFinal
   expect(plan.invocation, JSON.stringify(plan)).toBeDefined();
   const invocationPath = path.join(root, 'plan.json'), runDir = path.join(root, 'run');
   await writeFile(invocationPath, JSON.stringify(plan));
-  const launch = () => new SessionLauncher().launchWorker({ invocationPath, runDir,
+  const launch = (extra = {}) => new SessionLauncher().launchWorker({ invocationPath, runDir,
     inputs: { snapshot: f.snapshot, drivers }, now: f.request.now, scopedBreaker: null,
     checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
-    isolation: { mode: 'degraded', reason: 'synthetic local child; no systemd' }, allowDegraded: true });
+    isolation: { mode: 'degraded', reason: 'synthetic local child; no systemd' }, allowDegraded: true, ...extra });
   return { final, brief, plan, request, resolve, launch, runDir, owner };
 }
 
 describe('T-OG-15 Codex worker final versus last-message capture (partial)', () => {
   it('records the worker-written structured final after Codex captures a prose last message', async () => {
-    const f = await fixture(), result: any = await f.launch();
+    const f = await fixture(), result: any = await f.launch({ sampleIdentity: () => null });
     expect(result.exitCode).toBe(0);
     expect(result.errorCode).toBeFalsy();
     const bytes = await readFile(f.final);
@@ -74,7 +74,11 @@ describe('T-OG-15 Codex worker final versus last-message capture (partial)', () 
     expect(await readFile(capture, 'utf8')).toMatch(/^Completed the requested work\./);
     const invocation = JSON.parse(await readFile(path.join(f.runDir, 'invocation.json'), 'utf8'));
     expect(invocation.paths).toMatchObject({ final: f.final, lastMessage: capture });
-    // Degraded process isolation does not establish descendant termination.
+    // Termination is incidental to final capture here: the attached degraded
+    // transport never yields a launcher-owned group identity (the sampler is
+    // pinned to keep that timing-independent), so termination stays uncertain
+    // for a still-valid reason — unknown ownership, not observer coverage.
+    // Owned-containment confirmation is covered in worker-termination.test.mjs.
     expect(result.termination).toBe('uncertain');
   });
 

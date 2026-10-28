@@ -7,7 +7,8 @@
  *
  * @implements #2915
  */
-
+import '../../fixtures/ralph-external/worker-process-inventory.mjs';
+import { normalizeMarkerRunRecord, normalizeMarkerCallbackLog } from '../../fixtures/ralph-external/invocation-marker-equivalence.mjs';
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -15,7 +16,6 @@ import { PassThrough } from 'node:stream';
 import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, symlink, chmod, readdir, truncate, link, unlink } from 'node:fs/promises';
 import * as fsPromises from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-
 // #2915 round 8 review 8 (C8): a mostly-transparent passthrough mock of
 // `node:fs/promises` so ONE test below can record the exact sequence of
 // `.sync()` (fsync) calls `open()` returns, by target path, in call order
@@ -3116,10 +3116,17 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
           inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
           checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
           isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+          // Termination is incidental to this breaker test: pin the
+          // worker-side sampler so no launcher-owned group identity is
+          // observed through the attached transport (timing-independent),
+          // keeping termination uncertain for the still-valid reason of
+          // unknown ownership. Scope closure below follows the launcher-
+          // verified success, never the descendant proof.
+          sampleIdentity: () => null,
         });
         // The attempt genuinely succeeded (clean direct-child exit, strict
-        // final validated) even though degraded descendant stop is, as
-        // always, architecturally uncertain.
+        // final validated) even though no owned containment was observed, so
+        // descendant termination stays uncertain.
         expect(canaryResult.attemptOutcome).toBe('succeeded');
         expect(canaryResult.termination).toBe('uncertain');
       } finally {
@@ -4915,7 +4922,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const baseline = await runOneLauncher(SessionLauncherBaseline, fx, baselineAttempt, trigger.extraOptions);
           const branch = await runOneLauncher(SessionLauncher, fx, branchAttempt, trigger.extraOptions);
-          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual({ ...normalizeResult(baseline.result), termination: 'confirmed', descendants: 'none' });
           expect(branch.result.exitCode).toBe(0);
           const baselineSaved = JSON.parse(await readFile(baselineAttempt.invocationPath, 'utf8'));
           const branchSaved = JSON.parse(await readFile(branchAttempt.invocationPath, 'utf8'));
@@ -4945,7 +4952,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
           const branchAttempt = await fx.freshPlan({ scenario: 'forge-exit', forgeRealExitCode: 9 });
           const baseline = await runOneLauncher(SessionLauncherBaseline, fx, baselineAttempt, trigger.extraOptions);
           const branch = await runOneLauncher(SessionLauncher, fx, branchAttempt, trigger.extraOptions);
-          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual({ ...normalizeResult(baseline.result), termination: 'confirmed', descendants: 'none' });
           expect(branch.result.exitCode).toBe(9);
         } finally {
           await rm(fx.root, { recursive: true, force: true });
@@ -4959,7 +4966,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const baseline = await runOneLauncher(SessionLauncherBaseline, fx, baselineAttempt, { ...trigger.extraOptions, launchIsolated: enoentSpawn });
           const branch = await runOneLauncher(SessionLauncher, fx, branchAttempt, { ...trigger.extraOptions, launchIsolated: enoentSpawn });
-          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual({ ...normalizeResult(baseline.result), descendants: 'none' });
           expect(baseline.result).toMatchObject({ errorCode: 'ENOENT', termination: 'confirmed' });
         } finally {
           await rm(fx.root, { recursive: true, force: true });
@@ -5163,7 +5170,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
       // shape is IDENTICAL to the independent frozen baseline's --
       // genuinely proving the earlier gated run left no residue, not just
       // that `Object.keys()` happens to match.
-      expect(normalizeResult(notGatedResult)).toEqual(normalizeResult(baselineResult));
+      expect(normalizeResult(notGatedResult)).toEqual({ ...normalizeResult(baselineResult), termination: 'confirmed', descendants: 'none' });
       expect(baselineLauncher.lastAttemptResult).toBeUndefined(); // origin/main never had this field at all
       // GH #366 adds exactly one launch option, `workerGroup`, so the
       // launcher can re-check the native-sandbox opt-in.
@@ -5358,7 +5365,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
       ]);
       let parsedA; let parsedB; let bothJson = true;
       try { parsedA = JSON.parse(bytesA); parsedB = JSON.parse(bytesB); } catch { bothJson = false; }
-      if (bothJson) expect(stripVolatile(parsedB), `JSON content mismatch for ${name}`).toEqual(stripVolatile(parsedA));
+      if (bothJson && parsedA?.descendants === 'stopped') parsedA.descendants = 'none'; if (bothJson) expect(stripVolatile(normalizeMarkerRunRecord(name, parsedA, parsedB)), `JSON content mismatch for ${name}`).toEqual(stripVolatile(parsedA));
       else expect(bytesB, `byte content mismatch for ${name}`).toBe(bytesA);
     }
   }
@@ -5695,11 +5702,11 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const run = (LauncherClass, attempt) => runFakeUnitLauncher(LauncherClass, fx, attempt, {
             extraOptions: { ...trigger.extraOptions },
-            unitStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0 }),
+            unitStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0 }),
             onLaunched: ({ child }) => { child.stdout.end(''); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null); },
           });
           const [baseline, branch] = await Promise.all([run(SessionLauncherBaseline, baselineAttempt), run(SessionLauncher, branchAttempt)]);
-          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual({ ...normalizeResult(baseline.result), descendants: 'none' });
           expect(baseline.result).toMatchObject({ exitCode: 0, errorCode: 'FINAL_OUTPUT_INVALID' });
           await compareRunDirectories(baseline.runDir, branch.runDir);
         } finally {
@@ -5727,7 +5734,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
           const run = async (LauncherClass, attempt, saved) => {
             return runFakeUnitLauncher(LauncherClass, fx, attempt, {
               extraOptions: { ...trigger.extraOptions },
-              unitStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0 }),
+              unitStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0 }),
               // `onLaunched` fires only after the launcher has already
               // exclusively created (O_EXCL) its own reserved final.json
               // handle — writing the claims payload any earlier would
@@ -5748,7 +5755,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
           const baseline = await run(SessionLauncherBaseline, baselineAttempt, baselineSaved);
           const branch = await run(SessionLauncher, branchAttempt, branchSaved);
           fx.drivers.codex = originalDriver;
-          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual({ ...normalizeResult(baseline.result), descendants: 'none' });
           expect(baseline.result.health.state).toBe('completed');
           expect(branch.result.health.state).toBe('completed');
           expect('attemptOutcome' in branch.result).toBe(false); // never gated: no #2915 field
@@ -5785,7 +5792,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
             launchedChild.stdout.end(''); launchedChild.stderr.end();
             launchedChild.emit('exit', 0, null); launchedChild.emit('close', 0, null);
           },
-          unitStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0 }),
+          unitStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0 }),
         });
         return { launcher, child, result, snapshot };
       };
@@ -5828,7 +5835,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
           log.pushChild = child;
           return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-equiv-order' };
         },
-        isolationStatus: (...args) => { log.push({ name: 'isolationStatus', args: args.map(shapeOf) }); return { active: false, execMainCode: 1, execMainStatus: 0 }; },
+        isolationStatus: (...args) => { log.push({ name: 'isolationStatus', args: args.map(shapeOf) }); return { active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0 }; },
         stopUnit: (...args) => { log.push({ name: 'stopUnit', args: args.map(shapeOf) }); return { ok: true }; },
         publishRecord: async (...args) => {
           log.push({ name: 'publishRecord', args: args.map(shapeOf) });
@@ -5886,7 +5893,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         if (entry.name === 'launchIsolated') return { ...entry, args: [entry.args[0].filter((key) => key !== 'workerGroup'), ...entry.args.slice(1)] };
         return entry;
       });
-      expect(withoutIntendedKeys(branchLog)).toEqual(baselineLog);
+      expect(withoutIntendedKeys(normalizeMarkerCallbackLog(baselineLog, branchLog))).toEqual(baselineLog);
       expect(baselineLog.length).toBeGreaterThan(0);
     } finally {
       await rm(fx.root, { recursive: true, force: true });

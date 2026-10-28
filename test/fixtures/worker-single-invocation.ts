@@ -1,4 +1,5 @@
 /** Shared synthetic one-shot launcher fixture; all writes stay in os.tmpdir(). */
+import { trackWorkerProcess } from './ralph-external/worker-process-inventory.mjs';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +10,7 @@ import { resolveWorkerInvocation } from '../../src/serve/worker-invocation.js';
 import { SessionLauncher } from '../../tools/ralph-external/session-launcher.mjs';
 import { ScopedFailureBreaker } from '../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
 
-export async function workerInvocationFixture({ stdin = 'closed', scenario = 'success', stdoutOnly = false, forgeRealExitCode, semanticHealth = false, artifacts = [], recoveryClock = () => 0, hardTimeoutSeconds = 30 }: any = {}, { roots, breakers }: { roots: string[]; breakers: ScopedFailureBreaker[] }) {
+export async function workerInvocationFixture({ stdin = 'closed', scenario = 'success', stdoutOnly = false, forgeRealExitCode, semanticHealth = false, waitForIdentity = false, artifacts = [], recoveryClock = () => 0, hardTimeoutSeconds = 30 }: any = {}, { roots, breakers }: { roots: string[]; breakers: ScopedFailureBreaker[] }) {
   vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
   const f = workerResolutionFixture();
   const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-one-shot-')); roots.push(root);
@@ -21,7 +22,7 @@ export async function workerInvocationFixture({ stdin = 'closed', scenario = 'su
   const final = path.join(root, 'final.json');
   const configPath = path.join(root, 'fake.json');
   const recordPath = path.join(cwd, 'record.json');
-  await writeFile(configPath, JSON.stringify({ scenario, recordPath, ...(stdoutOnly ? { outputFlags: [] } : {}),
+  await writeFile(configPath, JSON.stringify({ scenario, recordPath, ...(waitForIdentity ? { waitForIdentity: path.join(runDir, 'process.json') } : {}), ...(stdoutOnly ? { outputFlags: [] } : {}),
     ...(scenario === 'forge-exit' ? { forgeRunDir: runDir, forgeRealExitCode: forgeRealExitCode ?? 7 } : {}) }));
   vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', configPath);
   vi.stubEnv('AIWG_SYNTHETIC_ALLOWED', 'secret-environment-value');
@@ -60,7 +61,7 @@ export async function workerInvocationFixture({ stdin = 'closed', scenario = 'su
     scopedBreaker,
     checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
     isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true };
-  const launcher = new SessionLauncher();
+  const launcher = new SessionLauncher(); launcher.on('launched', ({ pid }: any) => trackWorkerProcess(pid));
   const launch = (extra: any = {}) => launcher.launchWorker({ ...options, ...extra });
   return { ...f, root, cwd, brief, prompt, final, recordPath, runDir, invocationPath, plan, drivers, options, launcher, launch, launchSpy };
 }

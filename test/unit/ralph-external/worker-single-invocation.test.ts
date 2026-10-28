@@ -57,7 +57,7 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
         child.stdout.end(events); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null);
       });
       return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-health' };
-    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+    }, isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
     expect(result.health).toMatchObject({ handshake: 'semantic', state: 'completed', termination: 'confirmed', lastProgressAt: expect.any(String) });
     expect(result.healthEvidence.events.map((item: any) => item.kind)).toContain('progress');
     expect(launched).toHaveBeenCalledOnce(); expect(started).toHaveBeenCalledOnce();
@@ -95,7 +95,7 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
           child.stdout.end('{}\n'); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null);
         });
         return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-disabled-health' };
-      }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }),
+      }, isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0, result: 'success' }),
     });
     expect(result.attemptOutcome).toBeUndefined(); // disabled dispatch: no new field at all
     expect(result.health.state).toBe('completed');
@@ -112,7 +112,7 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
     const result = await f.launch({ launchIsolated: () => {
       queueMicrotask(() => { child.stdout.end(forged); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null); });
       return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-duplicate' };
-    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+    }, isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
     expect(result.exitCode).toBe(0);
     expect(result.health.state).not.toBe('completed');
     expect(await readFile(path.join(f.runDir, 'stdout.events.jsonl'), 'utf8')).toBe(forged);
@@ -149,7 +149,7 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
         child.stdout.end(stream); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null);
       });
       return { mode: 'systemd-unit', child, unit };
-    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+    }, isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
   }
 
   it('a realistic multi-event Factory stream reaches completed health through the real -direct adapter hook, with no hand-fed finalValid', async () => {
@@ -207,7 +207,7 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
         child.stdout.end(stream); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null);
       });
       return { mode: 'systemd-unit', child, unit };
-    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+    }, isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
   }
 
   it('a realistic multi-event Pi stream reaches completed health through the real -direct adapter hook, with no hand-fed finalValid', async () => {
@@ -249,7 +249,7 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
         child.emit('close', 0, null);
       });
       return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-pi-late-drain' };
-    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+    }, isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
     expect(result.exitCode, JSON.stringify(result)).toBe(0);
     expect(result.health).toMatchObject({ state: 'completed', termination: 'confirmed' });
     expect(JSON.parse(await readFile(path.join(f.runDir, 'final-evidence.json'), 'utf8')))
@@ -296,7 +296,7 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
         child.stdout.end(stream); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null);
       });
       return { mode: 'systemd-unit', child, unit };
-    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+    }, isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
   }
 
   it('a realistic multi-event Grok Build stream reaches completed health through the real adapter hook, with no hand-fed finalValid', async () => {
@@ -317,10 +317,10 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
   });
 
   it.each(['closed', 'brief-text', 'brief-json'])('preserves exact argv, %s EOF, private metadata and captures', async stdin => {
-    const f = await fixture({ stdin });
+    const f = await fixture({ stdin, waitForIdentity: true });
     const result = await f.launch();
     expect(result).toMatchObject({ exitCode: 0, signal: null, workerTermination: 'confirmed',
-      termination: 'uncertain', descendants: 'unknown', captureCoverage: 'complete', isolation: 'degraded' });
+      termination: 'confirmed', descendants: 'none', captureCoverage: 'complete', isolation: 'degraded' });
     const record = JSON.parse(await readFile(f.recordPath, 'utf8'));
     expect(record.argv).toEqual(f.plan.invocation!.argv!.slice(2));
     expect(record.cwd).toBe(f.cwd);
@@ -337,7 +337,7 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
     expect(metadata).not.toContain('secret-environment-value');
     expect(metadata).not.toContain('unrelated-value');
     const invocation = JSON.parse(metadata);
-    expect(invocation.envNames).toEqual(f.plan.invocation!.envNames);
+    expect(invocation.envNames).toEqual([...new Set([...f.plan.invocation!.envNames, 'AIWG_WORKER_INVOCATION_ID'])]);
     expect(invocation.prompt.path).toBe(f.brief);
     expect(invocation.invocationDigest).toBe(qualificationDigest(f.plan.invocation));
     expect(invocation.planDigest).toBe(qualificationDigest(f.plan));
@@ -383,8 +383,8 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
         child.stdout.end(events); child.stderr.end('synthetic diagnostic\n'); child.emit('exit', 0, null); child.emit('close', 0, null);
       });
       return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic' };
-    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
-    expect(result).toMatchObject({ exitCode: 0, termination: 'confirmed', descendants: 'stopped', errorCode: null, captureCoverage: 'complete' });
+    }, isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+    expect(result).toMatchObject({ exitCode: 0, termination: 'confirmed', descendants: 'none', errorCode: null, captureCoverage: 'complete' });
     expect(await readFile(f.plan.invocation!.stdoutPath!, 'utf8')).toBe(events);
     expect(await readFile(path.join(f.runDir, 'stdout.events.jsonl'), 'utf8')).toBe(events);
     expect(await readFile(path.join(f.runDir, 'stderr.log'), 'utf8')).toBe('synthetic diagnostic\n');
@@ -392,11 +392,11 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
   });
 
   it.each(['missing-final', 'truncated-final', 'double-final', 'exit-zero-error'])('retains wait exit but rejects %s final evidence', async scenario => {
-    const f = await fixture({ scenario });
+    const f = await fixture({ scenario, waitForIdentity: true });
     const result = await f.launch();
     expect(result.exitCode).toBe(0);
     expect(result.errorCode).toBe('FINAL_OUTPUT_INVALID');
-    expect(result.termination).toBe('uncertain');
+    expect(result.termination).toBe('confirmed');
     const exit = JSON.parse(await readFile(path.join(f.runDir, 'exit.json'), 'utf8'));
     expect(exit.errorCode).toBe('FINAL_OUTPUT_INVALID');
   });
@@ -419,7 +419,7 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
     await waitForCondition(() => observations.some(value => value.ownership === 'owned-group'));
     await vi.advanceTimersByTimeAsync(1000);
     const result = await done;
-    expect(result).toMatchObject({ timedOut: true, exitCode: null, termination: 'uncertain' });
+    expect(result).toMatchObject({ timedOut: true, exitCode: null, termination: 'confirmed' });
     expect(['SIGTERM', 'SIGKILL']).toContain(result.signal);
     const signals = kill.mock.calls.filter(call => call[1] !== 0);
     expect(signals.length).toBeGreaterThan(0);
