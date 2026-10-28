@@ -27,9 +27,28 @@ work should leave the primary context at all. Trivial, tightly coupled, serial,
 or shared-state-sensitive work stays with the primary agent, which always owns
 integration and final validation.
 
-The versioned schemas are under `schemas/models/`. Project/user compatibility
-input still accepts `max-quality` for one migration window, but canonical
-policy uses `premium`.
+The versioned schemas are under `schemas/models/`. The compatibility input
+`max-quality` normalizes to canonical `flagship`.
+
+### Flagship election and the current ladder
+
+`flagship > premium > standard > economy`; `max-quality` is a compatibility
+alias for `flagship`. Verified IDs (2026-10-27):
+
+| Tier | Claude | Codex |
+|---|---|---|
+| flagship | `claude-fable-5-1` | `gpt-6-astra` |
+| premium | `claude-opus-5-5` | `gpt-6.1-sol` |
+| standard | `claude-sonnet-5-5` | `gpt-6.1-terra` |
+| economy | `claude-haiku-5-5` | `gpt-6-luna` |
+
+Flagship catalog entries carry `selection: user-elected` and steward labels them
+**user-elected only**. Routing `requestedTier: flagship` (runtime Tier 4) requires
+`election: user` or an exact `agentName` hit in `flagshipAllowlist`, supplied by the
+caller from delegation config. Premium authorization, complexity, high impact and
+unattended operation grant no flagship election. Unelected requests cap at premium;
+compilation rejects unelected flagship bindings/overrides. Explicit worker bindings
+in project `models.json` and `aiwg.config` still win: this project's coding role stays on Sol.
 
 ## Configuration File Location
 

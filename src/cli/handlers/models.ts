@@ -163,7 +163,7 @@ interface ParsedArgs {
   positionals: string[];
   flags: Map<string, string | boolean>;
 }
-const TIERS = new Set(['economy', 'standard', 'premium', 'max-quality']);
+const TIERS = new Set(['economy', 'standard', 'premium', 'flagship', 'max-quality']);
 const PROVIDERS = new Set(Object.keys(loadProviderModelCapabilities().providers));
 
 function parseArgs(args: string[]): ParsedArgs {
@@ -254,7 +254,7 @@ function select(artifacts: Artifact[], parsed: ParsedArgs, useTierSelector = tru
   ));
 }
 function normalizedTier(tier: ModelTier | undefined): CanonicalModelPolicy['tier'] {
-  return tier === 'max-quality' ? 'premium' : tier ?? 'standard';
+  return tier === 'max-quality' ? 'flagship' : tier ?? 'standard';
 }
 function resolved(item: Artifact, provider: string, catalog?: ProviderModelCatalog) {
   const policy: CanonicalModelPolicy = {

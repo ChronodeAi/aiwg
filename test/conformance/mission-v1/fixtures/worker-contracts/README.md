@@ -836,3 +836,7 @@ fragment, so their existing amended digests remain valid.
 above. `node tools/mission-protocol/inventory.mjs --write` remains blocked by
 `spawnSync rg EPERM`; no generated inventory was hand-edited. No vendor/model
 calls or commits were made. Runtime qualification remains deferred.
+
+#2643 disposition: the existing worker-selection tier enum accepts canonical `flagship`
+and compatibility alias `max-quality`; neither grants user election. Fragment and
+manifest digest amended together; default worker bindings remain unchanged.

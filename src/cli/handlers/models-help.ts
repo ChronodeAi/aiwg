@@ -27,7 +27,7 @@ Artifact selectors and options:
   --drift                      Include catalog drift for sources/refresh
   --url <url>                  Remote catalog URL for refresh
   --help, -h                   Show this reference
-  TIER: economy | standard | premium | max-quality
+  TIER: economy | standard | premium | flagship (alias: max-quality)
 
 Direct worker resolution (plans an invocation; does not launch it):
   aiwg models resolve --role <role> --task <class> --group <group>

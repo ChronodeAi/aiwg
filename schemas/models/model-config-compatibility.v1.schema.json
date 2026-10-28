@@ -137,7 +137,7 @@
             }
           }
         },
-        "tier": { "enum": ["economy", "standard", "premium", "max-quality"] },
+        "tier": { "enum": ["economy", "standard", "premium", "flagship", "max-quality"] },
         "provider": {
           "enum": ["claude", "codex", "copilot", "cursor", "factory", "grokbot", "hermes", "muse", "opencode", "openclaw", "openhuman", "warp", "windsurf"]
         }
@@ -149,7 +149,7 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "model-tier": { "enum": ["economy", "standard", "premium", "max-quality"] },
+          "model-tier": { "enum": ["economy", "standard", "premium", "flagship", "max-quality"] },
           "model-override": { "type": "string", "minLength": 1 },
           "rationale": { "type": "string", "minLength": 1 }
         }
@@ -205,6 +205,7 @@
             "economy",
             "standard",
             "premium",
+            "flagship",
             "max-quality"
           ]
         },

@@ -41,7 +41,7 @@ export interface WrapperRouteEnvelope {
 
 function roleForTier(tier: ModelTier | null): ModelRole | null {
   if (tier === 'economy') return 'efficiency';
-  if (tier === 'premium' || tier === 'max-quality') return 'reasoning';
+  if (tier === 'premium' || tier === 'flagship' || tier === 'max-quality') return 'reasoning';
   if (tier === 'standard') return 'coding';
   return null;
 }
@@ -49,7 +49,7 @@ function roleForTier(tier: ModelTier | null): ModelRole | null {
 export function buildWrapperRouteEnvelope(request: WrapperRouteRequest): WrapperRouteEnvelope {
   if (!request.assignment.trim()) throw new Error('Wrapper routing requires a bounded assignment.');
 
-  const decision = routeModelTier(request);
+  const decision = routeModelTier({ ...request, agentName: request.agentName ?? request.capability.name });
   if (request.worker?.snapshot.config.parallelism?.worker_dispatch && !request.deterministic) {
     const worker = resolveWorkerPlan(request.worker.snapshot, {
       ...request.worker.request,
@@ -74,7 +74,10 @@ export function buildWrapperRouteEnvelope(request: WrapperRouteRequest): Wrapper
     ? compileModelPolicy({
         provider: request.provider,
         artifact: 'agent',
-        policy: { role, tier: tier === 'max-quality' ? 'premium' : tier },
+        policy: { role, tier },
+        election: request.election,
+        flagshipAllowlist: request.flagshipAllowlist,
+        agentName: request.agentName ?? request.capability.name,
         ...(request.catalog ? { catalog: request.catalog } : {}),
       })
     : null;
