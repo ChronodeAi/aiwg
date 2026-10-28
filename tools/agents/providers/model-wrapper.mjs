@@ -2,8 +2,18 @@
 import { load, dump } from 'js-yaml';
 import { importImpl } from '../../_resolve-impl.mjs';
 const { MODEL_WRAPPER_DEFINITIONS } = await importImpl(import.meta.url, 'models/wrapper-definitions.js');
-const { loadProviderModelCatalog } = await importImpl(import.meta.url, 'models/catalog-policy.js');
-const { resolveWrapperPin } = await importImpl(import.meta.url, 'models/wrapper-enforcement.js');
+// These TypeScript graphs import siblings by their compiled .js names, so they
+// load only from dist/. Run `npm run build:cli` before using a checkout's tools.
+async function compiled(module) {
+  try { return await importImpl(import.meta.url, module); }
+  catch (error) {
+    if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+    throw Object.assign(new Error(`provider translators need the compiled ${module} from dist/; run \`npm run build:cli\` first (${error.message})`),
+      { code: 'AIWG_BUILD_REQUIRED', cause: error });
+  }
+}
+const { loadProviderModelCatalog } = await compiled('models/catalog-policy.js');
+const { resolveWrapperPin } = await compiled('models/wrapper-enforcement.js');
 
 function parse(content) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
