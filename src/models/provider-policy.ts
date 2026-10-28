@@ -557,6 +557,13 @@ export function assertOperatorWorkerNativeArgv(adapter: WorkerAdapterMetadata, a
     if ((permissions?.approval ?? 'never') !== 'never') throw new Error('Muse direct worker approval requires never');
     requirePair('--approval-mode', 'never');
     requirePair('--approval-judge', 'off');
+    // #3685: Tier 0 Muse workers run in conductor-prepared worker trees, so
+    // project context must load. An argv without exactly one
+    // --trust-workspace would run with project_sources=0 (no project
+    // rules/skills/hooks) and is refused rather than silently degraded.
+    if (args.filter(token => token === '--trust-workspace').length !== 1) {
+      throw new Error('Requested native worker control is absent or ambiguous: --trust-workspace');
+    }
     if (args.includes('--disable-sandbox') !== (sandbox === 'external')) {
       throw new Error('Requested native worker sandbox control does not match');
     }

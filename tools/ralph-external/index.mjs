@@ -702,9 +702,24 @@ async function main() {
     const worker = parseWorkerLaunchArgs(args);
     const launcher = new SessionLauncher();
     launcher.on('recovery-transition', event => console.error(event.summary));
-    const result = await launcher.launchWorker(worker);
-    console.log(JSON.stringify(result));
-    process.exitCode = workerExitCode(result);
+    // #3685 round 2: every worker process starts with the AIWG bootstrap in
+    // its workdir — ensured (presence-checked, one-pass deployed when
+    // missing) before the worker spawns. A failed ensure refuses with the
+    // typed diagnostic envelope below, never a context-free launch.
+    try {
+      const result = await launcher.launchWorker({ ...worker, ensureWorkerContext: true });
+      console.log(JSON.stringify(result));
+      process.exitCode = workerExitCode(result);
+    } catch (error) {
+      if (error && error.code === 'OG_WORKER_CONTEXT_UNAVAILABLE') {
+        console.log(JSON.stringify({ launched: false, blocked: true, code: error.code,
+          diagnostic: error.message, remedy: error.remedy ?? null,
+          provider: error.provider ?? null, workdir: error.workdir ?? null }));
+        process.exitCode = 1;
+        return;
+      }
+      throw error;
+    }
     return;
   }
   // #2915 round 8 (D1.9): operator recovery for the allowance ledger --

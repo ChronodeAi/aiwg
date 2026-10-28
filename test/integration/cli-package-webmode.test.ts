@@ -334,7 +334,7 @@ describe('@aiwg/cli packaged web distribution', () => {
       'tools/ralph-external/session-launcher.mjs',
       'tools/ralph-external/process-monitor.mjs',
       'tools/ralph-external/lib/session-environment.mjs',
-      'tools/ralph-external/lib/worker-isolation.mjs', 'tools/ralph-external/lib/worker-native-sandbox.mjs',
+      'tools/ralph-external/lib/worker-isolation.mjs', 'tools/ralph-external/lib/worker-native-sandbox.mjs', 'tools/ralph-external/lib/worker-context.mjs',
       'tools/ralph-external/lib/systemd-client.mjs',
       'tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs',
       'tools/ralph-external/lib/launcher-recovery-evidence.mjs',

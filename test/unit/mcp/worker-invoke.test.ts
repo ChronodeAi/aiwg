@@ -98,7 +98,10 @@ const HEALTHY_GATE_LIVE = Object.freeze({
  * that never started (#3026). A test that passes its own `gateInputs`, for
  * example to prove a failing signal still refuses, overrides the default. */
 function registerWorkerInvokeToolset(server: any, options: Record<string, unknown> = {}) {
-  return registerProductionToolset(server, { gateInputs: { live: HEALTHY_GATE_LIVE }, ...options });
+  // #3685 round 2: the bridge ensures the worker bootstrap by default in
+  // production; tests targeting other behavior opt out here and opt back
+  // in per-test with an explicit `ensureWorkerContext` seam value.
+  return registerProductionToolset(server, { gateInputs: { live: HEALTHY_GATE_LIVE }, ensureWorkerContext: false, ...options });
 }
 
 async function registerRecoveryCapabilities(driver: object, capabilities: { canVerifyAttempt?: boolean }) {
@@ -4656,6 +4659,11 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs current
       const tools = new Map<string, any>();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+        // The frozen baseline has no context-ensure concept; the branch
+        // side skips its real deploy too, so both start equivalent (the
+        // ensure path has its own dedicated coverage). Unknown keys are
+        // ignored by the baseline fixture.
+        ensureWorkerContext: false,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
         callMcpWorker: async (...args: any[]) => { calls.push(args); return callMcpWorker(...args); },
       });
@@ -4773,6 +4781,11 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const ledgerSpies = spyOnLedger();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        // Equivalence needs identical starting states: the frozen baseline
+        // has no context-ensure concept, so the branch side skips its real
+        // deploy too (dedicated ensure coverage lives elsewhere). Unknown
+        // keys are ignored by the baseline fixture.
+        ensureWorkerContext: false,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
         now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
         ...buildOptions(calls),
@@ -4806,6 +4819,9 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const ledgerSpies = spyOnLedger();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        // Same equivalence rationale as runShellPair above: the frozen
+        // baseline cannot ensure, so neither side does here.
+        ensureWorkerContext: false,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
         now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
         ...buildOptions(calls),
@@ -4934,6 +4950,10 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
             const tools = new Map<string, any>();
             await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
               projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+              // Equivalence: the frozen baseline has no context-ensure, so
+              // neither side deploys here (dedicated ensure coverage lives
+              // elsewhere). Unknown keys are ignored by the baseline fixture.
+              ensureWorkerContext: false,
               loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
               now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
               launchShellWorker: async (invocation: any, options: any) => {
@@ -4978,6 +4998,8 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
           let launchCalled = false;
           await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
             projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+            // Equivalence: no real context deploy (see runWithFinalWrite).
+            ensureWorkerContext: false,
             loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
             now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
             // The launch itself does not resolve until `releaseLaunch` is
@@ -5063,6 +5085,8 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
           const tools = new Map<string, any>();
           await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
             projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+            // Equivalence: no real context deploy (see runWithFinalWrite).
+            ensureWorkerContext: false,
             loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
             now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
           });
@@ -5112,6 +5136,8 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       try {
         await registerFn({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
           projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+          // Equivalence: no real context deploy (see runWithFinalWrite).
+          ensureWorkerContext: false,
           loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
           now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
         });
@@ -5223,6 +5249,8 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const tools = new Map<string, any>();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        // Equivalence: no real context deploy (see runWithFinalWrite).
+        ensureWorkerContext: false,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
         now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
       });
@@ -5276,6 +5304,8 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const tools = new Map<string, any>();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: root,
+        // Equivalence: no real context deploy (see runWithFinalWrite).
+        ensureWorkerContext: false,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
         now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE },
       });
@@ -5392,6 +5422,10 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const tools = new Map<string, any>();
       await registerProductionToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        // Interleavings measure dispatch behavior; a real context deploy
+        // would pollute timing and spawn a real binary (dedicated ensure
+        // coverage lives elsewhere). Explicit seams still win via ...options.
+        ensureWorkerContext: false,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
         now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE },
         ...options,
@@ -6128,5 +6162,103 @@ describe('worker recovery scope status (#3049)', () => {
       expect(closed.recovery.transitions.map((event: any) => event.to)).toEqual(['open', 'half-open', 'canary-ready', 'canary', 'closed']);
       expect(JSON.stringify(closed.recovery)).not.toMatch(/operatorReason|summary|action|diagnostics/);
     } finally { breaker.destroy(); }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Worker AIWG bootstrap ensure before dispatch (#3685 round 2): the worker
+// CLI's bootstrap must be present in the worker workdir before any spawn.
+// A failed ensure refuses as `blocked` with the typed diagnostic (never a
+// launch); a successful ensure receives the resolved invocation and config
+// and lets dispatch proceed. Synthetic fixtures throughout: the ensure
+// seam is stubbed except where the default path runs against a workdir
+// pre-seeded with the real registry's expected bootstrap files (no spawn,
+// no HOME writes — presence means the deploy never runs).
+// ---------------------------------------------------------------------------
+describe('worker AIWG bootstrap ensure before dispatch (#3685 round 2)', () => {
+  async function shellRun(options: Record<string, unknown>, requestId: string) {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello worker');
+    const finalPath = path.join(work, 'final.json');
+    const f = buildFixture(root, 'shell');
+    const tools = new Map<string, any>();
+    let launches = 0;
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      launchShellWorker: async () => { launches += 1; return { launched: true, mode: 'degraded', child: closingChild(0) }; },
+      now: () => new Date(f.now),
+      ...options,
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: requestId, role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalPath, transport: 'shell',
+    });
+    return { root, work, launches, body: JSON.parse(result.content[0].text) };
+  }
+
+  it('refuses with the typed diagnostic naming the remedy when the ensure fails, without launching', async () => {
+    const { launches, body } = await shellRun({
+      ensureWorkerContext: async () => {
+        throw Object.assign(new Error('synthetic bootstrap missing'), {
+          code: 'OG_WORKER_CONTEXT_UNAVAILABLE', remedy: 'synthetic remedy: run aiwg use',
+        });
+      },
+    }, 'ctx-refuse-1');
+    expect(launches).toBe(0);
+    expect(body.status).toBe('blocked');
+    expect(body.diagnostics).toHaveLength(1);
+    expect(body.diagnostics[0]).toMatchObject({
+      code: 'OG_WORKER_CONTEXT_UNAVAILABLE', remedy: 'synthetic remedy: run aiwg use',
+    });
+  });
+
+  it('passes the resolved invocation and config to the ensure and proceeds on success', async () => {
+    const seen: any[] = [];
+    const { launches, body } = await shellRun({
+      ensureWorkerContext: async (args: any) => { seen.push(args); return { ensured: true }; },
+    }, 'ctx-pass-1');
+    expect(seen).toHaveLength(1);
+    expect(seen[0].invocation.selected.cli).toBe('codex');
+    expect(seen[0].invocation.cwd).toContain('work');
+    expect(seen[0].config).toBeDefined();
+    expect(launches).toBe(1);
+    expect(body.status).not.toBe('blocked');
+  });
+
+  it('the default ensure is a no-op (no spawn) when the workdir already carries the bootstrap', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    // Seed exactly what the real registry expects for codex: non-empty
+    // kernel dirs plus AGENTS.md rule sections.
+    await mkdir(path.join(work, '.agents', 'skills'), { recursive: true });
+    await writeFile(path.join(work, '.agents', 'skills', 'kernel.md'), 'kernel\n');
+    await mkdir(path.join(work, '.codex', 'rules'), { recursive: true });
+    await writeFile(path.join(work, '.codex', 'rules', 'kernel.md'), 'kernel\n');
+    await writeFile(path.join(work, 'AGENTS.md'), '<!-- AIWG:rule-startup:start -->\nx\n<!-- AIWG:rule-startup:end -->\n');
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello worker');
+    const finalPath = path.join(work, 'final.json');
+    const f = buildFixture(root, 'shell');
+    const tools = new Map<string, any>();
+    let launches = 0;
+    // Bypass the local test wrapper (which forces ensureWorkerContext:
+    // false) so the production default runs — with gate inputs fixed to
+    // synthetic healthy signals so the host does not matter.
+    await registerProductionToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, workerWorktreesRoot: work, gateInputs: { live: HEALTHY_GATE_LIVE },
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      launchShellWorker: async () => { launches += 1; return { launched: true, mode: 'degraded', child: closingChild(0) }; },
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: 'ctx-default-1', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalPath, transport: 'shell',
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(launches).toBe(1);
+    expect(JSON.stringify(body.diagnostics ?? [])).not.toContain('OG_WORKER_CONTEXT_UNAVAILABLE');
   });
 });

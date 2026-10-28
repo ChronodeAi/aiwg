@@ -178,6 +178,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mcpError, mcpJson } from '../helpers.mjs';
 import { buildShellStopControl, waitForUnitTermination } from './worker-shell-control.mjs';
 import { launchPreparedShellWorker, sweepWorkerStdin } from './worker-stdin-runtime.mjs';
+// NOTE: no static import of ../../config/worker-context.js here. That
+// module is TypeScript: a literal relative import resolves under vitest
+// but throws ERR_MODULE_NOT_FOUND under raw node (e.g. `node
+// src/mcp/cli.mjs`, which test/unit/mcp exercises directly). The
+// request-time loader below resolves it through importImpl (dist when
+// built, source otherwise), so merely loading this bridge never touches
+// it. See tools/_resolve-impl.mjs (#3062).
 
 const execFileAsync = promisify(execFile);
 
@@ -640,6 +647,64 @@ async function resolveDefaultMaxActive(servedRootReal) {
 function describeGateFailures(failures) {
   if (!Array.isArray(failures) || failures.length === 0) return undefined;
   return `worker dispatch gate blocked: ${failures.map(f => `${f.signal} (${f.reason})`).join('; ')}`;
+}
+
+/** Request-time loader for the TypeScript worker-context module (see the
+ * import note above): resolved through importImpl so production uses the
+ * compiled `dist` tree while a checkout falls back to source. Cached for
+ * the process lifetime; only request paths that actually ensure worker
+ * context ever trigger the load. */
+let cachedWorkerContextModule = null;
+async function loadWorkerContextModule() {
+  if (!cachedWorkerContextModule) cachedWorkerContextModule = await importImpl('config/worker-context.js');
+  return cachedWorkerContextModule;
+}
+
+/** Map the worker CLI to its provider and ensure its bootstrap is present
+ * in the worker workdir (#3685 round 2). Deploys the resolved union set
+ * (config providers plus orchestration CLIs) in one pass when the worker
+ * provider's bootstrap is missing; an unmappable CLI refuses with the
+ * typed diagnostic, since no deploy could target it. */
+async function ensureWorkerContextForInvocation({ invocation, config }) {
+  const { ensureWorkerContextBootstrap, mapCliToProviderId, resolveWorkerContextProvidersFromConfig, WorkerContextBootstrapError } =
+    await loadWorkerContextModule();
+  const cli = invocation?.selected?.cli;
+  const mapped = mapCliToProviderId(cli, config?.parallelism);
+  if (!('provider' in mapped) || !mapped.provider) {
+    throw new WorkerContextBootstrapError(
+      `cannot ensure worker context: CLI '${cli}' maps to no AIWG provider (${mapped.skipped ?? 'unmapped'})`,
+      `configure parallelism.clis.${cli} with a providers:<id> adapter, or dispatch a CLI whose adapter maps to a known provider`,
+      { workdir: invocation?.cwd },
+    );
+  }
+  let providers = [mapped.provider];
+  try {
+    providers = [...new Set([...resolveWorkerContextProvidersFromConfig(config).providers, mapped.provider])];
+  } catch {
+    providers = [mapped.provider];
+  }
+  return ensureWorkerContextBootstrap({ workdir: invocation?.cwd, provider: mapped.provider, providers });
+}
+
+/** Refuse a failed bootstrap ensure as a typed blocked diagnostic that
+ * names the remedy — never a bare string the operator cannot act on.
+ * `code`/`remedy`/`provider`/`workdir` survive on any error object that
+ * carries them (the tools-side ensure throws a duck-typed refusal, not
+ * necessarily this module's class instance); only genuinely bare failures
+ * fall back to the generic code and remedy. */
+function toWorkerContextDiagnostic(error) {
+  const fields = (error !== null && typeof error === 'object') ? error : {};
+  // Duck-typed on purpose: the worker-context module loads lazily (see
+  // above), so no class identity is available at module scope. Every
+  // refusal path sets `code`/`remedy` on the thrown object instead.
+  const code = (typeof fields.code === 'string' && fields.code ? fields.code : 'OG_WORKER_CONTEXT_UNAVAILABLE');
+  const remedy = (typeof fields.remedy === 'string' && fields.remedy ? fields.remedy
+    : 'ensure the worker CLI maps to a known AIWG provider and the aiwg CLI is installed (AIWG_BIN), then retry the run');
+  return { code,
+    message: error instanceof Error ? error.message : String(error?.message ?? error),
+    remedy,
+    ...(fields.provider !== undefined ? { provider: fields.provider } : {}),
+    ...(fields.workdir !== undefined ? { workdir: fields.workdir } : {}) };
 }
 
 // Audited observer; refresh the historical baseline graph after rebase.
@@ -1759,6 +1824,24 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [error.message] });
     }
     const { root, snapshot, drivers, invocation } = prefix;
+
+    // #3685 round 2: the worker CLI's AIWG bootstrap must be present in
+    // the worker workdir before dispatch — a context-free worker would run
+    // with no project rules/skills/hooks. Present: no-op. Missing: exactly
+    // one `aiwg use all` pass into the workdir (never elsewhere). A failed
+    // ensure refuses as `blocked` with the typed diagnostic (never a
+    // launch). Default on; `ensureWorkerContext: false` skips (synthetic
+    // tests), a function value replaces the ensure.
+    if (options.ensureWorkerContext !== false) {
+      try {
+        const ensure = typeof options.ensureWorkerContext === 'function'
+          ? options.ensureWorkerContext
+          : ensureWorkerContextForInvocation;
+        await ensure({ invocation, config: snapshot.config });
+      } catch (error) {
+        return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [toWorkerContextDiagnostic(error)] });
+      }
+    }
 
     // =========================================================================
     // #2915 round 8 (D6): ONE decision, immediately after the prefix, from

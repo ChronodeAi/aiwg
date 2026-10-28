@@ -57,6 +57,7 @@ describe('Muse installed direct dispatch contract', () => {
       expect(plan.invocation!.shellCommand).toContain('< /dev/null');
       expect(plan.invocation!.argv).not.toContain('--output-schema');
       expect(plan.invocation!.argv).not.toContain('${schema}');
+      expect(plan.invocation!.argv).toContain('--trust-workspace');
       expect(plan.invocation!.argv.includes('--disable-sandbox')).toBe(sandbox === 'external');
       expect(plan.diagnostics.filter(item => item.code === 'OG_SANDBOX_EXTERNAL')).toEqual(sandbox === 'external'
         ? [expect.objectContaining({ blocking: false, message: expect.stringContaining("muse CLI's own sandbox is disabled") })] : []);
@@ -81,6 +82,11 @@ describe('Muse installed direct dispatch contract', () => {
   it.each(['read-only', 'workspace-write', 'external'])('checks exact native %s argv', sandbox => {
     const f = fixture(sandbox);
     expect(() => assertOperatorWorkerNativeArgv(f.adapter, f.argv, f.selected, f.permissions)).not.toThrow();
+    // #3685: Tier 0 Muse workers always render --trust-workspace so project
+    // rules/skills/hooks load; the gate refuses an argv without it.
+    expect(f.argv).toContain('--trust-workspace');
+    expect(() => assertOperatorWorkerNativeArgv(f.adapter, f.argv.filter(x => x !== '--trust-workspace'),
+      f.selected, f.permissions)).toThrow('--trust-workspace');
     expect(f.argv.includes('--disable-sandbox')).toBe(sandbox === 'external');
     expect(f.argv.includes('--disable-write')).toBe(sandbox === 'read-only');
     expect(f.argv.includes('--disable-shell')).toBe(sandbox === 'read-only');

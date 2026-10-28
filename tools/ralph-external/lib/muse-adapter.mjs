@@ -31,6 +31,13 @@
  *   - `--approval-mode <mode>` — common to both; "`muse exec` accepts both
  *     approval flags" (configuration). Opt-in only: the adapter sets NO
  *     approval posture by default (#230 out of scope: `--yolo` defaults).
+ *   - `--trust-workspace` — loads project rules, skills and hooks for the
+ *     workspace (#3685: untrusted Muse reports `rules.context_load`
+ *     `project_sources=0` with user skills only and empty hook admission;
+ *     trusted reports `project_sources=1` with project skills and hooks).
+ *     Tier 0 workspaces are conductor-prepared worker trees the conductor
+ *     owns, so the direct profile binds this flag by default through the
+ *     host-controlled trust mapping; the brief never supplies it.
  *   - `muse export --session <uuid> --out <path>` — offline,
  *     byte-deterministic transcript projection; `--last` and `--redacted`
  *     skip the picker / redact payload strings (cookbook:
@@ -173,6 +180,9 @@ export class MuseAdapter extends ProviderAdapter {
     if ((permissions.approval ?? 'never') !== 'never') throw new Error('Muse direct worker approval requires never');
     // Trust is a host-owned, qualification-bound control, like the schema.
     // Brief contents and CLI defaults cannot opt into workspace instructions.
+    // Tier 0 binds ["--trust-workspace"] because the workspace is always a
+    // conductor-prepared worker tree (#3685); untrusted trees stay refused
+    // at dispatch by the operator native-argv gate.
     let trust;
     try { trust = JSON.parse(profile.controls.trust.mapping); } catch { /* fail closed below */ }
     if (!Array.isArray(trust) || !(trust.length === 0 || trust.length === 1 && trust[0] === '--trust-workspace')) {

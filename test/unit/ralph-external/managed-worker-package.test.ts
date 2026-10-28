@@ -34,7 +34,7 @@ describe('T-OG-14 packaged managed one-shot entry point', () => {
     const toolFiles = ['tools/_resolve-impl.mjs', 'tools/ralph-external/session-launcher.mjs',
       'tools/ralph-external/process-monitor.mjs', 'tools/scripts/resource-preflight.mjs',
       ...['worker-inputs', 'worker-final', 'strict-worker-json', 'worker-launch-cli', 'managed-worker-attempt', 'session-attempt', 'worker-health', 'worker-artifacts', 'consecutive-failure-circuit-breaker', 'session-environment', 'launcher-recovery-evidence',
-        'worker-isolation', 'worker-native-sandbox', 'worker-isolation-status', 'worker-retry-evidence', 'worker-termination', 'worker-invocation-processes', 'worker-invocation-ancestry', 'systemd-client', 'recovery-probe'].map(file => `tools/ralph-external/lib/${file}.mjs`)];
+        'worker-isolation', 'worker-native-sandbox', 'worker-isolation-status', 'worker-retry-evidence', 'worker-termination', 'worker-invocation-processes', 'worker-invocation-ancestry', 'worker-context', 'systemd-client', 'recovery-probe'].map(file => `tools/ralph-external/lib/${file}.mjs`)];
     for (const file of toolFiles) {
       expect(manifest.files.includes('tools/') || manifest.files.includes(file), file).toBe(true);
       if (name === '@aiwg/cli') expect(buildScript).toContain(file === 'tools/_resolve-impl.mjs' ? "'_resolve-impl.mjs'" : `'${file}'`);
