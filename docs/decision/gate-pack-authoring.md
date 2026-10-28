@@ -116,6 +116,52 @@ fail closed in gates entry points; `evaluateGates` requires floors input
 (`resolveProjectFloors(config)` or explicit `'none-explicit-opt-out'` for
 tests/legacy only).
 
+## Precedence: how multiple packs and floors combine
+
+When a binding pins several packs, nothing votes: every gate from every
+resolved pack is evaluated and the strictest outcome wins. Per-gate outcomes
+combine by maximum into `packOutcome`
+(`src/gates/evaluate.ts:719`), and the report decision is the ceiling over
+the pack outcome, the upstream ceiling and the binding ceiling
+(`src/gates/evaluate.ts:722`): each ceiling can only pull the decision down,
+never up. `combine: { rule: max-severity }` is the only pack combine rule
+(`src/gates/types.ts:119`), so adding a pack can only hold or roll back a
+report that would otherwise promote.
+
+Project floors outrank packs. A binding must include every floor gate and
+tighten it (`src/gates/registry.ts:682`, `enforceProjectFloors`); omitting a
+floor gate or loosening any floor value, scope or outcome refuses resolution.
+The operator default floor (the shipped
+`aiwg:decision-engine/integrity-ceiling` pack,
+`src/gates/floors.ts:74`) applies unless a configured floor governs it, and
+the binding ceiling may not sit below the configured per-study ceiling
+(`src/gates/registry.ts:700`). Pack inheritance (`spec.extends`) tightens
+the same way: a child may only narrow what its parent allows
+(`src/gates/registry.ts:337`, `assertGateTightens`).
+
+## Preregistration: pin the pack before results exist
+
+A study registers its design before it observes held-out data. The binding
+pins every pack with a full `{id, version, digest, resolvedDigest}` pin
+(`src/gates/types.ts:22`, `GatePackPin`), and resolution refuses any pin
+whose version or authored/composed digest has moved
+(`src/gates/registry.ts:797`, `:801`). Parameters are preregistered the same
+way: binding values are keyed by qualified name (`<packId>.<param>`),
+defaults fill what the binding leaves unset, a missing required parameter
+refuses, and setting an undeclared parameter refuses
+(`src/gates/registry.ts:859`, `:864`). Metric providers the gates observe
+must be pinned too, and any gate-observing provider left unpinned refuses
+(`src/gates/registry.ts:847`).
+
+Time order is checked, not trusted: the binding carries `registeredAt` and
+`frozenAt`, and registering after freezing refuses
+(`src/gates/registry.ts:894`, `:897`). At evaluation the binding digest must
+match both the caller-asserted trusted pin and the frozen-record digest
+(`src/gates/evaluate.ts:600`, `:611`), and the binding must have frozen
+before holdout access (`src/gates/evaluate.ts:630`). So a study that edits
+its pack, thresholds or parameters after seeing results no longer matches
+its pins and refuses evaluation.
+
 ## Linking rules to gates with `enforcedBy`
 
 Rules may declare full gate references (pack id plus gate id):
