@@ -1,8 +1,9 @@
+import { workerInstalledFixture } from '../../helpers/worker-installed-fixture.js';
 import { workerSigningFixture } from '../../helpers/worker-qualification-signing.js';
 import { mkdtempSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, writeFile, readFile, rm, access, cp, chmod, readdir, symlink, stat } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, rm, access, chmod, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -41,22 +42,7 @@ const installationRoots: string[] = [];
 
 async function installFixture(root: string) {
   const start = performance.now();
-  const installed = path.join(root, 'installed');
-  await mkdir(path.join(installed, 'dist'), { recursive: true, mode: 0o755 });
-  await cp(path.join(repo, 'package.json'), path.join(installed, 'package.json'));
-  await cp(path.join(repo, 'dist/src'), path.join(installed, 'dist/src'), { recursive: true,
-    filter: filename => !filename.endsWith('.map') && !filename.endsWith('.d.ts') && !filename.endsWith('.d.mts') });
-  await cp(path.join(repo, 'tools'), path.join(installed, 'tools'), { recursive: true });
-  async function trust(directory: string) {
-    await chmod(directory, 0o755);
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const filename = path.join(directory, entry.name);
-      if (entry.isDirectory()) await trust(filename);
-      else if (entry.isFile()) await chmod(filename, 0o644);
-    }
-  }
-  await trust(installed);
-  for (const directory of ['node_modules', 'agentic', 'schemas', 'vscode-extension']) await symlink(path.join(repo, directory), path.join(installed, directory));
+  const installed = await workerInstalledFixture(root, repo);
   timed('installation', start);
   return installed;
 }

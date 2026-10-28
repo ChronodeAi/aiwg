@@ -29,6 +29,23 @@ limits both probing and qualification to that configured CLI. JSON mode emits a
 single document, including the qualification results and an
 `qualification.accountScopeNotice` explaining the account approval limitation.
 
+Explicit `--probe-workers --qualify` exits **1** when qualification is `failed`
+or `partial`, in both text and JSON output; successful recorded qualification
+exits **0**. Usage errors exit **2**. Dry-run and declined confirmation do not
+claim approval. Ordinary doctor warnings remain advisory (exit 0); diagnostic
+errors and blocked recorded invocations still exit nonzero. `--strict-context`
+also promotes firewall violations or a missing baseline to errors.
+
+These observations have separate meanings:
+
+- **Installation readiness** (`workers[].ready`) describes executable/version
+  presence. An installed-module trust refusal can leave it true while
+  `qualification.status` is `failed`.
+- **Authenticated CLI task completion** requires an actual task run. Doctor's
+  local probes and installation approval do not establish it.
+- **Qualified managed dispatch** requires valid approval and the resolver's
+  policy and request checks; readiness or task completion alone cannot authorize it.
+
 Approval trusts the installed CLI and bundled argument renderer for direct shell
 operation. It records no live inference, backend identity, or negative sandbox
 test result. Existing host inspection binds the executable bytes/version,
@@ -77,10 +94,11 @@ the previous approvals until fresh discovery and qualification are recorded.
 Doctor includes this limitation in its confirmation question and qualification
 results, including `--dry-run` and `--json` output.
 
-Qualification rejects group/other-writable installed package paths. With a
-shared-group umask such as `002`, secure the package first with
-`chmod -R go-w <packageRoot>`; the error names the offending path. It never
-changes package permissions automatically. Qualification can remove group/other
+Qualification rejects group/other-writable installed package paths. The error names
+the offending path and a permission remedy. Ask the installation owner to repair
+the installation or provide a private trusted copy; do not recursively change a
+shared active checkout's permissions. Doctor never changes package permissions
+automatically. Qualification can remove group/other
 write bits from its own current-user-owned `AIWG_CONFIG` directory: the TTY
 confirmation and `--dry-run` list `chmod go-w`, and `--yes` applies it. A directory
 owned by another user is refused with its path.

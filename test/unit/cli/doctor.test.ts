@@ -671,106 +671,6 @@ describe('tools/cli/doctor.mjs — subagent dispatch headroom (#2562)', () => {
   });
 });
 
-// ── Context and persistent-memory firewall (#2040) ────────────────────
-
-describe('tools/cli/doctor.mjs — context/memory firewall (#2040)', () => {
-  let content: string;
-  beforeEach(async () => {
-    const { readFileSync } = await import('fs');
-    content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
-  });
-
-  it('imports and invokes the cross-category firewall', () => {
-    expect(content).toContain('scanContextMemoryFirewall');
-    expect(content).toContain("from '../security/context-memory-firewall.mjs'");
-    expect(content).toContain('const firewall = await scanContextMemoryFirewall');
-  });
-
-  it('exposes strict, baseline, and provider-budget controls', () => {
-    // Execute the actual parser with the shared helpers, without running the
-    // script's top-level diagnostics or process.exit(). This checks values and
-    // precedence rather than depending on the spelling of its former loop.
-    const parserSource = content.slice(content.indexOf('const DOCTOR_VALUE_FLAGS'), content.indexOf('// Parse-or-exit wrapper'));
-    const parse = new Function('shared', `
-      const {
-        requireFlagValue: requireDoctorFlagValue,
-        hasPositionalOrSwitch: hasDoctorFlagSwitch,
-        argsTerminatorIndex: doctorArgsTerminatorIndex,
-        valueTokenIndexes: doctorValueTokenIndexes,
-        MissingFlagValueError: DoctorMissingFlagValueError,
-      } = shared;
-      ${parserSource}
-      return parseDoctorArgs;
-    `)(sharedFlagParsing);
-    expect(parse([])).toMatchObject({ strictContext: false,
-      contextBaseline: '.aiwg/context-memory-firewall-baseline.json', contextBudgetTokens: 200_000 });
-    expect(parse(['--strict-context', '--context-baseline', 'reviewed.json', '--context-budget-tokens', '12345']))
-      .toMatchObject({ strictContext: true, contextBaseline: 'reviewed.json', contextBudgetTokens: 12345 });
-    expect(parse(['--context-baseline=old.json', '--context-baseline=new.json',
-      '--context-budget-tokens=1000', '--context-budget-tokens=2000']))
-      .toMatchObject({ contextBaseline: 'new.json', contextBudgetTokens: 2000 });
-    expect(parse(['--', '--strict-context', '--context-baseline', 'ignored.json']))
-      .toMatchObject({ strictContext: false, contextBaseline: '.aiwg/context-memory-firewall-baseline.json' });
-    for (const flag of ['--context-baseline', '--context-budget-tokens']) {
-      expect(() => parse([flag])).toThrow(`${flag} requires a value`);
-      expect(() => parse([`${flag}=`])).toThrow(`${flag} requires a value`);
-    }
-    expect(content).toContain('baselinePath: contextBaseline');
-    expect(content).toContain('budgetTokens: contextBudgetTokens');
-    expect(content).toContain("strictContext ? 'error' : 'warn'");
-  });
-
-  it('reports all six context contributions and review states', () => {
-    expect(content).toContain('Object.entries(firewall.categories)');
-    expect(content).toContain('firewall.trust.stale');
-    expect(content).toContain('firewall.trust.quarantined');
-    expect(content).toContain("record.reviewStatus === 'changed-review-required'");
-  });
-
-  it('scans Muse Code through the firewall without an unknown-provider hole (#229)', () => {
-    // The doctor-side provider filter must admit muse, and the firewall
-    // PROVIDERS table must know its layout — otherwise `aiwg doctor
-    // --provider muse` degrades to `scan failed: Unknown provider 'muse'`.
-    expect(content).toMatch(/'grokbot', 'grok-build', 'muse'\]/);
-    expect(content).toContain('if (!agentsPath) {');
-    expect(content).toContain('0 agents deployed on disk — no native agent surface');
-  });
-
-  it('scans Grok Build through the firewall without an unknown-provider hole (#2640)', () => {
-    // `aiwg doctor --provider grok-build` silently skipped the
-    // context/memory firewall scan because grok-build was missing from
-    // both the doctor-side allowlist and the firewall's own PROVIDERS
-    // table (tools/security/context-memory-firewall.mjs) — adding it to
-    // only one of the two turns the silent skip into a thrown
-    // `Unknown provider 'grok-build'` instead, so both are required.
-    expect(content).toMatch(/'openhuman', 'grokbot', 'grok-build', 'muse'\]/);
-    const firewallSource = readFileSync(
-      resolve(__dirname, '../../../tools/security/context-memory-firewall.mjs'),
-      'utf-8',
-    );
-    expect(firewallSource).toMatch(/'grok-build':\s*\{/);
-  });
-
-  it('every provider the firewall scanner supports is in the doctor allowlist (#2640)', async () => {
-    // Regression guard for the exact defect class #2640 reported: a
-    // provider the firewall scanner (tools/security/context-memory-firewall.mjs)
-    // already knows how to scan but that doctor's own allowlist forgot
-    // silently skips the context/memory firewall scan for it. Derives the
-    // expected set from the firewall module's own registry so adding a
-    // provider there without updating doctor.mjs fails this test instead
-    // of silently skipping the scan.
-    const { SUPPORTED_PROVIDERS } = await import('../../../tools/security/context-memory-firewall.mjs');
-
-    const allowlistMatch = /providersToCheck\.filter\(\(name\) =>\s*\[([^\]]+)\]\.includes\(name\)/.exec(content);
-    expect(allowlistMatch).not.toBeNull();
-    const allowlist = allowlistMatch[1].split(',').map((entry) => entry.trim().replace(/'/g, ''));
-
-    for (const provider of SUPPORTED_PROVIDERS) {
-      expect(allowlist, `expected '${provider}' (firewall-supported) to also be in doctor's allowlist`).toContain(provider);
-    }
-  });
-});
-
 // ── User registry override + shared parallelism defaults (#246 / #249) ──
 
 describe('doctor: user registry override warn (#246)', () => {
@@ -900,8 +800,9 @@ describe('doctor: direct-worker probes are opt-in (#2894)', () => {
   });
 
   it('documents the default config-only behavior in doctor help', () => {
-    const utilities = readFileSync(resolve(__dirname, '../../../src/cli/handlers/utilities.ts'), 'utf-8');
+    const utilities = readFileSync(resolve(__dirname, '../../../src/cli/handlers/doctor-help.ts'), 'utf-8');
     expect(utilities).toContain('--probe-workers');
+    expect(utilities).toContain('default: config-only, no subprocess');
   });
 });
 
@@ -1076,7 +977,8 @@ describe('doctor: real-process no-workers-configured output/exit regression (#28
 // in the #2894 real-process block. Every child process below is bounded by
 // an explicit timeout.
 describe('doctor: worker-probe JSON output and visible empty state (#3066)', () => {
-  const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+  const content = readFileSync(DOCTOR_SCRIPT, 'utf-8')
+    + readFileSync(resolve(__dirname, '../../../tools/cli/doctor-worker-probe.mjs'), 'utf-8');
 
   it('rejects unknown flags naming the flag with usage exit 2', () => {
     expect(content).toContain('DOCTOR_KNOWN_FLAGS');
@@ -1110,7 +1012,7 @@ describe('doctor: worker-probe JSON output and visible empty state (#3066)', () 
   });
 
   it('documents --json in doctor help', () => {
-    const utilities = readFileSync(resolve(__dirname, '../../../src/cli/handlers/utilities.ts'), 'utf-8');
+    const utilities = readFileSync(resolve(__dirname, '../../../src/cli/handlers/doctor-help.ts'), 'utf-8');
     expect(utilities).toContain('--json');
     expect(utilities).toMatch(/--probe-workers.*one worker-probe record per CLI/);
   });

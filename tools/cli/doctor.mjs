@@ -23,7 +23,8 @@ import { scanStartupContext,
   SUBAGENT_SYSTEM_PROMPT_TOKENS,
   SUBAGENT_MIN_WORKING_TOKENS,
 } from '../lint/claude-context-inventory.mjs';
-import { scanContextMemoryFirewall } from '../security/context-memory-firewall.mjs';
+import { checkContextMemoryFirewall } from './doctor-context-firewall.mjs';
+import { runWorkerProbe, toWorkerProbeRecord, WORKER_PROBE_EMPTY_MESSAGE } from './doctor-worker-probe.mjs';
 
 const { measureDeployedCoreRules } = await importImpl(import.meta.url, 'rules/activation.mjs');
 
@@ -667,6 +668,7 @@ async function checkStartupContextBudget(provName, label) {
 }
 
 async function loadProvider(name) {
+  if (!Object.hasOwn(PROVIDER_LABELS, name)) return null;
   try {
     const providerPath = path.join(AIWG_ROOT, 'tools/agents/providers', `${name}.mjs`);
     const mod = await import(pathToFileURL(providerPath).href);
@@ -688,7 +690,7 @@ function resolveProviderPath(p) {
 }
 
 async function detectDeployedProviders(config) {
-  const detected = (config?.providers ?? []).filter(name => name in PROVIDER_LABELS);
+  const detected = [...(config?.providers ?? [])];
   for (const [name, dir] of Object.entries(PROVIDER_AGENT_DIRS)) {
     if (!detected.includes(name) && await fileExists(path.join(process.cwd(), dir))) detected.push(name);
   }
@@ -701,112 +703,6 @@ async function detectDeployedProviders(config) {
 
 function check(name, status, message) {
   checks.push({ name, status, message });
-}
-
-// Empty-state guidance for the worker-probe report (#3066). Names the real
-// configuration command and key: `aiwg config set --project` writes dotted
-// keys into .aiwg/aiwg.config (src/config/cli.ts projectConfigSet), and
-// each parallelism.clis entry binds a provider adapter reference
-// (src/config/aiwg-config.ts validation).
-const WORKER_PROBE_EMPTY_MESSAGE =
-  `No worker CLIs are configured (parallelism.clis in .aiwg/aiwg.config is empty); add a complete cli entry, e.g. \`aiwg config set --project parallelism.clis.codex '{"adapter":"providers:codex","accountScope":"local-account","quotaScope":"local-quota"}'\`, then rerun with --probe-workers.`;
-const WORKER_PROBE_DISABLED_MESSAGE =
-  'Group dispatch is disabled (parallelism.worker_dispatch is not true); no version probes were run. Enable it with `aiwg config set --project parallelism.worker_dispatch true`, then rerun with --probe-workers.';
-
-// One machine-readable record per CLI for `aiwg doctor --probe-workers
-// --json`, mapped from the install-kind readiness finding (one per
-// configured cli, untruncated — see buildDirectWorkerDoctorSection's
-// installFindings):
-// - installed: the executable ran and produced output (a matched version,
-//   an out-of-range version, or an unmatched banner from something present);
-// - version: the identified version, or null when none was identified;
-// - inRange: true/false once a version was identified, else null;
-// - ready: true only for WORKER_DIRECT_READY;
-// - reason: the stable finding code (see src/models/worker-direct-readiness.ts).
-function toWorkerProbeRecord(finding) {
-  const version = finding.installedVersion ?? null;
-  return {
-    cli: finding.cli,
-    installed: version !== null || finding.code === 'WORKER_DIRECT_BANNER_UNMATCHED',
-    version,
-    inRange: finding.code === 'WORKER_DIRECT_READY' ? true : (version !== null ? false : null),
-    ready: finding.code === 'WORKER_DIRECT_READY',
-    reason: finding.code,
-  };
-}
-
-// Machine-readable worker-probe report (#3066). Prints exactly one JSON
-// document on stdout and nothing else: no announce lines (announce is
-// omitted), no buffered checks, no footer. Dispatch eligibility comes from
-// the binding-level fallback (no resolver snapshot is resolved here) — the
-// records only speak to installation readiness, so the snapshot would add
-// resolution cost without changing them.
-async function runWorkerProbeJson(projectDir, options, workerConfig) {
-  const parallelism = workerConfig?.parallelism;
-  if (options.cli) {
-    const ids = new Set([...Object.keys(parallelism?.clis ?? {}), ...Object.values(parallelism?.groups ?? {}).flatMap(group => group.members.map(member => member.cli))]);
-    if (!ids.has(options.cli)) throw new Error(`Unknown configured worker CLI: ${options.cli}`);
-  }
-  const workerDispatch = parallelism?.worker_dispatch === true;
-  const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
-  const { buildDirectWorkerDoctorSection } = await importImpl(import.meta.url, 'models/worker-direct-readiness.js');
-  const registry = loadProviderModelCapabilities();
-  const section = await buildDirectWorkerDoctorSection({
-    parallelism,
-    registry,
-    cli: options.cli,
-    probeWorkers: true,
-    projectRoot: projectDir,
-  });
-  const workers = section.installFindings.map(toWorkerProbeRecord);
-  const payload = {
-    probeWorkers: true,
-    nativeSandboxWarnings: nativeSandboxWarnings(workerConfig, projectDir),
-    decisionOffload: await collectDecisionOffloadReport(projectDir),
-    workerDispatch,
-    workersConfigured: section.workersConfigured,
-    workers,
-  };
-  if (workerDispatch) {
-    const { checkWorkerSandboxLaunches } = await import('./worker-qualification.mjs');
-    payload.sandboxChecks = await checkWorkerSandboxLaunches({ projectDir, config: workerConfig, registry, cli: options.cli });
-    // A blocked probe limits only the systemd-unit launcher path, which fails
-    // closed at launch. Direct shell dispatch stays ready (Tier 0 runs under
-    // the conductor harness's sandbox), so report it without failing doctor.
-    for (const worker of workers) {
-      const blocked = payload.sandboxChecks.find(check => check.cli === worker.cli && check.status === 'blocked');
-      if (blocked) worker.launcherSandbox = { status: 'blocked', code: blocked.diagnostics[0].code, scope: blocked.scope };
-    }
-  }
-  if (!section.workersConfigured) payload.message = WORKER_PROBE_EMPTY_MESSAGE;
-  else if (!workerDispatch) payload.message = WORKER_PROBE_DISABLED_MESSAGE;
-  if (options.qualify) {
-    const { qualifyProbedWorkers } = await import('./worker-qualification.mjs');
-    payload.qualification = await qualifyProbedWorkers({ projectDir, packageRoot: getPackageRoot(), config: workerConfig,
-      registry, section, ...options });
-    if (['failed', 'partial'].includes(payload.qualification.status)) process.exitCode = 1;
-  }
-  if (workerDispatch && workers.some(worker => worker.ready) && !options.dryRun) {
-    const { checkRecordedWorkerInvocationBuilds } = await import('./worker-qualification.mjs');
-    payload.invocationChecks = options.qualify
-      ? payload.qualification.results.flatMap(result => result.invocationChecks ?? [])
-      : await checkRecordedWorkerInvocationBuilds({ projectDir, config: workerConfig, registry, workers });
-    for (const worker of workers) {
-      if (payload.invocationChecks.some(check => check.cli === worker.cli && check.status === 'blocked')) {
-        worker.ready = false;
-        worker.reason = 'WORKER_DIRECT_INVOCATION_BLOCKED';
-        process.exitCode = 1;
-      }
-    }
-  }
-  if (options.json !== false) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  else {
-    for (const warning of payload.nativeSandboxWarnings) console.log(`Warning: ${warning.message}`);
-    for (const worker of workers) console.log(`Direct Worker ${worker.cli}: ${worker.reason}`);
-    if (payload.sandboxChecks?.length) console.log(`Worker sandbox checks: ${JSON.stringify(payload.sandboxChecks)}`);
-    if (payload.qualification) console.log(`Worker qualification: ${JSON.stringify(payload.qualification)}`);
-    if (payload.invocationChecks?.length) console.log(`Worker invocation checks: ${JSON.stringify(payload.invocationChecks)}`);
-  }
 }
 
 function hasSigningMaterial(signing) {
@@ -969,23 +865,23 @@ export async function runDoctor() {
           qualification: { status: 'failed', results: [], diagnostics: [workerInvocationDiagnostic(error)] },
         }, null, 2)}\n`);
         process.exitCode = 1;
-        return;
+        return 1;
       }
       process.stderr.write(`aiwg doctor: cannot read .aiwg/aiwg.config: ${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
-      return;
+      return 1;
     }
   }
 
   // Machine-readable worker probes: exactly one JSON document on stdout
   // and nothing else — the full diagnostic run (and its footer) is skipped.
   if (jsonMode || options.qualify || options.cli || options.dryRun) {
-    try { await runWorkerProbeJson(process.cwd(), { ...options, json: jsonMode }, workerProbeConfig); }
+    try { return await runWorkerProbe(process.cwd(), { ...options, json: jsonMode }, workerProbeConfig); }
     catch (error) {
       process.stderr.write(`aiwg doctor: ${error.message}\n`);
       process.exitCode = 1;
+      return 1;
     }
-    return;
   }
 
   const isTTY = Boolean(process.stdout.isTTY);
@@ -1448,49 +1344,10 @@ export async function runDoctor() {
     }
   }
 
-  // Provider context and persistent-memory firewall (#2040). This complements
-  // per-provider listing/startup estimates with one cross-category inventory,
-  // deployment-manifest drift checks, reviewed digests, and poisoning labels.
-  // The default doctor is advisory; --strict-context promotes any violation or
-  // missing review baseline to an error and therefore a non-zero doctor exit.
-  if (!noBudgetCheck) {
-    try {
-      const supported = providersToCheck.filter((name) =>
-        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman', 'grokbot', 'grok-build', 'muse'].includes(name),
-      );
-      const firewall = await scanContextMemoryFirewall({
-        rootDir: process.cwd(),
-        packageRoot: AIWG_ROOT,
-        providers: supported,
-        baselinePath: contextBaseline,
-        budgetTokens: contextBudgetTokens,
-      });
-      const stale = firewall.trust.stale;
-      const quarantined = firewall.trust.quarantined;
-      const external = firewall.trust.external;
-      const changed = firewall.records.filter((record) => record.reviewStatus === 'changed-review-required').length;
-      const categorySummary = Object.entries(firewall.categories)
-        .map(([category, value]) => `${category}=${value.bytes.toLocaleString()}B`)
-        .join(', ');
-      const summary =
-        `${firewall.totals.files} file(s), ~${firewall.totals.approxTokens.toLocaleString()} / `
-        + `${firewall.budget.tokens.toLocaleString()} tokens; ${categorySummary}; `
-        + `stale=${stale}, quarantined=${quarantined}, external=${external}, changed=${changed}`;
-      const baselineMissing = !firewall.baseline.exists;
-      const unsafe = firewall.violations.length > 0 || baselineMissing;
-      if (unsafe) {
-        const status = strictContext ? 'error' : 'warn';
-        const baselineMessage = baselineMissing
-          ? ` Review baseline missing at ${firewall.baseline.path}; run \`aiwg context-firewall baseline --plan\`, review every record, then use the confirmed write command it prints.`
-          : '';
-        check('Context/memory firewall', status, `${summary}.${baselineMessage}`);
-      } else {
-        check('Context/memory firewall', 'ok', `${summary}; reviewed baseline ${firewall.baseline.path}`);
-      }
-    } catch (error) {
-      check('Context/memory firewall', strictContext ? 'error' : 'warn', `scan failed: ${error.message}`);
-    }
-  }
+  if (!noBudgetCheck) await checkContextMemoryFirewall({
+    rootDir: process.cwd(), packageRoot: AIWG_ROOT, providers: providersToCheck,
+    baselinePath: contextBaseline, budgetTokens: contextBudgetTokens, strictContext,
+  }, check);
 
   // 5b. CLAUDE.md @AIWG.md hook check (#1437).
   // When claude is in the providers-to-check list AND the workspace has an
@@ -2877,7 +2734,9 @@ export async function runDoctor() {
 }
 
 if (isMain(import.meta.url)) {
-  runDoctor().catch(error => {
+  runDoctor().then(exitCode => {
+    if (exitCode) process.exitCode = exitCode;
+  }).catch(error => {
     console.error('Doctor failed:', error.message);
     process.exit(1);
   });

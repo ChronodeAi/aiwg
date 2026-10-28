@@ -46,6 +46,20 @@ For managed deployments, the report includes both deployed bytes and current
 packaged-source bytes. A manifest digest mismatch is labeled `stale`; it cannot be
 hidden by an unchanged total byte count.
 
+Provider layouts come from the firewall's exported provider keys; doctor uses the
+same source. Unknown providers are reported as **not yet supported** and skipped,
+including in strict mode; supported siblings still scan. Missing baselines and
+unsafe files retain their strict failures.
+
+The additional layouts follow the existing deployers and provider documentation:
+
+| Provider | Context and resource paths | Sources |
+|---|---|---|
+| Pi | `AGENTS.md`, `CLAUDE.md`, `.agents/skills`, `.pi/skills`, `.pi/.aiwg/skills` | [Deployer](../../tools/agents/providers/pi.mjs), [context loading](../providers/pi-direct.md) |
+| OMP | `.omp/AGENTS.md`, `.omp/agents`, `.omp/rules`, `.agents/skills` | [Deployer](../../tools/agents/providers/omp.mjs), [native resources](../providers/omp.md) |
+| Antigravity | `AGENTS.md`, `.agents/agents`, `.agents/skills`, `.agents/.aiwg/skills` | [Deployer](../../tools/agents/providers/antigravity.mjs), [workspace surfaces](../providers/antigravity.md) |
+| DeepSeek Harness | `AGENTS.md`, `CLAUDE.md`, `.agents/skills` | [Deployer](../../tools/agents/providers/deepseek-harness.mjs), [native context](../providers/deepseek-harness.md) |
+
 ## Trust and Review
 
 Every discovered file receives one trust label:
