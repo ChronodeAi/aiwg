@@ -1,18 +1,19 @@
 // Validates HITL with the existing config schema definitions, shared by loader and resolver.
-import { readFileSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import Ajv, { type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 
 function compiled(): ValidateFunction {
-  let root = dirname(fileURLToPath(import.meta.url));
-  while (!existsSync(join(root, 'vscode-extension/schemas/aiwg.config.v1.json'))) {
-    const parent = dirname(root);
-    if (parent === root) throw new Error('HITL config schema unavailable');
-    root = parent;
+  const require = createRequire(import.meta.url);
+  let schema;
+  // Source and compiled modules share the shipped config schema; no cwd or home lookup.
+  for (const relative of ['../../vscode-extension/schemas/aiwg.config.v1.json',
+    '../../../vscode-extension/schemas/aiwg.config.v1.json']) {
+    try { schema = require(relative); break; } catch (error: any) {
+      if (error?.code !== 'MODULE_NOT_FOUND') throw error;
+    }
   }
-  const schema = JSON.parse(readFileSync(join(root, 'vscode-extension/schemas/aiwg.config.v1.json'), 'utf8'));
+  if (!schema) throw new Error('HITL config schema unavailable');
   const ajv = new Ajv({ strict: true, allErrors: true });
   addFormats(ajv);
   return ajv.compile({

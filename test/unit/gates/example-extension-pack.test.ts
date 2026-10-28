@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { loadGatePackFile } from '../../../src/gates/discovery.js';
 import { createCoreProviderRegistry } from '../../../src/gates/providers/index.js';
 import { validateResolvedPack } from '../../../src/gates/registry.js';
@@ -24,6 +24,7 @@ describe('example extension gate pack', () => {
 
   it('rejects a copy with an invalid failure ceiling (onFail PROMOTE)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'gate-pack-'));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
     const copy = join(dir, 'example-counter.gatepack.yaml');
     writeFileSync(copy, readFileSync(packPath, 'utf8').replace('onFail: HOLD', 'onFail: PROMOTE'));
     expect(() => loadGatePackFile(copy)).toThrow(/gate pack invalid/);

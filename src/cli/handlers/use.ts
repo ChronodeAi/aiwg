@@ -108,6 +108,7 @@ import {
 } from '../../smiths/context-pipeline/index.js';
 import type { Platform } from '../../agents/types.js';
 import { verifyModelWrapperDeployment } from '../../models/wrapper-deployment.js';
+import { countDeployedBundleFiles, countDeployedBundleRules } from './use-bundle-counts.js';
 import {
   aggregateUseDeploymentResult,
   buildDryRunUseResult,
@@ -1226,29 +1227,6 @@ async function listBundleMdStems(bundlePath: string, subdir: string): Promise<st
   }
 }
 
-async function countDeployedBundleFiles(
-  bundlePath: string,
-  subdir: string,
-  target: string,
-  deployPath: string,
-  extensions: string[],
-): Promise<number> {
-  if (!deployPath) return 0;
-  const stems = await listBundleMdStems(bundlePath, subdir);
-  if (stems.length === 0) return 0;
-  const destDir = resolveDeployPath(target, deployPath);
-  let count = 0;
-  for (const stem of stems) {
-    for (const ext of extensions) {
-      if (await fileExists(path.join(destDir, `${stem}${ext}`))) {
-        count++;
-        break;
-      }
-    }
-  }
-  return count;
-}
-
 async function listBundleSkillNameCandidates(bundlePath: string): Promise<string[][]> {
   const skillsRoot = path.join(bundlePath, 'skills');
   try {
@@ -1315,7 +1293,7 @@ async function countBundleDeployedArtifacts(
     agents: await countDeployedBundleFiles(bundlePath, 'agents', target, paths.agents, ['.md', '.toml']),
     commands: await countDeployedBundleFiles(bundlePath, 'commands', target, paths.commands, ['.md']),
     skills: await countDeployedBundleSkills(bundlePath, target, provider),
-    rules: await countDeployedBundleFiles(bundlePath, 'rules', target, paths.rules, ['.md', '.mdc']),
+    rules: await countDeployedBundleRules(bundlePath, target, paths.rules),
   };
 }
 

@@ -114,13 +114,25 @@ describe('flagship election boundary (#2643)', () => {
 
   it('keeps the project default coding worker on gpt-6.1-sol', async () => {
     const dir = await temporary();
-    const projectModels = await readFile(path.join(root, 'models.json'), 'utf8');
-    const projectConfig = JSON.parse(await readFile(path.join(root, '.aiwg/aiwg.config'), 'utf8'));
-    await writeFile(path.join(dir, 'models.json'), projectModels);
+    const f = workerResolutionFixture();
+    const projectConfig = structuredClone(f.snapshot.config);
+    projectConfig.parallelism!.groups = { harness: { maxParallel: 4, requiredRoles: ['efficiency', 'coding', 'reasoning'],
+      members: [
+        { id: 'codex-luna', cli: 'codex', model: 'gpt-6-luna', roles: ['efficiency'], priority: 10 },
+        { id: 'codex-sol', cli: 'codex', model: 'gpt-6.1-sol', roles: ['coding', 'reasoning'], priority: 10 },
+      ], fallback: [] } };
+    const projectModels = { defaults: { workerSelection: {
+      roleGuidance: {
+        efficiency: { groups: ['harness'], tier: 'economy', initialEffort: 'medium', effortLadder: ['medium'] },
+        coding: { groups: ['harness'], tier: 'standard', initialEffort: 'high', effortLadder: ['medium', 'high'] },
+        reasoning: { groups: ['harness'], tier: 'premium', initialEffort: 'high', effortLadder: ['medium', 'high'] },
+      },
+      guards: { denySelfDelegation: false },
+    } } };
+    await writeFile(path.join(dir, 'models.json'), JSON.stringify(projectModels));
     await mkdir(path.join(dir, 'empty-user'));
     vi.stubEnv('AIWG_CONFIG', path.join(dir, 'empty-user'));
     const models = await new ConfigLoader(dir, { aiwgHome: root }).load(projectConfig.parallelism);
-    const f = workerResolutionFixture();
     f.snapshot.models = models;
     f.snapshot.config.parallelism!.groups = structuredClone(projectConfig.parallelism.groups);
     f.snapshot.config.parallelism!.groups.harness.execution = { sandbox: 'workspace-write', approval: 'never', transport: 'shell' };

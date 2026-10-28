@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { createCoreProviderRegistry } from '../../../src/gates/providers/index.js';
 import { discoverShippedGatePacks, loadGatePackFile } from '../../../src/gates/discovery.js';
 import { GateRegistry } from '../../../src/gates/registry.js';
@@ -36,6 +36,7 @@ describe('ci-flake gate pack', () => {
 
   it('rejects a copy that allows a failed run (negative count default)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'gate-pack-'));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
     const copy = join(dir, 'ci-flake.gatepack.yaml');
     writeFileSync(copy, readFileSync(packPath, 'utf8').replace('default: 0', 'default: -1'));
     const pack = loadGatePackFile(copy);
