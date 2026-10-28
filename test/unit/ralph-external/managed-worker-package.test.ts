@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { cliToolFiles } from '../../../tools/release/cli-package-files.mjs';
 import { parseManagedWorkerLaunchArgs } from '../../../tools/ralph-external/session-launcher.mjs';
 
 const exec = promisify(execFile);
@@ -27,6 +28,7 @@ describe('T-OG-14 packaged managed one-shot entry point', () => {
   it.each(['aiwg', '@aiwg/cli'])('%s loads the shipped session owner without source or the unshipped loop entry point', async name => {
     const source = process.cwd();
     const manifest = JSON.parse(await readFile(join(source, name === 'aiwg' ? 'package.json' : 'packages/cli/package.json'), 'utf8'));
+    const stagedTools = cliToolFiles(source, manifest.files);
     const buildScript = await readFile(join(source, 'tools/release/build-cli-package.mjs'), 'utf8');
     const root = await mkdtemp(join(tmpdir(), 'managed-package-')); roots.push(root);
     await writeFile(join(root, 'package.json'), JSON.stringify({ name, type: 'module' }));
@@ -37,7 +39,7 @@ describe('T-OG-14 packaged managed one-shot entry point', () => {
         'worker-isolation', 'worker-native-sandbox', 'worker-isolation-status', 'worker-retry-evidence', 'worker-termination', 'worker-invocation-processes', 'worker-invocation-ancestry', 'worker-context', 'systemd-client', 'recovery-probe'].map(file => `tools/ralph-external/lib/${file}.mjs`)];
     for (const file of toolFiles) {
       expect(manifest.files.includes('tools/') || manifest.files.includes(file), file).toBe(true);
-      if (name === '@aiwg/cli') expect(buildScript).toContain(file === 'tools/_resolve-impl.mjs' ? "'_resolve-impl.mjs'" : `'${file}'`);
+      if (name === '@aiwg/cli') expect(stagedTools, file).toContain(file);
       await mkdir(dirname(join(root, file)), { recursive: true });
       await copyFile(join(source, file), join(root, file));
     }

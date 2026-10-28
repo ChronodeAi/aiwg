@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { cliToolFiles } from '../../tools/release/cli-package-files.mjs';
+import { createExternalPluginProject, listFixtureEntries, listRelativeFiles, probeCliApi } from '../helpers/cli-package-fixtures.js';
 import { buildCliPackage } from '../../tools/release/build-cli-package.mjs';
 import { hasSevenDayReleaseAge } from '../helpers/npm-release-age.js';
 import {
@@ -68,105 +69,12 @@ function runCli(args: string[], cwd = tempRoot): Promise<{ code: number | null; 
   });
 }
 
-async function writeJson(filename: string, value: unknown): Promise<void> {
-  await mkdir(path.dirname(filename), { recursive: true });
-  await writeFile(filename, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-async function createExternalPluginProject(
-  project: string,
-  platforms: Record<string, 'full' | 'partial' | 'experimental' | 'none'> = { claude: 'full', codex: 'full' },
-): Promise<string> {
-  const wrapper = path.join(project, '.aiwg', 'plugins', 'bt6-maintainer');
-  const payload = path.join(wrapper, 'payload');
-  await writeJson(path.join(wrapper, 'manifest.json'), {
-    id: 'bt6-maintainer',
-    type: 'plugin',
-    name: 'BT6 Maintainer',
-    version: '0.2.0',
-    description: 'External plugin fixture for packed CLI deployment',
-    manifestVersion: '1',
-    platforms,
-    keywords: ['bt6', 'maintainer'],
-    deployment: { pathTemplate: '.aiwg/plugins/bt6-maintainer' },
-    pluginConfig: { payloadType: 'addon', payloadPath: 'payload/' },
-  });
-  await writeJson(path.join(payload, 'manifest.json'), {
-    id: 'bt6-maintainer-core',
-    type: 'addon',
-    name: 'BT6 Maintainer Core',
-    version: '0.2.0',
-    description: 'Payload for the BT6 Maintainer external plugin fixture',
-    manifestVersion: '1',
-    platforms,
-    keywords: ['bt6', 'maintainer'],
-    deployment: { pathTemplate: '.aiwg/addons/bt6-maintainer-core' },
-    addonConfig: { entry: { agents: 'agents/', skills: 'skills/', rules: 'rules/' } },
-  });
-  for (let index = 1; index <= 5; index += 1) {
-    const agentName = `bt6-fixture-agent-${index}`;
-    await mkdir(path.join(payload, 'agents'), { recursive: true });
-    await writeFile(
-      path.join(payload, 'agents', `${agentName}.md`),
-      `---\nname: ${agentName}\ndescription: Packed CLI fixture agent ${index}\nmodel: claude-sonnet-4-6\ntools: Read, Bash\n---\n\n# ${agentName}\n`,
-    );
-    const skillName = `bt6-fixture-skill-${index}`;
-    await mkdir(path.join(payload, 'skills', skillName), { recursive: true });
-    await writeFile(
-      path.join(payload, 'skills', skillName, 'SKILL.md'),
-      `---\nname: ${skillName}\ndescription: Packed CLI fixture skill ${index}\n---\n\n# ${skillName}\n`,
-    );
-  }
-  await mkdir(path.join(payload, 'rules'), { recursive: true });
-  await writeFile(
-    path.join(payload, 'rules', 'bt6-fixture-rule.md'),
-    '---\nid: bt6-fixture-rule\nname: bt6-fixture-rule\n---\n\n# BT6 fixture rule\n',
-  );
-  return wrapper;
-}
-
-async function listFixtureEntries(directory: string): Promise<string[]> {
-  return (await readdir(directory)).filter((entry) => entry.startsWith('bt6-fixture-')).sort();
-}
-
-async function listRelativeFiles(directory: string, relative = ''): Promise<string[]> {
-  const entries = await readdir(path.join(directory, relative), { withFileTypes: true });
-  const files = await Promise.all(entries.map(async (entry) => {
-    const entryRelative = path.join(relative, entry.name);
-    return entry.isDirectory()
-      ? listRelativeFiles(directory, entryRelative)
-      : [entryRelative];
-  }));
-  return files.flat().sort();
-}
-
 function sha256(value: Buffer): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function runApi(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const requireFromPrefix = createRequire(path.join(path.dirname(installRoot), 'api-probe.mjs'));
-  const entry = requireFromPrefix.resolve('@aiwg/cli');
-  const script = [
-    `const api = await import(${JSON.stringify(entry)});`,
-    `await api.run(${JSON.stringify(args)}, { cwd: ${JSON.stringify(tempRoot)} });`,
-    `process.exit(0);`,
-  ].join('\n');
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--input-type=module', '--eval', script], {
-      cwd: tempRoot,
-      env: runtimeEnv(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
-    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
-    child.once('error', reject);
-    child.once('close', (code) => resolve({ code, stdout, stderr }));
-  });
+function runApi(args: string[]) {
+  return probeCliApi(args, installRoot, tempRoot, runtimeEnv());
 }
 
 describe('packaging release-age policy interpretation', () => {
@@ -327,64 +235,9 @@ describe('@aiwg/cli packaged web distribution', () => {
     expect(paths.filter((entry) => entry.startsWith('agentic/')).filter(
       (entry) => !entry.startsWith('agentic/code/providers/') && !allowedAgenticRuntime.includes(entry),
     )).toEqual([]);
-    const allowedToolPrefixes = [
-      'tools/_resolve-impl.mjs',
-      'tools/cli/decision-offload-report.mjs',
-      'tools/cli/workspace-status.mjs',
-      'tools/ralph-external/session-launcher.mjs',
-      'tools/ralph-external/process-monitor.mjs',
-      'tools/ralph-external/lib/session-environment.mjs',
-      'tools/ralph-external/lib/worker-isolation.mjs', 'tools/ralph-external/lib/worker-native-sandbox.mjs', 'tools/ralph-external/lib/worker-context.mjs',
-      'tools/ralph-external/lib/systemd-client.mjs',
-      'tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs',
-      'tools/ralph-external/lib/launcher-recovery-evidence.mjs',
-      'tools/ralph-external/lib/recovery-probe.mjs',
-      'tools/ralph-external/lib/worker-overflow.mjs',
-      'tools/ralph-external/lib/worker-isolation-status.mjs',
-      'tools/ralph-external/lib/worker-retry-evidence.mjs',
-      'tools/ralph-external/lib/worker-termination.mjs',
-      'tools/ralph-external/lib/worker-invocation-processes.mjs',
-      'tools/ralph-external/lib/worker-invocation-ancestry.mjs',
-      // Launch helpers session-launcher imports (#3658).
-      'tools/ralph-external/lib/worker-inputs.mjs',
-      'tools/ralph-external/lib/worker-launch-cli.mjs',
-      // Worker final validation the launcher imports (#3675).
-      'tools/ralph-external/lib/worker-final.mjs',
-      // Termination evidence helpers the launcher imports (#3674).
-      'tools/ralph-external/lib/worker-isolation-status.mjs',
-      'tools/ralph-external/lib/worker-retry-evidence.mjs',
-      'tools/ralph-external/lib/worker-termination.mjs',
-      'tools/ralph-external/lib/worker-invocation-processes.mjs',
-      'tools/scripts/resource-preflight.mjs',
-      'tools/ralph-external/lib/provider-adapter.mjs',
-      'tools/ralph-external/lib/strict-worker-json.mjs',
-      'tools/ralph-external/lib/session-attempt.mjs',
-      'tools/ralph-external/lib/managed-worker-attempt.mjs',
-      'tools/ralph-external/lib/worker-artifacts.mjs',
-      'tools/ralph-external/lib/worker-health.mjs',
-      'tools/ralph-external/lib/claude-adapter.mjs',
-      'tools/ralph-external/lib/codex-adapter.mjs',
-      'tools/ralph-external/lib/opencode-adapter.mjs',
-      'tools/ralph-external/lib/factory-adapter.mjs',
-      'tools/ralph-external/lib/pi-adapter.mjs',
-      'tools/ralph-external/lib/omp-adapter.mjs',
-      'tools/ralph-external/lib/deepseek-harness-adapter.mjs',
-      'tools/ralph-external/lib/muse-adapter.mjs',
-      'tools/ralph-external/lib/openhuman-adapter.mjs',
-      'tools/providers/omp-transport.mjs',
-      'tools/providers/deepseek-harness-transport.mjs',
-      'tools/agents/deploy-agents.mjs',
-      'tools/agents/providers/',
-      'tools/providers/antigravity-transport.mjs',
-      'tools/commands/deploy-prompts-codex.mjs',
-      'tools/plugin/package-plugins.mjs',
-      'tools/plugin/plugin-links.mjs',
-      'tools/skills/deploy-skills-codex.mjs',
-      'tools/skills/codex-skill-transform.mjs',
-    ];
-    expect(paths.filter((entry) => entry.startsWith('tools/')).every(
-      (entry) => allowedToolPrefixes.some((allowed) => entry === allowed || (allowed.endsWith('/') && entry.startsWith(allowed))),
-    )).toBe(true);
+    const manifest = JSON.parse(await readFile(path.join(PROJECT_ROOT, 'packages/cli/package.json'), 'utf8'));
+    expect(paths.filter((entry) => entry.startsWith('tools/')).sort())
+      .toEqual(cliToolFiles(PROJECT_ROOT, manifest.files));
     expect(paths).toContain('bin/aiwg.mjs');
     expect(paths).toContain('LICENSE');
     expect(paths).toContain('THIRD_PARTY_NOTICES.md');
