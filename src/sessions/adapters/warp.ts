@@ -83,7 +83,7 @@ export class WarpSessionAdapter implements SessionSourceAdapter {
         schemaIssueDetail('headings'),
       );
     }
-    const stableSessionId = `manual:${createHash('sha256').update(value).digest('hex').slice(0, 32)}`;
+    const stableSessionId = source.nativeSessionId ?? `manual:${createHash('sha256').update(value).digest('hex').slice(0, 32)}`;
     const lifecycleEvidence = /<!--\s*warp-lifecycle:\s*complete\s*-->/i.test(value)
       ? 'completed-at-import' : 'unknown-at-import';
     const title = /^#\s+(.+)$/m.exec(value)?.[1]?.trim();

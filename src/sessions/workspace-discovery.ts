@@ -6,6 +6,15 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { inspectMuseNativeWorkspace, type MuseWorkspaceInspection } from './adapters/muse.js';
 import { readOmpSessionHeader } from './adapters/omp.js';
 import { grokbotConversationIdFromLocator } from './adapters/grokbot-locator.js';
+import {
+  GROK_BUILD_ACTIVE_FRESHNESS_MS,
+  grokBuildLiveState,
+  grokBuildSourceWorkspaceMatch,
+  readGrokBuildActiveRegistry,
+  type GrokBuildActiveRegistry,
+  type GrokBuildLiveEvidence,
+} from './adapters/grok-build-native.js';
+import { hermesSnapshotStagingDir } from './adapters/hermes-state-db.js';
 import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 import { readAiwgConfig } from '../config/aiwg-config.js';
 import {
@@ -33,6 +42,11 @@ export type DiscoveryProviderStatus =
   | 'export-required'
   | 'not-checked';
 
+export interface GrokBuildSourceLiveEvidence extends GrokBuildLiveEvidence {
+  observedAt: string;
+  expiresAt: string | null;
+}
+
 export interface DiscoveryManifestSource {
   sourceId: string;
   provider: SessionProviderId;
@@ -46,6 +60,8 @@ export interface DiscoveryManifestSource {
   nativeSessionId?: string;
   status?: 'excluded';
   exclusion?: SourceExclusion;
+  /** Advisory provider-reported activity; excluded from the manifest identity hash. */
+  liveEvidence?: GrokBuildSourceLiveEvidence;
 }
 
 export interface DiscoveryProviderReport {
@@ -105,18 +121,21 @@ export interface DiscoverWorkspaceOptions {
   museRoot?: string;
   dshRoot?: string;
   grokbotRoot?: string;
+  grokRoot?: string;
+  grokActiveSessions?: string;
+  hermesRoot?: string;
   createdAt?: string;
   /** Restrict maintenance discovery to previously authorized roots, with no defaults. */
   authorizedRoots?: Partial<Record<SessionProviderId, string[]>>;
 }
 
 interface DiscoverableProvider {
-  provider: 'claude' | 'codex' | 'cursor' | 'factory' | 'pi' | 'omp' | 'deepseek-harness' | 'muse' | 'grokbot';
+  provider: 'claude' | 'codex' | 'cursor' | 'factory' | 'pi' | 'omp' | 'deepseek-harness' | 'muse' | 'grokbot' | 'grok-build' | 'hermes';
   roots: string[];
 }
 
 const MANUAL_EXPORT_PROVIDERS = new Set<SessionProviderId>([
-  'copilot', 'hermes', 'opencode', 'openclaw', 'openhuman', 'grok-build',
+  'copilot', 'opencode', 'openclaw', 'openhuman',
   'warp', 'devin-desktop', 'generic',
 ]);
 
@@ -135,6 +154,8 @@ export async function discoverWorkspaceHistories(
     ...(options.museRoot ? ['muse'] : []),
     ...(options.dshRoot ? ['deepseek-harness'] : []),
     ...(options.grokbotRoot ? ['grokbot'] : []),
+    ...(options.grokRoot ? ['grok-build'] : []),
+    ...(options.hermesRoot ? ['hermes'] : []),
   ];
   const savedRoots = options.authorizedRoots ?? options.refreshFrom?.authorizedRoots;
   const authorizedProviders = options.refreshFrom
@@ -172,6 +193,15 @@ export async function discoverWorkspaceHistories(
     // no-filtering behavior already used for `pi`/`deepseek-harness`).
     { provider: 'grokbot', roots: options.grokbotRoot
       ? [resolve(options.grokbotRoot)] : [] },
+    // Grok Build authorizes the sessions directory itself, never Grok home:
+    // `<root>/<url-encoded cwd>/<id>/chat_history.jsonl`. No fallback through
+    // $HOME, GROK_HOME, or --provider-home grants access.
+    { provider: 'grok-build', roots: options.grokRoot
+      ? [resolve(options.grokRoot)] : [] },
+    // Hermes authorizes `<root>/state.db` for a read-only backup snapshot.
+    // Staging joins the scope below; nothing else under the root is read.
+    { provider: 'hermes', roots: options.hermesRoot
+      ? [resolve(options.hermesRoot)] : [] },
     {
       provider: 'claude',
       // Same scope rule as codex: configured providers keep their root grant
@@ -262,20 +292,23 @@ export async function discoverWorkspaceHistories(
       }
     }
     if (availableRoots.length === 0) {
-      const codexNeedsAuthorization = (entry.provider === 'codex' || entry.provider === 'omp'
+      const needsExplicitRoot = (entry.provider === 'codex' || entry.provider === 'omp'
         || entry.provider === 'deepseek-harness' || entry.provider === 'muse'
-        || entry.provider === 'grokbot')
+        || entry.provider === 'grokbot' || entry.provider === 'grok-build'
+        || entry.provider === 'hermes')
         && entry.roots.length === 0;
+      const expectedFlag = entry.provider === 'deepseek-harness' ? 'dsh' : entry.provider;
+      const rootKind = entry.provider === 'hermes' ? 'Hermes home (state.db is snapshotted read-only)' : 'sessions root';
       reports.set(entry.provider, providerReport(
         entry.provider,
-        codexNeedsAuthorization ? 'export-required' : 'unavailable',
-        codexNeedsAuthorization ? 'manual-export' : 'discoverable',
+        needsExplicitRoot ? 'export-required' : 'unavailable',
+        needsExplicitRoot ? 'manual-export' : 'discoverable',
         [],
-        codexNeedsAuthorization
+        needsExplicitRoot
           ? 'SHARED_ROOT_AUTHORIZATION_REQUIRED'
           : 'PROVIDER_ROOT_UNAVAILABLE',
-        codexNeedsAuthorization
-          ? `Pass --${entry.provider === 'deepseek-harness' ? 'dsh' : entry.provider}-root with an explicitly authorized sessions root.`
+        needsExplicitRoot
+          ? `Pass --${expectedFlag}-root with an explicitly authorized ${rootKind}.`
           : `No authorized ${entry.provider} workspace history root was found.`,
       ));
       if (entry.provider === 'codex') reports.get(entry.provider)!.rootCounts = [...rootCounts.values()];
@@ -286,13 +319,48 @@ export async function discoverWorkspaceHistories(
       workspaceId,
       allowedRoots: availableRoots,
     };
+    if (entry.provider === 'hermes') {
+      // The consistent snapshot is staged under owned workspace staging (the
+      // provider home stays read-only); staged locators need scope cover, and
+      // refresh must retain both the origin grant and the staging grant.
+      const staging = hermesSnapshotStagingDir(workspacePath);
+      if (!scope.allowedRoots.includes(staging)) scope.allowedRoots.push(staging);
+      authorizedRoots[entry.provider] = [...new Set([...availableRoots, staging])];
+      if (!rootCounts.has(staging)) {
+        rootCounts.set(staging, {
+          root: redactSourceLocator(staging), rootId: sha256(staging),
+          status: 'checked', sourceCount: 0, duplicateCount: 0,
+        });
+      }
+    }
     const providerSources: DiscoveryManifestSource[] = [];
     let matchedBySubfolder = 0;
     let matchedByWorktree = 0;
     const museSourceInspections: NonNullable<DiscoveryProviderReport['museSourceInspections']> = [];
+    // Grok Build live detection reads exactly one explicitly authorized file
+    // (never the sessions root's parent implicitly); absence means unknown.
+    let grokActiveRegistry: GrokBuildActiveRegistry | null = null;
+    let grokActiveRegistryLoaded = false;
+    const grokActiveEvidence = async (): Promise<GrokBuildActiveRegistry | null> => {
+      if (grokActiveRegistryLoaded || entry.provider !== 'grok-build' || !options.grokActiveSessions) return grokActiveRegistry;
+      grokActiveRegistryLoaded = true;
+      try {
+        grokActiveRegistry = await readGrokBuildActiveRegistry(
+          resolve(options.grokActiveSessions),
+          [resolve(options.grokActiveSessions)].map((file) => dirname(file)),
+        );
+      } catch {
+        grokActiveRegistry = null;
+      }
+      return grokActiveRegistry;
+    };
     for await (const descriptor of adapter.discover(scope)) {
       const known = options.knownSources?.find(source => source.provider === descriptor.provider && source.locator === descriptor.locator);
-      const nativeSessionId = known?.nativeSessionId ?? descriptor.nativeSessionId ?? nativeSessionIdFromLocator(descriptor);
+      // A Hermes projection holds many sessions, so its locator basename is
+      // never a session identity.
+      const nativeSessionId = entry.provider === 'hermes'
+        ? (known?.nativeSessionId ?? descriptor.nativeSessionId)
+        : (known?.nativeSessionId ?? descriptor.nativeSessionId ?? nativeSessionIdFromLocator(descriptor));
       const exclusion = matchImportExclusion({ ...descriptor, nativeSessionId }, exclusions);
       if (exclusion) {
         const locator = resolve(descriptor.locator);
@@ -331,6 +399,12 @@ export async function discoverWorkspaceHistories(
       const locator = await canonicalPath(descriptor.locator);
       if (entry.provider === 'codex') {
         workspaceMatch = await codexSourceWorkspaceMatch(locator, workspacePath);
+        if (!workspaceMatch) continue;
+      }
+      if (entry.provider === 'grok-build') {
+        // The url-encoded cwd directory is the only workspace evidence; an
+        // unresolvable or conflicting value never attaches to the caller.
+        workspaceMatch = await grokBuildSourceWorkspaceMatch(locator, workspacePath);
         if (!workspaceMatch) continue;
       }
       const ompHeader = entry.provider === 'omp' ? await readOmpSessionHeader({ ...descriptor, sourceId: 'discovery', authorizedScope: scope }) : undefined;
@@ -374,6 +448,24 @@ export async function discoverWorkspaceHistories(
         fingerprint.digest,
       );
       source.nativeSessionId = rolloutId ?? ompHeader?.id ?? nativeSessionId;
+      if (entry.provider === 'hermes') {
+        // A state.db projection holds many sessions; the locator basename is
+        // not a session identity.
+        delete source.nativeSessionId;
+      }
+      if (entry.provider === 'grok-build' && source.nativeSessionId) {
+        // Provider-reported activity only; histories stay usable without it.
+        const observedAt = options.createdAt ?? new Date().toISOString();
+        const registry = await grokActiveEvidence();
+        const evidence = grokBuildLiveState(registry, source.nativeSessionId);
+        source.liveEvidence = {
+          ...evidence,
+          observedAt,
+          expiresAt: evidence.state === 'active'
+            ? new Date(Date.parse(observedAt) + GROK_BUILD_ACTIVE_FRESHNESS_MS).toISOString()
+            : null,
+        };
+      }
       if (ompHeader) source.sourceId = sha256(['omp-native-source-v1', workspaceId, ompHeader.id].join('\0'));
       if (entry.provider === 'grokbot') {
         // The replica is rewritten wholesale as its sliding window evicts

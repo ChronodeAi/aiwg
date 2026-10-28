@@ -75,3 +75,29 @@ are not claimed as captures from a released binary. The adapter tests cover exac
 heading parsing, prompts, assistant output, tool calls, native identity,
 provenance, unavailable fields, changed output, unsupported native/Cursor
 locators, symlink escape rejection, deterministic replay, and idempotency.
+
+## Native discovery (synthetic schema v1, unqualified)
+
+```sh
+aiwg sessions discover --workspace /work/project \
+  --expected-providers grok-build --grok-root /home/operator/.grok/sessions --json
+aiwg sessions import-discovered --workspace /work/project --confirm --json
+```
+
+`--grok-root` authorizes the sessions directory itself (never Grok home, `$HOME`,
+`GROK_HOME`, or `--provider-home`). Discovery enumerates only the documented two
+levels and the exact `chat_history.jsonl` filename, ignores `session_search.sqlite`
+and unrelated files, and never runs `grok export`. The url-encoded cwd directory
+is decoded exactly once and matched against the authorized workspace; other
+workspaces never attach. Only `chat_history.jsonl` records in the synthetic v1
+shape (`schemaVersion: 1` with `sessionId`/`seq`/`role`/`content`) import — real
+store bytes were never inspected, so anything else fails closed.
+
+`--grok-active-sessions` optionally authorizes `active_sessions.json` (read-only,
+bounded) for live detection. Presence plus a fresh `lastHeartbeatAt` (120-second
+ceiling) reports `active`; anything else reports `unknown`. This is
+provider-reported activity, not a verified running process, and it is advisory
+manifest data outside the manifest identity hash. Authorizing the sessions root
+never grants its parent: a sibling registry file is unread without the explicit
+file flag. Fixtures live under `test/fixtures/sessions/grok-build/native-layout/`
+and `native-active-sessions.json` (see that directory's README).

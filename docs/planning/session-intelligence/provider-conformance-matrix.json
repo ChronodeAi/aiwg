@@ -129,6 +129,7 @@
       "issue": 1915,
       "status": "implemented",
       "operations": [
+        "discover",
         "inspect",
         "stream"
       ],
@@ -146,7 +147,7 @@
           "UNKNOWN_SCHEMA_MAJOR"
         ],
         "exceptions": {
-          "discovery": "provider requires explicit export or negotiated transport"
+          "discovery": "native state.db discovery requires an explicitly authorized --hermes-root and the optional sqlite backend (read-only backup snapshot, synthetic physical schema v1); CLI export ingest remains as the operator-selected fallback"
         }
       }
     },
@@ -261,6 +262,7 @@
       "issue": 2578,
       "status": "implemented",
       "operations": [
+        "discover",
         "inspect",
         "stream"
       ],
@@ -278,7 +280,7 @@
           "SCHEMA_DRIFT"
         ],
         "exceptions": {
-          "discovery": "use grok sessions list/search and grok export; direct $GROK_HOME/sessions parsing remains disabled until released-binary native fixtures qualify it"
+          "discovery": "native chat_history.jsonl discovery requires an explicitly authorized --grok-root (synthetic v1 schema; real stores never inspected); CLI export ingest remains as the operator-selected fallback"
         }
       }
     },
