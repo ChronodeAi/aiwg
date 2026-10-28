@@ -1,3 +1,4 @@
+import { ceilingDecision } from './lattice.js';
 import { canonicalJson } from '../security/artifact-trust.js';
 import { artifactDigest } from '../decision/validate.js';
 import type { MetricProviderRegistry } from './providers/registry.js';
@@ -408,7 +409,7 @@ export function assertGateTightens(parent: GateDefinition, child: GateDefinition
   } else if (minimumAfter < minimumBefore) {
     fail(`gate ${child.id} may only raise minimumN`);
   }
-  if (parent.onFail === 'ROLLBACK' && child.onFail !== 'ROLLBACK') {
+  if (ceilingDecision(child.onFail, parent.onFail) !== child.onFail) {
     fail(`gate ${child.id} may not demote onFail ROLLBACK -> HOLD`);
   }
   // Insufficient evidence always holds: ROLLBACK needs an observed blocking

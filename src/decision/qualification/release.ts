@@ -1,3 +1,4 @@
+import { ceilingDecision } from '../../gates/lattice.js';
 import { canonicalSha256, matchEvidenceDigest, type EvidenceDigestMode } from '../../gates/stats/index.js';
 import type { LabelStabilityReport } from './drift.js';
 import type { BinarySliceMetrics } from './quality.js';
@@ -220,9 +221,8 @@ export function buildQualificationReleaseRecord(
     && suites.length === manifest.cases.length && suites.every(item => item.outcome === 'pass' && item.verified)
     && report.gates.length === 7 && report.gates.every(gate => gate.status === 'pass')
     && report.decision === 'PROMOTE';
-  const decision: QualificationReleaseRecord['decision'] = releaseDecision === 'ROLLBACK'
-    || report.decision === 'ROLLBACK' || input.integrity.integrity_state === 'compromised' || input.integrity.compromise_labels.length > 0 ? 'ROLLBACK'
-    : complete && releaseDecision === 'PROMOTE' ? 'PROMOTE' : 'HOLD';
+  const decision = ceilingDecision(releaseDecision, report.decision, complete ? 'PROMOTE' : 'HOLD',
+    input.integrity.integrity_state === 'compromised' || input.integrity.compromise_labels.length > 0 ? 'ROLLBACK' : 'PROMOTE');
   const fields = {
     schemaVersion: 'decision-qualification-release/v2' as const,
     runId: manifest.runId, sourceCommit: manifest.sourceCommit, dirty: manifest.dirty,

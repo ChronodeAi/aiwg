@@ -1,3 +1,4 @@
+import { ceilingDecision, maxOutcome } from './lattice.js';
 import { qualificationIntegrityAllowlistProblems, type QualificationIntegrityMetadata } from '../decision/qualification/release.js';
 import { artifactDigest } from '../decision/validate.js';
 import { evaluatePredicate } from '../decision/predicates.js';
@@ -23,12 +24,7 @@ export class GateEvaluationError extends Error {
   constructor(message: string) { super(message); this.name = 'GateEvaluationError'; }
 }
 
-const RANK: Record<GateOutcome, number> = { PROMOTE: 0, HOLD: 1, ROLLBACK: 2 };
-
-/** Shared outcome lattice. The maximum never upgrades any component. */
-export function maxOutcome(...outcomes: GateOutcome[]): GateOutcome {
-  return outcomes.reduce((worst, outcome) => (RANK[outcome] > RANK[worst] ? outcome : worst), 'PROMOTE' as GateOutcome);
-}
+export { maxOutcome } from './lattice.js';
 
 /**
  * Per-gate outcome from its own status: `pass` promotes, `fail` takes the
@@ -498,9 +494,8 @@ function upstreamOutcome(upstream: UpstreamCeiling | null): { ceiling: GateOutco
   const compromised = problems.includes('compromised')
     || release === 'ROLLBACK'
     || (upstream.metadata as { integrity_state?: string }).integrity_state === 'compromised';
-  if (compromised) return { ceiling: 'ROLLBACK', problems };
-  if (problems.length || release === 'HOLD') return { ceiling: 'HOLD', problems };
-  return { ceiling: 'PROMOTE', problems };
+  return { ceiling: ceilingDecision(release ?? 'HOLD', compromised ? 'ROLLBACK' : 'PROMOTE',
+    problems.length ? 'HOLD' : 'PROMOTE'), problems };
 }
 
 /**
@@ -724,7 +719,7 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
   const packOutcome = maxOutcome(...gateEvidence.map(entry => entry.outcome));
   const { ceiling: upstreamCeiling, problems: upstreamProblems } = upstreamOutcome(upstream);
   const bindingCeiling = binding.spec.ceiling ?? 'PROMOTE';
-  const decision = maxOutcome(packOutcome, upstreamCeiling, bindingCeiling);
+  const decision = ceilingDecision(packOutcome, upstreamCeiling, bindingCeiling);
   const body = {
     apiVersion: binding.apiVersion,
     kind: 'GateReport' as const,

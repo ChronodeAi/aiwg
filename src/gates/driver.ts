@@ -1,3 +1,4 @@
+import { assertGateReportDecision } from './report.js';
 import { lstatSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -185,10 +186,11 @@ export async function validateGateFile(
     } else {
       // Full report validation needs the trusted evaluation context
       // (`validateGateReport` re-derives the report byte-identically).
-      // `validate` checks the closed schema, the kind and the self-digest,
+      // `validate` checks component ceilings, the closed schema, kind and self-digest,
       // so rewritten evidence with a stale digest still fails here.
       const report = validateGateDocument(document);
       if (!isRecord(document) || document.kind !== 'GateReport') throw new Error('expected kind GateReport');
+      assertGateReportDecision(report as GateReport);
       const { digest, ...fields } = report as unknown as Record<string, unknown>;
       if (typeof digest !== 'string' || artifactDigest(fields) !== digest) {
         throw new Error('report digest does not match its content');
