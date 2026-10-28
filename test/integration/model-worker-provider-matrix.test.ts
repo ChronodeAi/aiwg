@@ -55,7 +55,8 @@ describe('model worker provider matrix', () => {
     {
       provider: 'cursor',
       path: (root: string, role: string) => join(root, `.cursor/agents/aiwg-model-${role}-worker.md`),
-      models: ['claude-4.6-opus-high-thinking', 'claude-4.6-sonnet', 'auto'],
+      // Efficiency uses the standard catalog pin; Cursor's `auto` is never emitted (#2649).
+      models: ['claude-4.6-opus-high-thinking', 'claude-4.6-sonnet', 'claude-4.6-sonnet'],
     },
     {
       provider: 'factory',
@@ -83,6 +84,7 @@ describe('model worker provider matrix', () => {
       const file = path(target, roles[index]);
       const content = await readFile(file, 'utf8');
       expect(content).toContain(models[index]);
+      expect(content).not.toMatch(/^model: auto$/m);
       expect(content).toContain('aiwg discover');
       expect(content).toContain('aiwg show');
       expect(dryRun).toContain(file.replace(target, join(root, 'dry-run')));

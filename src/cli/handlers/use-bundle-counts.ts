@@ -23,7 +23,8 @@ export async function countDeployedBundleRules(bundlePath: string, target: strin
       const content = await fs.readFile(path.join(destination, name), 'utf8');
       const hash = `sha256:${createHash('sha256').update(content).digest('hex')}`;
       if (managed[name]?.hash !== hash) continue;
-      for (const match of content.matchAll(/`aiwg show rule ([^`\s]+) --body`/g)) indexed.add(match[1]);
+      // Rule names may contain spaces (for example "Diversity Awareness").
+      for (const match of content.matchAll(/`aiwg show rule ([^`]+?) --body`/g)) indexed.add(match[1]);
     } catch { /* An index receipt alone does not deliver a rule. */ }
   }
   let sources: string[];

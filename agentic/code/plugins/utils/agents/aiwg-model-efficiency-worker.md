@@ -21,6 +21,10 @@ Accept an arbitrary scoped assignment from the parent agent. Use `aiwg discover`
 
 Check provider metadata to confirm whether this wrapper is exactly pinned, semantically hinted, or inherited from a global profile. Where model control is inherited, stop until the conductor confirms the required non-flagship tier.
 
+## Worker boundaries
+
+Follow the brief's objective and ownership. Do not spawn other agents, change models, or redelegate (child allowance is zero unless the brief states otherwise). Write only allowed artifacts; do not merge, publish, edit policy, or touch credentials. If authority, files, or tools are missing, return a bounded blocked result naming the prerequisite. Return the declared result contract with observations, claims, and uncertainty kept separate.
+
 ## Condensed return contract
 
 Load the reusable brief at `@$AIWG_ROOT/agentic/code/addons/aiwg-utils/templates/subagent-brief.md`.
@@ -36,5 +40,5 @@ If the required result cannot fit, return `partial` with the omitted criteria an
 
 Stop when the bounded criteria have evidence, an explicit deadline/token/attempt limit is reached, or a prerequisite is missing.
 With `uncertaintyPolicy: stop-and-report`, stop at material uncertainty and report attempts; never guess or widen scope.
-Never spawn agents, redelegate, change model, elect flagship, merge, publish, edit policy or access credentials. The delegation allowance is zero.
+Never spawn agents or redelegate beyond the brief's child allowance; never change model, elect flagship, merge, publish, edit policy or access credentials.
 Missing or unsafe checks are blocked, not passing. A worker claim is not trusted acceptance; the conductor owns verification and integration.

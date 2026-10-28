@@ -40,6 +40,18 @@ describe('deployed bundle rule counts', () => {
     expect(await countDeployedBundleRules(bundle, root, rules)).toBe(1);
   });
 
+  it('counts a summary rule whose display name contains spaces', async () => {
+    await writeFile(path.join(bundle, 'rules', 'summary.md'),
+      '---\nid: diversity-awareness\nname: Diversity Awareness\nactivation: summary\nsummary: Synthetic\nenforcement: medium\n---\nBody.\n');
+    const index = '- Diversity Awareness — Fetch: `aiwg show rule Diversity Awareness --body`.\n';
+    await writeFile(path.join(rules, 'RULES-INDEX.md'), index);
+    await writeFile(path.join(rules, '.aiwg-manifest.json'), JSON.stringify({
+      managed: { 'RULES-INDEX.md': { hash: `sha256:${createHash('sha256').update(index).digest('hex')}` } },
+      ruleSources: [path.join(bundle, 'rules/summary.md')],
+    }));
+    expect(await countDeployedBundleRules(bundle, root, rules)).toBe(1);
+  });
+
   it('counts legacy native .mdc files without a projection receipt', async () => {
     await writeFile(path.join(rules, 'native.mdc'), 'Native body');
     expect(await countDeployedBundleRules(bundle, path.join(root, 'project'), '.claude/rules')).toBe(1);
