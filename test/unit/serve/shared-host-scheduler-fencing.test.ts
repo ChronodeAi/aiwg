@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { fork, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   bindManagedAdmissionPolicy, FileAdmissionStore, InMemoryAdmissionStore, SharedHostScheduler,
   type AdmissionRequest, type AdmissionStore, type SharedHostPolicy,
@@ -200,4 +201,102 @@ describe('T-OG-06/24 managed fencing and checkpoint recovery', () => {
     c.advance(10_000); expect(() => c.scheduler.claimLaunch('running', 1)).toThrow(/current/);
     c.scheduler.reconcileNow(); c.retained();
   });
+});
+
+describe('T-OG-06 NFR-OG-003 two-process crash admission', () => {
+  it('T-OG-06 NFR-OG-003 P01 100 managed requests across two processes survive SIGKILL with zero premature releases and no cap overshoot', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'scheduler-crash-admission-')); directories.push(dir);
+    const storePath = join(dir, 'admission.json');
+    const projectId = 'c'.repeat(64);
+    const crashPolicy: SharedHostPolicy = {
+      maxConcurrent: 4, leaseTtlMs: 600_000, agingIntervalMs: 1000, allowPreemption: false,
+      managed: { authorityRef: 'project', projectId, policyDigest: `sha256:${'d'.repeat(64)}`,
+        maxQueued: 200, dimensionCaps: {
+          [`project/${projectId}/group/coding/member/alpha`]: 2,
+          [`project/${projectId}/group/coding/member/beta`]: 2,
+        },
+        installations: { first: { accountScope: 'crash-account', quotaScope: 'pool/crash' } },
+        members: { 'coding/alpha': { cli: 'first' }, 'coding/beta': { cli: 'first' } } },
+    };
+    bindManagedAdmissionPolicy(new FileAdmissionStore(storePath), crashPolicy);
+    const submittedAt = new Date().toISOString();
+    const assignments = Array.from({ length: 100 }, (_, index) => {
+      const requestId = `crash-${String(index).padStart(3, '0')}`;
+      const member = index % 2 === 0 ? 'alpha' : 'beta';
+      return { requestId, request: { requestId, orchestratorId: 'crash-run', environment: 'test',
+        provider: 'synthetic', runtimeKind: 'container', priority: 10, submittedAt, queueTimeoutMs: 600_000,
+        managed: { kind: 'native', group: 'coding', member, cli: 'first', quotaScope: 'pool/crash' },
+        allowance: { runId: 'crash-run', taskId: requestId, reservation: { tokens: 10, costUsd: 1 } } } };
+    });
+    const children: ChildProcess[] = [];
+    const seen = new Set<string>();
+    const states = new Set<string>();
+    let maxAdmitted = 0; const maxMembers: Record<string, number> = {};
+    let crashed = false;
+    let resolveDone!: () => void; let rejectDone!: (error: Error) => void;
+    const completed = new Promise<void>((resolvePromise, rejectPromise) => {
+      resolveDone = resolvePromise; rejectDone = rejectPromise;
+    });
+    const spawn = (tag: string, ids: typeof assignments) => {
+      const child = fork(resolve('node_modules/tsx/dist/cli.mjs'),
+        [resolve('test/fixtures/crash-admission-worker.mts'), storePath, JSON.stringify(crashPolicy), JSON.stringify(ids), tag],
+        { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+      children.push(child);
+      let reported = 0;
+      child.on('message', (message: any) => {
+        if (message?.done) return;
+        seen.add(message.requestId); states.add(message.state);
+        maxAdmitted = Math.max(maxAdmitted, message.admitted);
+        for (const [member, count] of Object.entries(message.members ?? {})) {
+          maxMembers[member] = Math.max(maxMembers[member] ?? 0, count as number);
+        }
+        if (seen.size === 100) resolveDone();
+        if (tag === 'bravo' && !crashed && (reported += 1) === 15) {
+          crashed = true;
+          child.kill('SIGKILL');
+        }
+      });
+      child.on('exit', (code, signal) => {
+        if (tag === 'bravo' && crashed && signal === 'SIGKILL') {
+          // The killed holder can leave the non-blocking store lock behind;
+          // with the holder dead the supervisor clears it before restarting.
+          rmSync(`${storePath}.lock`, { force: true });
+          spawn('bravo-restart', ids);
+        } else if (code !== 0) rejectDone(new Error(`crash worker ${tag} exited with ${code ?? signal}`));
+      });
+      child.on('error', rejectDone);
+    };
+    const timer = setTimeout(() => {
+      for (const child of children) child.kill('SIGKILL');
+      rejectDone(new Error('crash admission did not complete within 40 seconds'));
+    }, 40_000);
+    try {
+      spawn('alpha', assignments.slice(0, 50));
+      spawn('bravo', assignments.slice(50));
+      await completed;
+    } finally {
+      clearTimeout(timer);
+      for (const child of children) child.kill('SIGKILL');
+    }
+    expect(crashed).toBe(true);
+    expect(seen.size).toBe(100);
+    for (const state of states) expect(['admitted', 'queued']).toContain(state);
+    expect(maxAdmitted).toBeLessThanOrEqual(4);
+    expect(maxMembers.alpha).toBeLessThanOrEqual(2);
+    expect(maxMembers.beta).toBeLessThanOrEqual(2);
+    const records = new FileAdmissionStore(storePath).read().records;
+    expect(Object.keys(records)).toHaveLength(100);
+    let admitted = 0; const perMember: Record<string, number> = {};
+    for (const record of Object.values(records)) {
+      expect(['admitted', 'queued']).toContain(record.state);
+      expect(record.finishedAt).toBeUndefined();
+      if (record.state !== 'admitted') continue;
+      admitted += 1;
+      perMember[record.managed!.member!] = (perMember[record.managed!.member!] ?? 0) + 1;
+      expect(record.reservedSlots).toBe(1);
+      expect(Date.parse(record.leaseExpiresAt!) > Date.now()).toBe(true);
+    }
+    expect(admitted).toBe(4);
+    expect(perMember).toEqual({ alpha: 2, beta: 2 });
+  }, 45_000);
 });

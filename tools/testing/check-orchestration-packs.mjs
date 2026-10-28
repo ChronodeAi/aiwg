@@ -8,6 +8,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 export const requiredPacks = [...Array.from({ length: 13 }, (_, i) => i + 1), 14, 15, 16, 17, 18, 19, 20, 21, 23, 24].map(id => `T-OG-${String(id).padStart(2, '0')}`);
 export const registryPath = 'test/conformance/orchestration-v1/packs.json';
 export const fragmentsDir = 'test/conformance/orchestration-v1/packs.d';
+export const mustRequirementsPath = 'test/conformance/orchestration-v1/must-requirements.json';
+export const mustAllowlistPath = 'test/conformance/orchestration-v1/must-allowlist.json';
 
 // Provider profiles register their own test files by adding
 // packs.d/<provider>.json; never edit packs.json's testFiles for a provider.
@@ -121,12 +123,63 @@ export function inspectPackRegistry(registry, repositoryRoot = root, additionalQ
     errors.push(...scenarioErrors(id, pack, contents));
   }
   errors.push(...qualificationErrors(registry?.qualificationResults), ...qualificationErrors(additionalQualifications));
+  // Must coverage is a registry-wide gate, not slice coverage: it fails the
+  // overall result but never rewrites a slice verdict such as the S5 audit.
+  const mustErrors = mustCoverageErrors(registry, repositoryRoot);
+  const scopes = scopedVerdicts(packs, errors);
+  errors.push(...mustErrors);
   return {
     revision: 1, checkpoint: registry?.checkpoint, result: errors.length ? 'failed' : 'wiring-valid',
     releaseQualification: 'unqualified',
-    scopes: scopedVerdicts(packs, errors),
+    scopes,
     packs, qualificationResults: [...(Array.isArray(registry?.qualificationResults) ? registry.qualificationResults : []), ...(Array.isArray(additionalQualifications) ? additionalQualifications : [])], errors,
   };
+}
+
+// Every Must requirement in the inventory is mapped only when some pack both
+// declares it in requirements and binds it in scenarios. Unmapped Musts must
+// name a reviewed allowlist entry with a reason; the check fails on any new
+// unmapped Must, on a stale entry whose Must became mapped, and on an
+// allowlist entry that is empty, missing a reason, or outside the inventory.
+export function mustCoverageErrors(registry, repositoryRoot = root) {
+  let inventory;
+  try {
+    inventory = JSON.parse(fs.readFileSync(path.join(repositoryRoot, mustRequirementsPath), 'utf8'));
+  } catch {
+    return [`${mustRequirementsPath} is missing or invalid`];
+  }
+  let allowlist;
+  try {
+    allowlist = JSON.parse(fs.readFileSync(path.join(repositoryRoot, mustAllowlistPath), 'utf8')).allowlist;
+  } catch {
+    return [`${mustAllowlistPath} is missing or invalid`];
+  }
+  const must = Array.isArray(inventory?.requirements) ? inventory.requirements : [];
+  if (!must.length || must.some(entry => typeof entry?.id !== 'string' || !/^(N?FR)-OG-\d{3}$/.test(entry.id))) {
+    return [`${mustRequirementsPath} must list Must requirement IDs`];
+  }
+  if (!allowlist || typeof allowlist !== 'object' || Array.isArray(allowlist)) {
+    return [`${mustAllowlistPath} must map requirement IDs to reasons`];
+  }
+  const errors = [];
+  for (const [id, reason] of Object.entries(allowlist)) {
+    if (!must.some(entry => entry.id === id)) errors.push(`${mustAllowlistPath}: ${id} is not a Must requirement`);
+    else if (typeof reason !== 'string' || !reason.trim()) errors.push(`${mustAllowlistPath}: ${id} needs a reviewed reason`);
+  }
+  const declared = new Set();
+  const bound = new Set();
+  for (const pack of Object.values(registry?.packs ?? {})) {
+    for (const requirement of pack?.requirements ?? []) declared.add(requirement);
+    for (const scenario of pack?.scenarios ?? []) {
+      if (typeof scenario?.requirement === 'string') bound.add(scenario.requirement);
+    }
+  }
+  for (const { id } of must) {
+    const mapped = declared.has(id) && bound.has(id);
+    if (!mapped && !(id in allowlist)) errors.push(`${id}: Must requirement has no pack requirements/scenarios mapping`);
+    if (mapped && id in allowlist) errors.push(`${mustAllowlistPath}: ${id} is now mapped; remove the allowlist entry`);
+  }
+  return errors;
 }
 
 // Scope verdicts describe registered coverage, never test execution or release acceptance.

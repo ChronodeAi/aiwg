@@ -29,6 +29,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          # The changed-code coverage gate diffs HEAD against its parent (#3641).
+          fetch-depth: 2
 
       - name: Install dependencies
         # Plain `npm ci` (no --omit=optional). Sharp's prebuilt libvips
@@ -127,7 +130,7 @@ jobs:
         run: npm run lint:orchestration-packs
 
       - name: Enforce measured testing-quality and audit-foundation coverage
-        run: npm run test:coverage:testing-quality && npm run test:coverage:audit-foundations && npm run test:coverage:enforcement
+        run: npm run test:coverage:testing-quality && npm run test:coverage:audit-foundations && npm run test:coverage:enforcement && npm run test:coverage:orchestration-changed
 
       - name: Run source-bound testing conformance example
         run: npm run test:conformance:example
@@ -196,6 +199,7 @@ jobs:
             test-results/testing-quality-coverage
             test-results/audit-foundations-coverage
             test-results/coverage-enforcement
+            test-results/orchestration-changed-coverage
           if-no-files-found: error
 
       - name: Run Dataset Intelligence conformance contracts (#2242)
