@@ -28,6 +28,7 @@ import { loadRecoveryModuleGraph } from '../../helpers/recovery-module-graph.mjs
 import { workerSigningFixture } from '../../helpers/worker-qualification-signing.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { systemdClientFixture } from '../../fixtures/systemd-client.js';
+import { detectWorkerIsolation } from '../../../tools/ralph-external/lib/worker-isolation.mjs';
 import { workerInputSchema, workerOutputSchema } from '../../fixtures/ralph-worker-protocol.mjs';
 import { parseToolsets, registerOptInToolsets, KNOWN_TOOLSETS } from '../../../src/mcp/tools/subsystems.mjs';
 
@@ -109,6 +110,8 @@ const roots: string[] = [];
 // Some sandbox hosts refuse native child stdio pipes (EPERM). Framing unit
 // tests still run there; the supervised-process check needs actual pipes.
 const supportsCapturedWorkerStdio = spawnSync(process.execPath, ['-e', 'process.stdout.write("ok")'], { encoding: 'utf8', timeout: 10000 }).stdout === 'ok';
+// Real systemd-unit isolation is only available with a reachable user manager (#3691).
+const hostHasUserSystemd = process.platform === 'linux' && detectWorkerIsolation().mode === 'systemd-unit';
 // #2915 review 6 (finding 3): `run()` now actually debits the shared
 // in-process allowance ledger (previously it only reserved, never
 // charged), so distinct test cases that resolve to the SAME task-chain
@@ -1030,6 +1033,9 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
   // (`mcpBinding.requestId` was never even populated — always `null`).
   it.skipIf(!supportsCapturedWorkerStdio || process.platform !== 'linux')('cancel sends notifications/cancelled with the ACTUAL in-flight request id, never null (#2892 F2)', async () => {
     const root = await tempRoot();
+    // Pin degraded isolation. Under a real user systemd the unit SIGKILL proves
+    // termination (#3691), which would make this request-id test depend on the host.
+    vi.stubEnv('PATH', await tempRoot());
     const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
     const briefPath = path.join(root, 'brief.md');
     const finalOutput = path.join(work, 'final.json');
@@ -1938,6 +1944,9 @@ describe('mcp transport against the real fake stdio worker (T-OG-17)', () => {
   // Measured <2 s/iteration with eight CPU burners; 6 × 2 s × 3 headroom.
   it.skipIf(process.platform !== 'linux' || !supportsCapturedWorkerStdio)('retains capacity and control after each unconfirmed degraded overflow', async () => {
     const root = await tempRoot();
+    // Pin degraded isolation: with no systemd-run on PATH the launcher cannot
+    // place the worker in a unit, so termination cannot be proven (#3691).
+    vi.stubEnv('PATH', await tempRoot());
     const script = path.join(root, 'hostile-worker.mjs');
     const pidPath = path.join(root, 'worker.pid');
     await writeFile(script, `import { writeFileSync } from 'node:fs';
@@ -1980,10 +1989,11 @@ setInterval(() => {}, 1000);
   // #3691: the same degraded-overflow shape with a payload exactly one byte
   // over the frame cap. At cap+1 the worker has fully flushed and idles, so
   // unlike the 12 MiB worker it cannot die via EPIPE — the stop authority
-  // itself must stop it. Single iteration; the six-iteration test above
-  // keeps the 12 MiB payload unchanged.
+  // itself must stop it. The six-iteration test above keeps the 12 MiB payload unchanged.
   it.skipIf(process.platform !== 'linux' || !supportsCapturedWorkerStdio)('stops a worker writing exactly one byte over the frame cap', async () => {
     const root = await tempRoot();
+    // Degraded isolation, as in the 12 MiB test above; the systemd-unit case follows.
+    vi.stubEnv('PATH', await tempRoot());
     const script = path.join(root, 'hostile-worker.mjs');
     const pidPath = path.join(root, 'worker.pid');
     await writeFile(script, `import { writeFileSync } from 'node:fs';
@@ -2006,6 +2016,7 @@ setInterval(() => {}, 1000);
       expect(body.status, JSON.stringify(body)).toBe('uncertain');
       expect(body.termination).toBe('uncertain');
       expect(body.diagnostics.join('; ')).toContain('OG_WORKER_MCP_FRAME_TOO_LARGE');
+      expect(body.diagnostics.join('; ')).not.toContain('OG_WORKER_MCP_STOP_FAILED');
       const [entry] = registry.values();
       expect(entry.terminalAt).toBeNull();
       expect(entry.control?.stop).toBeTypeOf('function');
@@ -2015,6 +2026,42 @@ setInterval(() => {}, 1000);
         expect(() => process.kill(pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
       }, { timeout: 2000, interval: 25 });
       await rm(path.join(root, 'work', 'final.json'), { force: true });
+    } finally {
+      pid ??= Number(await readFile(pidPath, 'utf8').catch(() => '0'));
+      if (pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch { /* already reaped */ } }
+    }
+  }, 30000);
+
+  // #3691: under systemd-unit isolation the overflow stop SIGKILLs the unit's
+  // whole cgroup, so an inactive unit proves termination and frees capacity.
+  // A plain `systemctl stop` used to wait out the stop timeout of this
+  // SIGTERM-ignoring worker and report the overflow as unstopped.
+  it.skipIf(!supportsCapturedWorkerStdio || !hostHasUserSystemd)('confirms the stop of a cap+1 overflow worker under systemd-unit isolation', async () => {
+    const root = await tempRoot();
+    const script = path.join(root, 'hostile-worker.mjs');
+    const pidPath = path.join(root, 'worker.pid');
+    await writeFile(script, `import { writeFileSync } from 'node:fs';
+writeFileSync(process.argv[2], String(process.pid));
+process.on('SIGTERM', () => {});
+process.stdout.write(Buffer.alloc(${MAX_MCP_FRAME_BYTES + 1}, 120));
+setInterval(() => {}, 1000);
+`);
+    const f = mcpFixture(root, path.join(root, 'unused-config.json'));
+    f.drivers.codex.mcpRegistry = {
+      get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath, args: [script, pidPath] }),
+    };
+    resetInProcessAllowanceLedger();
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    let pid: number | undefined;
+    try {
+      const result = await invoke(root, '', {}, { registry, loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }) });
+      pid = Number(await readFile(pidPath, 'utf8'));
+      const body = JSON.parse(result.content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('failed');
+      expect(body.termination).toBe('confirmed');
+      expect(body.diagnostics).toEqual(['OG_WORKER_MCP_FRAME_TOO_LARGE']);
+      expect(registry.canStart()).toBe(true);
+      expect(() => process.kill(pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
     } finally {
       pid ??= Number(await readFile(pidPath, 'utf8').catch(() => '0'));
       if (pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch { /* already reaped */ } }

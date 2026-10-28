@@ -6,17 +6,38 @@ import path from 'node:path';
 import { ChildProcessTransport, MAX_MCP_FRAME_BYTES } from '../../../src/mcp/tools/worker-invoke.mjs';
 import { stopOverflowWorker } from '../../../tools/ralph-external/lib/worker-overflow.mjs';
 import { sampleWorkerGroup, sampleWorkerIdentity } from '../../../tools/ralph-external/process-monitor.mjs';
+import { signalOwnedWorker } from '../../../tools/ralph-external/session-launcher.mjs';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe('MCP overflow stop authority', () => {
   const unit = { mode: 'systemd-unit', unit: 'aiwg-overflow-test.service' };
+  // Stop-only cases: the unit SIGKILL is refused so these keep testing the stop path alone.
+  const noKill = () => ({ ok: false });
+
+  it('SIGKILLs the unit cgroup before stopping it, so a SIGTERM-ignoring worker cannot outlast the deadline (#3691)', async () => {
+    const calls: string[] = [];
+    const killUnit = vi.fn(() => { calls.push('kill'); return { ok: true }; });
+    // A plain stop times out while the worker ignores SIGTERM.
+    const stopUnit = vi.fn(() => { calls.push('stop'); return { ok: false, diagnostic: 'spawnSync /usr/bin/systemctl ETIMEDOUT' }; });
+    const unitStatus = vi.fn().mockReturnValueOnce({ active: true }).mockReturnValue({ active: false });
+    const result = await stopOverflowWorker(unit, { stopUnit, killUnit, unitStatus });
+    expect(calls).toEqual(['kill', 'stop']);
+    expect(killUnit).toHaveBeenCalledWith(unit.unit, { timeoutMs: expect.any(Number) });
+    expect(result).toEqual({ termination: 'confirmed', delivered: true });
+  });
+
+  it('reports a stop failure only when both the unit SIGKILL and the stop fail (#3691)', async () => {
+    const result = await stopOverflowWorker(unit, { stopUnit: () => ({ ok: false }), killUnit: () => { throw new Error('bus down'); },
+      unitStatus: () => ({ active: true }), deadlineMs: 0 });
+    expect(result).toEqual({ termination: 'uncertain', delivered: false, diagnostic: 'OG_WORKER_MCP_STOP_FAILED' });
+  });
 
   it.each([true, false])('requires inactive state after unit stop delivery (ok: %s)', async ok => {
     const stopUnit = vi.fn(() => ({ ok }));
     const unitStatus = vi.fn(() => ({ active: true }));
-    const result = await stopOverflowWorker(unit, { stopUnit, unitStatus, deadlineMs: 0 });
+    const result = await stopOverflowWorker(unit, { stopUnit, killUnit: noKill, unitStatus, deadlineMs: 0 });
     expect(stopUnit).toHaveBeenCalledWith(unit.unit, { timeoutMs: 1 });
     expect(unitStatus).toHaveBeenCalledWith(unit.unit, { timeoutMs: 1 });
     expect(result).toEqual({ termination: 'uncertain', delivered: ok,
@@ -25,13 +46,13 @@ describe('MCP overflow stop authority', () => {
 
   it.each([true, false])('waits for inactive unit state and retains stop failures (ok: %s)', async ok => {
     const unitStatus = vi.fn().mockReturnValueOnce({ active: true }).mockReturnValue({ active: false });
-    const result = await stopOverflowWorker(unit, { stopUnit: () => ({ ok }), unitStatus });
+    const result = await stopOverflowWorker(unit, { stopUnit: () => ({ ok }), killUnit: noKill, unitStatus });
     expect(result).toEqual({ termination: 'confirmed', delivered: ok, ...(ok ? {} : { diagnostic: 'OG_WORKER_MCP_STOP_FAILED' }) });
     expect(unitStatus).toHaveBeenCalledTimes(2);
   });
 
   it('cannot prove termination when unit state is unavailable', async () => {
-    expect(await stopOverflowWorker(unit, { stopUnit: () => ({ ok: true }),
+    expect(await stopOverflowWorker(unit, { stopUnit: () => ({ ok: true }), killUnit: noKill,
       unitStatus: () => { throw new Error('manager unavailable'); }, deadlineMs: 0,
     })).toEqual({ termination: 'uncertain', delivered: true, diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
   });
@@ -49,6 +70,78 @@ describe('MCP overflow stop authority', () => {
     expect(result.termination).toBe('uncertain');
     expect(result.delivered).toBe(false);
     expect(signal).not.toHaveBeenCalled();
+  });
+
+  function supervisedFixture() {
+    const supervisor = { pid: 123, parentPid: process.pid, uid: process.getuid?.(), startTicks: '1' };
+    const worker = { pid: 456, parentPid: supervisor.pid, uid: process.getuid?.(), pgid: 456,
+      sessionId: 456, startTicks: '2', bootId: 'boot', host: 'fixture', executable: '/fixture/node' };
+    const child = { pid: supervisor.pid, exitCode: null as number | null, signalCode: null };
+    return { supervisor, worker, child, launch: { mode: 'degraded', child, transportSupervisor: true } };
+  }
+
+  it('signals the same birth after reparenting, including a retry after supervisor teardown', async () => {
+    const { supervisor, worker, child, launch } = supervisedFixture();
+    let orphaned = false;
+    const sample = vi.fn((pid: number) => pid === supervisor.pid
+      ? child.exitCode === null ? supervisor : null : { ...worker, parentPid: orphaned ? 1 : supervisor.pid });
+    const group = vi.fn();
+    // Reparent after capture but before the launcher's fresh identity check.
+    const signal = vi.fn((identity: any, sig: string) => {
+      orphaned = true;
+      return signalOwnedWorker(identity, sig, { sample, group, supervisor: { pid: process.pid, pgid: 999 } });
+    });
+    const killPid = vi.fn();
+    const options = { platform: 'linux', sample, children: () => [worker], signal, killPid };
+    const expected = { termination: 'uncertain', delivered: true, diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' };
+    expect(await stopOverflowWorker(launch, options)).toEqual(expected);
+    expect(signal).toHaveBeenCalledWith(worker, 'SIGKILL');
+    expect(group).not.toHaveBeenCalled(); // parent mismatch refuses before enumeration
+    expect(killPid).toHaveBeenCalledWith(worker.pid, 'SIGKILL');
+    child.exitCode = 1;
+    expect(await stopOverflowWorker(launch, options)).toEqual(expected);
+    expect(killPid).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['startTicks', '3'], ['bootId', 'other-boot'], ['uid', -1], ['sessionId', 999],
+    ['pgid', 999], ['host', 'other-host'], ['executable', '/other/node'],
+  ])('refuses a reused PID or changed identity (%s) with STOP_FAILED', async (key, value) => {
+    const { supervisor, worker, launch } = supervisedFixture();
+    let changed = false;
+    const sample = (pid: number) => pid === supervisor.pid ? supervisor
+      : { ...worker, parentPid: 1, ...(changed ? { [key]: value } : {}) };
+    const signal = vi.fn(() => { changed = true; return false; });
+    const killPid = vi.fn();
+    expect(await stopOverflowWorker(launch, { platform: 'linux', sample, children: () => [worker], signal, killPid }))
+      .toEqual({ termination: 'uncertain', delivered: false, diagnostic: 'OG_WORKER_MCP_STOP_FAILED' });
+    expect(killPid).not.toHaveBeenCalled();
+  });
+
+  it.each(['startTicks', 'bootId', 'uid', 'sessionId'])('requires complete captured birth identity (%s)', async key => {
+    const { supervisor, worker, launch } = supervisedFixture();
+    const signal = vi.fn(); const killPid = vi.fn();
+    expect(await stopOverflowWorker(launch, { platform: 'linux', sample: () => supervisor,
+      children: () => [{ ...worker, [key]: undefined }], signal, killPid }))
+      .toMatchObject({ termination: 'uncertain', delivered: false });
+    expect(signal).not.toHaveBeenCalled(); expect(killPid).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('retains the original birth after failed delivery and supervisor exit (PID reused: %s)', async reused => {
+    const { supervisor, worker, child, launch } = supervisedFixture();
+    const sample = (pid: number) => pid === supervisor.pid ? child.exitCode === null ? supervisor : null
+      : { ...worker, ...(child.exitCode === null ? {} : { parentPid: 1, startTicks: reused ? '3' : worker.startTicks }) };
+    const children = vi.fn(() => [worker]);
+    const signal = vi.fn(() => false);
+    const killPid = vi.fn().mockImplementationOnce(() => { throw new Error('signal unavailable'); }).mockReturnValue(undefined);
+    const options = { platform: 'linux', sample, children, signal, killPid };
+    expect(await stopOverflowWorker(launch, options))
+      .toEqual({ termination: 'uncertain', delivered: false, diagnostic: 'OG_WORKER_MCP_STOP_FAILED' });
+    child.exitCode = 1;
+    expect(await stopOverflowWorker(launch, options)).toEqual({ termination: 'uncertain', delivered: !reused,
+      diagnostic: reused ? 'OG_WORKER_MCP_STOP_FAILED' : 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
+    expect(children).toHaveBeenCalledTimes(1);
+    expect(killPid).toHaveBeenCalledTimes(reused ? 1 : 2);
   });
 
   it.each(['darwin', 'win32'])('attempts direct-child kill on %s without claiming tree termination', async platform => {
@@ -70,7 +163,7 @@ describe('MCP overflow stop authority', () => {
     let time = 0;
     const unitStatus = vi.fn(() => ({ active: time < 10 }));
     const stopUnit = vi.fn(() => ({ ok: true }));
-    expect(await stopOverflowWorker(unit, { stopUnit, unitStatus, deadlineMs: 10,
+    expect(await stopOverflowWorker(unit, { stopUnit, killUnit: noKill, unitStatus, deadlineMs: 10,
       pollIntervalMs: 25, clock: () => time, sleep: async ms => { time += ms; },
     })).toEqual({ termination: 'confirmed', delivered: true });
     expect(unitStatus.mock.calls).toEqual([[unit.unit, { timeoutMs: 10 }], [unit.unit, { timeoutMs: 1 }]]);

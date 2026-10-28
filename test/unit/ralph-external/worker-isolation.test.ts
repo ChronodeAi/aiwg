@@ -11,6 +11,7 @@ import {
   buildWorkerIsolationArgs,
   detectWorkerIsolation,
   launchIsolatedWorker,
+  killWorkerUnit,
   proposeWorkerUnitName,
   stopWorkerUnit,
 } from '../../../tools/ralph-external/lib/worker-isolation.mjs';
@@ -648,6 +649,26 @@ describe('launchIsolatedWorker gate-then-launch', () => {
     // Only the manager-environment query used the synchronous spawn; the
     // launch itself never did.
     expect(syncCalls.every(call => path.basename(call[0]) === 'systemctl')).toBe(true);
+  });
+});
+
+describe('killWorkerUnit (#3691)', () => {
+  beforeEach(() => { const fixture = systemdClientFixture(); roots.push(fixture.root); vi.stubEnv('PATH', fixture.root); });
+  it('SIGKILLs every process in the unit cgroup with a bounded, SIGKILL-escalating subprocess', () => {
+    vi.stubEnv('AIWG_UNLISTED_SECRET', 'synthetic-conductor-secret');
+    const spawn = vi.fn(() => ({ status: 0, stdout: '', stderr: '', error: null }));
+    expect(killWorkerUnit('aiwg-worker-demo-9', { spawn: spawn as never, timeoutMs: 13 })).toMatchObject({ ok: true });
+    const [binary, argv, options] = spawn.mock.calls[0] as unknown as [string, string[], { timeout: number; killSignal: string; env: NodeJS.ProcessEnv }];
+    expect([binary, ...argv]).toEqual([resolveSystemdClient('systemctl'), '--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', 'aiwg-worker-demo-9']);
+    expect(options).toMatchObject({ timeout: 13, killSignal: 'SIGKILL' });
+    expect(options.env).not.toHaveProperty('AIWG_UNLISTED_SECRET');
+  });
+
+  it('reports a failed kill and refuses unsafe unit names or signals', () => {
+    const spawn = vi.fn(() => ({ status: 1, stdout: '', stderr: 'Failed to kill unit: Unit not loaded.', error: null }));
+    expect(killWorkerUnit('aiwg-worker-demo-9', { spawn: spawn as never })).toEqual({ ok: false, diagnostic: 'Failed to kill unit: Unit not loaded.' });
+    expect(() => killWorkerUnit('bad unit;rm', { spawn: spawn as never })).toThrow(/unit-safe/);
+    expect(() => killWorkerUnit('aiwg-worker-demo-9', { spawn: spawn as never, signal: '9; reboot' })).toThrow(/named signal/);
   });
 });
 
