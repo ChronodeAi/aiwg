@@ -44,6 +44,7 @@ export type AgentSkillProjectionStatus =
 export type AgentSkillCollisionOrigin =
   | 'project'
   | 'user'
+  | 'synced'
   | 'imported'
   | 'aiwg-managed';
 
@@ -208,12 +209,14 @@ export interface AgentSkillDiagnostic {
 /**
  * Higher values win. This preserves the upstream project-over-user rule while
  * keeping explicitly imported skills ahead of AIWG's packaged defaults.
+ * Account-synced skills sit below operator ownership; see docs/skills/agent-skills.md.
  */
 export const AGENT_SKILL_COLLISION_PRECEDENCE: Readonly<
   Record<AgentSkillCollisionOrigin, number>
 > = Object.freeze({
   project: 400,
   user: 300,
+  synced: 250,
   imported: 200,
   'aiwg-managed': 100,
 });

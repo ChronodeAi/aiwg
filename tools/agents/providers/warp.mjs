@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * Warp Terminal Provider
@@ -20,7 +21,6 @@ import { importImpl } from '../../_resolve-impl.mjs';
  *   - Backup creation with timestamp
  *   - CLAUDE.md symlink support
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -48,13 +48,10 @@ import {
   normalizeDeploymentMode,
   collectFrameworkArtifacts
 } from './base.mjs';
-
 import { writeContextFileSync } from './context-write.mjs';
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'warp';
 export const aliases = [];
 
@@ -141,7 +138,8 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
 /**
  * Transform agent content for Warp
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('warp', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const { reasoningModel, codingModel, efficiencyModel } = opts;
 
   // Only transform if model overrides specified

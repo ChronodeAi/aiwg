@@ -11,89 +11,25 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Platform } from '../agents/types.js';
-import { normalizeProviderDefinitionId } from '../providers/provider-definitions.js';
-import { AGENT_SKILLS_SIDECAR_SCHEMA } from './agent-skills.js';
 import { getImportedAgentSkill } from './importer.js';
+import { higherLocalSkillOwner, skillCollisionDiagnostic } from './collision-discovery.js';
 import type {
   AgentSkillDeploymentOptions, AgentSkillDeploymentOutcome,
   AgentSkillDeploymentResult, AgentSkillImportResult,
 } from './types.js';
+import { isManagedTarget, readDeploymentSidecar, providersShareProjectionSurface } from './deployment-ownership.js';
 import { resolvePolicy } from './deployment-policy.js';
 import { projectionDocument, providerSkillBytes, sidecarBytes } from './deployment-projection.js';
 import {
   AGENT_SKILL_MANAGED_MARKER, AGENT_SKILL_DEPLOYMENT_SIDECAR, MARKER_CONTENT,
   assertPortableName, fail,
   type DesiredEntry, type DesiredDirectory, type DesiredFile,
-  type DeploymentSidecar, type ProjectionPlan, type AgentSkillProjectionInspection,
+  type ProjectionPlan, type AgentSkillProjectionInspection,
 } from './deployment-types.js';
 export {
   AGENT_SKILL_MANAGED_MARKER, AGENT_SKILL_DEPLOYMENT_SIDECAR,
   AgentSkillDeploymentError, type AgentSkillProjectionInspection,
 } from './deployment-types.js';
-
-function readDeploymentSidecar(
-  targetPath: string,
-  expectedName?: string,
-  expectedProvider?: Platform,
-): DeploymentSidecar | undefined {
-  try {
-    const sidecarPath = path.join(targetPath, AGENT_SKILL_DEPLOYMENT_SIDECAR);
-    const stat = fs.lstatSync(sidecarPath);
-    if (!stat.isFile() || stat.isSymbolicLink()) return undefined;
-    const value = JSON.parse(fs.readFileSync(sidecarPath, 'utf8')) as DeploymentSidecar;
-    if (
-      value.schemaVersion !== 1
-      || value.kind !== 'aiwg-managed-agent-skill-projection'
-      || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.name)
-      || !normalizeProviderDefinitionId(value.provider)
-      || !/^[0-9a-f]{64}$/.test(value.sourceDigest)
-      || !['native', 'projected', 'degraded', 'unsupported'].includes(
-        value.projectionStatus,
-      )
-      || !Array.isArray(value.reasons)
-      || !value.reasons.every((item) => typeof item === 'string')
-      || !Array.isArray(value.warnings)
-      || !value.warnings.every((item) => typeof item === 'string')
-      || value.portable?.$schema !== AGENT_SKILLS_SIDECAR_SCHEMA
-      || value.portable.schemaVersion !== 1
-      || typeof value.portable.aiwg !== 'object'
-      || value.portable.aiwg === null
-      || Array.isArray(value.portable.aiwg)
-      || value.portable.provenance?.sourceDigest !== value.sourceDigest
-      || !['strict', 'compatible', 'discovery'].includes(
-        value.portable.validationProfile,
-      )
-      || !['untrusted', 'trusted', 'revoked'].includes(
-        value.portable.trust?.state,
-      )
-      || !['inactive', 'active', 'blocked'].includes(
-        value.portable.trust?.activation,
-      )
-      || (expectedName !== undefined && value.name !== expectedName)
-      || (expectedProvider !== undefined && value.provider !== expectedProvider)
-      || path.basename(targetPath) !== value.name
-    ) {
-      return undefined;
-    }
-    return value;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Codex, Antigravity, DeepSeek Harness, and Muse intentionally consume the
- * same portable project skill surface (<repo>/.agents/skills). A projection
- * written for any member is managed ownership for the others when the
- * desired payload is otherwise byte-identical.
- */
-function providersShareProjectionSurface(
-  actual: Platform,
-  expected: Platform,
-): boolean {
-  const shared = new Set<Platform>(['antigravity', 'codex', 'deepseek-harness', 'muse']);
-  return actual === expected || (shared.has(actual) && shared.has(expected));
-}
 
 function buildProjectionPlan(
   record: AgentSkillImportResult,
@@ -108,6 +44,15 @@ function buildProjectionPlan(
       sourceDigest: record.digest,
       desiredEntries: [],
     };
+  }
+
+  const collision = higherLocalSkillOwner(record.name, 'imported', options);
+  if (collision?.origin) {
+    const diagnostic = skillCollisionDiagnostic(record.name, collision.origin, 'imported', collision.path ?? '');
+    policy.status = 'degraded';
+    policy.reasons.push(diagnostic.message);
+    policy.warnings.push(`Existing ${collision.origin}-owned files were not modified: ${collision.path}`);
+    return { blocked: true, policy, targetPath, sourceDigest: record.digest, desiredEntries: [] };
   }
 
   const { document, sourceEntries } = projectionDocument(record);
@@ -153,31 +98,6 @@ function buildProjectionPlan(
     sourceDigest: record.digest,
     desiredEntries,
   };
-}
-
-function isManagedTarget(
-  targetPath: string,
-  expectedName?: string,
-  expectedProvider?: Platform,
-): boolean {
-  if (!fs.existsSync(targetPath)) return false;
-  try {
-    const targetStat = fs.lstatSync(targetPath);
-    const marker = path.join(targetPath, AGENT_SKILL_MANAGED_MARKER);
-    const sidecar = readDeploymentSidecar(targetPath, expectedName);
-    return (
-      targetStat.isDirectory()
-      && !targetStat.isSymbolicLink()
-      && fs.lstatSync(marker).isFile()
-      && !fs.lstatSync(marker).isSymbolicLink()
-      && fs.readFileSync(marker, 'utf8') === MARKER_CONTENT
-      && sidecar !== undefined
-      && (expectedProvider === undefined
-        || providersShareProjectionSurface(sidecar.provider, expectedProvider))
-    );
-  } catch {
-    return false;
-  }
 }
 
 function targetMatches(
@@ -261,6 +181,9 @@ function promoteAtomically(
   const existed = fs.existsSync(plan.targetPath);
   try {
     writeDesiredTree(staging, plan.desiredEntries);
+    if (!existed && fs.existsSync(plan.targetPath)) {
+      fail('AS_DEPLOY_COLLISION_RACE', 'project/user-owned target appeared before imported-owned skill promotion');
+    }
     if (existed) {
       if (!isManagedTarget(plan.targetPath, name, plan.policy.provider)) {
         fail(
@@ -273,10 +196,11 @@ function promoteAtomically(
     try {
       fs.renameSync(staging, plan.targetPath);
     } catch (error) {
-      if (fs.existsSync(plan.targetPath)) {
-        fs.rmSync(plan.targetPath, { recursive: true, force: true });
+      // A failed rename did not install our tree. A newly appeared target is
+      // operator-owned; retain it and the backup rather than deleting either.
+      if (fs.existsSync(backup) && !fs.existsSync(plan.targetPath)) {
+        fs.renameSync(backup, plan.targetPath);
       }
-      if (fs.existsSync(backup)) fs.renameSync(backup, plan.targetPath);
       throw error;
     }
     if (fs.existsSync(backup)) {
@@ -354,7 +278,7 @@ export function deployImportedAgentSkill(
   const record = requireDeployableImport(name, projectDir);
   const plan = buildProjectionPlan(record, { ...options, projectDir });
   const dryRun = options.dryRun ?? false;
-  if (!plan.policy.supported) {
+  if (!plan.policy.supported || plan.blocked) {
     return result('deploy', 'blocked', dryRun, name, plan);
   }
   if (
@@ -362,7 +286,7 @@ export function deployImportedAgentSkill(
     && !isManagedTarget(plan.targetPath, name, plan.policy.provider)
   ) {
     plan.policy.status = 'degraded';
-    plan.policy.reasons.push('target collision is not owned by AIWG');
+    plan.policy.reasons.push('target collision is not owned by AIWG: project/user-owned target blocks imported-owned skill');
     plan.policy.warnings.push('the existing user-owned target was not modified');
     return result('deploy', 'blocked', dryRun, name, plan);
   }
@@ -442,6 +366,7 @@ export function inspectImportedAgentSkillProjection(
     managed,
     matches: (
       plan.policy.supported
+      && !plan.blocked
       && managed
       && targetMatches(
         plan.targetPath,

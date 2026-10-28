@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 import { postDeploy } from './claude-post-deploy.mjs';
 export { postDeploy };
 import { importImpl } from '../../_resolve-impl.mjs';
@@ -22,7 +23,6 @@ import { importImpl } from '../../_resolve-impl.mjs';
  *   - Rules:         .claude/rules/          (platform-native)
  *   - Hooks/settings: .claude/               (platform-native)
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -62,13 +62,10 @@ import {
   buildRemotesTopologyBlock,
   interpolateContextTokens
 } from './base.mjs';
-
 import { writeContextFileSync } from './context-write.mjs';
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'claude';
 export const aliases = [];
 
@@ -165,7 +162,8 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
  * Transform agent content for Claude
  * Claude is the native format - minimal transformation needed
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('claude', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const { reasoningModel, codingModel, efficiencyModel } = opts;
 
   // Explicit overrides re-map every classified model, pinned or not.
