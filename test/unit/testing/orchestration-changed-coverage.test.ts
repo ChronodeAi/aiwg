@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ADAPTER_THRESHOLDS, bucketConfig, classifyChangedFile, listChangedFiles,
   resolveMergeBase, runGate, splitChangedFiles, VALIDATOR_THRESHOLDS,
-  changedCoverage, parseChangedRanges,
+  changedCoverage, changedRanges, parseChangedRanges,
 } from '../../../tools/testing/orchestration-changed-coverage.mjs';
 
 const directories: string[] = [];
@@ -16,6 +16,7 @@ afterEach(() => directories.splice(0).forEach(dir => rmSync(dir, { recursive: tr
 // Exercise the entry point with synthetic Git diffs and coverage-final.json.
 function syntheticGate(diff: string[], hits: number[], options: {
   branchHits?: number[]; newFile?: boolean; untracked?: boolean; omitReport?: boolean;
+  totalCases?: number; executedCases?: number; omitCases?: boolean; outOfScope?: boolean;
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'diff-coverage-')); directories.push(dir);
   for (const folder of ['tools/testing', 'config', 'src/config', 'node_modules/vitest']) {
@@ -38,6 +39,9 @@ function syntheticGate(diff: string[], hits: number[], options: {
     import { pathToFileURL } from 'node:url';
     const { default: config } = await import(pathToFileURL(process.argv[process.argv.indexOf('--config') + 1]));
     mkdirSync(config.test.coverage.reportsDirectory, { recursive: true });
+    if (!${Boolean(options.omitCases)}) writeFileSync(config.test.outputFile.json, JSON.stringify({
+      numTotalTests: ${options.totalCases ?? 1}, numPassedTests: ${options.executedCases ?? 1}, numFailedTests: 0
+    }));
     if (!${Boolean(options.omitReport)}) writeFileSync(config.test.coverage.reportsDirectory + '/coverage-final.json',
       JSON.stringify({ 'src/config/example.ts': ${JSON.stringify(coverage)} }));
   `);
@@ -47,7 +51,7 @@ function syntheticGate(diff: string[], hits: number[], options: {
       if (args.includes('--unified=0')) return ${JSON.stringify(diff)};
       if (args[0] === 'cat-file') return ${options.newFile || options.untracked ? 'null' : '[]'};
       if (args[0] === 'ls-files') return ${options.untracked ? "['src/config/example.ts']" : '[]'};
-      return ${options.untracked ? '[]' : "['src/config/example.ts']"};
+      return ${options.outOfScope ? "['README.md']" : options.untracked ? '[]' : "['src/config/example.ts']"};
     } });
   `, pathToFileURL(helper).href], { cwd: dir, encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL' });
 }
@@ -141,6 +145,7 @@ describe('T-OG-05/06 orchestration changed-code coverage helper', () => {
       const { default: config } = await import(pathToFileURL(process.argv[process.argv.indexOf('--config') + 1]));
       const { mkdirSync, writeFileSync } = await import('node:fs');
       mkdirSync(config.test.coverage.reportsDirectory, { recursive: true });
+      writeFileSync(config.test.outputFile.json, JSON.stringify({ numTotalTests: 1, numPassedTests: 1, numFailedTests: 0 }));
       writeFileSync(config.test.coverage.reportsDirectory + '/coverage-final.json', JSON.stringify(
         Object.fromEntries(config.test.coverage.include.map(file => [file, {
           statementMap: { 0: { start: { line: 2, column: 0 }, end: { line: 2, column: 12 } } },
@@ -214,6 +219,41 @@ describe('T-OG-05/06 orchestration changed-code coverage helper', () => {
     expect(result.stdout).toContain('changed statements 0/0 (100.00%), branches 0/0 (100.00%): PASS');
   });
 
+  it.each([
+    { totalCases: 0, executedCases: 0 },
+    { totalCases: 3, executedCases: 0 },
+  ])('rejects a successful runner with zero executed cases (%j)', options => {
+    const result = syntheticGate(['@@ -1 +1 @@'], [1], options);
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('no executed test cases');
+    expect(result.stdout).not.toContain(': PASS');
+  });
+
+  it('requires a fresh executed-case report even with covered changed code', () => {
+    const result = syntheticGate(['@@ -1 +1 @@'], [1], { omitCases: true });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('validators.tests.json');
+  });
+
+  it('reports no in-scope changes as skipped without claiming cases passed', () => {
+    const result = syntheticGate([], [], { outOfScope: true });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('skipped (0 executed cases)');
+    expect(result.stdout).not.toMatch(/\bpass(?:es|ed)?\b/i);
+  });
+
+  it.each([
+    ['@@ -8 +2,2 @@', [1, 1, 0], '1/2 (50.00%)', 3],
+    ['@@ -8 +2 @@', [0, 1, 0], '1/1 (100.00%)', null],
+  ])('measures exactly the inclusive new-side boundary of %s', (hunk, hits, metric, missed) => {
+    const result = syntheticGate([hunk], hits);
+    expect(result.status, result.stderr).toBe(missed ? 1 : 0);
+    expect(result.stdout).toContain(`changed statements ${metric}`);
+    if (missed) expect(result.stderr).toContain(`uncovered changed lines: ${missed}`);
+  });
+
   it('fails closed when the coverage reporter does not produce its report', () => {
     const result = syntheticGate(['@@ -1 +1 @@'], [1], { omitReport: true });
     expect(result.status).toBe(1);
@@ -259,8 +299,10 @@ describe('T-OG-05/06 orchestration changed-code coverage helper', () => {
       return result;
     };
     git(['init', '-q']);
+    mkdirSync(join(dir, 'src/config'), { recursive: true });
+    writeFileSync(join(dir, 'src/config/original.ts'), 'first\nsecond\nthird\n');
     writeFileSync(join(dir, 'tracked.txt'), 'base\n');
-    git(['add', 'tracked.txt']);
+    git(['add', '.']);
     // Snapshot the index as a baseline tree without creating a commit.
     const base = git(['write-tree']).stdout.trim();
     const runGit = (args: string[]) => {
@@ -271,5 +313,23 @@ describe('T-OG-05/06 orchestration changed-code coverage helper', () => {
     writeFileSync(join(dir, 'tracked.txt'), 'changed\n');
     writeFileSync(join(dir, 'added.ts'), 'export const added = 1;\n');
     expect(listChangedFiles(base, runGit)).toEqual(['added.ts', 'tracked.txt']);
+    // Root-independent diff measurement: modified files own only their new-side hunk.
+    writeFileSync(join(dir, 'src/config/original.ts'), 'first\nchanged\nthird\n');
+    expect(changedRanges(base, 'src/config/original.ts', runGit)).toEqual([{ start: 2, end: 2 }]);
+    renameSync(join(dir, 'src/config/original.ts'), join(dir, 'src/config/renamed.ts'));
+    // Stage a rename to exercise Git's rename heuristics; --no-renames must expose
+    // the destination as a whole new file, even when only one line differs.
+    git(['add', '-A']);
+    expect(listChangedFiles(base, runGit)).toEqual([
+      'added.ts', 'src/config/original.ts', 'src/config/renamed.ts', 'tracked.txt',
+    ]);
+    const diff = runGit(['diff', '--unified=0', '--no-renames', base, '--', 'src/config/renamed.ts'])!;
+    expect(diff).toContain('--- /dev/null');
+    // Use the real diff through the synthetic entrypoint (its new-file fallback
+    // reads its own disposable source tree, never the repository source).
+    const result = syntheticGate(diff, [1, 0, 1], { newFile: true });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('changed statements 2/3 (66.67%)');
+    expect(result.stderr).toContain('uncovered changed lines: 2');
   });
 });
