@@ -55,7 +55,7 @@ export const wasmFiles = [
 // conformance lane. Mechanism suites retain their source owner's unit lane.
 export const orchestrationConformanceFiles = [
   'test/conformance/orchestration-v1/**/*.test.ts',
-  'test/conformance/mission-v1/worker-contracts.test.ts',
+  'test/conformance/mission-v1/**/*.test.ts',
 ];
 export const nodeFiles = [
   'tools/ralph-external/*.test.mjs', 'test/unit/ralph/*.test.mjs',

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -13,6 +13,15 @@ describe('Mission protocol inventory', () => {
     const generated = inventory.entries.filter((entry: { canonicalSource?: string }) => entry.canonicalSource);
     expect(generated.length).toBeGreaterThan(0);
     for (const entry of generated) expect(existsSync(entry.canonicalSource), entry.path).toBe(true);
+  });
+
+  it('classifies every canonical module and mission-v1 fixture regardless of text markers', () => {
+    const inventory = JSON.parse(readFileSync('schemas/mission-protocol/inventory-v1.json', 'utf8'));
+    const paths = new Set(inventory.entries.map((entry: { path: string }) => entry.path));
+    for (const file of readdirSync('src/mission-protocol').filter(file => file.endsWith('.ts'))) {
+      expect(paths.has(`src/mission-protocol/${file}`), file).toBe(true);
+    }
+    expect(paths.has('test/conformance/mission-v1/fixtures/worker-contracts/delegation-vectors.json')).toBe(true);
   });
 
   it('falls back to the Git index when ripgrep is unavailable', () => {
