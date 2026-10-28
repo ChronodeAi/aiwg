@@ -68,10 +68,6 @@
         {
           "path": "src/sessions/fortemi-shard-recovery.ts",
           "sha256": "26ab06f7667f1f198d00e203949fe1b5f6574b44e11ffee63fe40749f0a9fa39"
-        },
-        {
-          "path": "src/cli/handlers/sessions.ts",
-          "sha256": "1c739253594c2c24c4b210ac776f6cd3cae5dac0319718a6a8d9ebc33b8c64e5"
         }
       ],
       "session_count": 2,
