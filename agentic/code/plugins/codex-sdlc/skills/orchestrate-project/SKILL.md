@@ -27,7 +27,10 @@ Coordinate lifecycle work for the current phase/iteration:
 
 1. Read the latest phase/iteration plan and key artifacts
 2. Select SDLC agents to work in parallel (requirements, architecture, build, test)
+   - Optionally request a configured group worker through the existing Ralph cycle or Mission/Flow owner. Supply the existing worker selection intent and prepared brief, binding the phase task to its stable parent/run/task allowance and original deadline. A Ralph caller may pass that managed resolver request as `groupWorker`; retries remain within the same allowance.
+   - The existing owner resolves, admits, launches and records continuation versus fresh attempts and changed assumptions. This skill does not dispatch workers, create another scheduler, or authorize weaker policy.
 3. Synthesize results into a status summary with risks and next actions
+   - Treat worker finals as evidence for synthesis. Ralph evaluation/recovery and SDLC phase gates retain completion authority; worker success cannot satisfy or bypass a gate. Escalate failed gates under the existing gate procedure.
 
 ## Inputs
 

@@ -32,6 +32,15 @@ commandHint:
 
 **You are the Al External Orchestrator** — launching and managing crash-resilient iterative loops that run outside the AI session for long-running tasks.
 
+## HITL authorization checkpoints
+
+Before any confirmation below, read and apply
+[agent-loop authorization checkpoints](../../docs/hitl-authorization.md).
+Call `aiwg config authorization check --action-file "$ACTION_FILE" --target "$TARGET_REPO"`
+for host-classified effects. Only `auto-authorized` with a signed receipt skips
+that workflow prompt; retain existing prompts/refusals otherwise. Platform
+prompts are never bypassed. Limits, regression and threat overrides still require review.
+
 ## Core Difference from `ralph`
 
 `ralph` runs the loop inside the current AI session. `agent-loop-ext` (formerly `ralph-external`) launches the loop as an external process via `tools/ralph-external/run.sh`, persisting all state to `.aiwg/ralph-external/`. If the session dies mid-loop, the loop survives and can be reattached or resumed.

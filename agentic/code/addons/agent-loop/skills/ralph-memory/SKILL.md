@@ -30,6 +30,15 @@ commandHint:
 
 Inspect and manage the semantic memory that Al accumulates across loop iterations. Memory entries record lessons learned, failure patterns, and success patterns so that later iterations — and future loops on similar tasks — benefit from what earlier attempts discovered.
 
+## HITL authorization checkpoints
+
+Before a removal confirmation below, apply
+[agent-loop authorization checkpoints](../../docs/hitl-authorization.md) and call
+`aiwg config authorization check --action-file "$ACTION_FILE" --target "$TARGET_REPO"`.
+Only `auto-authorized` with a signed receipt skips a workflow prompt. Keep
+existing prompts/refusals otherwise; platform prompts are never bypassed.
+Memory deletion without a complete rollback remains irreversible and requires review.
+
 ## Natural Language Triggers
 
 Users may say:

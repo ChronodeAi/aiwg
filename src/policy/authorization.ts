@@ -11,6 +11,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 import type { HitlPolicy } from './hitl-types.js';
 export { resolveHitlAuthorization } from './hitl.js';
+export { checkHitlAuthorization, canonicalHitlAction } from './hitl-check.js';
 import type { AiwgConfig, WorkspaceRepoAction } from '../config/aiwg-config.js';
 import { projectAiwgPath, projectControlPath } from '../config/project-artifacts.js';
 
