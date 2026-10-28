@@ -13,7 +13,7 @@ import { action, context, policy } from '../../fixtures/policy/hitl.js';
 import type { HandlerContext } from '../../../src/cli/handlers/types.js';
 
 const dirs: string[] = [];
-afterEach(async () => { vi.restoreAllMocks(); await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
+afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'aiwg-hitl-config-')); dirs.push(dir);
   await mkdir(join(dir, '.aiwg'));
@@ -111,4 +111,42 @@ describe('authorization config integration', () => {
     const file = join(dir, 'bad.json'); await writeFile(file, '{"body":"private-canary"}');
     await expect(authorizationCli(['enable', '--policy-file', file], dir)).rejects.toThrow('Invalid authorization.hitl');
   });
+  it('shows config help with the authorization entry and authorization usage through both entry points', async () => {
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await configMain([]);
+    expect(output.mock.calls.flat().join('\n')).toContain('authorization       Inspect/validate/preview/enable/revoke');
+    for (const args of [[], ['--help'], ['help']]) {
+      output.mockClear();
+      await authorizationCli(args);
+      expect(output.mock.calls.flat().join('\n')).toContain('Action files cannot supply session authorization');
+    }
+  });
+  it('records a decision through the local effect ledger without performing the proposed action', async () => {
+    const { dir } = await fixture();
+    const file = join(dir, 'action.json');
+    await writeFile(file, JSON.stringify(action()));
+    vi.stubEnv('NODE_ENV', 'test');
+    vi.stubEnv('AIWG_EFFECT_LEDGER_TEST_KEY', 'a'.repeat(64));
+    const before = await readFile(join(dir, '.aiwg', 'aiwg.config'), 'utf8');
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await authorizationCli(['receipt', '--action-file', file], dir);
+    const result = JSON.parse(String(output.mock.calls.at(-1)![0]));
+    expect(result.reconciled.result.verification.result).toBe('present');
+    expect(JSON.parse(await readFile(result.file, 'utf8')).kind).toBe('hitl-authorization');
+    expect(await readFile(join(dir, '.aiwg', 'aiwg.config'), 'utf8')).toBe(before);
+  });
+  it('rejects unreadable JSON, unknown operations, absent config and unknown profiles', async () => {
+    const { dir } = await fixture();
+    await expect(authorizationCli(['preview', '--action-file', 'missing.json'], dir)).rejects.toThrow('could not be read or parsed');
+    await expect(authorizationCli(['unknown'], dir)).rejects.toThrow('Unknown authorization operation');
+    await expect(authorizationCli(['enable'], dir)).rejects.toThrow('--policy-file is required');
+    await expect(authorizationCli(['revoke', '--profile', 'unknown'], dir)).rejects.toThrow('Unknown authorization profile');
+    const emptyDir = await mkdtemp(join(tmpdir(), 'aiwg-hitl-empty-')); dirs.push(emptyDir);
+    await expect(authorizationCli(['revoke'], emptyDir)).rejects.toThrow('No project config found');
+    await writeFile(join(dir, '.aiwg', 'aiwg.config'), JSON.stringify(emptyConfig()));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    await authorizationCli(['revoke'], dir);
+    expect((await readAiwgConfigCandidate(dir))?.authorization?.hitl).toBeUndefined();
+  });
+
 });
