@@ -119,7 +119,10 @@ describe('Mission schema compatibility classification', () => {
 
   it('classifies optional fields and enum additions as additive', () => {
     const next = { ...base, properties: { ...base.properties, optional: { type: 'string' }, state: { enum: ['running', 'completed', 'unknown'] } } };
-    expect(classifyContractChanges(base, next).every(change => change.kind === 'additive')).toBe(true);
+    expect(classifyContractChanges(base, next)).toEqual([
+      { kind: 'additive', path: '/properties/state/enum', detail: 'enum value added: "unknown"' },
+      { kind: 'additive', path: '/properties/optional', detail: 'new optional property' },
+    ]);
   });
 
   const invocationPath = '/$defs/workerResolvedInvocation/properties';

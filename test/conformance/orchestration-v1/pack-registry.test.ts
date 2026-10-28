@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,6 +13,22 @@ const roots: string[] = [];
 afterEach(() => { for (const directory of roots.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 describe('T-OG registry wiring gate (partial coverage is not release acceptance)', () => {
+  it('retains every registered file from the base and sorted fragments exactly once per pack', () => {
+    const expected = JSON.parse(readFileSync(path.join(root, registryPath), 'utf8')).packs;
+    for (const filename of readdirSync(path.join(root, fragmentsDir)).filter(name => name.endsWith('.json')).sort()) {
+      const fragment = JSON.parse(readFileSync(path.join(root, fragmentsDir, filename), 'utf8'));
+      for (const [id, entry] of Object.entries(fragment) as [string, any][]) {
+        expected[id].testFiles.push(...(Array.isArray(entry) ? entry : entry.testFiles));
+      }
+    }
+    const actual = registry().packs;
+    expect(Object.keys(actual).sort()).toEqual(Object.keys(expected).sort());
+    for (const [id, pack] of Object.entries(expected) as [string, any][]) {
+      expect(actual[id].testFiles, id).toEqual(pack.testFiles);
+      expect(new Set(pack.testFiles).size, id).toBe(pack.testFiles.length);
+    }
+  });
+
   it('maps all requested S0/S1 packs to an issue/slice and existing tests', () => {
     const report = inspectPackRegistry(registry(), root);
     expect(Object.keys(report.packs)).toEqual(requiredPacks);
