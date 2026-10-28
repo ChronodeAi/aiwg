@@ -74,6 +74,11 @@ export function withModelWrapper(provider, translate) {
       else if (provider === 'claude') metadata.disallowedTools = ['Write', 'Edit', 'Task', 'Agent'];
     }
     let header = dump(metadata, { lineWidth: -1, noRefs: true });
+    // Keep the translator's own tools line (Factory JSON, Copilot quoted list);
+    // the wrapper never changes tools, and a block list breaks those formats.
+    const nativeHeader = mapped.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)?.[1] ?? '';
+    const nativeTools = nativeHeader.match(/^tools:[^\n]*(?:\n[ \t]+- [^\n]*)*/m)?.[0];
+    if (nativeTools) header = header.replace(/^tools:[^\n]*(?:\n[ \t]+- [^\n]*)*/m, () => nativeTools);
     // Keep Grok's quoted native model selector, including operator-supplied IDs.
     if (provider === 'grok-build' && metadata.model) header = header.replace(/^model: .*$/m, `model: ${JSON.stringify(metadata.model)}`);
     return `---\n${header}---\n\n${notice}\n\n${target.body.trim()}\n`;

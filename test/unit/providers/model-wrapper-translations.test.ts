@@ -43,6 +43,18 @@ describe('model wrapper provider translations', () => {
     }
   });
 
+  it.each([
+    ['factory', /^tools: \[".*"\]$/m],
+    ['copilot', /^tools: \['.*'\]$/m],
+  ] as const)('%s wrappers keep the translator\'s inline tools format', async (provider, pattern) => {
+    const { translate } = await translator(provider);
+    for (const wrapper of MODEL_WRAPPER_DEFINITIONS) {
+      const output = translate(source(wrapper.name), await readFile(source(wrapper.name), 'utf8'), { modelCatalog: catalog, quiet: true });
+      expect(output.match(/^---\n([\s\S]*?)\n---/)![1]).toMatch(pattern);
+      expect(Array.isArray(metadata(output).tools)).toBe(true);
+    }
+  });
+
   it.each(providers)('%s golden: all wrappers retain contract, role tier and safe capabilities', async provider => {
     const { adapter, translate } = await translator(provider);
     const outputs: Record<string, unknown> = {};
