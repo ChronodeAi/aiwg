@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 /**
  * Factory AI Provider
  *
@@ -16,7 +17,6 @@
  *   - Enables custom droids in ~/.factory/settings.json
  *   - Creates/updates AGENTS.md from template
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -55,14 +55,11 @@ import {
   deploySoulCompanions
 } from './base.mjs';
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'factory';
 export const aliases = [];
-
 export const paths = {
   agents: '.factory/droids/',
   commands: '.factory/commands/',
@@ -297,7 +294,8 @@ export function mapModel(originalModel, modelCfg, modelsConfig) {
 /**
  * Transform AIWG agent to Factory droid format
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('factory', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const { modelsConfig = {} } = opts;
 
   // Parse existing frontmatter

@@ -227,7 +227,6 @@ Writing quality validation and AI pattern detection.
 - Discord: https://discord.gg/BuAusFMxdA
 `
   },
-
   'utils': {
     name: 'utils',
     displayName: 'AIWG Utilities',
@@ -240,7 +239,8 @@ Writing quality validation and AI pattern detection.
     extraCopy: [
       { from: 'agentic/code/addons/aiwg-utils/rules/skill-discovery.md', to: 'rules/skill-discovery.md' },
       { from: 'agentic/code/addons/aiwg-utils/rules/skill-discovery-guidance.md', to: 'rules/skill-discovery-guidance.md' },
-      { from: 'agentic/code/addons/aiwg-utils/rules/cli-secondary.md', to: 'rules/cli-secondary.md' }
+      { from: 'agentic/code/addons/aiwg-utils/rules/cli-secondary.md', to: 'rules/cli-secondary.md' },
+      { from: 'agentic/code/addons/aiwg-utils/templates/subagent-brief.md', to: 'templates/subagent-brief.md' }
     ],
     readme: `# AIWG Utilities
 

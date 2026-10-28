@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * Devin Desktop Provider (Windsurf compatibility adapter)
@@ -23,7 +24,6 @@ import { importImpl } from '../../_resolve-impl.mjs';
  *   - Conventional skills and rules deployment
  *   - Devin Desktop selectors resolve to the stable `windsurf` provider id
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -55,13 +55,10 @@ import {
   filterCommandsAgainstSkills,
   deploySoulCompanions
 } from './base.mjs';
-
 import { writeContextFileSync } from './context-write.mjs';
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'windsurf';
 export const aliases = ['devin', 'devin-desktop', 'devin-local', 'cascade'];
 
@@ -98,7 +95,8 @@ export const capabilities = {
 /**
  * Transform agent content to Windsurf format (plain markdown, no YAML frontmatter)
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('windsurf', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
   if (!fmMatch) return content;
 

@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 /**
  * Grok Build provider (experimental).
  * Project skills under `.grok/skills`; user home via $GROK_HOME (default ~/.grok).
@@ -137,7 +138,8 @@ const ROLE_FROM_ALIAS = { opus: 'reasoning', sonnet: 'coding', haiku: 'efficienc
 const GROK_TOOLS = new Set(['Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob']);
 
 /** Grok agent files accept a small YAML frontmatter subset, not AIWG metadata. */
-export function compileGrokAgent(source, content, opts = {}) {
+export const compileGrokAgent = withModelWrapper('grok-build', translateAgent);
+function translateAgent(source, content, opts = {}) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) throw new Error(`${source}: expected YAML agent frontmatter`);
   const metadata = yaml.load(match[1]);
@@ -146,8 +148,8 @@ export function compileGrokAgent(source, content, opts = {}) {
   }
   const name = metadata.name;
   const role = metadata['model-role'] || ROLE_FROM_ALIAS[metadata.model];
-  if (!/^aiwg-model-(reasoning|coding|efficiency)-worker$/.test(String(name)) || !WORKER_ROLES.has(role)) {
-    throw new Error(`${source}: Grok Build native compilation currently supports only the three AIWG model-worker roles; use aiwg show agent for other roles`);
+  if (!/^aiwg-model-((reasoning|coding|efficiency)-worker|explorer|verifier)$/.test(String(name)) || !WORKER_ROLES.has(role)) {
+    throw new Error(`${source}: Grok Build native compilation currently supports only the five AIWG model wrappers; use aiwg show agent for other roles`);
   }
   if (typeof metadata.description !== 'string' || !metadata.description.trim()) {
     throw new Error(`${source}: agent description is required`);
@@ -179,7 +181,7 @@ export function compileGrokAgent(source, content, opts = {}) {
 }
 
 export function deployAgents(agentFiles, targetDir, opts = {}) {
-  const selected = agentFiles.filter(file => /^aiwg-model-(reasoning|coding|efficiency)-worker\.md$/.test(path.basename(file)));
+  const selected = agentFiles.filter(file => /^aiwg-model-((reasoning|coding|efficiency)-worker|explorer|verifier)\.md$/.test(path.basename(file)));
   const dir = assertSafeNativeDirectory(targetDir, paths.agents);
   for (const source of selected) {
     const dest = path.join(dir, path.basename(source));
@@ -291,7 +293,7 @@ export function uninstall(target, opts = {}) {
     }
     manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     for (const [name, record] of Object.entries(manifest.managed ?? {})) {
-      if (path.basename(name) !== name || !/^aiwg-model-(reasoning|coding|efficiency)-worker\.md$/.test(name)) continue;
+      if (path.basename(name) !== name || !/^aiwg-model-((reasoning|coding|efficiency)-worker|explorer|verifier)\.md$/.test(name)) continue;
       const file = path.join(agentsDir, name);
       const relative = path.relative(root, file);
       if (!fs.existsSync(file) || fs.lstatSync(file).isSymbolicLink() || !fs.lstatSync(file).isFile()) {
@@ -377,8 +379,8 @@ async function deploySelected(opts) {
   let count = 0;
   if (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly) {
     const workerDir = path.join(aiwgRoot, 'agentic', 'code', 'addons', 'aiwg-utils', 'agents');
-    const workers = ['reasoning', 'coding', 'efficiency']
-      .map(role => path.join(workerDir, `aiwg-model-${role}-worker.md`))
+    const workers = ['reasoning-worker', 'coding-worker', 'efficiency-worker', 'explorer', 'verifier']
+      .map(role => path.join(workerDir, `aiwg-model-${role}.md`))
       .filter(file => fs.existsSync(file));
     count += deployAgents(workers, opts.target, opts).filter(action => action.type === 'deploy').length;
   }

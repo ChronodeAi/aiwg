@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 import { postDeploy } from './codex-post-deploy.mjs';
 export { postDeploy };
 import { importImpl } from '../../_resolve-impl.mjs';
@@ -28,7 +29,6 @@ import { importImpl } from '../../_resolve-impl.mjs';
  *   - Delegates commands to deploy-prompts-codex.mjs (deploys to ~/.codex/prompts/)
  *   - Delegates skills to deploy-skills-codex.mjs (deploys to .agents/skills/)
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -69,15 +69,12 @@ import {
   parseFrontmatter,
   resolveAiwgRoot
 } from './base.mjs';
-
 import { writeContextFileSync } from './context-write.mjs';
-
 function resolveCodexHelperRoot(srcRoot) {
   const resolved = resolveAiwgRoot(srcRoot);
   if (resolved) return resolved;
   return path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..', '..');
 }
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
@@ -206,7 +203,8 @@ export function renderAgentToml(srcPath, content, models) {
 /**
  * Transform agent content for Codex
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('codex', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const { reasoningModel, codingModel, efficiencyModel } = opts;
   const catalogModels = (opts.modelCatalog || loadRuntimeModelCatalog(staticModelCatalog)).providers.codex.roles;
 

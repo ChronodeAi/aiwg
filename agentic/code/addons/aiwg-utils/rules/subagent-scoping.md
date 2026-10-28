@@ -340,6 +340,8 @@ in conductor context even when receipts are off.
    aiwg ralph-external --status --workers --runs-root /absolute/private/conductor/runs --json
    ```
 
+Reusable wrapper brief: `@$AIWG_ROOT/agentic/code/addons/aiwg-utils/templates/subagent-brief.md`. Prefer `aiwg-model-explorer` for read-only exploration and `aiwg-model-verifier` for read-only oracle checks; use their condensed criterion/evidence/verdict return and stop rules.
+
 **Tier 0 brief/result/receipt templates** (extend the existing Mission/Ralph brief definitions — `workerDirectBrief`/`workerClaims`/`workerDirectVerification`/`workerDirectResult` in `schemas/mission-v1.schema.json`; this is not a new template product):
 
 ```text

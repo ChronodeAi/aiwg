@@ -1,0 +1,82 @@
+{
+  "aiwg-model-reasoning-worker": {
+    "name": "aiwg-model-reasoning-worker",
+    "description": "Choose for architecture, synthesis, difficult analysis, and high-consequence review",
+    "model": "claude-4.6-opus-high-thinking",
+    "tools": [
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "Grep"
+    ],
+    "category": "orchestration",
+    "model-role": "reasoning",
+    "model-tier": "premium",
+    "model-rationale": "Cross-domain architecture and synthesis assignments have high downstream rework cost.",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-coding-worker": {
+    "name": "aiwg-model-coding-worker",
+    "description": "Choose for implementation, tests, debugging, and routine technical delivery",
+    "model": "claude-4.6-sonnet",
+    "tools": [
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "Grep"
+    ],
+    "category": "orchestration",
+    "model-role": "coding",
+    "model-tier": "standard",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-efficiency-worker": {
+    "name": "aiwg-model-efficiency-worker",
+    "description": "Choose for discovery, inventory, focused edits, and bounded low-cost work",
+    "tools": [
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "Grep"
+    ],
+    "category": "orchestration",
+    "model-role": "efficiency",
+    "model-tier": "economy",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-explorer": {
+    "name": "aiwg-model-explorer",
+    "description": "Choose to explore codebase, search files, inspect docs or logs, and return cited findings",
+    "model": "claude-4.6-sonnet",
+    "tools": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash"
+    ],
+    "category": "analysis",
+    "model-role": "efficiency",
+    "model-tier": "standard",
+    "readonly": true,
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-verifier": {
+    "name": "aiwg-model-verifier",
+    "description": "Choose for fresh-context verification and adversarial review using the supplied verification oracle",
+    "model": "claude-4.6-sonnet",
+    "tools": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash"
+    ],
+    "category": "analysis",
+    "model-role": "coding",
+    "model-tier": "standard",
+    "readonly": true,
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  }
+}

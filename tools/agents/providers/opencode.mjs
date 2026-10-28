@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 /**
  * OpenCode Provider
  *
@@ -15,7 +16,6 @@
  *   - Permission system with bash command whitelist
  *   - Temperature and steps per category
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -54,14 +54,11 @@ import {
 } from './base.mjs';
 const { assertConfigDestination, writeConfigAtomic } = await importImpl(import.meta.url, 'mcp/config-file.mjs');
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'opencode';
 export const aliases = [];
-
 export const paths = {
   agents: '.opencode/agent/',   // Discovered via {agent,agents}/**/*.md glob (#773)
   commands: '.opencode/command/',
@@ -208,7 +205,8 @@ export function getAgentConfig(category, name) {
 /**
  * Transform AIWG agent to OpenCode agent format
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('opencode', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const { modelsConfig = {} } = opts;
 
   // Parse existing frontmatter

@@ -1987,7 +1987,6 @@ interface OpenHumanHarnessProfile {
   sandboxMode: 'none' | 'read_only' | 'sandboxed';
   tokenjuiceCompression: 'auto' | 'full' | 'light' | 'off';
 }
-
 const OPENHUMAN_DEFAULT_HARNESS_PROFILE: OpenHumanHarnessProfile = {
   modelHint: 'agentic',
   temperature: 0.35,
@@ -1999,8 +1998,9 @@ const OPENHUMAN_DEFAULT_HARNESS_PROFILE: OpenHumanHarnessProfile = {
   sandboxMode: 'none',
   tokenjuiceCompression: 'auto',
 };
-
 const OPENHUMAN_HARNESS_PROFILES: Record<string, Partial<OpenHumanHarnessProfile>> = {
+  'aiwg-model-explorer': { modelHint: 'efficiency', sandboxMode: 'read_only', maxTurnOutputTokens: 1000 },
+  'aiwg-model-verifier': { modelHint: 'coding', sandboxMode: 'read_only', maxTurnOutputTokens: 1000 },
   'aiwg-model-reasoning-worker': {
     modelHint: 'reasoning',
   },

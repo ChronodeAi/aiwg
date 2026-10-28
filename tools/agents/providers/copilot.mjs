@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * GitHub Copilot Provider
@@ -19,7 +20,6 @@ import { importImpl } from '../../_resolve-impl.mjs';
  *   - Tool mapping to Copilot built-in tools
  *   - Creates copilot-instructions.md
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -55,14 +55,11 @@ import {
   deploySoulCompanions,
   loadRuntimeModelCatalog
 } from './base.mjs';
-
 import { writeContextFileSync } from './context-write.mjs';
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'copilot';
 export const aliases = [];
 
@@ -191,7 +188,8 @@ export function getTools(category, toolsString) {
  * Transform AIWG agent to GitHub Copilot .agent.md format.
  * Output: YAML frontmatter with name, description, tools, model + markdown body (system prompt).
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('copilot', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const { modelsConfig = {} } = opts;
 
   // Parse existing frontmatter

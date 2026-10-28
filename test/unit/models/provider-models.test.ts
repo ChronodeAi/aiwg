@@ -68,6 +68,8 @@ describe('provider model metadata', () => {
       expect.objectContaining({ role: 'reasoning', model: 'gpt-premium', wrapper: MODEL_WRAPPERS.reasoning }),
       expect.objectContaining({ role: 'coding', model: 'gpt-standard', wrapper: MODEL_WRAPPERS.coding }),
       expect.objectContaining({ role: 'efficiency', model: 'gpt-economy', wrapper: MODEL_WRAPPERS.efficiency }),
+      expect.objectContaining({ role: 'efficiency', model: 'gpt-economy', wrapper: 'aiwg-model-explorer' }),
+      expect.objectContaining({ role: 'coding', model: 'gpt-standard', wrapper: 'aiwg-model-verifier' }),
     ]);
   });
 
