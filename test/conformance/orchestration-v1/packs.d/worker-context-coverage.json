@@ -4,8 +4,5 @@
   ],
   "T-OG-05": [
     "test/unit/ralph-external/cli-arguments-status.test.ts"
-  ],
-  "T-OG-06": [
-    "test/unit/ralph-external/cli-entrypoint.test.ts"
   ]
 }
