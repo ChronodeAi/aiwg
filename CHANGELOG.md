@@ -7,7 +7,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
-## [2026.11.0] - 2026-10-28
+## [2026.10.11] - 2026-10-28
 
 ### Added
 
@@ -61,6 +61,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
     the timeout termination sample (#3709).
 - Dependencies: fast-uri 3.1.9 and ip-address 10.7.5 (GitHub
   jmagly/aiwg#375).
+- The stable publish's retained-artifact check now requests the artifact archive
+  with the media type GitHub accepts. The first publish attempt failed with
+  HTTP 415 before anything was published (#3716).
+- The changed-code coverage gate grades only source files (test fixtures are
+  excluded), and worker-context coverage meets the 90/85 thresholds.
 
 ## [2026.10.10] - 2026-10-27
 
