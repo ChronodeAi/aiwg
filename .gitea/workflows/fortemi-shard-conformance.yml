@@ -9,11 +9,21 @@ on:
       - 'src/artifacts/fortemi-shard-export.ts'
       - 'src/artifacts/fortemi-shard-contract/**'
       - 'src/api/index.ts'
+      - 'src/sessions/**'
+      - 'src/cli/handlers/sessions.ts'
+      - 'test/fixtures/sessions/**'
+      - 'test/unit/sessions/**'
+      - 'test/unit/cli/handlers/sessions-export*.test.ts'
+      - 'test/unit/ci/fortemi-session-receipt.test.ts'
+      - 'test/unit/ci/fortemi-shard-conformance-workflow.test.ts'
       - 'test/unit/artifacts/fortemi-shard-export.test.ts'
       - 'test/fixtures/fortemi-shard/**'
       - 'schemas/artifacts/aiwg-fortemi-shard-receipt.v1.schema.json'
       - 'schemas/artifacts/aiwg-fortemi-full-v1-consumer-receipt.v1.schema.json'
       - 'tools/ci/verify-aiwg-fortemi-shard-receipt.mjs'
+      - 'tools/ci/verify-aiwg-fortemi-session-receipt.mjs'
+      - 'tools/ci/fortemi-session-fixture.mjs'
+      - 'tools/ci/fortemi-session-api-test.rs'
       - '.gitea/workflows/fortemi-shard-conformance.yml'
   workflow_dispatch:
 
@@ -196,6 +206,27 @@ jobs:
 
       - name: Verify clean Fortemi import and semantic re-export
         run: node tools/ci/verify-aiwg-fortemi-shard-receipt.mjs --server-checkout /tmp/aiwg-fortemi-consumer
+
+      # Keep session prerequisites and verification after the existing artifact
+      # checks so the artifact lane retains its original package graph and run.
+      - name: Prepare session shard producer
+        shell: bash
+        run: |
+          set -euo pipefail
+          SESSION_PRODUCER_COMMIT="$(node -p "require('./test/fixtures/fortemi-shard/aiwg-session-full-v1.producer.receipt.json').consumer.commit")"
+          git fetch --quiet --no-tags --depth=1 origin "$SESSION_PRODUCER_COMMIT"
+          test "$(git rev-parse "$SESSION_PRODUCER_COMMIT^{commit}")" = "$SESSION_PRODUCER_COMMIT"
+          npm run build:cli
+          # Same pinned optional native dependency as the session test lane.
+          npm install --no-save --save-dev --package-lock=false --min-release-age=0 better-sqlite3@12.8.0
+          node -e "const Database = require('better-sqlite3'); new Database(':memory:').close()"
+
+      - name: Verify session full-v1 shard through pinned Fortemi API
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx vitest run --config config/vitest.config.js test/unit/ci/fortemi-session-receipt.test.ts
+          node tools/ci/verify-aiwg-fortemi-session-receipt.mjs --server-checkout /tmp/aiwg-fortemi-consumer
 
       - name: Remove isolated database
         if: always()
