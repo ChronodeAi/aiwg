@@ -75,7 +75,9 @@ export function createGithubEvidenceTransport({ token, approvalIssue, fetchImpl 
     },
     async downloadArtifact({ repository, artifactId, destination }) {
       if (!positive(artifactId)) throw new Error('Invalid artifact ID');
-      let response = await request(`${API}${repoPath(repository)}/actions/artifacts/${artifactId}/zip`, { binary: true });
+      // The zip endpoint accepts only the JSON media type and answers with a redirect
+      // to the archive; any other Accept returns HTTP 415 (#3716).
+      let response = await request(`${API}${repoPath(repository)}/actions/artifacts/${artifactId}/zip`);
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get('location'); let target;
         try { target = new URL(location); } catch { throw new Error('Invalid artifact redirect'); }
