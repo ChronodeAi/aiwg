@@ -67,6 +67,18 @@ describe('mapCliToProviderId: orchestration CLI to registry provider', () => {
       .toEqual({ skipped: 'clis/nope: providers:nope (unknown provider)' });
     expect(mapCliToProviderId('', null)).toEqual({ skipped: 'empty CLI reference' });
   });
+
+  it.each([null, undefined, {}, { adapter: '' }, { adapter: 42 }])(
+    'defaults an absent or unusable adapter entry %j to the CLI provider', entry => {
+      expect(mapCliToProviderId('codex', { clis: { codex: entry } })).toEqual({ provider: 'codex' });
+    },
+  );
+
+  it('reports malformed adapter references verbatim instead of guessing a provider', () => {
+    expect(mapCliToProviderId('codex', { clis: { codex: { adapter: 'providers:codex,claude' } } }))
+      .toEqual({ skipped: 'clis/codex: providers:codex,claude' });
+    expect(mapCliToProviderId(42)).toEqual({ skipped: 'empty CLI reference' });
+  });
 });
 
 describe('resolveWorkerContextProvidersFromConfig: union of providers and orchestration CLIs', () => {
@@ -107,6 +119,37 @@ describe('resolveWorkerContextProvidersFromConfig: union of providers and orches
     expect(() => resolveWorkerContextProvidersFromConfig({ providers: [], parallelism: {} }))
       .toThrow(/union.*is empty/);
   });
+
+  it('normalizes aliases, ignores unusable configured entries, and dedupes the union in order', () => {
+    expect(resolveWorkerContextProvidersFromConfig({
+      providers: [null, 42, '', ' OpenAI ', 'codex', 'project-local'],
+      parallelism: { clis: { codex: null }, groups: { absent: null, empty: {} } },
+    })).toEqual({ providers: ['codex', 'project-local'], skipped: [] });
+  });
+
+  it('reports group-only non-provider and missing CLI entries once per diagnostic', () => {
+    expect(resolveWorkerContextProvidersFromConfig({
+      providers: ['muse'],
+      parallelism: {
+        clis: { local: { adapter: 'workerAdapters:local-http' } },
+        groups: { offline: { members: [{ cli: 'local' }, { cli: 'local' }, {}, { cli: '' }, { cli: 7 }] } },
+      },
+    })).toEqual({ providers: ['muse'], skipped: [
+      'clis/local: workerAdapters:local-http',
+      "groups/offline/members cli 'local': clis/local: workerAdapters:local-http",
+      'groups/offline/members: empty CLI reference',
+    ] });
+  });
+
+  it('includes skipped adapters in an empty-union refusal and its remedy', () => {
+    expect(() => resolveWorkerContextProvidersFromConfig({
+      providers: 'muse', parallelism: { groups: { offline: { members: [{ cli: 'unknown' }] } } },
+    })).toThrow(expect.objectContaining({
+      code: 'OG_WORKER_CONTEXT_UNAVAILABLE',
+      message: expect.stringContaining("groups/offline/members cli 'unknown': clis/unknown: providers:unknown (unknown provider)"),
+      remedy: expect.stringContaining('configure providers'),
+    }));
+  });
 });
 
 describe('workerContextBootstrapStatus: provider files plus AGENTS.md sections', () => {
@@ -139,6 +182,37 @@ describe('workerContextBootstrapStatus: provider files plus AGENTS.md sections',
 
   it('reports an unknown provider as missing, never present', () => {
     expect(workerContextBootstrapStatus({ workdir: emptyDir(), provider: 'nope' }).present).toBe(false);
+  });
+
+  it('reports an empty kernel directory as missing', () => {
+    const dir = emptyDir();
+    mkdirSync(path.join(dir, '.agents/skills'), { recursive: true });
+    writeFileSync(path.join(dir, 'AGENTS.md'), '<!-- AIWG:bootstrap:start -->');
+    expect(workerContextBootstrapStatus({ workdir: dir, provider: 'muse' }))
+      .toEqual({ present: false, missing: ["provider dir '.agents/skills'"] });
+  });
+
+  it('checks env-gated absolute artifact paths for providers without kernel directories', () => {
+    const dir = emptyDir();
+    const skills = path.join(dir, 'native-skills');
+    mkdirSync(skills);
+    writeFileSync(path.join(skills, 'kernel.md'), 'kernel');
+    writeFileSync(path.join(dir, 'AGENTS.md'), '<!-- AIWG:bootstrap:start -->');
+    vi.stubEnv('AIWG_GROKBOT_SKILLS_DIR', skills);
+    try {
+      expect(workerContextBootstrapStatus({ workdir: dir, provider: 'grokbot' }))
+        .toEqual({ present: true, missing: [] });
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it('does not require AGENTS.md for providers whose bootstrap contract targets another file', () => {
+    const dir = emptyDir();
+    for (const subdir of ['.claude/skills', '.claude/rules', '.claude/hooks']) {
+      mkdirSync(path.join(dir, subdir), { recursive: true });
+      writeFileSync(path.join(dir, subdir, 'kernel.md'), 'kernel');
+    }
+    expect(workerContextBootstrapStatus({ workdir: dir, provider: 'claude' }))
+      .toEqual({ present: true, missing: [] });
   });
 });
 

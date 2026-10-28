@@ -26,6 +26,7 @@ export const FOCUSED_TESTS = [
   'test/unit/mission-protocol/**/*.test.ts',
   'test/unit/mcp/**/*.test.ts',
   'test/unit/ralph-external/**/*.test.ts',
+  'test/unit/ralph-external/**/*.test.mjs',
 ];
 export const REPORT_PARENT = 'test-results/orchestration-changed-coverage';
 
@@ -87,7 +88,7 @@ function runVitestBucket(bucket, files) {
   fs.writeFileSync(configPath, `import base from ${JSON.stringify('../../config/vitest.config.js')};
 export default { ...base, test: { ...base.test, include: ${JSON.stringify(FOCUSED_TESTS)},
   coverage: { enabled: true, provider: 'v8', include: ${JSON.stringify(files)},
-    exclude: [], reporter: ['text', 'json-summary'],
+    exclude: ['test/**'], reporter: ['text', 'json-summary'],
     reportsDirectory: ${JSON.stringify(reportsDirectory)},
     thresholds: { perFile: true, ...${JSON.stringify(thresholds)} } } } };
 `);

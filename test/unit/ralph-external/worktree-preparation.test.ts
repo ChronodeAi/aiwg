@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   WorktreeClaimRegistry,
+  forceOwnerOnlyDir,
   defaultDeployWorkerContext,
   prepareWorkerWorktree,
   releaseWorkerWorktree,
@@ -50,6 +51,30 @@ function tmpWorktreesRoot() {
   roots.push(root);
   return root;
 }
+
+describe('T-OG-04 worktree preparation argument and filesystem refusals', () => {
+  it('rejects absent registries before calling git', async () => {
+    await expect(prepareWorkerWorktree()).rejects.toThrow(/requires a WorktreeClaimRegistry/);
+    expect(() => releaseWorkerWorktree()).toThrow(/requires a WorktreeClaimRegistry/);
+  });
+
+  it('rejects unusable claim owners, file paths and ports without retaining claims', () => {
+    const registry = new WorktreeClaimRegistry();
+    for (const owner of ['', undefined]) expect(() => registry.claim(owner, {})).toThrow(/ownerId/);
+    for (const file of ['relative', undefined]) expect(() => registry.claim('owner', { files: [file] })).toThrow(/absolute/);
+    for (const port of [0, -1, 1.5, 'invalid']) expect(() => registry.claim('owner', { ports: [port] })).toThrow(/positive integer/);
+    expect(registry.list()).toEqual([]);
+  });
+
+  it('creates an owner-only directory through the compatibility entry and refuses files', () => {
+    const root = tmpWorktreesRoot(), dir = path.join(root, 'private');
+    expect(forceOwnerOnlyDir(dir)).toBe(dir);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(forceOwnerOnlyDir(dir)).toBe(dir);
+    const file = path.join(root, 'file'); writeFileSync(file, 'fixture');
+    expect(() => forceOwnerOnlyDir(file)).toThrow(/not a directory/);
+  });
+});
 
 describe('resolveBaseDigest binds an exact commit SHA, never a moving ref (T-OG-04)', () => {
   it('resolves HEAD to a 40-char SHA matching git rev-parse', () => {

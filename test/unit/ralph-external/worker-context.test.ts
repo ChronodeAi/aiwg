@@ -10,14 +10,24 @@
  *
  * @source @tools/ralph-external/lib/worker-context.mjs
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import {
   ensureWorkerContextForLaunch,
   resolveWorkerContextProviders,
+  defaultDeployWorkerContext,
+  listDeployDirtiedBridges,
 } from '../../../tools/ralph-external/lib/worker-context.mjs';
 import { resolveWorkerContextProvidersFromConfig } from '../../../src/config/worker-context.js';
 
 const REAL_UNION = resolveWorkerContextProvidersFromConfig;
+const roots: string[] = [];
+afterEach(() => roots.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true })));
+function workdir() {
+  const dir = mkdtempSync(path.join(tmpdir(), 'tools-worker-context-')); roots.push(dir); return dir;
+}
 
 describe('resolveWorkerContextProviders (tools): loader plus src-side union', () => {
   it('returns an explicit list verbatim without touching the loader', async () => {
@@ -98,5 +108,54 @@ describe('ensureWorkerContextForLaunch: cli mapping, one-pass deploy set, typed 
       mapCli: async () => ({ provider: 'codex' }),
       ensureFn: async () => { throw Object.assign(new Error('deploy broke'), { code: 'OG_WORKER_CONTEXT_UNAVAILABLE', remedy: 'fix it' }); },
     })).rejects.toMatchObject({ code: 'OG_WORKER_CONTEXT_UNAVAILABLE' });
+  });
+
+  it('refuses missing workdir and CLI before invoking the ensure seam', async () => {
+    const ensureFn = vi.fn();
+    await expect(ensureWorkerContextForLaunch({ ensureFn })).rejects.toThrow(/needs a workdir/);
+    await expect(ensureWorkerContextForLaunch({ workdir: workdir(), ensureFn })).rejects.toThrow(/worker CLI id/);
+    expect(ensureFn).not.toHaveBeenCalled();
+  });
+
+  it('reports an unmapped CLI even when the mapper supplies no diagnostic', async () => {
+    await expect(ensureWorkerContextForLaunch({ workdir: workdir(), cli: 'local', mapCli: async () => ({}) }))
+      .rejects.toMatchObject({ code: 'OG_WORKER_CONTEXT_UNAVAILABLE', message: expect.stringContaining('(unmapped)') });
+  });
+
+  it('loads repo config when absent and passes all ensure seams through', async () => {
+    const dir = workdir(), statusFn = vi.fn(), deployFn = vi.fn(), skipWorktreeFn = vi.fn();
+    const ensureFn = vi.fn(async ({ providers }) => ({ providers, ensured: false, skippedBridges: [] }));
+    await expect(ensureWorkerContextForLaunch({ workdir: dir, repoRoot: dir, cli: 'codex',
+      readConfig: async () => config, resolveFromConfig: REAL_UNION, mapCli: async () => ({ provider: 'codex' }),
+      ensureFn, statusFn, deployFn, skipWorktreeFn,
+    })).resolves.toMatchObject({ provider: 'codex', providers: ['muse', 'codex'] });
+    expect(ensureFn).toHaveBeenCalledWith(expect.objectContaining({ statusFn, deployFn, skipWorktreeFn }));
+  });
+});
+
+describe('T-OG-04 tools context deploy and bridge refusals', () => {
+  it('refuses a missing binary and never spawns after validation fails', async () => {
+    const spawn = vi.fn();
+    await expect(defaultDeployWorkerContext({ worktreePath: workdir(), providers: ['muse'], aiwgBin: '', spawn }))
+      .rejects.toThrow(/an aiwg binary/);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the requested providers when an injected sync supplies no union', async () => {
+    const dir = workdir(), spawn = vi.fn(() => ({ status: 0 })), argvFn = vi.fn(async () => ['use', 'all']);
+    await expect(defaultDeployWorkerContext({ worktreePath: dir, providers: ['muse'],
+      syncFn: async () => null, argvFn, spawn,
+    })).resolves.toEqual({ providers: ['muse'] });
+    expect(argvFn).toHaveBeenCalledWith(['muse'], dir);
+  });
+
+  it.each([{ error: new Error('git missing') }, { status: 128, stderr: undefined }])(
+    'reports failed bridge discovery %j', result => {
+      expect(() => listDeployDirtiedBridges({ worktreePath: workdir(), spawn: () => result })).toThrow(/git status/);
+    },
+  );
+
+  it('treats absent status stdout as clean', () => {
+    expect(listDeployDirtiedBridges({ worktreePath: workdir(), spawn: () => ({ status: 0 }) })).toEqual([]);
   });
 });

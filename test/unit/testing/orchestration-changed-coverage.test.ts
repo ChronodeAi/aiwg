@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   ADAPTER_THRESHOLDS, bucketConfig, classifyChangedFile, listChangedFiles,
@@ -83,6 +84,40 @@ describe('T-OG-05/06 orchestration changed-code coverage helper', () => {
     expect(VALIDATOR_THRESHOLDS).toEqual({ statements: 90, branches: 85 });
     expect(ADAPTER_THRESHOLDS).toEqual({ branches: 80 });
     expect(bucketConfig('adapters-recovery', ['src/mcp/a.ts']).thresholds).toBe(ADAPTER_THRESHOLDS);
+  });
+
+  it('generates coverage configs excluding test/** even when fixture paths match the source include', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'changed-coverage-config-')); directories.push(dir);
+    for (const folder of ['tools/testing', 'config', 'node_modules/vitest']) {
+      mkdirSync(join(dir, folder), { recursive: true });
+    }
+    const helper = join(dir, 'tools/testing/orchestration-changed-coverage.mjs');
+    copyFileSync(fileURLToPath(new URL('../../../tools/testing/orchestration-changed-coverage.mjs', import.meta.url)), helper);
+    writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
+    writeFileSync(join(dir, 'config/vitest.config.js'), 'export default { test: {} };');
+    // A fake local runner reads the actual generated module; no nested Vitest process.
+    writeFileSync(join(dir, 'node_modules/vitest/vitest.mjs'), `
+      import { pathToFileURL } from 'node:url';
+      const { default: config } = await import(pathToFileURL(process.argv[process.argv.indexOf('--config') + 1]));
+      console.log('CONFIG=' + JSON.stringify(config.test.coverage));
+      console.log('SUITES=' + JSON.stringify(config.test.include));
+    `);
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      const { runGate } = await import(process.argv[1]);
+      process.exitCode = runGate({ base: 'synthetic-base', runGit: () =>
+        ['src/config/worker-context.ts', 'tools/ralph-external/lib/worker-context.mjs'] });
+    `, pathToFileURL(helper).href], { cwd: dir, encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL' });
+    expect(result.status, result.stderr).toBe(0);
+    const configs = result.stdout.split('\n').filter(line => line.startsWith('CONFIG='))
+      .map(line => JSON.parse(line.slice('CONFIG='.length)));
+    expect(configs).toHaveLength(2);
+    expect(configs.map(config => config.include)).toEqual([
+      ['src/config/worker-context.ts'], ['tools/ralph-external/lib/worker-context.mjs'],
+    ]);
+    for (const config of configs) expect(config.exclude).toEqual(['test/**']);
+    const suites = result.stdout.split('\n').filter(line => line.startsWith('SUITES='))
+      .map(line => JSON.parse(line.slice('SUITES='.length)));
+    for (const include of suites) expect(include).toContain('test/unit/ralph-external/**/*.test.mjs');
   });
 
   it('lists real working-tree changes from a disposable git repository', () => {
