@@ -1813,6 +1813,182 @@
         }
       }
     },
+    "HitlProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "categories",
+        "repos",
+        "environments",
+        "resources",
+        "reversible",
+        "maxImpact",
+        "expiresAt"
+      ],
+      "properties": {
+        "categories": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "repo.read",
+              "repo.edit",
+              "docs.edit",
+              "test.run",
+              "testnet.configure"
+            ]
+          }
+        },
+        "repos": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,255}$"
+          }
+        },
+        "environments": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "local",
+              "development",
+              "test",
+              "testnet"
+            ]
+          }
+        },
+        "resources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[\\\\\\x00-\\x20]).+$"
+          }
+        },
+        "reversible": {
+          "const": true
+        },
+        "maxImpact": {
+          "enum": [
+            "low",
+            "medium"
+          ]
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "HitlSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "categories": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,255}$"
+          }
+        },
+        "repos": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,255}$"
+          }
+        },
+        "environments": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,255}$"
+          }
+        },
+        "resources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[\\\\\\x00-\\x20]).+$"
+          }
+        }
+      }
+    },
+    "HitlPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "enabled",
+        "reviewedAt",
+        "maxAgeSeconds",
+        "expiresAt",
+        "profiles",
+        "deny",
+        "requireReview"
+      ],
+      "properties": {
+        "version": {
+          "const": "1"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "reviewedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "maxAgeSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2592000
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "profiles": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/definitions/HitlProfile"
+          }
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HitlSelector"
+          }
+        },
+        "requireReview": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HitlSelector"
+          }
+        }
+      }
+    },
     "Authorization": {
       "type": "object",
       "additionalProperties": false,
@@ -1825,6 +2001,7 @@
         "assignments"
       ],
       "properties": {
+        "hitl": { "$ref": "#/definitions/HitlPolicy" },
         "version": {
           "const": "1"
         },

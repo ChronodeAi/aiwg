@@ -37,6 +37,11 @@ const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
  * Main CLI entry point for `aiwg config <subcommand> [args]`
  */
 export async function main(args: string[]): Promise<void> {
+  if (args[0] === 'authorization') {
+    const { authorizationCli } = await import('./authorization-cli.js');
+    await authorizationCli(args.slice(1));
+    return;
+  }
   if (await handleWorkerAdoptionArgs(args, process.cwd(), 'config')) return;
   // Extract --config-dir flag before routing
   let configDir: string | undefined;
@@ -330,7 +335,7 @@ async function projectConfigSet(key: string, raw: string, args: string[], quiet 
 
   // Coerce booleans for known boolean fields
   let value: unknown = raw;
-  if (key === 'rules' || key.startsWith('rules.') || key === 'parallelism' || /^parallelism\.(worker_dispatch|worker_mode|groups|clis|admission|budgets|health|retry|activation)(\.|$)/.test(key)) {
+  if (key === 'authorization' || key.startsWith('authorization.') || key === 'rules' || key.startsWith('rules.') || key === 'parallelism' || /^parallelism\.(worker_dispatch|worker_mode|groups|clis|admission|budgets|health|retry|activation)(\.|$)/.test(key)) {
     try { value = JSON.parse(raw); } catch { /* String leaves are validated by the whole-object writer. */ }
   }
   if (/^externalLinks\.[^.]+$/.test(key) || key === 'security.threatAssessment') {
@@ -432,6 +437,10 @@ async function projectConfigSet(key: string, raw: string, args: string[], quiet 
     ? (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : emptyConfig())
     : (await readAiwgConfig(projectDir)) ?? emptyConfig();
   const before = structuredClone(getDottedPath(cfg as unknown as Record<string, unknown>, key));
+  if (key.startsWith('authorization.hitl')) {
+    const { ensureAuthorization } = await import('../policy/hitl-config.js');
+    ensureAuthorization(cfg);
+  }
   setDottedPath(cfg as unknown as Record<string, unknown>, key, value);
   const externalLinkErrors = validateExternalLinks(cfg.externalLinks);
   if (externalLinkErrors.length > 0) {

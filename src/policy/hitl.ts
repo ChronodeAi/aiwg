@@ -1,0 +1,98 @@
+// Resolves bounded HITL authorization without I/O, clocks, or prompt-text authority.
+import { createHash } from 'node:crypto';
+import { HITL_CATEGORIES, HITL_ENVIRONMENTS, type HitlAction, type HitlContext,
+  type HitlLayer, type HitlProfile, type HitlResolution, type HitlSelector } from './hitl-types.js';
+import { validateHitlPolicy } from './hitl-validation.js';
+export type * from './hitl-types.js';
+
+export function hitlDigest(value: unknown): string {
+  const canonical = (v: unknown): unknown => Array.isArray(v) ? v.map(canonical)
+    : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined)
+      .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, x]) => [k, canonical(x)])) : v;
+  return `sha256:${createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex')}`;
+}
+export const hitlPolicyVersion = (layers: HitlLayer[]): string => hitlDigest(layers);
+const identifier = /^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,255}$/;
+const pathValid = (path: string): boolean => path.length > 0 && path.length <= 512 && !path.startsWith('/') && !path.includes(':')
+  && !/[\\\x00-\x20*?\[\]{}!]/.test(path) && path.split('/').every(p => p !== '.' && p !== '..' && p !== '');
+export function validHitlAction(value: unknown): value is HitlAction {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return actionFieldsValid(value as HitlAction);
+}
+function actionFieldsValid(a: HitlAction): boolean {
+  const keys = ['category', 'repo', 'environment', 'resources', 'reversible', 'impact'];
+  return Object.keys(a).length === keys.length && keys.every(k => Object.hasOwn(a, k))
+    && [a.category, a.repo, a.environment].every(x => typeof x === 'string' && identifier.test(x))
+    && Array.isArray(a.resources) && a.resources.length > 0 && a.resources.every(p => typeof p === 'string' && pathValid(p))
+    && typeof a.reversible === 'boolean' && ['low', 'medium', 'high'].includes(a.impact);
+}
+/** Deliberately small glob language: * within a segment; ** crosses directories; ? one character. */
+function glob(pattern: string, path: string): boolean {
+  // Memoized matching bounds work by pattern length × path length, without regex backtracking.
+  const memo = new Map<string, boolean>();
+  const match = (i: number, j: number): boolean => {
+    const key = `${i}:${j}`;
+    if (memo.has(key)) return memo.get(key)!;
+    let result: boolean;
+    if (i === pattern.length) result = j === path.length;
+    else if (pattern[i] === '*' && pattern[i + 1] === '*') {
+      if (pattern[i + 2] === '/') {
+        const slash = path.indexOf('/', j);
+        result = match(i + 3, j) || (slash >= 0 && match(i, slash + 1));
+      } else result = match(i + 2, j) || (j < path.length && match(i, j + 1));
+    } else if (pattern[i] === '*') result = match(i + 1, j)
+      || (j < path.length && path[j] !== '/' && match(i, j + 1));
+    else result = j < path.length && (pattern[i] === path[j] || (pattern[i] === '?' && path[j] !== '/'))
+      && match(i + 1, j + 1);
+    memo.set(key, result);
+    return result;
+  };
+  return match(0, 0);
+}
+function selected(s: HitlSelector, a: HitlAction): boolean {
+  return (!s.categories || s.categories.includes(a.category)) && (!s.repos || s.repos.includes(a.repo))
+    && (!s.environments || s.environments.includes(a.environment))
+    && (!s.resources || a.resources.some(p => s.resources!.some(g => glob(g, p))));
+}
+function grant(p: HitlProfile, a: HitlAction, now: number): boolean {
+  return now < Date.parse(p.expiresAt) && p.reversible === true && a.reversible
+    && p.categories.some(c => c === a.category) && p.repos.includes(a.repo)
+    && p.environments.some(e => e === a.environment)
+    && a.resources.every(path => p.resources.some(g => glob(g, path)))
+    && (a.impact === 'low' || (a.impact === 'medium' && p.maxImpact === 'medium'));
+}
+export function resolveHitlAuthorization(action: unknown, context: HitlContext): HitlResolution {
+  const policyVersion = hitlPolicyVersion(context.layers);
+  const result = (decision: HitlResolution['decision'], reason: string, provenance: HitlResolution['provenance'],
+    matchedProfile: string | null = null): HitlResolution => ({ decision, reason, policyVersion, matchedProfile, provenance });
+  if (context.platform) return result(context.platform === 'deny' ? 'deny' : 'escalate', 'platform-constraint', 'platform');
+  if (!validHitlAction(action)) return result('escalate', 'invalid-action-descriptor', 'default');
+  if (!HITL_CATEGORIES.some(c => c === action.category) || !HITL_ENVIRONMENTS.some(e => e === action.environment)
+    || !action.reversible || action.impact === 'high') return result('escalate', 'safety-category-requires-explicit-review', 'platform');
+  // Revalidate even when invoked directly with objects that bypassed the config loader.
+  if (context.layers.some(l => validateHitlPolicy(l.policy).length)) return result('escalate', 'invalid-policy', 'default');
+  if (context.layers.some(l => l.policy?.deny.some(s => selected(s, action)))) return result('deny', 'explicit-deny', 'explicit-deny');
+  const now = Date.parse(context.now);
+  if (!Number.isFinite(now)) return result('escalate', 'invalid-clock', 'default');
+  const session = context.sessionAuthorization;
+  if (session?.source === 'session-user') {
+    const probe = { version: '1', enabled: true, reviewedAt: context.now, maxAgeSeconds: 1,
+      expiresAt: session.profile.expiresAt, profiles: { session: session.profile }, deny: [], requireReview: [] };
+    if (!validateHitlPolicy(probe).length && grant(session.profile, action, now)) return result('auto-authorized', 'session-user-authorization', 'session-user', 'session');
+  }
+  if (context.expectedPolicyVersion && policyVersion !== context.expectedPolicyVersion) return result('escalate', 'stale-policy-version', 'project-policy');
+  if (!context.layers.length) return result('escalate', 'no-project-policy', 'default');
+  let matched: string | null = null;
+  for (const layer of context.layers) {
+    const p = layer.policy;
+    if (!p?.enabled) return result('escalate', p ? 'policy-revoked' : 'missing-member-policy', 'project-policy');
+    const reviewed = Date.parse(p.reviewedAt);
+    if (now >= Date.parse(p.expiresAt)) return result('escalate', 'policy-expired', 'project-policy');
+    if (reviewed > now || now - reviewed >= p.maxAgeSeconds * 1000) return result('escalate', 'stale-policy-review', 'project-policy');
+    if (p.requireReview.some(s => selected(s, action))) return result('escalate', 'policy-requires-review', 'project-policy');
+    const entry = Object.entries(p.profiles).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).find(([, profile]) => grant(profile, action, now));
+    if (!entry) return result('escalate', 'outside-profile-or-expired', 'project-policy');
+    matched = entry[0];
+  }
+  return result('auto-authorized', 'bounded-project-policy', 'project-policy', matched);
+}
