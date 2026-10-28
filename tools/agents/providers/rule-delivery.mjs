@@ -20,7 +20,7 @@ const { guardRulesInlineBudget } = await importImpl(import.meta.url, 'rules/inli
 const { userConfigFile } = await importImpl(import.meta.url, 'config/user-config-dir.mjs');
 const { resolveProjectAiwgDir } = await importImpl(import.meta.url, 'config/project-artifacts-runtime.mjs');
 import { writeContextFileSync, CONTEXT_STAGE_ENV } from './context-write.mjs';
-import { captureProviderPathDescriptors, setStagedProviderPath, restoreProviderPaths } from './provider-paths-staging.mjs';
+import { captureProviderPathDescriptors, setStagedProviderPath, restoreProviderPaths, logicalProviderOutputPath } from './provider-paths-staging.mjs';
 import { resolveDeliveryRuleBindings } from './rule-binding-targets.mjs';
 import { projectOnDemandReferences, renderRuleKernelIndex } from './rule-presentation.mjs';
 export { renderRuleKernelIndex } from './rule-presentation.mjs';
@@ -1116,7 +1116,7 @@ export async function prepareRuleDeployment(original, provider, deploy) {
     }
     delivery.bindings = remappedBindings;
     preimages.push(...snapshotPreimages([...delivery.rules.map(rule => rule.file), ...delivery.targets.map(entry => entry.source), path.join(target, '.aiwg', 'aiwg.config')]));
-    const opts = { ...original, target: stage, dryRun: false, ruleDelivery: delivery,
+    const opts = { ...original, target: stage, dryRun: false, ruleDelivery: delivery, logicalOutputPath: file => logicalProviderOutputPath(file, stage, target, mappings),
       kernelSkillsPath: kernel, deploymentHome: home, activeWorkspace, hermesLegacySkills, legacyCodexSkills, staging: true };
     await deploySelectedSurface(opts, provider, deploy);
     if (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly && opts.deployBehaviors !== false) {

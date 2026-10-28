@@ -380,6 +380,7 @@ describe('@aiwg/cli packaged web distribution', () => {
       'tools/plugin/package-plugins.mjs',
       'tools/plugin/plugin-links.mjs',
       'tools/skills/deploy-skills-codex.mjs',
+      'tools/skills/codex-skill-transform.mjs',
     ];
     expect(paths.filter((entry) => entry.startsWith('tools/')).every(
       (entry) => allowedToolPrefixes.some((allowed) => entry === allowed || (allowed.endsWith('/') && entry.startsWith(allowed))),
