@@ -569,7 +569,7 @@ References:
       expect(index.entries['.aiwg/wiki/corrupt.md'].memoryRecord).toBeUndefined();
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0]).toMatch(/corrupt.md: invalid memoryRecord metadata quarantined/);
-      await expect(buildIndex(tmpDir, { quiet: true, workers: 0 })).resolves.toBeUndefined();
+      await expect(buildIndex(tmpDir, { quiet: true, workers: 0 })).resolves.toMatchObject({ reindexed: 0, statSkipped: 2 });
     });
 
     it('should build index from .aiwg/ directory', async () => {
@@ -1130,38 +1130,6 @@ type: use-case
       for (const source of sources) {
         expect(stats.mock.calls.filter(([file]) => String(file) === source)).toHaveLength(1);
       }
-    });
-
-    it('completes a no-op 3000-artifact build in under 25 percent of a forced build', async () => {
-      const sourceDir = path.join(tmpDir, 'src');
-      fs.mkdirSync(sourceDir, { recursive: true });
-      for (let i = 0; i < 3000; i++) {
-        const refs = [1, 2, 3].map(offset => `@src/artifact-${(i + offset) % 3000}.ts`).join('\n');
-        fs.writeFileSync(path.join(sourceDir, `artifact-${i}.ts`),
-          `---\ntitle: Artifact ${i}\ntags: [synthetic]\n---\n# Artifact ${i}\n\n${refs}\n`);
-      }
-      // Contention on a shared runner (parallel shards) only ever adds time,
-      // so compare the fastest of three forced builds with the fastest of three
-      // no-op builds. A single forced sample against a best-of-three no-op
-      // skewed the ratio both ways under load (ci.yml run 90229).
-      let forcedMs = Infinity;
-      for (let run = 0; run < 3; run++) {
-        const start = performance.now();
-        await buildIndex(tmpDir, { graph: 'codebase', force: true, quiet: true });
-        forcedMs = Math.min(forcedMs, performance.now() - start);
-      }
-      let incrementalMs = Infinity;
-      for (let run = 0; run < 3; run++) {
-        const incrementalStart = performance.now();
-        await buildIndex(tmpDir, { graph: 'codebase', quiet: true });
-        incrementalMs = Math.min(incrementalMs, performance.now() - incrementalStart);
-      }
-
-      const stats = JSON.parse(fs.readFileSync(path.join(tmpDir, INDEX_DIR, 'codebase', 'stats.json'), 'utf8'));
-      expect(stats.totalArtifacts).toBe(3000);
-      expect(stats.graphMetrics.totalEdges).toBe(9000);
-      console.info(`3000 artifacts: forced=${forcedMs.toFixed(1)}ms, no-op=${incrementalMs.toFixed(1)}ms (${(100 * incrementalMs / forcedMs).toFixed(1)}%)`);
-      expect(incrementalMs).toBeLessThan(forcedMs * 0.25);
     });
 
     it('should infer type from filename patterns', async () => {

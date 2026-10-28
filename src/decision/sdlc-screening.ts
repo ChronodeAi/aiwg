@@ -1,3 +1,4 @@
+import { ceilingDecision } from '../gates/lattice.js';
 import { createHash } from 'node:crypto';
 import {
   DECISION_API_VERSION, DECISION_API_VERSION_STRUCTURED, type AdapterObservation, type ArtifactPin,
@@ -1467,11 +1468,9 @@ export function buildSdlcScreeningReleaseReport(input: {
     input.preregistration, input.trustedPreregistrationDigest, input.heldout, input.nowEpochMs);
   const integrityProblems = qualificationIntegrityAllowlistProblems(input.integrity);
   const readable = !integrityProblems.includes('integrity-invalid');
-  const compromised = readable && (input.integrity.release_gate.decision === 'ROLLBACK'
-    || input.integrity.integrity_state === 'compromised' || input.integrity.compromise_labels.length > 0);
-  const decision: SdlcScreeningReleaseReport['decision'] = compromised ? 'ROLLBACK'
-    : readable && integrityProblems.length === 0 && preregistered.decision === 'pass'
-      && input.integrity.release_gate.decision === 'PROMOTE' ? 'PROMOTE' : 'HOLD';
+  const compromised = readable && (input.integrity.integrity_state === 'compromised' || input.integrity.compromise_labels.length > 0);
+  const decision = ceilingDecision(readable ? input.integrity.release_gate.decision : 'HOLD',
+    compromised ? 'ROLLBACK' : 'PROMOTE', integrityProblems.length === 0 && preregistered.decision === 'pass' ? 'PROMOTE' : 'HOLD');
   const unsigned = {
     schemaVersion: input.preregistration.schemaVersion === SDLC_SCREENING_PREREGISTRATION_VERSION_V2
       ? SDLC_SCREENING_RELEASE_VERSION_V2 : SDLC_SCREENING_RELEASE_VERSION,

@@ -1,6 +1,6 @@
 ---
 activation: summary
-summary: "Delegate one bounded objective with minimal context and explicit outputs; parallelize independent work within provider, project, and context caps."
+summary: "Delegate one bounded objective with minimal context, uncertainty policy, regression checks and a verification oracle; parallelize independent work within provider, project, and context caps."
 bound_to:
   skills:
     - agent-loop
@@ -107,6 +107,13 @@ Prevent context overload when delegating to subagents by enforcing focused, sing
 
 ### Rule 1: Single Responsibility Per Subagent
 Each invocation MUST have ONE clear objective. **FORBIDDEN**: one subagent for "review security, improve perf, update docs, write tests." **REQUIRED**: decompose into 4 focused subagents, each with one responsibility.
+
+Brief contract: state `uncertaintyPolicy`, `mustNotRegress`, and an exact
+`verificationOracle`. For non-trivial implementation require a design review
+artifact before dispatch. Final acceptance needs review of the current PR head
+by a different observed model family. Retain A/B/C findings across rounds:
+open A blocker/major findings block; B gets a follow-up; C stays out of scope.
+Record review rounds and acceptance `roundsToClean` (see `aiwg-mission`).
 
 ### Rule 2: Context Minimization
 Include only context directly relevant to the task. **FORBIDDEN**: dumping full 50-message history + all 15 module files for a task that only needs one function. **REQUIRED**: pass just the target function, the relevant test section, and the acceptance criteria.

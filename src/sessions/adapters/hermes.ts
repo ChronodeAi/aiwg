@@ -1,3 +1,5 @@
+import { lstat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { number } from '../../schema/zod-validation.mjs';
 import {
@@ -17,6 +19,12 @@ import {
   streamBoundedJsonLines,
   type BoundedJsonRecord, type ReaderLimits,
 } from '../readers.js';
+import {
+  HERMES_SNAPSHOT_LOCATOR_CLASS,
+  HERMES_STATE_DB_FILENAME,
+  hermesSnapshotStagingDir,
+  snapshotHermesStateDb,
+} from './hermes-state-db.js';
 
 export const HERMES_ADAPTER_VERSION = '1.0.0';
 export const HERMES_EXPORT_SCHEMA_VERSION = '1.0.0';
@@ -90,7 +98,7 @@ export class HermesSessionAdapter implements SessionSourceAdapter {
   readonly provider = 'hermes' as const;
   readonly adapterVersion = HERMES_ADAPTER_VERSION;
   readonly disposition = 'implemented' as const;
-  readonly supportedOperations = ['inspect', 'stream'] as const;
+  readonly supportedOperations = ['discover', 'inspect', 'stream'] as const;
   readonly acquisitionModes = ['jsonl', 'api', 'sqlite-snapshot'] as const;
 
   constructor(
@@ -98,8 +106,37 @@ export class HermesSessionAdapter implements SessionSourceAdapter {
     private readonly localApi?: HermesLocalSessionsTransport,
   ) {}
 
-  async *discover(_scope: AuthorizedScope): AsyncIterable<SourceDescriptor> {
-    // Native exports and consistent snapshots require explicit selection.
+  /**
+   * Discover through a consistent `sqlite3.backup()` snapshot of the
+   * explicitly authorized `<root>/state.db`. The live database is never
+   * opened for writing and never streamed directly; matching sessions are
+   * projected to an owned staging snapshot the existing consistent-snapshot
+   * path already validates.
+   */
+  async *discover(scope: AuthorizedScope): AsyncIterable<SourceDescriptor> {
+    if (scope.allowedRoots.length === 0) {
+      throw new SessionContractError(
+        'SOURCE_NOT_AUTHORIZED',
+        'Hermes discovery requires an explicitly authorized Hermes home; pass --hermes-root.',
+      );
+    }
+    const staging = hermesSnapshotStagingDir(scope.workspaceId);
+    for (const root of [...scope.allowedRoots].sort()) {
+      if (!(await isStateDbFile(join(root, HERMES_STATE_DB_FILENAME)))) continue;
+      const snapshot = await snapshotHermesStateDb({
+        hermesRoot: root,
+        stagingDir: staging,
+        allowedRoots: scope.allowedRoots,
+        workspaceId: scope.workspaceId,
+        limits: this.limits,
+      });
+      if (!snapshot) continue;
+      yield {
+        provider: 'hermes',
+        locator: snapshot.projectionPath,
+        locatorClass: HERMES_SNAPSHOT_LOCATOR_CLASS,
+      };
+    }
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
@@ -338,6 +375,14 @@ function normalizeMessage(
     extensions: { ...common, toolCall: call },
   }));
   return records;
+}
+
+async function isStateDbFile(path: string): Promise<boolean> {
+  try {
+    return (await lstat(path)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function ended(value: HermesExport): boolean {

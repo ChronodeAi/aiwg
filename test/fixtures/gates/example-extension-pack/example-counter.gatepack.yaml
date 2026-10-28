@@ -1,0 +1,54 @@
+apiVersion: gates.aiwg.io/v1alpha1
+kind: GatePack
+metadata:
+  id: extension:example/counter
+  version: 1.0.0
+  description: Minimal example extension pack for the gate-pack authoring guide. Caps the false-ready rate and rolls back on any blocking-slice event.
+spec:
+  parameters:
+    falseReadyMaxBps:
+      type: bps
+      direction: lower-is-stricter
+      default: 100
+      description: Wilson upper bound cap on the false-ready rate (basis points).
+  metrics:
+    false-ready:
+      provider: decision.screening/v1
+      kind: proportion
+      description: False-ready events per slice.
+  gates:
+    - id: false-ready-upper
+      kind: interval-bound
+      description: Wilson upper bound on the false-ready rate.
+      metric:
+        provider: decision.screening/v1
+        name: false-ready
+      statistic:
+        kind: interval-bound
+        method: wilson
+        bound: upper
+        levelBps: 9500
+      threshold:
+        op: lte
+        param: falseReadyMaxBps
+      scope:
+        mode: all
+      direction: lower-is-stricter
+      onFail: HOLD
+    - id: blocking-false-ready-events
+      kind: count-max
+      description: Zero observed false-ready events on the blocking slice; an observed event rolls back.
+      metric:
+        provider: decision.screening/v1
+        name: false-ready
+      threshold:
+        op: lte
+        value: 0
+      scope:
+        mode: listed
+        slices:
+          - blocked
+      direction: lower-is-stricter
+      onFail: ROLLBACK
+  combine:
+    rule: max-severity

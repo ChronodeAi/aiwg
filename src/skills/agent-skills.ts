@@ -7,6 +7,10 @@
  * @implements #1875
  */
 
+import { CLAUDE_SKILL_FIELDS, type AgentSkillProviderExtensions } from './provider-extensions.js';
+export { CLAUDE_SKILL_FIELDS } from './provider-extensions.js';
+export { createAgentSkillSidecar, restoreAgentSkillFromSidecar } from './agent-skill-sidecar.js';
+
 export const AGENT_SKILLS_BASELINE = {
   repository: 'agentskills/agentskills',
   revision: '38a2ff82958afee88dadf4831509e6f7e9d8ef4e',
@@ -152,6 +156,7 @@ export interface AgentSkillDocument {
   body: string;
   resources: AgentSkillResource[];
   aiwg: AiwgSkillControlMetadata;
+  providers?: AgentSkillProviderExtensions;
   /**
    * Unknown external fields are diagnostic evidence only. Importers must never
    * promote them to `aiwg` control metadata automatically.
@@ -173,6 +178,7 @@ export interface AgentSkillSidecarV1 {
   $schema: typeof AGENT_SKILLS_SIDECAR_SCHEMA;
   schemaVersion: 1;
   aiwg: AiwgSkillControlMetadata;
+  providers?: AgentSkillProviderExtensions;
   provenance: AgentSkillProvenance;
   validationProfile: AgentSkillValidationProfile;
   trust: {
@@ -379,6 +385,7 @@ export function validateCompatibleAgentSkillMetadata(
   const recognizedFields = new Set<string>([
     ...STANDARD_SKILL_FIELDS,
     ...AIWG_SKILL_CONTROL_FIELDS,
+    ...CLAUDE_SKILL_FIELDS,
   ]);
   for (const key of Object.keys(frontmatter).sort()) {
     if (!recognizedFields.has(key)) {
@@ -455,39 +462,4 @@ export function equivalentPortableAllowedTools(
     return undefined;
   }
   return aiwg.allowedTools.join(' ');
-}
-
-export function createAgentSkillSidecar(
-  document: AgentSkillDocument,
-  provenance: AgentSkillProvenance,
-  validationProfile: AgentSkillValidationProfile,
-  trust: AgentSkillSidecarV1['trust'],
-): AgentSkillSidecarV1 {
-  return {
-    $schema: AGENT_SKILLS_SIDECAR_SCHEMA,
-    schemaVersion: 1,
-    aiwg: structuredClone(document.aiwg),
-    provenance: structuredClone(provenance),
-    validationProfile,
-    trust: { ...trust },
-  };
-}
-
-/**
- * Restore AIWG metadata omitted at a strict portability boundary. Portable
- * content remains authoritative for standard fields, body, and resources.
- */
-export function restoreAgentSkillFromSidecar(
-  standard: AgentSkillsStandardMetadata,
-  body: string,
-  resources: readonly AgentSkillResource[],
-  sidecar: AgentSkillSidecarV1,
-): AgentSkillDocument {
-  return {
-    standard: structuredClone(standard),
-    body,
-    resources: resources.map((resource) => ({ ...resource })),
-    aiwg: structuredClone(sidecar.aiwg),
-    unknownFields: [],
-  };
 }

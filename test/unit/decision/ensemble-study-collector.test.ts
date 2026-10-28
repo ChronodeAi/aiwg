@@ -1,3 +1,4 @@
+import { GateDecisionUpgradeError } from '../../../src/gates/lattice.js';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -219,6 +220,26 @@ describe('D17 scorer with recorded injected-transport observations', () => {
   const input = async (c: Awaited<ReturnType<typeof setup>>) => ({ corpus: c.bundle.corpus, preregistration: c.bundle.preregistration,
     attempts: (await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result).map(event => event.attempt),
     gold: c.prepared.gold, integrity: integrity(), approvedCalibration: c.bundle.approval.calibration, calibrated: false as const });
+  it('preserves D17 scoring and collector verdict tables with the shared lattice (#2829)', async () => {
+    const c = await setup(true);
+    const summary = await c.run(vi.fn(async (_url: unknown, init?: RequestInit) => reply(init)));
+    if (summary.status === 'disabled') throw new Error('expected offline collection');
+    const base = await input(c);
+    for (const upstream of ['PROMOTE', 'HOLD', 'ROLLBACK'] as const) for (const compromised of [false, true]) {
+      const metadata = { ...base.integrity, release_gate: { decision: upstream, reasons: [] },
+        compromise_labels: compromised ? ['fixture_edit'] : [] };
+      const expected = upstream === 'ROLLBACK' || compromised ? 'ROLLBACK' : 'HOLD';
+      const report = await scoreD17Study({ ...base, integrity: metadata }, c.prepared);
+      expect(report.decision).toBe(expected);
+      if (expected === 'ROLLBACK') expect(() => validateD17Artifact('report', { ...report, decision: 'HOLD' }))
+        .toThrow(GateDecisionUpgradeError);
+      const collected = await scoreHeldoutStudy({ run: c.runDir, trustedEvidenceDigest: summary.evidenceDigest,
+        trustedApprovalDigest: heldoutDigest(c.bundle.approval), gold: c.prepared.gold, integrity: metadata,
+        trustedIntegrityDigest: heldoutDigest(metadata), moduleDigest: c.bundle.preregistration.scorerDigest,
+        module: { prepare: async () => c.prepared, score: value => scoreD17Study(value, c.prepared) } });
+      expect(collected.decision).toBe(expected);
+    }
+  });
   it('refuses every non-diagnostic or unknown approved calibration mode and any calibrated flag', async () => {
     const c = await setup(true);
     await c.run(vi.fn(async (_url: unknown, init?: RequestInit) => reply(init)));

@@ -17,6 +17,7 @@ Subcommands:
   path                Print config directory path
   edit                Open config in $EDITOR/$VISUAL (requires a terminal)
   edit --print-path   Print the config file path instead of opening an editor
+  authorization       Inspect/validate/preview/enable/revoke bounded HITL policy
   gitignore           Show/check/fix .gitignore AIWG entries
 
 Reviewed worker policy pair (project scope, no prompts):

@@ -1031,7 +1031,7 @@
       "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
     },
     {
-      "path": "src/mission-protocol/codecs.ts",
+      "path": "src/mission-protocol/canonical-codecs.ts",
       "owner": "src/mission-protocol",
       "role": "producer-consumer",
       "currentVersion": "mission.aiwg.io/v1",
@@ -1055,6 +1055,53 @@
       "migrationReason": "Canonical Mission Protocol v1 source or contract."
     },
     {
+      "path": "src/mission-protocol/codecs.ts",
+      "owner": "src/mission-protocol",
+      "role": "producer-consumer",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
+        "completed",
+        "failed"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "canonicalize",
+      "migrationReason": "Canonical Mission Protocol v1 source or contract."
+    },
+    {
+      "path": "src/mission-protocol/health-trace-codecs.ts",
+      "owner": "src/mission-protocol",
+      "role": "producer-consumer",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
+        "cancelled",
+        "completed",
+        "failed"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "canonicalize",
+      "migrationReason": "Canonical Mission Protocol v1 source or contract."
+    },
+    {
+      "path": "src/mission-protocol/health-trace-types.ts",
+      "owner": "src/mission-protocol",
+      "role": "producer-consumer",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "canonicalize",
+      "migrationReason": "Canonical Mission Protocol v1 source or contract."
+    },
+    {
+      "path": "src/mission-protocol/index.ts",
+      "owner": "src/mission-protocol",
+      "role": "producer-consumer",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "canonicalize",
+      "migrationReason": "Canonical Mission Protocol v1 source or contract."
+    },
+    {
       "path": "src/mission-protocol/types.ts",
       "owner": "src/mission-protocol",
       "role": "producer-consumer",
@@ -1067,6 +1114,70 @@
         "pending",
         "running",
         "unknown"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "canonicalize",
+      "migrationReason": "Canonical Mission Protocol v1 source or contract."
+    },
+    {
+      "path": "src/mission-protocol/worker-contract-diagnostics.ts",
+      "owner": "src/mission-protocol",
+      "role": "producer-consumer",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "canonicalize",
+      "migrationReason": "Canonical Mission Protocol v1 source or contract."
+    },
+    {
+      "path": "src/mission-protocol/worker-contract-json.ts",
+      "owner": "src/mission-protocol",
+      "role": "producer-consumer",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "canonicalize",
+      "migrationReason": "Canonical Mission Protocol v1 source or contract."
+    },
+    {
+      "path": "src/mission-protocol/worker-invocation-types.ts",
+      "owner": "src/mission-protocol",
+      "role": "producer-consumer",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "canonicalize",
+      "migrationReason": "Canonical Mission Protocol v1 source or contract."
+    },
+    {
+      "path": "src/mission-protocol/worker-review-gate.ts",
+      "owner": "src/mission-protocol",
+      "role": "producer-consumer",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "canonicalize",
+      "migrationReason": "Canonical Mission Protocol v1 source or contract."
+    },
+    {
+      "path": "src/mission-protocol/worker-review-types.ts",
+      "owner": "src/mission-protocol",
+      "role": "producer-consumer",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
+        "failed"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "canonicalize",
+      "migrationReason": "Canonical Mission Protocol v1 source or contract."
+    },
+    {
+      "path": "src/mission-protocol/worker-status.ts",
+      "owner": "src/mission-protocol",
+      "role": "producer-consumer",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
+        "running"
       ],
       "serialization": "typescript/javascript",
       "migrationAction": "canonicalize",
@@ -1471,6 +1582,91 @@
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
     },
     {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/README.md",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [
+        "completed",
+        "unknown"
+      ],
+      "serialization": "markdown",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/activation-contract-vectors.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/adapter-loading-vectors.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/adapter-vectors.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/capability-root.patch.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/consumer-inventory.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/delegation-vectors.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/fake-worker.mjs",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [
+        "completed"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
       "path": "test/conformance/mission-v1/fixtures/worker-contracts/legacy-vectors.json",
       "owner": "test/conformance",
       "role": "fixture-or-test",
@@ -1479,6 +1675,16 @@
         "pending",
         "unknown"
       ],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/manifest.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
       "serialization": "json",
       "migrationAction": "retain",
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
@@ -1514,7 +1720,49 @@
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
     },
     {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/negotiation-vectors.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
       "path": "test/conformance/mission-v1/fixtures/worker-contracts/parallelism.fragment.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/policy-route-vectors.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [
+        "unknown"
+      ],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/policy-semantic-vectors.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/provider-coverage.json",
       "owner": "test/conformance",
       "role": "fixture-or-test",
       "currentVersion": "unversioned",
@@ -1528,6 +1776,60 @@
       "owner": "test/conformance",
       "role": "fixture-or-test",
       "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/shared-vectors.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [
+        "unknown"
+      ],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/third-worker-adapter.mjs",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/worker-adapter.fragment.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/worker-observation.fragment.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [
+        "unknown"
+      ],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/worker-selection.fragment.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
       "statusVocabulary": [],
       "serialization": "json",
       "migrationAction": "retain",
@@ -1555,10 +1857,40 @@
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
     },
     {
+      "path": "test/conformance/mission-v1/worker-contract-fixtures.ts",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
       "path": "test/conformance/mission-v1/worker-contracts.test.ts",
       "owner": "test/conformance",
       "role": "fixture-or-test",
       "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/worker-delegation.test.ts",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/worker-policy.test.ts",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
       "statusVocabulary": [],
       "serialization": "typescript/javascript",
       "migrationAction": "retain",

@@ -836,3 +836,23 @@ fragment, so their existing amended digests remain valid.
 above. `node tools/mission-protocol/inventory.mjs --write` remains blocked by
 `spawnSync rg EPERM`; no generated inventory was hand-edited. No vendor/model
 calls or commits were made. Runtime qualification remains deferred.
+
+#2643 disposition: the existing worker-selection tier enum accepts canonical `flagship`
+and compatibility alias `max-quality`; neither grants user election. Fragment and
+manifest digest amended together; default worker bindings remain unchanged.
+
+## #3167 delegation and acceptance amendment
+
+The existing Mission definitions gain optional brief uncertainty, regression,
+oracle and design-review fields, and verifier-owned findings/review rounds.
+New shared components nest inside existing brief/verification definitions,
+preserving schema ownership at Flow/MCP handoffs. The compatibility baseline
+is amended under the existing mission-v1 schema identity.
+The frozen fragment and its manifest digest are amended together; exact-match
+checks remain required. Array types in accepted verification branches are now
+explicit so every worker definition compiles with strict types and keywords.
+`delegation-vectors.json` adds synthetic positive/negative contract cases;
+legacy vectors remain unchanged. Result assembly uses the existing required
+review policy and shared observed-lineage diagnostics, binds final review to
+the conductor's current head, and derives rounds-to-clean. These fixtures do
+not qualify live providers or introduce a managed evidence framework.

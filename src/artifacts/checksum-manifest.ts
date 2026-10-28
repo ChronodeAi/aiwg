@@ -137,8 +137,20 @@ export interface ManifestStats {
   statSkipped: number;
   /** Files read and checksum verified as unchanged */
   checksumSkipped: number;
-  /** Files that actually changed and were re-indexed */
+  /** Artifacts whose content was parsed and metadata re-extracted (new or changed). */
   reindexed: number;
   /** Files removed from manifest (deleted from disk) */
   pruned: number;
+}
+
+/** Format change-detection diagnostics from the same counters returned to callers. */
+export function formatManifestStats(stats: ManifestStats): string[] {
+  if (stats.checked === 0) return [];
+  const messages = [
+    `  Change detection: ${stats.checked} checked, ${stats.statSkipped} skipped via stat, ${stats.checked - stats.statSkipped} content-read, ${stats.reindexed} re-indexed`,
+  ];
+  if (stats.pruned > 0) {
+    messages.push(`  Pruned ${stats.pruned} stale manifest entries (files no longer on disk)`);
+  }
+  return messages;
 }

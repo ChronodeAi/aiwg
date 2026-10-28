@@ -33,7 +33,7 @@ import {
 } from './types.js';
 import { parseCitationSidecar, citationResultToEdges, buildRefToPathMap } from './citation-parser.js';
 import { writeIndexFile, resolveIndexDir, loadGraphIndexFile, publishIndexFiles } from './index-reader.js';
-import { loadManifest, writeManifest, statMatches, makeEntry, type ChecksumManifest, type ManifestStats } from './checksum-manifest.js';
+import { loadManifest, writeManifest, statMatches, makeEntry, formatManifestStats, type ChecksumManifest, type ManifestStats } from './checksum-manifest.js';
 import { FRAMEWORK_RELATIONS_REVISION } from './framework-source-digest.js';
 import { normalizeOperationalState } from './operational-state.js';
 import {
@@ -1061,7 +1061,8 @@ function extractIndexArtifact(job: IndexPreparationJob, bindingOnly: boolean, wa
   return { checksum, entry };
 }
 
-export async function buildIndex(cwd: string, options: BuildOptions = {}): Promise<void> {
+/** Return change-detection counts for artifact builds; skipped/source builds return void. */
+export async function buildIndex(cwd: string, options: BuildOptions = {}): Promise<ManifestStats | void> {
   loadUserGraphConfigs(cwd);
   loadGlobalGraphConfigs();
   const scanDirs = options.scope ? [path.join(cwd, options.scope)] : options.graph
@@ -1091,7 +1092,7 @@ export async function buildIndex(cwd: string, options: BuildOptions = {}): Promi
       fs.mkdirSync(directory, { recursive: true });
       return staging ??= fs.mkdtempSync(path.join(directory, '.build-'));
     };
-    await buildIndexSnapshot(cwd, options, preparePublication, owned ? observation : undefined);
+    const stats = await buildIndexSnapshot(cwd, options, preparePublication, owned ? observation : undefined);
     // A receipt hit verifies the existing snapshot directly against the scan's
     // stats. There is no extraction interval to recheck. Real builds still probe
     // again after preparation so concurrent source changes remain pending.
@@ -1100,6 +1101,7 @@ export async function buildIndex(cwd: string, options: BuildOptions = {}): Promi
     // All extraction and backend work has succeeded before any live file moves.
     if (owned) recordIndexVerification(owned, cwd, { before: observation.before, after, wallMs: Date.now() - start }, staging);
     if (staging) publishIndexFiles(staging, directory);
+    return stats;
   } catch (error) {
     if (owned) {
       try { recordIndexVerification(owned, cwd, { error: error instanceof Error ? error.message : String(error), wallMs: Date.now() - start }); }
@@ -1123,7 +1125,7 @@ async function buildIndexSnapshot(
   options: BuildOptions,
   preparePublication: () => string,
   observation?: BuildObservation,
-): Promise<void> {
+): Promise<ManifestStats | void> {
   const { force = false, verbose = false, scope, includeIgnored = false, outputDir, graph, explicit = true } = options;
   const workers = resolveIndexWorkers(options.workers);
   const startTime = Date.now();
@@ -1243,14 +1245,7 @@ async function buildIndexSnapshot(
     log(`Artifact index built in ${buildTimeMs}ms`);
     log(`  Indexed ${newCount} new, updated ${updatedCount}, unchanged ${unchangedCount}`);
     log(`  Total: ${total} artifacts`);
-    if (!force && manifestStats.checked > 0) {
-      const fastPath = manifestStats.statSkipped;
-      const slowPath = manifestStats.checked - manifestStats.statSkipped;
-      log(`  Change detection: ${manifestStats.checked} checked, ${fastPath} skipped via stat, ${slowPath} content-read, ${manifestStats.reindexed} re-indexed`);
-      if (manifestStats.pruned > 0) {
-        log(`  Pruned ${manifestStats.pruned} stale manifest entries (files no longer on disk)`);
-      }
-    }
+    if (!force) for (const message of formatManifestStats(manifestStats)) log(message);
     const displayDir = graph ? indexOutputDir : `${INDEX_DIR}/`;
     log(`  Output: ${displayDir}`);
   };
@@ -1307,7 +1302,7 @@ async function buildIndexSnapshot(
       writeIndexFile(effectiveOutputCwd, 'stats.json', { ...stats, builtAt: new Date().toISOString(), buildTimeMs }, indexOutputDir);
       if (observation) observation.unchanged = true;
       reportBuild(buildTimeMs, files.length);
-      return;
+      return manifestStats;
     }
   }
 
@@ -1336,6 +1331,7 @@ async function buildIndexSnapshot(
   }
   const preparation = await runIndexPreparation(jobs, prepareIndexArtifact, import.meta.url, workers,
     options.onDiagnostic ?? (message => console.warn(`Index preparation: ${message}`)));
+  manifestStats.reindexed = preparation.results.filter(result => result.entry !== undefined).length;
   for (const result of preparation.results) for (const warning of result.warnings ?? []) {
     (options.onDiagnostic ?? (message => console.warn(`Index preparation: ${message}`)))(warning);
   }
@@ -1405,7 +1401,6 @@ async function buildIndexSnapshot(
         if (verbose) log(`  unchanged (checksum): ${relativePath}`);
         continue;
       }
-      manifestStats.reindexed++;
       nextManifestEntries[relativePath] = makeEntry(checksum, stat);
       entry = prepared.entry!;
     }
@@ -1453,7 +1448,7 @@ async function buildIndexSnapshot(
       // Renew receipts only for changed source stats or repaired projections.
       if (manifestStats.checksumSkipped > 0 || projectionNeedsRepair) writeBuildManifest(nextManifestEntries);
       reportBuild(buildTimeMs, total);
-      return;
+      return manifestStats;
     }
   }
 
@@ -1688,4 +1683,5 @@ async function buildIndexSnapshot(
 
   // Report
   reportBuild(buildTimeMs, total);
+  return manifestStats;
 }

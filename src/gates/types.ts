@@ -1,3 +1,4 @@
+import type { GateOutcome } from './lattice.js';
 import type { QualificationIntegrityMetadata } from '../decision/qualification/release.js';
 import type { DecisionPredicate } from '../decision/types.js';
 
@@ -216,7 +217,7 @@ export interface GateHoldoutInputs {
   digest: Sha256Digest;
 }
 
-export type GateOutcome = 'PROMOTE' | 'HOLD' | 'ROLLBACK';
+export type { GateOutcome } from './lattice.js';
 
 export type GateStatus = 'pass' | 'fail' | 'insufficient';
 

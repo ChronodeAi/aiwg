@@ -5,6 +5,22 @@ const marker = 'AIWG_WORKER_INVOCATION_ID';
 export function normalizeMarkerRunRecord(name, baseline, branch) {
   if (name === 'invocation.json') {
     expect(branch.envNames).toEqual([...new Set([...baseline.envNames, marker])]);
+    // #3701 also intersects invocation limits with the configured health deadline.
+    // Assert every changed byte before restoring the frozen representation below.
+    const ceiling = baseline.health.hardTimeoutSeconds;
+    const origins = structuredClone(baseline.health.origins);
+    const pointer = '/parallelism/health/hardTimeoutSeconds';
+    if (baseline.limits.wallSeconds > ceiling && origins.hardTimeoutSeconds.includes(pointer)) {
+      expect(branch.limits).toEqual({ ...baseline.limits, wallSeconds: ceiling });
+      const runtime = 'runtime/remainingWallSeconds';
+      const hardOrigins = [...origins.hardTimeoutSeconds, runtime];
+      for (const field of ['diagnosticGraceSeconds', 'terminateGraceSeconds']) {
+        if (baseline.health[field] === ceiling) origins[field] = [...origins[field], runtime];
+      }
+      origins.hardTimeoutSeconds = [...hardOrigins, pointer];
+      expect(branch.health).toEqual({ ...baseline.health, origins });
+      return { ...branch, envNames: baseline.envNames, limits: baseline.limits, health: baseline.health };
+    }
     return { ...branch, envNames: baseline.envNames };
   }
   if (name === 'process.json') {

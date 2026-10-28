@@ -6,13 +6,14 @@ function jsonResult(value: unknown, exitCode = 0): HandlerResult {
 
 function usage(): string {
   return [
-    'Usage: aiwg gates <validate|evaluate|show|list> [options]',
+    'Usage: aiwg gates <validate|evaluate|show|list|coverage> [options]',
     '',
     'Commands:',
     '  validate <pack|binding|report> <path> [--pack-dir <dir>] [--aiwg-root <dir>]',
     '  evaluate --binding <file> --metrics <file> --holdout <file> [--upstream <file>] --now <iso> --trusted-binding-digest <sha256> [--pack-dir <dir>] [--aiwg-root <dir>]',
     '  show <id> [--pack-dir <dir>] [--aiwg-root <dir>]',
     '  list [--namespace <ns>] [--rule [<rule-id>]] [--pack-dir <dir>] [--aiwg-root <dir>]',
+    '  coverage [--rule <rule-id>] [--json] [--pack-dir <dir>] [--aiwg-root <dir>]',
     '',
     'Packs live in <bundle>/gate-packs/*.gatepack.yaml|json and register as',
     'aiwg:<bundle>/<name> (shipped).',
@@ -81,7 +82,7 @@ async function executeGates(ctx: HandlerContext): Promise<HandlerResult> {
   try {
     if (!command || command === '--help' || command === '-h') return { exitCode: 0, message: usage(), rawOutput: true };
     const {
-      validateGateFile, evaluateGatesFromFiles, showGatePack, listGatePacks, packsReferencedByRule,
+      validateGateFile, evaluateGatesFromFiles, showGatePack, listGatePacks,
     } = await import('../../gates/driver.js');
     const options = driverOptions(ctx);
     if (command === 'validate') {
@@ -119,25 +120,26 @@ async function executeGates(ctx: HandlerContext): Promise<HandlerResult> {
       if (!id) return { exitCode: 2, message: `gates show requires <id>\n\n${usage()}`, rawOutput: true };
       return jsonResult(showGatePack(id, options), 0);
     }
+    if (command === 'coverage' || command === 'list' && ctx.args.includes('--rule')) {
+      const { listRuleGateCoverage, formatRuleGateCoverage } = await import('../../rules/gate-coverage.js');
+      const value = takeOption(ctx.args, '--rule');
+      const rule = value && !value.startsWith('-') ? value : undefined;
+      const rules = listRuleGateCoverage(options, rule);
+      if (command === 'coverage') {
+        return ctx.args.includes('--json') ? jsonResult({ schema: 'aiwg-gates-coverage/v1', rules })
+          : { exitCode: 0, message: formatRuleGateCoverage(rules), rawOutput: true };
+      }
+      const namespace = takeOption(ctx.args, '--namespace');
+      const packs = listGatePacks({ ...options, ...(namespace ? { namespace } : {}) });
+      const referenced = new Set(rules.flatMap(item => item.enforcedBy.map(reference => reference.split('#')[0])));
+      return jsonResult({
+        schema: 'aiwg-gates-list/v1', ...(rule ? { rule } : {}), rules,
+        packs: rule ? packs.filter(pack => referenced.has(pack.id)) : packs,
+      }, 0);
+    }
     if (command === 'list') {
       const namespace = takeOption(ctx.args, '--namespace');
-      const ruleIndex = ctx.args.indexOf('--rule');
-      const ruleValue = ruleIndex >= 0 ? ctx.args[ruleIndex + 1] : undefined;
-      const rule = ruleIndex >= 0 ? (ruleValue && !ruleValue.startsWith('-') ? ruleValue : null) : undefined;
-      const packs = listGatePacks({ ...options, ...(namespace ? { namespace } : {}) });
-      if (rule === undefined) return jsonResult({ schema: 'aiwg-gates-list/v1', packs }, 0);
-      if (rule === null) {
-        return jsonResult({
-          schema: 'aiwg-gates-list/v1', packs,
-          enforcedBy: { status: 'stub', note: 'Rule enforcedBy coverage is tracked in #2839; rules without enforcedBy remain guidance.' },
-        }, 0);
-      }
-      const referenced = new Set(await packsReferencedByRule(rule, options));
-      return jsonResult({
-        schema: 'aiwg-gates-list/v1', rule,
-        packs: packs.filter(pack => referenced.has(pack.id)),
-        enforcedBy: { status: 'stub', note: 'Rule enforcedBy coverage is tracked in #2839.' },
-      }, 0);
+      return jsonResult({ schema: 'aiwg-gates-list/v1', packs: listGatePacks({ ...options, ...(namespace ? { namespace } : {}) }) });
     }
     return { exitCode: 2, message: usage(), rawOutput: true };
   } catch (error) {

@@ -45,7 +45,7 @@ describe('model worker provider matrix', () => {
     {
       provider: 'codex',
       path: (root: string, role: string) => join(root, `.codex/agents/aiwg-model-${role}-worker.toml`),
-      models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+      models: ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna'],
     },
     {
       provider: 'copilot',

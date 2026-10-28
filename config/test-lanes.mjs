@@ -55,7 +55,7 @@ export const wasmFiles = [
 // conformance lane. Mechanism suites retain their source owner's unit lane.
 export const orchestrationConformanceFiles = [
   'test/conformance/orchestration-v1/**/*.test.ts',
-  'test/conformance/mission-v1/worker-contracts.test.ts',
+  'test/conformance/mission-v1/**/*.test.ts',
 ];
 export const nodeFiles = [
   'tools/ralph-external/*.test.mjs', 'test/unit/ralph/*.test.mjs',
@@ -77,6 +77,7 @@ export const nodeFiles = [
 // files keep fast coverage in the default lane.
 export const d17SlowFiles = [
   'test/unit/decision/ensemble-study-staged.test.ts',
+  'test/unit/decision/ensemble-staged-lattice.test.ts',
   // D17-MF probe (#2850): full 5,772-row preparation, shortcut audit, bundle planning and calibrated scoring (about 22 s).
   'test/unit/decision/d17-multifact.test.ts',
 ];

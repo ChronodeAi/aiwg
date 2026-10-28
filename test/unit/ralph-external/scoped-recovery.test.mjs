@@ -44,6 +44,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 import os from 'node:os';
 import path from 'node:path';
 import { loadRecoveryModuleGraph } from '../../helpers/recovery-module-graph.mjs';
+import { reapedWorkerSpawn as directSpawn } from '../../helpers/reaped-worker-spawn.mjs';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { systemdClientFixture } from '../../fixtures/systemd-client.js';
 import { parseLedgerReleaseArgs } from '../../../tools/ralph-external/index.mjs';
@@ -4809,13 +4810,7 @@ describe('allowance ledger: cross-instance probes', () => {
 // every block — the original one plus the follow-up scenarios added after
 // it — uses the exact same fixture/launch/normalize machinery).
 //
-// A direct, detached spawn of the resolved argv -- see the file-level
-// comment on the first "baseline equivalence" describe block below for why
-// this stands in for the real `launchIsolatedWorker` in every scenario.
-function directSpawn({ command, args, cwd, env, stdin }) {
-  const child = spawn(command, args, { cwd, env, stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true });
-  return { mode: 'degraded', child };
-}
+// ENOENT leaves no child identity for either launcher's settlement.
 function enoentSpawn() {
   return { mode: 'degraded', child: spawn('/nonexistent-aiwg-fixture-2915-equiv', [], { stdio: ['ignore', 'pipe', 'pipe'] }) };
 }
@@ -4855,7 +4850,8 @@ async function equivFixtureRoot() {
       const attemptFinal = path.join(root, `final-${planSeq}.json`);
       const configPath = path.join(root, `fake-${planSeq}.json`);
       const recordPath = path.join(root, `record-${planSeq}.json`); // unconditionally written by ralph-worker-cli.mjs
-      await writeFile(configPath, JSON.stringify({ scenario, recordPath, ...(forgeRealExitCode !== undefined ? { forgeRealExitCode } : {}) }));
+      // Keep the real worker alive until ownership is recorded, even under load.
+      await writeFile(configPath, JSON.stringify({ scenario, recordPath, waitForIdentity: path.join(root, `run-${planSeq}`, 'process.json'), ...(forgeRealExitCode !== undefined ? { forgeRealExitCode } : {}) }));
       const request = { role: 'coding', task: 'implementation', group: 'workers', brief, workdir: cwd, final_output: attemptFinal };
       const resolve = side === 'baseline' ? resolveWorkerInvocationBaseline : resolveWorkerInvocation;
       const plan = await resolve(f.snapshot, request, drivers, f.request.now);

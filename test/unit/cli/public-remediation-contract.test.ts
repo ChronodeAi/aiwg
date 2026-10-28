@@ -46,7 +46,8 @@ function walk(directory: string): string[] {
 function candidates(): Array<{ path: string; line: number; text: string }> {
   const files = [
     ...walk(join(ROOT, 'src')).filter((file) => /\.(?:ts|mjs)$/.test(file) && !/\.(?:test|spec)\./.test(file)),
-    join(ROOT, 'tools', 'cli', 'doctor.mjs'),
+    ...['doctor.mjs', 'doctor-context-firewall.mjs', 'doctor-worker-probe.mjs']
+      .map(file => join(ROOT, 'tools', 'cli', file)),
     join(ROOT, 'docs', 'security', 'context-memory-firewall.md'),
     join(ROOT, 'docs', 'agents', 'cli-reference.md'),
   ];
@@ -77,7 +78,8 @@ describe('public remediation contract', () => {
   });
 
   it('resolves every context-firewall remediation emitted by doctor', () => {
-    const doctor = readFileSync(join(ROOT, 'tools', 'cli', 'doctor.mjs'), 'utf8');
+    const doctor = ['doctor.mjs', 'doctor-context-firewall.mjs']
+      .map(file => readFileSync(join(ROOT, 'tools', 'cli', file), 'utf8')).join('\n');
     const commands = [...doctor.matchAll(/\\?`(aiwg context-firewall .*?)\\?`/g)]
       .map((match) => match[1]);
     expect(commands).toContain('aiwg context-firewall baseline --plan');

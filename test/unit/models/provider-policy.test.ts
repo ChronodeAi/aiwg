@@ -93,7 +93,7 @@ describe('provider model registry', () => {
     const catalog = loadProviderModelCatalog();
     expect(catalog.version).toBe('1.0.0');
     expect(catalog.staleAfterDays).toBeGreaterThan(0);
-    expect(catalog.providers.codex.roles.coding.id).toBe('gpt-5.6-terra');
+    expect(catalog.providers.codex.roles.coding.id).toBe('gpt-6.1-terra');
   });
 });
 describe('project/user model config validation', () => {
@@ -116,7 +116,7 @@ describe('canonical model policy validation', () => {
   });
   it.each([
     { role: 'unknown', tier: 'economy' },
-    { role: 'coding', tier: 'max-quality' },
+    { role: 'coding', tier: 'unknown-tier' },
     { role: 'coding', tier: 'standard', extra: true },
   ])('rejects invalid policy before compilation: %j', policy => {
     const result = validateCanonicalModelPolicy(policy);
@@ -130,14 +130,14 @@ describe('provider-aware compilation', () => {
     const result = compileModelPolicy({ provider: 'codex', artifact: 'agent', policy });
     expect(result.outcome).toBe('native');
     expect(result.fields).toEqual({
-      model: 'gpt-5.6-luna',
+      model: 'gpt-6-luna',
       model_reasoning_effort: 'low',
     });
   });
   it('honors an effective dynamic catalog supplied by callers', () => {
     const catalog = JSON.parse(JSON.stringify(loadProviderModelCatalog()));
-    catalog.providers.codex.roles.efficiency.id = 'gpt-dynamic-cheap';
-    catalog.providers.codex.roles.efficiency.status = 'active';
+    catalog.providers.codex.tiers.economy.id = 'gpt-dynamic-cheap';
+    catalog.providers.codex.tiers!.economy.status = 'active';
     const result = compileModelPolicy({
       provider: 'codex',
       artifact: 'agent',
@@ -165,7 +165,7 @@ describe('provider-aware compilation', () => {
   it('reports catalog staleness deterministically', () => {
     const result = compileModelPolicy({
       provider: 'codex', artifact: 'agent', policy,
-      now: new Date('2027-01-01T00:00:00Z'),
+      now: new Date('2027-03-01T00:00:00Z'),
     });
     expect(result.diagnostics.map(item => item.code)).toContain('MODEL_CATALOG_STALE');
   });
@@ -186,7 +186,7 @@ describe('provider-aware compilation', () => {
   });
   it('rejects a deprecated catalog selection with a stable diagnostic', () => {
     const catalog = loadProviderModelCatalog();
-    const entry = catalog.providers.codex.roles.efficiency;
+    const entry = catalog.providers.codex.tiers!.economy;
     const originalStatus = entry.status;
     try {
       entry.status = 'deprecated';

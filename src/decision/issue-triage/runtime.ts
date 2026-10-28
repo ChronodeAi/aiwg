@@ -1,3 +1,4 @@
+import { assertDecisionCeiling, ceilingDecision } from '../../gates/lattice.js';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -67,7 +68,6 @@ const SCHEMA_FILES: Record<SchemaKind, string> = {
   report: 'DecisionIssueTriageEvaluationReport.v1.schema.json',
 };
 
-const GATE_RANK: Record<IssueTriageGateDecision, number> = { PROMOTE: 0, HOLD: 1, ROLLBACK: 2 };
 const FINAL_FIELDS = ['finalLabels', 'finalDuplicateOf', 'resolution', 'closedAt'] as const;
 const RESPONSE_FIELDS = ['issueId', 'issueType', 'area', 'urgency', 'completeness', 'clarificationNeed', 'duplicate',
   'uncertaintyProfile', 'accepted', 'actualModel', 'requestedModel', 'latencyMs', 'usage', 'usageReceipts', 'calls', 'retries', 'fallbacks',
@@ -192,9 +192,7 @@ function checkIssueTriageEvaluationReportShape(value: unknown): IssueTriageEvalu
   checkSchema('report', value);
   const report = value as IssueTriageEvaluationReport;
   const problems: string[] = [];
-  if (GATE_RANK[report.decision] < GATE_RANK[report.integrity.upstreamDecision]) {
-    problems.push(`issue triage report cannot upgrade ${report.integrity.upstreamDecision} to ${report.decision}`);
-  }
+  assertDecisionCeiling(report.decision, report.integrity.upstreamDecision, gateDecision(report.integrity.upstreamDecision, report.integrity.findings));
   if (report.decision === 'PROMOTE' && report.integrity.findings.length > 0) problems.push('PROMOTE requires no findings');
   if (report.decision === 'PROMOTE' && report.baselineComparison.qualityNonInferiority?.decision !== 'non-inferior') {
     problems.push('PROMOTE requires a non-inferior paired quality interval');
@@ -676,9 +674,7 @@ function correct(sample: ScoredSample, which: 'baseline' | 'cascade'): boolean {
 }
 
 function gateDecision(upstream: IssueTriageGateDecision, findings: readonly string[]): IssueTriageGateDecision {
-  if (upstream === 'ROLLBACK') return 'ROLLBACK';
-  if (upstream === 'HOLD' || findings.length > 0) return 'HOLD';
-  return 'PROMOTE';
+  return ceilingDecision(upstream, findings.length > 0 ? 'HOLD' : 'PROMOTE');
 }
 
 /** Supported interval level in bps, or null. The paired helpers accept integer levels strictly in (5000, 9999). */

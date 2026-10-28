@@ -16,15 +16,18 @@ import type {
   RuntimeModelTier,
 } from './types.js';
 
+import { flagshipElected, normalizeModelTier } from './tiers.js';
+
 const RUNTIME_TO_MODEL_TIER: Record<RuntimeModelTier, ModelTier | null> = {
   0: null,
   1: 'economy',
   2: 'standard',
   3: 'premium',
+  4: 'flagship',
 };
 
 function clampRuntimeTier(tier: RuntimeModelTier | undefined, fallback: RuntimeModelTier): RuntimeModelTier {
-  return tier === 0 || tier === 1 || tier === 2 || tier === 3 ? tier : fallback;
+  return tier === 0 || tier === 1 || tier === 2 || tier === 3 || tier === 4 ? tier : fallback;
 }
 
 export function routeModelTier(request: ModelRouteRequest = {}): ModelRouteDecision {
@@ -42,6 +45,10 @@ export function routeModelTier(request: ModelRouteRequest = {}): ModelRouteDecis
     tier = 0;
     source = 'deterministic';
     rationale.push('deterministic tool/cache/existing answer is sufficient');
+  } else if (request.requestedTier) {
+    tier = ({ economy: 1, standard: 2, premium: 3, flagship: 4 } as const)[normalizeModelTier(request.requestedTier)];
+    source = 'request';
+    rationale.push('explicit tier request');
   } else if (request.requestedPremium) {
     tier = 3;
     source = 'request';
@@ -62,7 +69,14 @@ export function routeModelTier(request: ModelRouteRequest = {}): ModelRouteDecis
     rationale.push('no escalation signal present');
   }
 
-  const requiresConfirmation = (tier === 3 && !request.premiumAuthorized) || tier > maxAutoTier;
+  const elected = flagshipElected(request);
+  if (tier === 4 && !elected) {
+    tier = 3;
+    source = 'policy';
+    rationale.push('flagship is user-elected only; capped at premium');
+  }
+
+  const requiresConfirmation = tier === 4 ? false : (tier === 3 && !request.premiumAuthorized) || tier > maxAutoTier;
   if (requiresConfirmation) {
     rationale.push(
       tier === 3

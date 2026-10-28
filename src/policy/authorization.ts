@@ -9,6 +9,8 @@
 import { access, copyFile, mkdir, readFile, rename } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
+import type { HitlPolicy } from './hitl-types.js';
+export { resolveHitlAuthorization } from './hitl.js';
 import type { AiwgConfig, WorkspaceRepoAction } from '../config/aiwg-config.js';
 import { projectAiwgPath, projectControlPath } from '../config/project-artifacts.js';
 
@@ -70,6 +72,7 @@ export interface ProviderPermissionMapping {
 }
 
 export interface AuthorizationConfig {
+  hitl?: HitlPolicy;
   version: '1';
   default_effect: 'deny';
   resources: Record<string, AuthorizationResource>;

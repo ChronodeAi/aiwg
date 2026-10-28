@@ -11,6 +11,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseDocument } from 'yaml';
+import { resourceDiagnostics } from './validator-resources.js';
+import { CLAUDE_SKILL_FIELDS } from './provider-extensions.js';
 import {
   AGENT_SKILLS_BASELINE,
   AGENT_SKILL_VALIDATION_PROFILES,
@@ -75,9 +77,9 @@ export interface AgentSkillScanReport {
 }
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
-const MARKDOWN_LINK = /!?\[[^\]]*]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^)]*["'])?\s*\)/g;
 const STANDARD_FIELDS = new Set<string>(STANDARD_SKILL_FIELDS);
 const AIWG_FIELDS = new Set<string>(AIWG_SKILL_CONTROL_FIELDS);
+const CLAUDE_FIELDS = new Set<string>(CLAUDE_SKILL_FIELDS);
 
 function diagnostic(
   code: string,
@@ -134,13 +136,13 @@ function normalizeMetadataDiagnostics(
 
   if (!policy.recognizedAiwgFields) {
     for (const key of Object.keys(frontmatter).sort()) {
-      if (!AIWG_FIELDS.has(key)) continue;
+      if (!AIWG_FIELDS.has(key) && !CLAUDE_FIELDS.has(key)) continue;
       normalized.push(diagnostic(
         'AS_FIELD_EXTENSION',
         'error',
         file,
         `$.${key}`,
-        `AIWG extension field "${key}" is not allowed by the strict profile`,
+        `Provider or AIWG extension field "${key}" is not allowed by the strict profile`,
         'Remove the extension field or validate with the compatible profile.',
       ));
     }
@@ -149,97 +151,6 @@ function normalizeMetadataDiagnostics(
   return normalized;
 }
 
-function resourceDiagnostics(
-  content: string,
-  file: string,
-  skillRoot: string | undefined,
-  checkResources: boolean,
-): AgentSkillDiagnostic[] {
-  const diagnostics: AgentSkillDiagnostic[] = [];
-  const references = new Set<string>();
-  for (const match of content.matchAll(MARKDOWN_LINK)) {
-    const raw = (match[1] ?? match[2] ?? '').trim();
-    if (
-      raw.length === 0
-      || raw.startsWith('#')
-      || /^(?:https?|mailto|data):/i.test(raw)
-    ) {
-      continue;
-    }
-    const withoutFragment = raw.split('#', 1)[0] ?? '';
-    const decoded = (() => {
-      try {
-        return decodeURIComponent(withoutFragment);
-      } catch {
-        return withoutFragment;
-      }
-    })();
-    references.add(decoded);
-  }
-
-  for (const reference of [...references].sort()) {
-    const normalized = reference.replaceAll('\\', '/');
-    if (
-      path.isAbsolute(reference)
-      || normalized === '..'
-      || normalized.startsWith('../')
-      || normalized.includes('/../')
-    ) {
-      diagnostics.push(diagnostic(
-        'AS_RESOURCE_PATH',
-        'warning',
-        file,
-        '$.body',
-        `resource reference "${reference}" is not an in-skill relative path`,
-        'Reference a file relative to SKILL.md without parent traversal.',
-      ));
-      continue;
-    }
-
-    const segments = normalized.split('/').filter(Boolean);
-    if (segments.length > 2) {
-      diagnostics.push(diagnostic(
-        'AS_ADVISORY_RESOURCE_DEPTH',
-        'warning',
-        file,
-        '$.body',
-        `resource reference "${reference}" is deeper than one resource-directory level`,
-        'Prefer resources such as references/topic.md, scripts/run.sh, or assets/example.json.',
-      ));
-    }
-
-    if (!checkResources || !skillRoot) continue;
-    const resolved = path.resolve(skillRoot, reference);
-    const relative = path.relative(skillRoot, resolved);
-    if (
-      relative.startsWith('..')
-      || path.isAbsolute(relative)
-      || !fs.existsSync(resolved)
-    ) {
-      diagnostics.push(diagnostic(
-        'AS_RESOURCE_MISSING',
-        'warning',
-        file,
-        '$.body',
-        `referenced resource "${reference}" does not exist`,
-        'Add the referenced file or correct the relative resource path.',
-      ));
-      continue;
-    }
-    const stat = fs.lstatSync(resolved);
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      diagnostics.push(diagnostic(
-        'AS_RESOURCE_TYPE',
-        'warning',
-        file,
-        '$.body',
-        `referenced resource "${reference}" is not a regular file`,
-        'Replace the reference target with an in-tree regular file.',
-      ));
-    }
-  }
-  return diagnostics;
-}
 
 function resultState(
   diagnostics: readonly AgentSkillDiagnostic[],
@@ -430,7 +341,7 @@ export function validateAgentSkillContent(
   // Defensive policy check: a future field added to one allow-list must not
   // silently escape classification in this parser.
   for (const key of Object.keys(frontmatter).sort()) {
-    if (STANDARD_FIELDS.has(key) || AIWG_FIELDS.has(key)) continue;
+    if (STANDARD_FIELDS.has(key) || AIWG_FIELDS.has(key) || CLAUDE_FIELDS.has(key)) continue;
     if (!diagnostics.some((item) => item.yamlPath === `$.${key}`)) {
       diagnostics.push(diagnostic(
         'AS_FIELD_UNKNOWN',

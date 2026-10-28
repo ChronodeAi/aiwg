@@ -1,3 +1,4 @@
+import { ceilingDecision } from '../../gates/lattice.js';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -329,6 +330,6 @@ export async function scoreHeldoutStudy(input: { run: string; trustedEvidenceDig
   return { schemaVersion: 'decision-heldout-score/v1', source: frozen.priorRuns.some(run => run.source === 'injected-transport') ? 'injected-transport' : frozen.source, evidenceDigest: input.trustedEvidenceDigest, integrityDigest: input.trustedIntegrityDigest,
     complete, diagnostics, approvedCalibration, calibrated: studyValidated ? true : calibrated, d09Qualified: studyValidated,
     calibratedGate: studyValidated && study?.calibratedGate === true,
-    calibrationArtifactValidation: studyValidated ? 'performed-by-study-scorer' : 'not-performed', integrityProblems: problems, decision: input.integrity.release_gate.decision === 'ROLLBACK'
-      || input.integrity.compromise_labels.length > 0 ? 'ROLLBACK' as const : 'HOLD' as const };
+    calibrationArtifactValidation: studyValidated ? 'performed-by-study-scorer' : 'not-performed', integrityProblems: problems, decision: ceilingDecision('HOLD', input.integrity.release_gate.decision,
+      input.integrity.compromise_labels.length > 0 ? 'ROLLBACK' : 'PROMOTE') };
 }

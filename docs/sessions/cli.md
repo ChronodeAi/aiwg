@@ -73,6 +73,8 @@ aiwg sessions discover --workspace <path>
                        [--expected-providers <comma-separated-ids>]
                        [--codex-root <authorized-path>]... [--muse-root <authorized-path>]
                        [--omp-root <authorized-path>] [--dsh-root <authorized-path>]
+                       [--grok-root <authorized-path>] [--grok-active-sessions <path>]
+                       [--hermes-root <authorized-path>]
                        [--manifest <path>] [--dry-run] [--json]
 aiwg sessions import-discovered --workspace <path>
                                 [--manifest <path>] [--confirm|--yes]
@@ -80,6 +82,8 @@ aiwg sessions import-discovered --workspace <path>
                                 [--resume] [--lock-wait-ms <n>]
                                 [--dry-run] [--json]
 aiwg sessions import <file> --source-id <id> [--workspace <id>] [--dry-run] [--json]
+aiwg sessions import --from-dir <dir> [--source-id <prefix>] [--provider <id>]
+                       [--workspace <id>] [--dry-run] [--json]
 aiwg sessions list [--provider <id>] [--workspace <id>] [--tag <tag>]
                    [--limit <1..500>] [--cursor <opaque>]
                    [--min-coverage <0..1>] [--json]
@@ -184,7 +188,11 @@ in the persisted manifest's `authorizedRoots`.
 
 OMP and DeepSeek Harness also require an
 explicit authorized root through `--omp-root` or `--dsh-root`. Harness imports
-raw v2 JSONL; compressed histories require a reviewed raw export. Providers that
+raw v2 JSONL; compressed histories require a reviewed raw export. Grok Build
+requires `--grok-root` (native `chat_history.jsonl` discovery, synthetic v1
+schema) with optional `--grok-active-sessions` for live detection; Hermes
+requires `--hermes-root` (read-only `state.db` backup snapshot, needs Hermes
+running and the optional sqlite backend). Providers that
 require an API or manual
 export remain visible as `export-required`.
 
@@ -292,6 +300,32 @@ batch receipt's `interruptedRuns` lists their run IDs and timestamps; single-sou
 imports report the same list beside `receipts`. A resumed batch retains
 `run.interruptedAt` after completion. WAL readers remain available while an
 importer owns the lease.
+
+### Intake-directory batch import
+
+Single-file `import` covers one provider export at a time. When an intake
+directory accumulates several exports -- for example repeated Claude.ai
+account downloads -- import them in one pass with `--from-dir`:
+
+```sh
+aiwg sessions import --from-dir ./claude-intake \
+  --provider claude --source-id claude-admin --workspace default --json
+```
+
+`--from-dir` extends `sessions import`; it adds no new top-level command.
+Files are processed in sorted order. Every recognised file (`.json` or
+`.jsonl`) imports through the same single-file path, with `--source-id` as
+an optional per-file prefix (`claude-admin/<filename>`). Files already
+imported are skipped by content digest; unrecognised files are skipped with a
+reason; failures are reported per file without stopping the rest. The receipt
+holds one entry per file plus a `summary` (`total`, `imported`,
+`alreadyImported`, `skipped`, `rejected`, inserts). Repeating the batch
+imports nothing. `--dry-run` previews the file plan without writing.
+
+The full operator journey -- export download, single and batch import with
+exact commands and expected receipts, read-back, and shard export -- is
+walked through in [Claude admin intake
+walkthrough](../providers/claude-code-sessions.md#claude-admin-intake-walkthrough).
 
 ## Coverage and timeline
 
@@ -718,7 +752,7 @@ as supported; everything else is unverified, not assumed to work.
 | Index-level wrapper (`source.repo`/`privacy`) recovered from a `full-v1` archive via the synthetic export-manifest record | Verified | `test/unit/sessions/fortemi-shard-recovery.test.ts`, `test/unit/cli/handlers/sessions-export.test.ts`; manual CLI smoke test against a rebuilt `dist/` |
 | Codex -> `export plan/build/verify` | Verified | `test/unit/cli/handlers/sessions-export.test.ts`, using the `codex/threads.app-server.jsonl` fixture |
 | Remaining provider sources (Copilot, Cursor, Hermes, OpenCode, etc.) -> `export plan/build` | Unverified but expected to work | The mapping in `src/sessions/fortemi-export-mapping.ts` reads only the normalized `Session`/`SessionEvent` catalog, not provider-specific fields -- Claude and Codex both pass through it unmodified, but no dedicated test exercises the remaining providers through the export pipeline yet |
-| A real external Fortemi consumer application importing the built shard | Unverified | No test exercises this; AIWG's own artifact-index shard export has a Docker/Postgres-based producer-consumer conformance job (`.gitea/workflows/fortemi-shard-conformance.yml`) that could be extended to cover session shards, but that has not been done |
+| A real external Fortemi consumer application importing the built shard | Verified (CI job `producer-consumer-receipt`) | `.gitea/workflows/fortemi-shard-conformance.yml` imports the synthetic Claude fixture into a temporary catalog and builds a full-v1 shard. It then checks the pinned Fortemi consumer's import, note and provenance APIs, and semantic re-export. First passing run: Gitea Actions run 92878 (2026-10-28). The job reruns on every main push that touches the session-export paths. |
 | Locally present OpenCode data-URL and registered-output bytes embedded and recovered exactly | Verified with `--include-bytes` | `test/unit/cli/handlers/sessions-export.test.ts`; native BLAKE3 blob sidecars validated by `@fortemi/core` |
 | Remote or provider-reference-only attachment bytes | Not available | Never fetched; providers such as Claude web exports expose metadata/extracted text rather than original bytes |
 | Edited or branched Claude web-export conversations | Unverified | No fixture represents this; see `docs/providers/claude-code-sessions.md` known limitations |

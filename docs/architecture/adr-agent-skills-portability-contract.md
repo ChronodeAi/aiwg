@@ -53,11 +53,43 @@ the sidecar rather than projected as portable fields.
 - `body` retains Markdown independently of frontmatter;
 - `resources` records every accepted regular resource path, size, and digest;
 - `aiwg` contains only recognized AIWG control fields;
+- optional `providers.claude` retains the recognized native Claude fields;
 - `unknownFields` retains external fields as diagnostic data without granting
   them AIWG policy meaning.
 
 Exact source bytes remain in the immutable managed source tree. The parsed
 representation is not a replacement for those bytes.
+
+Issue #3703 extends the existing v1 sidecar with optional `providers.claude`.
+Compatible validation recognizes the Claude field set without widening the
+six-field portable baseline. Claude deployment restores the native fields;
+other managed provider projections drop them with field/provider warnings and
+`degraded` status. Strict export retains the values only in its sidecar.
+See [the field and surface projection tables](../skills/agent-skills.md#strict-provider-projection).
+
+#### D1/D2 source investigation (#3703)
+
+The portable allow-list is `src/skills/agent-skills.ts:24`; unknown fields are
+diagnosed at `src/skills/agent-skills.ts:385`. Contrary to the brief's example,
+this checkout already recognized `context` and `effort` as legacy AIWG fields
+(`src/skills/agent-skills.ts:114`), so their defect was silent loss during
+projection. Other native spellings, such as `user-invocable`, were unknown.
+Strict rejection of recognized extensions is in `src/skills/validator.ts:136`.
+
+`src/skills/deployer.ts:113` now delegates its former six-field-only projection
+to `src/skills/deployment-projection.ts:104`. The existing ownership/provenance
+sidecar is still `.aiwg-agent-skill.json`; provider values are copied and
+restored by `src/skills/agent-skill-sidecar.ts:8`, using the existing schema's
+optional `providers` property (`schemas/skills/agent-skill-sidecar.v1.schema.json:25`).
+
+Separate bundled provider deployers also consume frontmatter: the shared copier
+at `tools/agents/providers/base.mjs:1577` injects platforms and calls provider
+transforms; Claude's `tools/agents/providers/claude.mjs:346` compiles
+`commandHint` model/effort; Factory's `tools/agents/providers/factory.mjs:417`
+maps and filters native fields; Hermes's `tools/agents/providers/hermes.mjs:155`
+rewrites platforms and Hermes tags; `tools/skills/deploy-skills-codex.mjs:233`
+parses metadata before its Codex rendering. Managed import deployment uses
+`src/skills/deployer.ts`, independently of those bundled-source transformers.
 
 ### Standard field map
 

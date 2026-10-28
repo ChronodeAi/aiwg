@@ -1,7 +1,7 @@
 {
   "$schema": "../../../schemas/models/model-catalog.v1.schema.json",
   "version": "1.0.0",
-  "refreshedAt": "2026-09-21",
+  "refreshedAt": "2026-10-27",
   "staleAfterDays": 90,
   "providers": {
     "antigravity": {
@@ -28,44 +28,94 @@
     "claude": {
       "roles": {
         "reasoning": {
-          "id": "claude-opus-5",
+          "id": "claude-opus-5-5",
           "status": "active",
-          "observed": false
+          "observed": true
         },
         "coding": {
-          "id": "claude-sonnet-5",
+          "id": "claude-sonnet-5-5",
           "status": "active",
-          "observed": false
+          "observed": true
         },
         "efficiency": {
-          "id": "claude-haiku-4-5",
+          "id": "claude-haiku-5-5",
           "status": "active",
-          "observed": false
+          "observed": true
         }
       },
       "sourceUrl": "https://platform.claude.com/docs/en/about-claude/models/overview",
-      "verifiedAt": "2026-09-21"
+      "verifiedAt": "2026-10-27",
+      "tiers": {
+        "flagship": {
+          "id": "claude-fable-5-1",
+          "status": "active",
+          "observed": true,
+          "selection": "user-elected"
+        },
+        "premium": {
+          "id": "claude-opus-5-5",
+          "status": "active",
+          "observed": true
+        },
+        "standard": {
+          "id": "claude-sonnet-5-5",
+          "status": "active",
+          "observed": true
+        },
+        "economy": {
+          "id": "claude-haiku-5-5",
+          "status": "active",
+          "observed": true
+        }
+      },
+      "verified_at": "2026-10-27",
+      "evidence": "Conductor-verified Claude Code harness current model list, 2026-10-27."
     },
     "codex": {
       "roles": {
         "reasoning": {
-          "id": "gpt-5.6-sol",
+          "id": "gpt-6.1-sol",
           "status": "active",
           "observed": true
         },
         "coding": {
-          "id": "gpt-5.6-terra",
+          "id": "gpt-6.1-terra",
           "status": "active",
           "observed": true
         },
         "efficiency": {
-          "id": "gpt-5.6-luna",
+          "id": "gpt-6-luna",
           "status": "active",
           "observed": true
         }
       },
       "sourceUrl": "https://learn.chatgpt.com/docs/models",
-      "verifiedAt": "2026-09-21"
+      "verifiedAt": "2026-10-27",
+      "tiers": {
+        "flagship": {
+          "id": "gpt-6-astra",
+          "status": "active",
+          "observed": true,
+          "selection": "user-elected"
+        },
+        "premium": {
+          "id": "gpt-6.1-sol",
+          "status": "active",
+          "observed": true
+        },
+        "standard": {
+          "id": "gpt-6.1-terra",
+          "status": "active",
+          "observed": true
+        },
+        "economy": {
+          "id": "gpt-6-luna",
+          "status": "active",
+          "observed": true
+        }
+      },
+      "verified_at": "2026-10-27",
+      "evidence": "Conductor-verified Codex CLI local model cache on titan (codex-cli 0.165.0), plus ~/.cache/aiwg/model-catalog.v1.json, 2026-10-27; no network verification by this worker."
     },
     "copilot": {
       "roles": {

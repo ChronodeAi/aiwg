@@ -32,7 +32,7 @@ describe('network-analysis addon deployment (#2272)', () => {
     corpus = await mkdtemp(path.join(os.tmpdir(), 'aiwg-network-corpus-'));
     // Deployment snapshots the source corpus's legacy index as well as the target.
     // Copy source inputs; a symlink would still bind the checkout's mutable index.
-    for (const entry of ['agentic', 'docs', 'schemas', 'prebuilt', 'tools', 'src', 'package.json']) {
+    for (const entry of ['agentic', 'docs', 'schemas', 'prebuilt', 'tools', 'src', 'vscode-extension/schemas', 'package.json']) {
       await cp(path.join(root, entry), path.join(corpus, entry), { recursive: true });
     }
     await symlink(path.join(root, 'node_modules'), path.join(corpus, 'node_modules'), 'dir');

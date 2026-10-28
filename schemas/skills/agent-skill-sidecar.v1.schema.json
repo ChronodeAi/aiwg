@@ -22,6 +22,9 @@
     "aiwg": {
       "$ref": "#/$defs/aiwgMetadata"
     },
+    "providers": {
+      "$ref": "#/$defs/providerExtensions"
+    },
     "provenance": {
       "$ref": "#/$defs/provenance"
     },
@@ -92,6 +95,30 @@
         "disableModelInvocation": {},
         "context": {},
         "allowedTools": {}
+      }
+    },
+    "providerExtensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claude": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "disable-model-invocation": {},
+            "user-invocable": {},
+            "disallowed-tools": {},
+            "context": {},
+            "agent": {},
+            "background": {},
+            "model": {},
+            "effort": {},
+            "paths": {},
+            "shell": {},
+            "argument-hint": {},
+            "arguments": {}
+          }
+        }
       }
     },
     "provenance": {

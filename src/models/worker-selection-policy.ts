@@ -16,7 +16,7 @@ const baseRoles = ['efficiency', 'coding', 'reasoning'] as const;
 const WorkerRoleSchema = z.strictObject({
   baseRole: z.enum(baseRoles).optional(),
   groups: uniqueStrings.refine(values => values.length > 0),
-  tier: z.enum(['economy', 'standard', 'premium', 'max-quality']),
+  tier: z.enum(['economy', 'standard', 'premium', 'flagship', 'max-quality']),
   initialEffort: z.string().min(1).nullable(),
   effortLadder: uniqueStrings,
   escalateAfter: integer().positive().optional(),

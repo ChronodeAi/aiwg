@@ -1,7 +1,6 @@
 /**
  * Gates capability phase 1 core (epic #2824): declarative gate packs, a pure deterministic
- * evaluator and digest-bound reports. Experimental and default-off: nothing in the
- * decision runtime imports this module, so existing behavior is unchanged.
+ * evaluator and digest-bound reports. Decision consumers share its outcome lattice.
  */
 export { GATES_API_VERSION, qualifyGateParameter } from './types.js';
 export type {
@@ -30,7 +29,7 @@ export {
   GateEvaluationError, maxOutcome, gateStatusOutcome, sealUpstream, sealGateHoldout,
   evaluateGates, type EvaluateGatesInput,
 } from './evaluate.js';
-export { validateGateReport, type GateReportValidation } from './report.js';
+export { assertGateReportDecision, validateGateReport, type GateReportValidation } from './report.js';
 export { createCoreProviderRegistry, evidenceProvider, pairedProvider, proportionProvider, scalarProvider, screeningProvider } from './providers/index.js';
 export type { MetricProvider } from './providers/index.js';
 export { MetricProviderRegistry } from './providers/index.js';
@@ -54,3 +53,4 @@ export {
 } from './providers/loader.js';
 export type { BundleProviderOptions, ProviderCodeDigest, ProviderExternalPin, ProviderFileDigest } from './providers/loader.js';
 export type { BundleMetricProvider, ProviderRuntime } from './providers/types.js';
+export { GATE_RANK, ceilingDecision, assertDecisionCeiling, GateDecisionUpgradeError } from './lattice.js';

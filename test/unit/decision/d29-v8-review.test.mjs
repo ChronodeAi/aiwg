@@ -289,3 +289,13 @@ describe('D29 v7 dataset freeze (drift guard vs 9d30ab348)', () => {
     }
   }, 120_000);
 });
+
+it('preserves D29 binding, upstream and native-ceiling verdict tables (#2829)', () => {
+  for (const upstream of ['PROMOTE', 'HOLD', 'ROLLBACK']) for (const missing of [false, true]) {
+    const metadata = integrity();
+    metadata.release_gate.decision = upstream;
+    const observed = run({ heldoutMut: missing ? () => null : value => value,
+      gate: { integrity: metadata, trustedIntegrityDigest: heldoutDigest(metadata) } });
+    expect(observed.decision).toBe(upstream === 'ROLLBACK' ? 'ROLLBACK' : upstream === 'HOLD' || missing ? 'HOLD' : 'PROMOTE');
+  }
+});

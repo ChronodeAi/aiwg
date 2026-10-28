@@ -168,9 +168,19 @@ describe('sessions CLI contracts', () => {
     expect(output.data.providers.find((item: any) => item.provider === 'grok-build'))
       .toMatchObject({
         disposition: 'implemented',
-        reasonCode: 'CLI_EXPORT_REQUIRED',
-        supportedOperations: ['inspect', 'stream'],
-        acquisitionModes: ['manual-export'],
+        reasonCode: null,
+        supportedOperations: ['discover', 'inspect', 'stream'],
+        acquisitionModes: ['manual-export', 'jsonl'],
+        discovery: {
+          disposition: 'discoverable',
+          authorization: 'explicit-root',
+          requiredFlags: ['--grok-root'],
+          liveDetection: 'supported',
+        },
+      });
+    expect(output.data.providers.find((item: any) => item.provider === 'copilot'))
+      .toMatchObject({
+        discovery: { disposition: 'manual-export' },
       });
     expect(output.data.providers.find((item: any) => item.provider === 'cursor'))
       .toMatchObject({
@@ -187,8 +197,14 @@ describe('sessions CLI contracts', () => {
     expect(output.data.providers.find((item: any) => item.provider === 'hermes'))
       .toMatchObject({
         disposition: 'implemented',
-        supportedOperations: ['inspect', 'stream'],
+        supportedOperations: ['discover', 'inspect', 'stream'],
         acquisitionModes: ['jsonl', 'api', 'sqlite-snapshot'],
+        discovery: {
+          disposition: 'discoverable',
+          authorization: 'explicit-root',
+          requiredFlags: ['--hermes-root'],
+          liveDetection: 'unsupported',
+        },
       });
     expect(output.data.providers.find((item: any) => item.provider === 'opencode'))
       .toMatchObject({
