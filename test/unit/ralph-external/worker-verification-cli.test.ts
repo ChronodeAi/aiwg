@@ -10,6 +10,7 @@ import { parseWorkerLaunchArgs, resolveRetryReference } from '../../../tools/ral
 import { verifyRetryPredecessor } from '../../../tools/ralph-external/session-launcher.mjs';
 import { sampleWorkerIdentity } from '../../../tools/ralph-external/process-monitor.mjs';
 import { inspectWorkerPath } from '../../../src/serve/worker-invocation-paths.js';
+import { observeChildClose, stopAndReap, waitForCondition } from '../../helpers/worker-lifecycle.mjs';
 
 const repo = fileURLToPath(new URL('../../../', import.meta.url));
 const roots: string[] = [];
@@ -109,12 +110,13 @@ describe('T-OG-04 installed CLI trusted verification', () => {
     const f = fixture();
     const child = spawn(process.execPath, [path.join(repo, 'test/fixtures/ralph-external/termination-worker.mjs'), 'descendant'],
       { detached: true, stdio: 'ignore' });
+    const closed = observeChildClose(child);
     try {
       let identity;
-      for (let n = 0; n < 100 && !identity; n++) {
+      await waitForCondition(() => {
         identity = sampleWorkerIdentity(child.pid);
-        if (!identity) await new Promise(resolve => setTimeout(resolve, 5));
-      }
+        return identity?.pgid === child.pid;
+      });
       expect(identity?.pgid).toBe(child.pid);
       f.writeRecord('process.json', { invocationId: 'previous-1', invocationMarker: 'previous-1', origin: 'launcher', isolation: 'degraded',
         supervisor: sampleWorkerIdentity(process.pid), worker: identity,
@@ -124,13 +126,14 @@ describe('T-OG-04 installed CLI trusted verification', () => {
       expect(result.output).toMatchObject({ status: 'rejected', errorCode: 'VERIFICATION_REQUEST_FAILED', evidence: [] });
       expect(result.output.findings.join(' ')).toMatch(/signal-0 still finds members.*--check-descendants/);
       expect(JSON.parse(readFileSync(path.join(f.run, 'exit.json'), 'utf8')).termination).toBe('uncertain');
-    } finally { process.kill(child.pid!, 'SIGKILL'); }
+    } finally { await stopAndReap(child, closed, { ownedGroup: true }); }
   });
 
   it('refuses verification when the group is empty but an escaped marked process survives', async () => {
     const f = fixture();
     const child = spawn(process.execPath, [path.join(repo, 'test/fixtures/ralph-external/termination-worker.mjs'), 'descendant'],
       { detached: true, stdio: 'ignore', env: { AIWG_WORKER_INVOCATION_ID: 'previous-1' } });
+    const closed = observeChildClose(child);
     try {
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       symlinkSync(`/proc/${child.pid}`, path.join(f.root, 'clients/proc', String(child.pid)));
@@ -144,8 +147,7 @@ describe('T-OG-04 installed CLI trusted verification', () => {
       expect(result.output.findings.join(' ')).toMatch(/escaped-descendant evidence: same-uid process still carries invocation marker/);
       expect(JSON.parse(readFileSync(path.join(f.run, 'exit.json'), 'utf8')).termination).toBe('uncertain');
     } finally {
-      child.kill('SIGKILL');
-      await new Promise(resolve => child.once('exit', resolve));
+      await stopAndReap(child, closed, { ownedGroup: true });
     }
   });
 
