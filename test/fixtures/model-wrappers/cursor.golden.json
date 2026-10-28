@@ -35,6 +35,7 @@
   "aiwg-model-efficiency-worker": {
     "name": "aiwg-model-efficiency-worker",
     "description": "Choose for discovery, inventory, focused edits, and bounded low-cost work",
+    "model": "claude-4.6-sonnet",
     "tools": [
       "Bash",
       "Read",
@@ -44,7 +45,7 @@
     ],
     "category": "orchestration",
     "model-role": "efficiency",
-    "model-tier": "economy",
+    "model-tier": "standard",
     "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
   },
   "aiwg-model-explorer": {

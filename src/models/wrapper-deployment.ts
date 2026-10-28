@@ -134,7 +134,9 @@ async function validateArtifact(
     mismatches, wrapper, file, 'model-role', 'wrapper role is stale or mismatched', role, actualRole,
   );
   const actualTier = fieldValue(fields, 'model-tier', 'modelTier', 'aiwg-model-tier');
-  if (actualTier && actualTier !== tier && !(readOnly && tier === 'economy' && actualTier === 'standard')) addMismatch(
+  const standardFallback = tier === 'economy' && actualTier === 'standard'
+    && (readOnly || expectation.provider === 'cursor');
+  if (actualTier && actualTier !== tier && !standardFallback) addMismatch(
     mismatches, wrapper, file, 'model-tier', 'wrapper tier is stale or mismatched', tier, actualTier,
   );
 

@@ -2,7 +2,8 @@
 import { load, dump } from 'js-yaml';
 import { importImpl } from '../../_resolve-impl.mjs';
 const { MODEL_WRAPPER_DEFINITIONS } = await importImpl(import.meta.url, 'models/wrapper-definitions.js');
-const { compileModelPolicy, loadProviderModelCatalog } = await importImpl(import.meta.url, 'models/catalog-policy.js');
+const { loadProviderModelCatalog } = await importImpl(import.meta.url, 'models/catalog-policy.js');
+const { resolveWrapperPin } = await importImpl(import.meta.url, 'models/wrapper-enforcement.js');
 
 function parse(content) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
@@ -16,23 +17,17 @@ export function withModelWrapper(provider, translate) {
     const wrapper = MODEL_WRAPPER_DEFINITIONS.find(item => item.name === parsed?.metadata.name);
     if (!wrapper) return translate(source, content, opts);
     const catalog = opts.modelCatalog || loadProviderModelCatalog();
-    const override = opts[`${wrapper.role}Model`]
-      || opts.modelsConfig?.[provider]?.[wrapper.role]?.model;
+    const config = opts.modelsConfig?.[provider]?.[wrapper.role];
+    const sourceModel = parsed.metadata.model;
+    const override = parsed.metadata['model-override'] || opts[`${wrapper.role}Model`]
+      || config?.model || (sourceModel && !['opus', 'sonnet', 'haiku', 'inherit', 'auto'].includes(sourceModel) ? sourceModel : undefined);
     // Reuse #2643 election checks, including catalog entries marked user-elected.
     // Wrappers never supply election authority, even if a parent session has it.
-    let tier = wrapper.tier;
-    let role = wrapper.role;
-    const compile = () => compileModelPolicy({ provider, artifact: 'agent', catalog,
-      policy: { role, tier, ...(override ? { override } : {}) } });
-    let policy = compile();
-    // An automatic selector can inherit flagship. Prefer the catalog's standard pin.
-    if (wrapper.readOnly && tier === 'economy' && policy.effectiveModel === 'auto' && !override) {
-      tier = 'standard';
-      role = 'coding';
-      policy = compile();
-    }
-    const pin = policy.effectiveModel && !/^(?:configured\/|auto$|inherit$)/.test(policy.effectiveModel) ? policy.effectiveModel : null;
-    const nativePin = pin && !['openclaw', 'antigravity', 'windsurf', 'warp'].includes(provider);
+    const effort = parsed.metadata['model-effort'] || parsed.metadata.model_reasoning_effort
+      || parsed.metadata.reasoningEffort || parsed.metadata.thinkingLevel || parsed.metadata.effort
+      || config?.reasoningEffort;
+    const { tier, role, model: pin, effort: nativeEffort, controls, enforcement } =
+      resolveWrapperPin(provider, wrapper, { catalog, override, effort });
     // Legacy translators read a single tools line; normalize YAML lists before mapping.
     const toolList = parsed.metadata.tools;
     const normalized = Array.isArray(toolList) && ['antigravity', 'copilot', 'factory', 'windsurf'].includes(provider)
@@ -41,10 +36,13 @@ export function withModelWrapper(provider, translate) {
       : content;
     const mapped = translate(source, normalized, opts);
     const notice = `AIWG wrapper tier: ${tier}; catalog role: ${role}. `
-      + (nativePin ? `Catalog model selector: ${pin}.` : 'The automatic selector is not a model pin. Model control is inherited or informational; stop unless the conductor confirms the required non-flagship session.');
+      + `Tier enforcement: ${enforcement}; effort: ${nativeEffort ? `pinned (${nativeEffort})` : 'not enforced per wrapper'}. `
+      + (pin ? `Model selector: ${pin}.` : 'The automatic selector is not a model pin. Model control is inherited or informational; stop unless the conductor confirms the required non-flagship session.')
+      + (provider === 'grok-build' ? ' Native-agent tier enforcement remains gated by #2577; not enforced.' : '');
     if (provider === 'codex') {
       let output = mapped.replace(/^model = .*$/m, `model = ${JSON.stringify(pin)}`);
       if (!pin) throw new Error(`${source}: Codex wrapper needs a catalog model pin`);
+      output = output.replace(/^model_reasoning_effort = .*$/m, `model_reasoning_effort = ${JSON.stringify(nativeEffort)}`);
       output = output.replace(/^developer_instructions = (.*)$/m, (_line, value) =>
         `developer_instructions = ${JSON.stringify(`${notice}\n\n${JSON.parse(value)}`)}`);
       if (wrapper.readOnly) output += 'sandbox_mode = "read-only"\n';
@@ -53,8 +51,9 @@ export function withModelWrapper(provider, translate) {
     const target = parse(mapped);
     if (!target) return `${mapped.trim()}\n\n${notice}\n`;
     const metadata = target.metadata;
-    if (nativePin) metadata.model = pin;
-    else delete metadata.model;
+    if (pin) metadata[controls.model] = pin;
+    else if (!override) delete metadata.model;
+    if (nativeEffort) metadata[controls.effort] = nativeEffort;
     if (metadata['model-tier']) metadata['model-tier'] = tier;
     if (wrapper.readOnly) {
       if (provider === 'opencode') {
