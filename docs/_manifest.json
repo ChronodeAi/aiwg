@@ -193,6 +193,7 @@
     "references/REF-003-agentic-development-antipatterns",
     "references/REF-066-mcp-specification-2025",
     "releases",
+    "releases/v2026.10.12-announcement",
     "releases/v2026.10.11-announcement",
     "releases/v2026.10.10-announcement",
     "releases/v2026.10.9-announcement",
@@ -1629,6 +1630,13 @@
       "title": "Releases",
       "summary": "Release notes and changelog",
       "collapsed": true
+    },
+    {
+      "id": "releases/v2026.10.12-announcement",
+      "title": "v2026.10.12 — Live Session Follow, Safer Approvals and Checked Worker Results",
+      "summary": "Follow live sessions, import Grok Build and Hermes history automatically, pre-approve bounded routine work, and require cross-model review before worker results count.",
+      "file": "releases/v2026.10.12-announcement.md",
+      "parent": "releases"
     },
     {
       "id": "releases/v2026.10.11-announcement",

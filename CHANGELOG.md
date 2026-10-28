@@ -7,6 +7,86 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.12] - 2026-10-28
+
+### Added
+
+- `aiwg sessions tail` follows a live session read-only, with `--follow` (new
+  events appear within 2 s), `--latest` and an optional `--import`. Providers
+  without a native stream report `UNSUPPORTED_PROVIDER` (#3228).
+- Native session discovery for Grok Build (`--grok-root`, read from
+  `chat_history.jsonl`) and Hermes (`--hermes-root`, through a read-only
+  `state.db` snapshot). `sessions sources` reports a provider as discoverable
+  only when native discovery is wired (#3229).
+- `aiwg sessions import --from-dir` batch-imports an intake folder of Claude
+  admin exports idempotently, with per-file receipts. A walkthrough covers the
+  whole path from export to Fortemi shard (#3168).
+- Bounded project HITL authorization:
+  - `authorization.hitl` profiles, with a preview, inspect, validate, enable
+    and revoke commands under `aiwg config authorization`.
+  - Signed decision receipts.
+  - Secrets, destructive, production and policy-override actions can never be
+    preauthorized.
+  - Workflow wiring follows in #3720 (#2655).
+- `aiwg models resolve` accepts tightening-only per-task limits: `--max-attempts`,
+  `--timeout-ms`, `--max-output-tokens` and `--max-usd`. A looser value is
+  refused with `OG_POLICY_RELAXATION` (#3701).
+- Flagship model tier:
+  - The model catalog is refreshed with verified current models: Claude
+    Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5; Codex Astra, Sol, Terra and
+    Luna.
+  - Tier order now matches capability order.
+  - `flagship` is used only when you explicitly elect it; `max-quality` remains
+    an alias.
+  - Framework model defaults follow the catalog (#2643).
+- Worker acceptance and review:
+  - Delegation briefs can carry an uncertainty policy, must-not-regress checks
+    and a verification oracle.
+  - Final acceptance requires a review of the exact PR head by a different
+    model family.
+  - A findings ledger (A, B and C classes) and a rounds-to-clean count are
+    recorded (#3167).
+- Rules can declare `enforcedBy` gate references, and `aiwg gates coverage`
+  lists each rule's enforcing gates (#2839).
+- A gate-pack authoring guide, and a shipped `aiwg:dev/ci-flake` pack that now
+  drives the integration flake gate (#2840).
+- Issue audits page through large backlogs with a bounded cursor, hydrate only
+  selected issues, resume from a checkpoint without duplicates, and report
+  coverage (#2211).
+- The aiwg-pr workflow checks that a branch is synced with main before
+  readiness (`tools/git/pr-base-sync.sh`), and readiness records the head and
+  main SHAs (#2654).
+- CI checks that session-export shards import into a pinned Fortemi consumer
+  (#2570).
+
+### Changed
+
+- One shared PROMOTE/HOLD/ROLLBACK lattice replaces the duplicated decision
+  formulas. Reports can no longer claim a better decision than any of their
+  components (#2829).
+- `aiwg storage migrate` runs through the migration protocol. Resume recopies
+  changed paths, deletes propagate only when authorized, and the receipt gives
+  a reason for every path (#3702).
+- Claude skill frontmatter such as `context: fork` round-trips through deploy.
+  Portable validation stays strict, and the other providers warn about each
+  field they drop (#3703).
+
+### Fixed
+
+- A bound rule in a project-local bundle can target an agent in the same
+  bundle, with or without a project index (#3700, GitHub jmagly/aiwg#373).
+- Deploying to Grok Bot at project scope no longer crashes or records phantom
+  artifact counts (#3648).
+- `aiwg doctor` scans every configured provider, including pi, omp,
+  antigravity and deepseek-harness. A failed explicit `--qualify` exits nonzero
+  (#3649, #3690).
+- Two flaky tests are fixed: the index no-op test now checks the work done
+  instead of timing, and the scoped-recovery tests wait for real process
+  reaping (#3705, #3712).
+- The orchestration changed-code coverage gate now measures changed lines, not
+  whole changed files, as #3641 specified. The Fortemi session receipt pins only
+  the shard producer files.
+
 ## [2026.10.11] - 2026-10-28
 
 ### Added
