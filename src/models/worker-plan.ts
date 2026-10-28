@@ -1,5 +1,7 @@
 // Resolves eligible worker tuples against current config, catalog and installation snapshots.
+import { isFlagshipModel, flagshipElected, normalizeModelTier } from './tiers.js';
 import { ownWorkerRoleGuidance } from './worker-selection-policy.js';
+import { resolveWorkerCeilings } from './worker-ceilings.js';
 import { mergeGroupWorkerPolicy } from '../config/worker-group-templates.js';
 import { WORKER_DISPATCH_ENABLE_COMMAND, WORKER_DISPATCH_READINESS_COMMAND } from './worker-dispatch-offer.js';
 import {
@@ -138,7 +140,8 @@ function workerCatalogDigest(catalog: DynamicModelCatalog): string {
 
 /** Pure S1 resolution. No probing, launch, activation, admission, or writes.
  * Recheck against freshly loaded snapshots before preparing an invocation. */
-export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerPlanRequest): WorkerResolutionPlan {
+export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerPlanRequest,
+  ceilingDefaults: WorkerResolutionCeilings = {}): WorkerResolutionPlan {
   let parallelism: ReturnType<typeof resolveParallelism> | NonNullable<WorkerPlanSnapshot['config']['parallelism']> = snapshot.config.parallelism ?? {};
   const policy = snapshot.models.defaults.workerSelection;
   const digests = {
@@ -196,14 +199,10 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
   for (const message of validateWorkerGroupReferences(parallelism, policy)) block('OG_CONFIG_REFERENCE', '/parallelism', message);
   if (plan.diagnostics.length) return plan;
   parallelism = resolveParallelism(parallelism, snapshot.config.providers?.[0]);
-  const ceilingLayers = [parallelism.budgets?.perRun, parallelism.budgets?.perTask,
-    { maxAttempts: parallelism.retry?.maxAttempts ?? 3 }, snapshot.constraints?.ceilings, request.ceilings];
-  for (const key of ['tokens', 'costUsd', 'wallSeconds', 'maxAttempts'] as const) {
-    const values = ceilingLayers.map(layer => (layer as WorkerResolutionCeilings | undefined)?.[key]).filter((value): value is number => value !== undefined);
-    if (values.some(value => !Number.isFinite(value) || value < 0 || key !== 'costUsd' && !Number.isSafeInteger(value))) {
-      block('OG_CONFIG_REFERENCE', `/request/ceilings/${key}`, 'Ceilings must be finite nonnegative values; counts must be integers');
-    } else if (values.length) plan.ceilings[key] = Math.min(...values);
-  }
+  const resolvedCeilings = resolveWorkerCeilings(parallelism, snapshot.constraints?.ceilings, request.ceilings, ceilingDefaults);
+  plan.ceilings = resolvedCeilings.ceilings;
+  plan.origins = { ...plan.origins, ...resolvedCeilings.origins };
+  plan.diagnostics.push(...resolvedCeilings.diagnostics);
   if (plan.ceilings.maxAttempts === 0) block('OG_BUDGET_UNMEASURABLE', '/request/ceilings/maxAttempts', 'No task attempts remain');
   const qualifiedRoles: Record<string, string[]> = {};
   for (const [groupId, group] of Object.entries(parallelism.groups ?? {})) {
@@ -340,9 +339,11 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
           catch { plan.exclusions.push({ ...tuple, diagnostics: reasons }); continue; }
           if (snapshot.constraints?.revokedModels?.includes(key)) deny('OG_MODEL_UNAPPROVED', '/constraints/revokedModels', 'Current model revocation');
           if (snapshot.constraints?.unavailableMembers?.includes(`${groupId}/${member.id}`)) deny('OG_ADAPTER_UNQUALIFIED', pointer, 'Member is currently unavailable');
-          const premium = ['premium', 'max-quality'].includes(guidance.tier) || observation.pricing.costClass === 'premium';
+          const flagship = normalizeModelTier(guidance.tier) === 'flagship' || isFlagshipModel(row.apiModelId);
+          if (flagship && !flagshipElected(request.authority ?? {})) deny('OG_MODEL_UNAPPROVED', '/request/authority', 'Flagship models are user-elected only');
+          const premium = ['premium', 'flagship', 'max-quality'].includes(guidance.tier) || observation.pricing.costClass === 'premium';
           // Worker candidates always invoke a model; deterministic/routine hints must not bypass premium authority.
-          const authority = routeModelTier({ ...request.authority, deterministic: false, routine: false,
+          const authority = routeModelTier({ ...request.authority, deterministic: false, routine: false, requestedTier: flagship ? 'flagship' : undefined,
             defaultTier: guidance.tier === 'economy' ? 1 : 2, requestedPremium: premium || request.authority?.requestedPremium });
           if (authority.requiresConfirmation) deny('OG_MODEL_UNAPPROVED', '/request/authority', `${authority.rationale.join('; ')}; agents may pass --authorize-premium only after the human explicitly confirmed the premium escalation (escalation-discipline rule)`);
           const installation = parallelism.clis?.[member.cli];

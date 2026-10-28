@@ -1,3 +1,4 @@
+import type { FlagshipAuthority } from './tiers.js';
 /**
  * TypeScript types for Enhanced Model Selection System (Phase 1)
  *
@@ -8,17 +9,19 @@
 /**
  * Quality tier for model selection
  */
-export type ModelTier = 'economy' | 'standard' | 'premium' | 'max-quality';
+export type ModelTier = 'economy' | 'standard' | 'premium' | 'flagship' | 'max-quality';
 
 /**
  * Provider-neutral runtime routing tier for escalation policy.
  *
  * 0 = no model call, 1 = default/cheap, 2 = capable work model,
- * 3 = premium/supervised.
+ * 3 = premium/supervised, 4 = user-elected flagship.
  */
-export type RuntimeModelTier = 0 | 1 | 2 | 3;
+export type RuntimeModelTier = 0 | 1 | 2 | 3 | 4;
 
-export interface ModelRouteRequest {
+export interface ModelRouteRequest extends FlagshipAuthority {
+  /** Explicit requested tier; max-quality is a compatibility alias for flagship. */
+  requestedTier?: ModelTier;
   /** Agent or workflow name, used for diagnostics only. */
   agentName?: string;
   /** Current/default runtime tier for the session. Defaults to 1. */
@@ -352,7 +355,7 @@ export interface ResolvedModel {
 /**
  * Model resolver options
  */
-export interface ModelResolverOptions {
+export interface ModelResolverOptions extends FlagshipAuthority {
   provider?: Provider;
   tier?: ModelTier;
   respectMinimums?: boolean;

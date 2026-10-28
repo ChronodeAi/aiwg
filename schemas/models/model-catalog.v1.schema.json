@@ -24,6 +24,23 @@
               "efficiency": { "$ref": "#/$defs/model" }
             }
           },
+          "tiers": {
+            "type": "object", "additionalProperties": false,
+            "required": ["flagship", "premium", "standard", "economy"],
+            "properties": {
+              "flagship": {
+                "allOf": [
+                  { "$ref": "#/$defs/model" },
+                  { "type": "object", "required": ["selection"], "properties": { "selection": { "const": "user-elected" } } }
+                ]
+              },
+              "premium": { "$ref": "#/$defs/model" },
+              "standard": { "$ref": "#/$defs/model" },
+              "economy": { "$ref": "#/$defs/model" }
+            }
+          },
+          "verified_at": { "type": "string", "format": "date" },
+          "evidence": { "type": "string", "minLength": 1 },
           "sourceUrl": { "type": "string", "format": "uri" },
           "verifiedAt": { "type": "string", "format": "date" }
         }
@@ -61,7 +78,8 @@
         "id": { "type": "string", "minLength": 1 },
         "status": { "enum": ["active", "deprecated", "unverified"] },
         "fallback": { "type": "string", "minLength": 1 },
-        "observed": { "type": "boolean" }
+        "observed": { "type": "boolean" },
+        "selection": { "const": "user-elected" }
       }
     },
     "workerObservation": {

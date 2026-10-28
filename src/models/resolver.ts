@@ -6,6 +6,8 @@
  * @architecture @.aiwg/architecture/enhanced-model-selection-design.md
  */
 
+import { normalizeModelTier, TIER_ORDER, flagshipElected, isFlagshipModel } from './tiers.js';
+import { compileModelPolicy } from './provider-policy.js';
 import { ConfigLoader } from './config-loader.js';
 import { resolveWorkerPlan, type WorkerPlanRequest, type WorkerPlanSnapshot, type WorkerResolutionPlan } from './worker-plan.js';
 export * from './worker-plan.js';
@@ -56,25 +58,40 @@ export class ModelResolver {
       config
     );
 
+    if (normalizeModelTier(tier) === 'flagship' && !flagshipElected({ ...this.options, agentName })) {
+      throw new Error('Flagship models are user-elected only');
+    }
+
     // Check for direct model override (bypasses tier system)
     const override = config.agentOverrides[agentName];
     if (override?.['model-override']) {
+      if (isFlagshipModel(override['model-override']) && !flagshipElected({ ...this.options, agentName })) throw new Error('Flagship models are user-elected only');
       return {
         modelId: override['model-override'],
         provider: this.options.provider || config.defaults.provider,
-        tier,
+        tier: normalizeModelTier(tier),
         role,
         source: 'agent',
       };
     }
 
-    // Resolve tier + role to concrete model
-    const modelId = this.resolveModelId(tier, role, config);
+    const provider = this.options.provider || config.defaults.provider;
+    const modelId = normalizeModelTier(tier) === 'flagship'
+      ? compileModelPolicy({
+          provider: provider === 'openai' ? 'codex' : provider,
+          artifact: 'agent', policy: { tier: 'flagship', role },
+          election: this.options.election, flagshipAllowlist: this.options.flagshipAllowlist, agentName,
+        }).effectiveModel
+      : this.resolveModelId(tier, role, config);
+    if (!modelId) throw new Error(`No supported model binding for ${provider}/${tier}`);
+    if (isFlagshipModel(modelId) && !flagshipElected({ ...this.options, agentName })) {
+      throw new Error('Flagship models are user-elected only');
+    }
 
     return {
       modelId,
       provider: this.options.provider || config.defaults.provider,
-      tier,
+      tier: normalizeModelTier(tier),
       role,
       source,
     };
@@ -175,9 +192,9 @@ export class ModelResolver {
    * Return the higher of two tiers
    */
   private maxTier(tier1: ModelTier, tier2: ModelTier): ModelTier {
-    const tierOrder: ModelTier[] = ['economy', 'standard', 'premium', 'max-quality'];
-    const index1 = tierOrder.indexOf(tier1);
-    const index2 = tierOrder.indexOf(tier2);
+    const tierOrder = TIER_ORDER;
+    const index1 = tierOrder.indexOf(normalizeModelTier(tier1));
+    const index2 = tierOrder.indexOf(normalizeModelTier(tier2));
     return tierOrder[Math.max(index1, index2)];
   }
 
@@ -292,7 +309,7 @@ export class ModelResolver {
     const config = await this.getConfig();
 
     return Object.entries(config.tiers).map(([tierName, tierDef]) => ({
-      tier: tierName as ModelTier,
+      tier: normalizeModelTier(tierName as ModelTier),
       description: tierDef.description,
       costMultiplier: tierDef.costMultiplier,
     }));

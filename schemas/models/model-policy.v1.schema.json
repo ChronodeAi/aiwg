@@ -7,7 +7,7 @@
   "required": ["role", "tier"],
   "properties": {
     "role": { "enum": ["efficiency", "coding", "reasoning"] },
-    "tier": { "enum": ["economy", "standard", "premium"] },
+    "tier": { "enum": ["economy", "standard", "premium", "flagship", "max-quality"] },
     "effort": { "enum": ["minimal", "low", "medium", "high", "xhigh"] },
     "override": { "type": "string", "minLength": 1 }
   }

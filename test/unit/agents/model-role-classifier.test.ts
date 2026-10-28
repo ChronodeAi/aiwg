@@ -105,9 +105,9 @@ describe('shared deployment role classification', () => {
     });
 
     expect(new Set(deployedModels)).toEqual(new Set([
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
+      'gpt-6.1-sol',
+      'gpt-6.1-terra',
+      'gpt-6-luna',
     ]));
   });
 });

@@ -1,5 +1,9 @@
 {
   "version": "1.0.0",
+  "ladders": {
+    "claude": { "flagship": "claude-fable-5-1", "premium": "claude-opus-5-5", "standard": "claude-sonnet-5-5", "economy": "claude-haiku-5-5" },
+    "codex": { "flagship": "gpt-6-astra", "premium": "gpt-6.1-sol", "standard": "gpt-6.1-terra", "economy": "gpt-6-luna" }
+  },
   "policies": [
     { "id": "reasoning-premium", "policy": { "role": "reasoning", "tier": "premium", "effort": "high" } },
     { "id": "coding-standard", "policy": { "role": "coding", "tier": "standard", "effort": "medium" } },

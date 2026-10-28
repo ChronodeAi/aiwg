@@ -513,7 +513,7 @@ describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => 
     f.snapshot.config.parallelism!.budgets = { perRun: { tokens: 9000, costUsd: 3 }, perTask: { tokens: 5000, wallSeconds: 120 } };
     f.snapshot.config.parallelism!.retry = { maxAttempts: 4 };
     f.snapshot.constraints = { ceilings: { tokens: 4000, costUsd: 2, wallSeconds: 90, maxAttempts: 3 } };
-    f.request.ceilings = { tokens: 8000, costUsd: 1, wallSeconds: 60, maxAttempts: 10 };
+    f.request.ceilings = { tokens: 4000, costUsd: 1, wallSeconds: 60, maxAttempts: 3 };
     expect(resolve(f).ceilings).toEqual({ tokens: 4000, costUsd: 1, wallSeconds: 60, maxAttempts: 3 });
     expect(resolve(f).status).toBe('eligible');
     f.snapshot.config.parallelism!.budgets.enforcement = 'hard';

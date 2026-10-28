@@ -7,8 +7,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { writeFile, mkdir, rm } from 'fs/promises';
+import { writeFile, mkdir, rm, mkdtemp } from 'fs/promises';
 import { resolve } from 'path';
+import { tmpdir } from 'node:os';
 import { ModelResolver } from '../../../src/models/resolver.js';
 import { routeModelTier } from '../../../src/models/router.js';
 import type { UserProjectConfig } from '../../../src/models/types.js';
@@ -25,7 +26,7 @@ describe('ModelResolver', () => {
   let resolver: ModelResolver;
 
   beforeEach(async () => {
-    testDir = resolve(process.cwd(), 'test-temp-models');
+    testDir = await mkdtemp(resolve(tmpdir(), 'aiwg-models-'));
     await mkdir(testDir, { recursive: true });
     // Point AIWG_HOME to project root so ConfigLoader finds models-v2.json
     process.env.AIWG_HOME = process.cwd();
@@ -68,12 +69,12 @@ describe('ModelResolver', () => {
         },
         {
           name: 'tier from CLI options',
-          options: { tier: 'max-quality' },
+          options: { tier: 'flagship', election: 'user' },
           agent: 'software-implementer',
           role: 'coding',
           expected: {
-            modelId: CLAUDE_MODELS.reasoning,
-            tier: 'max-quality',
+            modelId: FLAGSHIP_MODELS.claude,
+            tier: 'flagship',
             source: 'cli',
           },
         },
@@ -289,7 +290,7 @@ describe('ModelResolver', () => {
         'economy',
         'standard',
         'premium',
-        'max-quality',
+        'flagship',
       ]);
 
       const standardTier = tiers.find((t) => t.tier === 'standard');
@@ -299,7 +300,7 @@ describe('ModelResolver', () => {
       const economyTier = tiers.find((t) => t.tier === 'economy');
       expect(economyTier?.costMultiplier).toBe(0.1);
 
-      const maxQualityTier = tiers.find((t) => t.tier === 'max-quality');
+      const maxQualityTier = tiers.find((t) => t.tier === 'flagship');
       expect(maxQualityTier?.costMultiplier).toBe(10.0);
     });
   });
@@ -334,17 +335,17 @@ describe('ModelResolver', () => {
         },
         {
           name: 'max-quality (explicitly elected flagship) for best',
-          tier: 'max-quality',
+          tier: 'flagship',
           assertions: [
             { role: 'reasoning', expected: FLAGSHIP_MODELS.claude },
-            { role: 'coding', expected: CLAUDE_MODELS.reasoning },
-            { role: 'efficiency', expected: CLAUDE_MODELS.coding },
+            { role: 'coding', expected: FLAGSHIP_MODELS.claude },
+            { role: 'efficiency', expected: FLAGSHIP_MODELS.claude },
           ],
         },
       ];
 
       for (const tc of cases) {
-        resolver = new ModelResolver({ tier: tc.tier as any }, testDir);
+        resolver = new ModelResolver({ tier: tc.tier as any, election: tc.tier === 'flagship' ? 'user' : undefined }, testDir);
         for (const assertion of tc.assertions) {
           const result = await resolver.resolve('test-agent', assertion.role as any);
           expect(result.modelId, `${tc.name} - ${assertion.role}`).toBe(assertion.expected);

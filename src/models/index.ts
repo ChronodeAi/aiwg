@@ -2,7 +2,7 @@
  * Enhanced Model Selection System - Public API
  *
  * Provides tier-based model selection with:
- * - Quality tiers (economy, standard, premium, max-quality)
+ * - Quality tiers (economy, standard, premium, flagship; alias max-quality)
  * - Provider abstraction (claude, openai, factory, etc.)
  * - Hierarchical configuration (default < user < project < agent)
  * - Backwards compatibility with v1 configs
