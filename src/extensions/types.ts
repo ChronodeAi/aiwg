@@ -9,6 +9,8 @@
  * @version 1.0.0
  */
 
+import type { Platform } from '../agents/types.js';
+
 // ============================================
 // Core Extension Schema
 // ============================================
@@ -68,35 +70,12 @@ export type PlatformSupport =
 
 /**
  * Platform compatibility matrix
+ *
+ * Keys mirror the provider registry (`PROVIDER_IDS` in
+ * `src/providers/provider-definitions.ts`), the single source of truth for
+ * provider ids (#3724).
  */
-export interface PlatformCompatibility {
-  /** Claude Code / Desktop */
-  claude?: PlatformSupport;
-
-  /** Factory AI */
-  factory?: PlatformSupport;
-
-  /** Cursor */
-  cursor?: PlatformSupport;
-
-  /** GitHub Copilot */
-  copilot?: PlatformSupport;
-
-  /** Windsurf */
-  windsurf?: PlatformSupport;
-
-  /** Codex / OpenAI */
-  codex?: PlatformSupport;
-
-  /** OpenCode */
-  opencode?: PlatformSupport;
-
-  /** Generic / Warp */
-  generic?: PlatformSupport;
-
-  /** OpenClaw */
-  openclaw?: PlatformSupport;
-}
+export type PlatformCompatibility = Partial<Record<Platform, PlatformSupport>>;
 
 /**
  * A single .aiwg/ path entry in a memory footprint declaration

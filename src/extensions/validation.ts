@@ -12,6 +12,7 @@
 
 import { z } from 'zod';
 import { integer, dateTime, url, number } from '../schema/zod-validation.mjs';
+import { PROVIDER_IDS } from '../providers/provider-definitions.js';
 import type {
   ExtensionType,
 } from './types.js';
@@ -79,17 +80,16 @@ export const HookEventSchema = z.enum([
 
 /**
  * Platform compatibility matrix
+ *
+ * Keys are derived from the provider registry (`PROVIDER_IDS` in
+ * `src/providers/provider-definitions.ts`), the single source of truth for
+ * provider ids — so every registered provider (pi, hermes, …) is accepted.
+ * Strict: an unknown platform key is a validation error, never silently
+ * stripped (#3724).
  */
-export const PlatformCompatibilitySchema = z.object({
-  claude: PlatformSupportSchema.optional(),
-  factory: PlatformSupportSchema.optional(),
-  cursor: PlatformSupportSchema.optional(),
-  copilot: PlatformSupportSchema.optional(),
-  windsurf: PlatformSupportSchema.optional(),
-  codex: PlatformSupportSchema.optional(),
-  opencode: PlatformSupportSchema.optional(),
-  generic: PlatformSupportSchema.optional(),
-}).refine(
+const platformCompatibilityShape: Record<string, z.ZodOptional<typeof PlatformSupportSchema>> =
+  Object.fromEntries(PROVIDER_IDS.map((id) => [id, PlatformSupportSchema.optional()]));
+export const PlatformCompatibilitySchema = z.strictObject(platformCompatibilityShape).refine(
   (data) => Object.values(data).some((val) => val !== undefined),
   { error: 'At least one platform must be specified' }
 );
