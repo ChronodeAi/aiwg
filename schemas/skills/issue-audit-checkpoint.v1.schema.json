@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/skills/issue-audit-checkpoint.v1.schema.json",
+  "title": "AIWG issue-audit resumable checkpoint",
+  "description": "Persisted cursor, pending metadata and findings for a bounded, resumable issue audit (#2211). Owner: src/issues/audit.ts (AuditCheckpoint). Never holds credentials or issue bodies.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "scope", "cursor", "pending", "pageComplete", "finished", "completed", "findings", "totalSeen", "totalHydrated"],
+  "properties": {
+    "version": { "const": 1 },
+    "scope": { "type": "string", "minLength": 1 },
+    "cursor": { "type": ["string", "null"] },
+    "pending": { "type": "array", "items": { "$ref": "#/$defs/metadata" } },
+    "pageComplete": { "type": "boolean" },
+    "finished": { "type": "boolean" },
+    "completed": { "type": "array", "items": { "type": "string" } },
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "totalSeen": { "type": "integer", "minimum": 0 },
+    "totalHydrated": { "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "status", "labels", "updatedAt"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "status": { "type": "string" },
+        "labels": { "type": "array", "items": { "type": "string" } },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "recommendation"],
+      "properties": {
+        "id": { "type": "string" },
+        "category": { "enum": ["High Priority", "Cleanup Candidates", "Epic Hygiene", "Duplicate / Relationship Candidates", "Next Actions"] },
+        "recommendation": { "type": "string" }
+      }
+    }
+  }
+}

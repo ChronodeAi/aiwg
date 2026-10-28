@@ -222,7 +222,7 @@ export function classifyStatus(response: ForgeRawResponse): ForgeReadFailure | n
   return 'unexpected-status';
 }
 
-function parseJson(response: ForgeRawResponse): unknown {
+export function parseForgeJson(response: ForgeRawResponse): unknown {
   const failure = classifyStatus(response);
   if (failure) throw new ForgeReadError(failure, response.status);
   try {
@@ -231,6 +231,8 @@ function parseJson(response: ForgeRawResponse): unknown {
     throw new ForgeReadError('malformed');
   }
 }
+
+const parseJson = parseForgeJson;
 
 export interface ForgePage<T> {
   items: T[];
