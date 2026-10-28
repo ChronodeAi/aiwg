@@ -16,29 +16,17 @@ import { fileURLToPath } from 'node:url';
 import { stringify } from 'yaml';
 import {
   AGENT_SKILLS_BASELINE,
-  AIWG_SKILL_CONTROL_FIELDS,
   projectStrictAgentSkill,
   type AgentSkillDocument,
-  type AgentSkillsStandardMetadata,
-  type AiwgSkillControlMetadata,
 } from './agent-skills.js';
 import type {
   AgentSkillExportOptions,
   AgentSkillExportResult,
 } from './types.js';
 import { validateAgentSkillContent } from './validator.js';
+import { agentSkillDocument } from './provider-extensions.js';
 
 export const AGENT_SKILL_EXPORT_SIDECAR = '.aiwg-agent-skill-export.json';
-
-const STANDARD_FIELDS = [
-  'name',
-  'description',
-  'license',
-  'compatibility',
-  'metadata',
-  'allowed-tools',
-] as const;
-const AIWG_FIELDS = new Set<string>(AIWG_SKILL_CONTROL_FIELDS);
 
 interface ExportDirectory {
   kind: 'directory';
@@ -220,28 +208,11 @@ function parseDocument(
     );
   }
 
-  const standard: Partial<AgentSkillsStandardMetadata> = {};
-  for (const key of STANDARD_FIELDS) {
-    const value = validation.frontmatter[key];
-    if (value !== undefined) Object.assign(standard, { [key]: structuredClone(value) });
-  }
-  const aiwg: AiwgSkillControlMetadata = {};
-  for (const [key, value] of Object.entries(validation.frontmatter)) {
-    if (AIWG_FIELDS.has(key)) {
-      aiwg[key as keyof AiwgSkillControlMetadata] = structuredClone(value);
-    }
-  }
-
+  const document = agentSkillDocument(validation.frontmatter, validation.body);
   return {
-    document: {
-      standard: standard as AgentSkillsStandardMetadata,
-      body: validation.body,
-      resources: [],
-      aiwg,
-      unknownFields: [],
-    },
-    description: validation.frontmatter.description as string,
-    omittedAiwgFields: Object.keys(aiwg).sort(),
+    document,
+    description: document.standard.description,
+    omittedAiwgFields: Object.keys(document.aiwg).sort(),
   };
 }
 
@@ -406,6 +377,7 @@ export function exportAgentSkillDirectory(
     sourceDigest,
     exportDigest: '',
     omittedAiwgFields,
+    ...(document.providers ? { providers: document.providers } : {}),
     fileCount: 0,
     totalBytes: 0,
     exportedAt,
@@ -443,6 +415,7 @@ export function exportAgentSkillDirectory(
     sourceDigest,
     exportDigest,
     omittedAiwgFields,
+    ...(document.providers ? { providers: document.providers } : {}),
     fileCount,
     totalBytes,
     exportedAt,
