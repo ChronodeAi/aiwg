@@ -142,6 +142,8 @@ describe('model wrapper deployment verification', () => {
       .toContainEqual(expect.objectContaining({ field: 'format' }));
     expect(await verify('aiwg-model-coding-worker.json', '"text"', 'claude'))
       .toContainEqual(expect.objectContaining({ field: 'format' }));
+    expect(await verify('aiwg-model-coding-worker.json', '[1]', 'claude'))
+      .toContainEqual(expect.objectContaining({ field: 'format' }));
     expect(await verify('aiwg-model-coding-worker.md', '---\njust text\n---\n', 'claude'))
       .toContainEqual(expect.objectContaining({ field: 'format' }));
   });

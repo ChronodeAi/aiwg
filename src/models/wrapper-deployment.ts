@@ -71,7 +71,7 @@ function artifactFields(file: string, content: string): Record<string, unknown> 
   if (/\.json$/i.test(file)) {
     try {
       const parsed = JSON.parse(content) as unknown;
-      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
     } catch { return null; }
   }
   if (/\.(?:md|yaml|yml)$/i.test(file)) return markdownFields(content);
