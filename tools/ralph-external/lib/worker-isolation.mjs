@@ -581,6 +581,22 @@ export function stopWorkerUnit(unit, { spawn = spawnSync, timeoutMs = 10000 } = 
 }
 
 /**
+ * SIGKILL every process in the unit's cgroup and return without waiting.
+ * `stop` sends SIGTERM and then waits for the unit's stop timeout, which a
+ * worker that ignores SIGTERM outlasts (#3691).
+ */
+export function killWorkerUnit(unit, { spawn = spawnSync, timeoutMs = 10000, signal = 'SIGKILL' } = {}) {
+  if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) {
+    throw new Error('Worker isolation requires a unit-safe unit name');
+  }
+  if (!/^SIG[A-Z0-9]+$/.test(signal)) throw new Error('Worker isolation requires a named signal');
+  const result = spawn(resolveSystemdClient('systemctl'), ['--user', 'kill', '--kill-whom=all', `--signal=${signal}`, unit],
+    { encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGKILL', env: buildSystemdClientEnv({ envNames: [] }) });
+  return { ok: !result.error && result.status === 0,
+    diagnostic: result.error ? result.error.message : String(result.stderr ?? '').trim() || null };
+}
+
+/**
  * Read the kernel-reported `ControlGroup` systemd placed this unit's
  * processes under. This is the containment authority for `systemd-unit`
  * mode worker identity (#2895 round 2, MAJOR a): a candidate pid is only
