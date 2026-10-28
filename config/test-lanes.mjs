@@ -60,6 +60,8 @@ export const orchestrationConformanceFiles = [
 export const nodeFiles = [
   'tools/ralph-external/*.test.mjs', 'test/unit/ralph/*.test.mjs',
   'tools/experiments/conformal/prototype.test.mjs',
+  'tools/eval/test/*.test.mjs',
+  'agentic/code/addons/droid-bridge/test/*.test.mjs',
   'test/unit/providers/grok-build-qualification.test.mjs',
   'test/contract/agentic-publication-source.test.mjs',
   'test/contract/setup-manifest-site-dispatch.test.mjs',
