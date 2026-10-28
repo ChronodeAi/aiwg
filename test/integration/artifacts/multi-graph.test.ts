@@ -34,12 +34,17 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
 const AIWG_DIR = resolveProjectAiwgDir(REPO_ROOT);
 const SRC_DIR = path.join(REPO_ROOT, 'src');
 const AGENTIC_DIR = path.join(REPO_ROOT, 'agentic');
+// `aiwg use` scaffolds these directories empty, so a corpus needs at least one file in them (#3696).
 const PROJECT_CORPUS_AVAILABLE = fs.existsSync(AIWG_DIR) && [
   'requirements',
   'architecture',
   'planning',
   'security',
-].some(dir => fs.existsSync(path.join(AIWG_DIR, dir)));
+].some(dir => {
+  const full = path.join(AIWG_DIR, dir);
+  return fs.existsSync(full)
+    && fs.readdirSync(full, { recursive: true, withFileTypes: true }).some(entry => entry.isFile());
+});
 const ARTIFACT_ENV_KEYS = [
   'AIWG_ARTIFACTS_PATH',
   'AIWG_PROJECT_ARTIFACTS_PATH',
