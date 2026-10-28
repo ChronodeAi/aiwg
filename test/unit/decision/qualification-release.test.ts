@@ -1,10 +1,11 @@
+import { integrityOutcomes, integrityVariants, syntheticIntegrity } from './integrity-ceiling-fixtures.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { QUALIFICATION_PRIVACY_SURFACES } from '../../../src/decision/qualification/privacy.js';
 import {
-  buildQualificationReleaseRecord, deriveCacheLayerPins, qualificationReleaseSummary, type QualificationCacheLayerEvidence,
+  buildQualificationReleaseRecord, verifyQualificationReleaseDigest, deriveCacheLayerPins, qualificationReleaseSummary, type QualificationCacheLayerEvidence,
 } from '../../../src/decision/qualification/release.js';
 import { evaluateBinaryHeldout } from '../../../src/decision/qualification/quality.js';
 import { executeAndEvaluateQualification } from '../../../src/decision/qualification/runner.js';
@@ -141,5 +142,23 @@ it('preserves release decisions for every upstream, report and compromise combin
     });
     expect(record.decision).toBe(upstream === 'ROLLBACK' || reportDecision === 'ROLLBACK' || compromised ? 'ROLLBACK'
       : upstream === 'HOLD' || reportDecision === 'HOLD' ? 'HOLD' : 'PROMOTE');
+  }
+});
+
+it.each(integrityOutcomes)('upstream-ceiling preserves qualification verdicts for %s', async upstream => {
+  const executed = await fixture();
+  for (const variant of integrityVariants) for (const reportDecision of integrityOutcomes) for (const complete of [true, false]) {
+    const metadata = syntheticIntegrity({ ...variant.patch, release_gate: { decision: upstream, reasons: [] } });
+    const record = buildQualificationReleaseRecord({ ...executed, report: { ...executed.report, decision: reportDecision } }, {
+      commands: ['synthetic-check'], environment: 'fixture', pins, budgets: { calls: 10 }, actuals: { calls: 0 },
+      reviewer: complete ? 'fixture-reviewer' : null, integrity: metadata, benchmark, metrics, integritySnapshot,
+    });
+    const expected = upstream === 'ROLLBACK' || reportDecision === 'ROLLBACK'
+      || metadata.integrity_state === 'compromised' || metadata.compromise_labels.length ? 'ROLLBACK'
+      : upstream === 'HOLD' || reportDecision === 'HOLD' || variant.releaseHold || !complete ? 'HOLD' : 'PROMOTE';
+    expect(record.decision, variant.name).toBe(expected);
+    expect(verifyQualificationReleaseDigest(record)).toBe('canonical');
+    expect(verifyQualificationReleaseDigest({ ...record, integrity: { ...metadata, sample_n: 7 } })).toBeNull();
+    expect(verifyQualificationReleaseDigest({ ...record, decision: expected === 'PROMOTE' ? 'HOLD' : 'PROMOTE' })).toBeNull();
   }
 });
