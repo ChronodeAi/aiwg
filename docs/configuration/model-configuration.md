@@ -15,7 +15,7 @@ The current provider-aware contract separates three concerns:
 
 Provider compilation reports one of `native`, `compiled`, `inherited`,
 `global-only`, `informational`, or `unsupported`. An unsupported field is
-omitted rather than copied into an artifact that ignores it.
+omitted rather than copied into an artifact that ignores it. See [wrapper enforcement](wrapper-tier-enforcement.md) for the per-provider artifact contract.
 
 Generated bootstrap context also presents a bounded delegation rubric. For
 independent work, orchestrators prefer `aiwg-model-efficiency-worker` for

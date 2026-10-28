@@ -23,6 +23,7 @@ import { readAiwgConfigCandidate, validateWorkerConfigCandidate, resolveParallel
 import { ConfigLoader } from '../../models/config-loader.js';
 import type { DynamicModelCatalog } from '../../models/model-discovery.js';
 import { validateWorkerCatalogDiscovery } from '../../models/provider-policy.js';
+import { wrapperEnforcementReport } from '../../models/wrapper-enforcement.js';
 
 export const PARALLELISM_BLOCK_START = '<!-- AIWG-PARALLELISM-CAP:START -->';
 export const PARALLELISM_BLOCK_END = '<!-- AIWG-PARALLELISM-CAP:END -->';
@@ -233,8 +234,9 @@ function delegationSupport(provider: string | undefined): string {
     case 'cursor':
     case 'factory':
     case 'opencode':
-    case 'openclaw':
       return `**Provider behavior (${provider})**: native custom subagents can select the deployed model-worker wrapper. Verify the resolved model when provider or account policy may substitute it.`;
+    case 'openclaw':
+      return '**Provider behavior (openclaw)**: wrapper Markdown is a reference mirror; native model controls require separate subagent configuration.';
     case 'openhuman':
       return '**Provider behavior (openhuman)**: wrapper roles compile to OpenHuman agent definitions; exact pins validate while semantic hints may be routed dynamically.';
     case 'warp':
@@ -243,7 +245,7 @@ function delegationSupport(provider: string | undefined): string {
     case 'windsurf':
       return '**Provider behavior (windsurf)**: portable subagent model selection is unsupported. Apply the decomposition rubric in the primary agent and do not claim wrapper pinning or parallel delegation.';
     default:
-      return '**Provider behavior (unknown)**: delegation and per-worker model selection are unverified. Apply the rubric only where the active provider exposes those capabilities, and state any fallback explicitly.';
+      return `**Provider behavior (${provider ?? 'unknown'})**: delegation and per-worker model selection are unverified. Apply the rubric only where the active provider exposes those capabilities, and state any fallback explicitly.`;
   }
 }
 
@@ -313,7 +315,9 @@ export async function buildParallelismSection(projectPath: string, deps: Paralle
   lines.push('Delegation policy and model-worker selection: `aiwg show rule subagent-scoping`.');
   lines.push('After changing project parallelism with `aiwg config set/reset --project`, follow the emitted provider-specific regeneration commands and run `aiwg workspace-context doctor`.');
   lines.push('');
-  lines.push(delegationSupport(primary));
+  for (const provider of cfg.providers.length ? cfg.providers : ['unknown']) {
+    lines.push(`${delegationSupport(provider)} ${wrapperEnforcementReport(provider)}`);
+  }
   lines.push('');
   lines.push(workerDispatchStateLine(cfg.parallelism, cfg.setup));
   lines.push('');

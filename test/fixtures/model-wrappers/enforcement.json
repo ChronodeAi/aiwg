@@ -1,0 +1,20 @@
+{
+  "claude": { "state": "pinned", "model": "model", "effort": "effort" },
+  "codex": { "state": "pinned", "model": "model", "effort": "model_reasoning_effort" },
+  "copilot": { "state": "pinned", "model": "model" },
+  "cursor": { "state": "pinned", "model": "model" },
+  "factory": { "state": "pinned", "model": "model", "effort": "reasoningEffort" },
+  "opencode": { "state": "pinned", "model": "model" },
+  "omp": { "state": "inherited", "model": "model", "effort": "thinkingLevel" },
+  "antigravity": { "state": "inherited" },
+  "grok-build": { "state": "inherited" },
+  "openclaw": { "state": "inherited" },
+  "openhuman": { "state": "inherited" },
+  "windsurf": { "state": "inherited" },
+  "pi": { "state": "inherited" },
+  "deepseek-harness": { "state": "inherited" },
+  "warp": { "state": "global-only" },
+  "hermes": { "state": "global-only" },
+  "grokbot": { "state": "global-only" },
+  "muse": { "state": "global-only" }
+}

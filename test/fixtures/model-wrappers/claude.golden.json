@@ -14,6 +14,7 @@
     "model-role": "reasoning",
     "model-tier": "premium",
     "model-rationale": "Cross-domain architecture and synthesis assignments have high downstream rework cost.",
+    "effort": "high",
     "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
   },
   "aiwg-model-coding-worker": {
@@ -30,6 +31,7 @@
     "category": "orchestration",
     "model-role": "coding",
     "model-tier": "standard",
+    "effort": "medium",
     "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
   },
   "aiwg-model-efficiency-worker": {
@@ -46,6 +48,7 @@
     "category": "orchestration",
     "model-role": "efficiency",
     "model-tier": "economy",
+    "effort": "low",
     "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
   },
   "aiwg-model-explorer": {
@@ -61,6 +64,7 @@
     "category": "analysis",
     "model-role": "efficiency",
     "model-tier": "economy",
+    "effort": "low",
     "disallowedTools": [
       "Write",
       "Edit",
@@ -82,6 +86,7 @@
     "category": "analysis",
     "model-role": "coding",
     "model-tier": "standard",
+    "effort": "medium",
     "disallowedTools": [
       "Write",
       "Edit",

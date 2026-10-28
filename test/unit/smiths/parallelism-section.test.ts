@@ -286,7 +286,7 @@ This project caps parallel agent fan-out (#1359):
 Delegation policy and model-worker selection: \`aiwg show rule subagent-scoping\`.
 After changing project parallelism with \`aiwg config set/reset --project\`, follow the emitted provider-specific regeneration commands and run \`aiwg workspace-context doctor\`.
 
-**Provider behavior (codex)**: native custom subagents can select the deployed model-worker wrapper. Verify the resolved model when provider or account policy may substitute it.
+**Provider behavior (codex)**: native custom subagents can select the deployed model-worker wrapper. Verify the resolved model when provider or account policy may substitute it. Tier enforcement (generated wrapper defaults): pinned; effort: pinned via model_reasoning_effort (high/medium/low by wrapper). Native custom subagents carry explicit catalog model selectors. Explicit operator pins are preserved where supported. This is not a live resolved-model audit; provider/account policy may substitute models.
 
 **Direct worker dispatch**: off (\`parallelism.worker_dispatch\`). Do not assume other worker CLIs are unavailable — detect them yourself and offer \`aiwg config set --project parallelism.worker_dispatch true\` to the user if it would help.
 
