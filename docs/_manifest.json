@@ -193,6 +193,7 @@
     "references/REF-003-agentic-development-antipatterns",
     "references/REF-066-mcp-specification-2025",
     "releases",
+    "releases/v2026.10.14-announcement",
     "releases/v2026.10.12-announcement",
     "releases/v2026.10.11-announcement",
     "releases/v2026.10.10-announcement",
@@ -1631,6 +1632,13 @@
       "title": "Releases",
       "summary": "Release notes and changelog",
       "collapsed": true
+    },
+    {
+      "id": "releases/v2026.10.14-announcement",
+      "title": "v2026.10.14 — Approvals in Your Workflows, Focused Helper Agents and Fewer Deploy Surprises",
+      "summary": "Workflows check your approval profile before asking, new explorer and verifier helper agents, tier-pinned helpers, one orchestration guide, and project add-on deploy fixes.",
+      "file": "releases/v2026.10.14-announcement.md",
+      "parent": "releases"
     },
     {
       "id": "releases/v2026.10.12-announcement",

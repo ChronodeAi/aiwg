@@ -7,6 +7,91 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.14] - 2026-10-28
+
+### Added
+
+- Workflows now use project HITL authorization:
+  - `aiwg config authorization check --action-file <file> --target <repo>`
+    runs the resolver on a host-built action descriptor. Only for
+    auto-authorized does it write a signed receipt and let the workflow
+    continue without a prompt.
+  - address-issues, issue-create, the agent-loop skills and the
+    provider-adapter confirmation hooks build that descriptor from the real
+    pending effects.
+  - Escalate keeps the prompt, deny keeps the refusal, and platform prompts
+    are never bypassed. Issue text and model output never count as approval
+    (#3720, completing #2655).
+- Explorer and verifier wrapper agents (`aiwg-model-explorer`,
+  `aiwg-model-verifier`) for read-only work:
+  - Both return a condensed criterion / evidence / verdict.
+  - All 12 wrapper-capable providers deploy them.
+  - Neither wrapper resolves to flagship unless you elect it.
+  - A reusable brief template ships as `templates/subagent-brief.md` (#2647).
+- Wrapper tier enforcement:
+  - Wrappers pin their catalog tier and a supported effort wherever the
+    provider can pin.
+  - Cursor's `auto` efficiency fallback becomes a concrete pin.
+  - The deploy report says whether each provider's tier enforcement is
+    pinned, inherited or global-only (#2649).
+- One orchestration guide (`docs/orchestration/guide.md`) covers:
+  - handing work to helper CLIs;
+  - choosing a wrapper;
+  - bounded briefs;
+  - cross-family acceptance review;
+  - approvals;
+  - the provider tier matrix (#2652).
+- A synced skill can no longer silently shadow a managed skill with the same
+  name:
+  - Precedence is fixed: project, then user/operator, then synced, then
+    imported, then packaged AIWG.
+  - Deploy blocks a lower-precedence collision instead of overwriting it.
+  - Operator files are never overwritten (#2631).
+- Packaged-CLI tests cover the offline session-to-Fortemi journey (import,
+  select, export, verify, recover), plus missing-attachment, digest-drift and
+  existing-output failures (#2567).
+
+### Changed
+
+- The qualification release record, the ensemble contract and context pruning
+  share one upstream-ceiling gate. An upstream HOLD or ROLLBACK caps the
+  report decision, and the findings name the cap. Existing reports keep
+  identical decisions (#2838).
+- @aiwg/cli packaging reads one tool list, from `packages/cli/package.json`. A
+  new import-closure check fails when a shipped module imports a file the
+  package omits, and names the module and the list it is missing from (#2326).
+
+### Fixed
+
+- Project-local addons that declare `pi`, `hermes` or any other registered
+  provider are accepted. An unknown platform key is an error that names the
+  key (#3724).
+- A project-local deploy now counts summary-activated rules that did deploy
+  (#3725).
+- The codex deploy copies a skill's whole folder, not only the files SKILL.md
+  names (#3726).
+- A skill asset reference followed by sentence punctuation no longer breaks
+  the bundle deploy (#3727).
+- `aiwg doctor --project-local` rejects a rule summary over 240 characters,
+  as delivery does. `aiwg use` prints the actual reason, naming the file and
+  the limit (#3728).
+
+### Testing and CI
+
+- CI runs Cockpit's UI and smoke suites. Test registration fails when an
+  `apps/*` test script runs in no CI job, unless it has a reasoned opt-out
+  (#3729).
+- The eval and Droid suites run in the Node lane. Registration also detects
+  addon, tool and inline test files (#2317).
+- The testing gates' own tests now reject broken gate logic; 16 of 16
+  mutations are caught. A configured lane that finds zero files fails. The
+  orchestration coverage gate measures only changed lines (#2318).
+- Conformance oracles are tightened for pack registries, the delegation
+  review gate, worker contracts and mission-protocol compatibility; 18 of 18
+  mutations are caught (#2319).
+- Launcher and scheduler lifecycle tests wait on observable process state
+  instead of timers. They passed 10 runs in a row under CPU load (#2323).
+
 ## [2026.10.12] - 2026-10-28
 
 ### Added
