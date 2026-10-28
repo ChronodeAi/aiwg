@@ -14,13 +14,14 @@ const baseline = 'test/unit/control.test.ts';
 const vitestSource = "import { it } from 'vitest'; throw new Error('SOURCE_MUST_NOT_EXECUTE'); it('source-only fixture', () => {});\n";
 const nodeSource = "import { test } from 'node:test'; throw new Error('SOURCE_MUST_NOT_EXECUTE'); test('source-only fixture', () => {});\n";
 
-function project({ files = {}, include = ['test/unit/**/*.test.ts', 'agentic/code/frameworks/*/test/unit/**/*.test.ts'], nodeFiles = [], scripts, ci = 'npm run test', withBaseline = true } = {}) {
+function project({ files = {}, include = ['test/unit/**/*.test.ts', 'agentic/code/frameworks/*/test/unit/**/*.test.ts'], nodeFiles = [], scripts, ci = 'npm run test', withBaseline = true, packages = {}, optIns = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-registration-gate-'));
   roots.push(root);
   const entries = {
     'package.json': JSON.stringify({ type: 'module', scripts: scripts ?? { test: 'vitest run --config config/vitest.config.js' } }),
     '.gitea/workflows/ci.yml': JSON.stringify({ jobs: { test: { steps: [{ run: ci }] } } }),
-    'config/test-lanes.mjs': `export const nodeFiles = ${JSON.stringify(nodeFiles)};\n`,
+    'config/test-lanes.mjs': `export const nodeFiles = ${JSON.stringify(nodeFiles)};\nexport const optInPackageTests = ${JSON.stringify(optIns)};\n`,
+    ...Object.fromEntries(Object.entries(packages).map(([dir, pkg]) => [`${dir}/package.json`, JSON.stringify(pkg)])),
     'config/vitest.config.js': `export default ${JSON.stringify({ test: { include, exclude: [] } })};\n`,
     ...(withBaseline ? { [baseline]: vitestSource } : {}),
     ...files,
@@ -299,6 +300,50 @@ describe('test runner registration gate', () => {
         : mode === 'missing-script' ? ['Release workflow references missing npm script test:release-slow', `Release lane is not reachable from its workflow: ${releaseConfig}`]
           : [`Release lane is not reachable from its workflow: ${releaseConfig}`]);
     if (mode === 'valid') expect(report.files.find(row => row.file === file).lanes).toEqual([{ id: releaseConfig, live: false }]);
+  });
+
+  it('rejects a workspace package test script invoked by no CI job', () => {
+    const { child, report } = run(project({
+      packages: { 'apps/widget': { name: '@scope/widget', scripts: { test: 'node --test test/*.test.mjs' } } },
+    }));
+    expect(child.status).toBe(1);
+    expect(report.errors).toEqual(['Workspace package test has no invoking CI job: @scope/widget test']);
+    expect(child.stderr).toContain(report.errors[0]);
+  });
+
+  it('accepts a workspace package test script invoked by a CI job', () => {
+    const { child, report } = run(project({
+      ci: 'npm run test && npm --prefix apps/widget run test',
+      packages: { 'apps/widget': { name: '@scope/widget', scripts: { test: 'node --test test/*.test.mjs', 'test:web': 'vitest run' } } },
+    }));
+    // Only `test` is CI-invoked; `test:web` stays unowned without an opt-in.
+    expect(child.status).toBe(1);
+    expect(report.errors).toEqual(['Workspace package test has no invoking CI job: @scope/widget test:web']);
+  });
+
+  it('accepts a reasoned opt-in alongside a CI-owned workspace package script', () => {
+    const { child, report } = run(project({
+      ci: 'npm run test && npm --prefix apps/widget run test',
+      packages: { 'apps/widget': { name: '@scope/widget', scripts: { test: 'node --test test/*.test.mjs', 'test:web': 'vitest run' } } },
+      optIns: [{ package: '@scope/widget', script: 'test:web', reason: 'Manual browser-only lane; no headless runner in CI.' }],
+    }));
+    expect(child.status).toBe(0);
+    expect(report.errors).toEqual([]);
+  });
+
+  it.each([
+    ['reasonless', { reason: '  ' }, 'Opt-in package test has no reason: @scope/widget test'],
+    ['unknown package', { package: '@scope/gone', script: 'test', reason: 'Stale entry.' }, 'Opt-in package test references unknown package: @scope/gone test'],
+    ['missing script', { package: '@scope/widget', script: 'test:gone', reason: 'Stale entry.' }, 'Opt-in package test references missing script: @scope/widget test:gone'],
+    ['redundant', { package: '@scope/widget', script: 'test', reason: 'Stale entry.' }, 'Opt-in package test is owned by CI; remove it: @scope/widget test'],
+  ])('rejects a %s opt-in package test entry', (_kind, optIn, error) => {
+    const { child, report } = run(project({
+      ci: 'npm run test && npm --prefix apps/widget run test',
+      packages: { 'apps/widget': { name: '@scope/widget', scripts: { test: 'node --test test/*.test.mjs' } } },
+      optIns: [{ package: '@scope/widget', script: 'test', reason: 'Stale entry.', ...optIn }],
+    }));
+    expect(child.status).toBe(1);
+    expect(report.errors).toContain(error);
   });
 
 });

@@ -29,7 +29,7 @@ function sourceRunner(file, body) {
 // Inspect declarations and owning lanes without executing test source bodies.
 export async function inspectTestRegistration(root = repositoryRoot) {
   root = path.resolve(root);
-  const { nodeFiles, releaseLaneWorkflows = {} } = await import(pathToFileURL(path.join(root, 'config/test-lanes.mjs')).href);
+  const { nodeFiles, releaseLaneWorkflows = {}, optInPackageTests = [] } = await import(pathToFileURL(path.join(root, 'config/test-lanes.mjs')).href);
   const configs = globSync('config/vitest*.config.js', { cwd: root }).sort();
   const lanes = [];
   for (const config of configs) {
@@ -100,6 +100,37 @@ export async function inspectTestRegistration(root = repositoryRoot) {
     }
     releaseReachable.set(config, commands);
   }
+  // Workspace package test ownership (#3729): every `test`/`test:*` script in
+  // apps/*/package.json must be invoked by a canonical CI job or be an
+  // explicitly reasoned opt-in. A `--prefix <dir> (run )?<script>` reference in
+  // the expanded CI text (direct, or via an expanded root alias body) counts.
+  const escapeRegExp = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const packageByName = new Map();
+  const packageTestScripts = [];
+  for (const manifest of globSync('apps/*/package.json', { cwd: root })) {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, manifest), 'utf8'));
+    const dir = path.posix.dirname(manifest);
+    const name = pkg.name ?? dir;
+    const scripts = new Set(Object.keys(pkg.scripts ?? {}));
+    packageByName.set(name, { dir, scripts });
+    for (const script of scripts) {
+      if (script !== 'test' && !script.startsWith('test:')) continue;
+      packageTestScripts.push({ name, dir, script });
+    }
+  }
+  const packageScriptOwned = (dir, script) =>
+    new RegExp(`--prefix\\s+${escapeRegExp(dir)}\\s+(run\\s+)?${escapeRegExp(script)}(?![\\w:-])`).test(reachable);
+  for (const { name, dir, script } of packageTestScripts) {
+    const optedIn = (optInPackageTests ?? []).some(entry => entry?.package === name && entry?.script === script);
+    if (!packageScriptOwned(dir, script) && !optedIn) errors.push(`Workspace package test has no invoking CI job: ${name} ${script}`);
+  }
+  for (const entry of optInPackageTests ?? []) {
+    if (!entry?.package || !entry?.script) errors.push(`Opt-in package test entry is missing package or script: ${JSON.stringify(entry)}`);
+    else if (!entry.reason?.trim()) errors.push(`Opt-in package test has no reason: ${entry.package} ${entry.script}`);
+    else if (!packageByName.has(entry.package)) errors.push(`Opt-in package test references unknown package: ${entry.package} ${entry.script}`);
+    else if (!packageByName.get(entry.package).scripts.has(entry.script)) errors.push(`Opt-in package test references missing script: ${entry.package} ${entry.script}`);
+    else if (packageScriptOwned(packageByName.get(entry.package).dir, entry.script)) errors.push(`Opt-in package test is owned by CI; remove it: ${entry.package} ${entry.script}`);
+  }
   for (const lane of lanes) {
     if (releaseReachable.has(lane.id)) {
       if (!releaseReachable.get(lane.id).includes(`--config ${lane.id}`)) errors.push(`Release lane is not reachable from its workflow: ${lane.id}`);
@@ -123,7 +154,7 @@ export async function inspectTestRegistration(root = repositoryRoot) {
     records.push({ file, runner, lanes: owners.map(({ id, live }) => ({ id, live })) });
   }
   if (!records.length) errors.push('No candidate test files found');
-  const report = { schemaVersion: 1, scope: 'Root test/, framework/addon test/, src/ and tool tests, including inline Vitest and unsuffixed runner imports. Owned input-fixture trees and addon templates excluded. App/package runners, generated plugin mirrors and manual harnesses require separate review; CI ownership is not asserted for them.', units: 'Source files and imported APIs, not registered or executed cases', totalFiles: records.length, files: records, errors };
+  const report = { schemaVersion: 1, scope: 'Root test/, framework/addon test/, src/ and tool tests, including inline Vitest and unsuffixed runner imports. Owned input-fixture trees and addon templates excluded. Workspace package test scripts are covered by the package ownership check (CI-invoked or reasoned opt-in); generated plugin mirrors and manual harnesses require separate review.', units: 'Source files and imported APIs, not registered or executed cases', totalFiles: records.length, files: records, errors };
   return report;
 }
 
