@@ -26,8 +26,13 @@ export async function resolveCli(args: string[], root: string, cwd: string): Pro
   let fromFile: string | undefined;
   let year: number | undefined;
   let json = false;
+  const seen = new Set<string>();
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+    if (arg.startsWith('--')) {
+      if (seen.has(arg)) usage(`${arg} may only be supplied once`);
+      seen.add(arg);
+    }
     if (arg === '--json') { json = true; continue; }
     if (arg === '--year' || arg === '--from-file') {
       const value = args[++i];
