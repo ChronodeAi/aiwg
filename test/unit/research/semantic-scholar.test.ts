@@ -251,15 +251,17 @@ describe('SemanticScholarClient', () => {
       });
     });
 
-    it('should throw on rate limit', async () => {
-      mockFetch.mockResolvedValueOnce({
+    it('should throw on rate limit after bounded retries', async () => {
+      mockFetch.mockResolvedValue({
         ok: false,
         status: 429,
       });
 
-      await expect(client.getPaperByDoi('test')).rejects.toMatchObject({
+      const check = expect(client.getPaperByDoi('test')).rejects.toMatchObject({
         code: ResearchErrorCode.RF_103,
       });
+      await vi.runAllTimersAsync(); await check;
+      expect(mockFetch).toHaveBeenCalledTimes(4);
     });
   });
 

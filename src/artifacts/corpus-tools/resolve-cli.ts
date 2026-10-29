@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { AiwgError } from '../../cli/errors.js';
 import { createResolverClients, resolveReference, type ResolutionResult } from './resolve.js';
 
-export const RESOLVE_USAGE = 'aiwg corpus resolve "<title | URL | arXiv ID | DOI | bibliography line>" [--year YYYY] [--json]\naiwg corpus resolve --from-file refs.txt [--year YYYY] [--json]\nExit codes: 0 resolved, 2 ambiguous, 3 unresolved (batch: worst line), 1 usage error.\n';
+export const RESOLVE_USAGE = 'aiwg corpus resolve "<title | URL | arXiv ID | DOI | bibliography line>" [--year YYYY] [--json]\naiwg corpus resolve --from-file refs.txt [--year YYYY] [--json]\nExit codes: 0 resolved, 2 ambiguous, 3 unresolved, 4 deferred (incomplete lookup; retry), 1 usage error (batch: worst line).\n';
 
 function usage(message: string): never {
   throw new AiwgError({ code: 'ERR_CORPUS_RESOLVE_USAGE', message, exitCode: 1, hint: RESOLVE_USAGE.trim() });
@@ -60,12 +60,12 @@ export async function resolveCli(args: string[], root: string, cwd: string): Pro
     try {
       results.push({ ...await resolveReference(reference.input, root, year, clients), ...reference });
     } catch (error) {
-      results.push({ ...reference, reference: { input: reference.input }, status: 'unresolved', incomplete: true,
+      results.push({ ...reference, reference: { input: reference.input }, status: 'deferred', incomplete: true,
         error: error instanceof Error ? error.message : String(error), candidates: [], findings: [], paths_tried: [],
         already_in_corpus: false, corpus_matches: [] });
     }
   }
   process.stdout.write(json ? JSON.stringify(fromFile ? results : results[0], null, 2) + '\n' : results.map(render).join('\n'));
-  const exitCode = results.reduce((worst, result) => Math.max(worst, { resolved: 0, ambiguous: 2, unresolved: 3 }[result.status]), 0);
+  const exitCode = results.reduce((worst, result) => Math.max(worst, { resolved: 0, ambiguous: 2, unresolved: 3, deferred: 4 }[result.status]), 0);
   if (exitCode) throw new AiwgError({ code: 'ERR_CORPUS_RESOLVE_RESULT', message: 'Reference resolution requires review; see results', exitCode });
 }

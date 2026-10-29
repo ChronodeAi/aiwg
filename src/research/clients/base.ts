@@ -18,6 +18,8 @@ import {
 export class RateLimiter {
   private tokens: number;
   private lastRefill: number;
+  private blockedUntil = 0;
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(private config: RateLimitConfig) {
     this.tokens = config.currentTokens;
@@ -39,23 +41,25 @@ export class RateLimiter {
   /**
    * Acquire a token, waiting if necessary
    */
-  async acquire(): Promise<void> {
-    this.refill();
+  acquire(): Promise<void> {
+    const pending = this.queue.then(() => this.acquireToken());
+    this.queue = pending.catch(() => {});
+    return pending;
+  }
 
-    if (this.tokens >= 1) {
-      this.tokens -= 1;
-      return;
+  /** Share a server cooldown with subsequent requests, including exhausted retries. */
+  defer(ms: number): void {
+    this.blockedUntil = Math.max(this.blockedUntil, Date.now() + ms);
+  }
+
+  private async acquireToken(): Promise<void> {
+    for (;;) {
+      this.refill();
+      const waitMs = Math.max(this.blockedUntil - Date.now(),
+        (1 - this.tokens) / this.config.refillRate * 1000);
+      if (waitMs <= 0) { this.tokens -= 1; return; }
+      await this.sleep(Math.ceil(waitMs));
     }
-
-    // Calculate wait time
-    const deficit = 1 - this.tokens;
-    const waitMs = (deficit / this.config.refillRate) * 1000;
-
-    await this.sleep(waitMs);
-
-    // Refill again after waiting
-    this.refill();
-    this.tokens -= 1;
   }
 
   private sleep(ms: number): Promise<void> {
@@ -94,6 +98,11 @@ export abstract class BaseClient {
     return this.executeWithRetry<T>(url, options);
   }
 
+  /** XML clients use the same limiter, timeout and HTTP retry policy as JSON. */
+  protected requestText(url: string, options: RequestInit = {}): Promise<string> {
+    return this.executeWithRetry(url, options, 0, undefined, response => response.text());
+  }
+
   /**
    * Execute request with exponential backoff retry
    */
@@ -101,7 +110,8 @@ export abstract class BaseClient {
     url: string,
     options: RequestInit,
     attempt = 0,
-    firstError?: ResearchError
+    firstError?: ResearchError,
+    read: (response: Response) => Promise<T> = response => response.json() as Promise<T>
   ): Promise<T> {
     // Every attempt consumes a token, after any retry backoff and before timeout.
     await this.rateLimiter.acquire();
@@ -142,7 +152,7 @@ export abstract class BaseClient {
         throw error;
       }
 
-      return (await response.json()) as T;
+      return await read(response);
     } catch (error) {
       // Clear timeout on error
       if (timeoutId) {
@@ -162,17 +172,24 @@ export abstract class BaseClient {
       const currentFirstError =
         firstError || (error instanceof ResearchError ? error : undefined);
 
-      // Don't retry ResearchErrors (they're already handled)
+      // A throttle cooldown survives exhaustion so the next batch line also waits.
+      const delay = Math.max(this.calculateBackoff(attempt),
+        error instanceof ResearchError ? error.retryAfterMs ?? 0 : 0);
+      if (error instanceof ResearchError && error.code === ResearchErrorCode.RF_103) {
+        this.rateLimiter.defer(delay);
+      }
+
+      // Retry transient HTTP failures with the same limiter on every attempt.
       if (error instanceof ResearchError) {
         // Retry on transient errors
         if (this.isRetriable(error) && attempt < this.retryConfig.maxRetries) {
-          const delay = this.calculateBackoff(attempt);
-          await this.sleep(delay);
+          if (error.code !== ResearchErrorCode.RF_103) await this.sleep(delay);
           return this.executeWithRetry<T>(
             url,
             options,
             attempt + 1,
-            currentFirstError
+            currentFirstError,
+            read
           );
         }
         throw error;
@@ -186,7 +203,8 @@ export abstract class BaseClient {
           url,
           options,
           attempt + 1,
-          currentFirstError
+          currentFirstError,
+          read
         );
       }
 
@@ -217,10 +235,13 @@ export abstract class BaseClient {
     }
 
     if (status === 429) {
-      return new ResearchError(
-        ResearchErrorCode.RF_103,
-        'Rate limit exceeded'
-      );
+      const error = new ResearchError(ResearchErrorCode.RF_103, 'Rate limit exceeded');
+      const value = response.headers?.get('retry-after');
+      if (value) {
+        const ms = /^\d+(?:\.\d+)?$/.test(value.trim()) ? Number(value) * 1000 : Date.parse(value) - Date.now();
+        if (Number.isFinite(ms)) error.retryAfterMs = Math.max(0, ms);
+      }
+      return error;
     }
 
     if (status === 401 || status === 403) {
@@ -248,8 +269,8 @@ export abstract class BaseClient {
    */
   private isRetriable(error: unknown): boolean {
     if (error instanceof ResearchError) {
-      // Only retry on server errors (not rate limits or client errors)
-      return error.code === ResearchErrorCode.RF_200;
+      // Rate limits and server errors are transient.
+      return error.code === ResearchErrorCode.RF_200 || error.code === ResearchErrorCode.RF_103;
     }
 
     // Retry on network errors

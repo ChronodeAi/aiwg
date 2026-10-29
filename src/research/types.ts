@@ -234,6 +234,8 @@ export enum ResearchErrorCode {
  * Research Framework error
  */
 export class ResearchError extends Error {
+  /** Server-directed cooldown, shared by all requests through the client limiter. */
+  public retryAfterMs?: number;
   constructor(
     public code: ResearchErrorCode,
     message: string,

@@ -1,5 +1,5 @@
 // Parse partial citations and score distinct candidate identities without choosing close matches.
-import { normalizeIdentity, normalizeTitle, parseResearchIdentifier, type ResearchIdentifier } from './identity.js';
+import { normalizeIdentity, normalizeTitle, parseArxivId, parseResearchIdentifier, type ResearchIdentifier } from './identity.js';
 import type { ResearchPaper } from './types.js';
 
 export interface PartialReference {
@@ -16,7 +16,7 @@ export interface ScoredPaper {
   score_parts: { title: number; year?: number; first_author?: number; identifier?: number };
 }
 
-export type ResolutionStatus = 'resolved' | 'ambiguous' | 'unresolved';
+export type ResolutionStatus = 'resolved' | 'ambiguous' | 'unresolved' | 'deferred';
 
 /** Common quoted, APA-style and title-plus-year citations; retain the untouched input. */
 export function parsePartialReference(input: string, year?: number): PartialReference {
@@ -38,12 +38,37 @@ export function parsePartialReference(input: string, year?: number): PartialRefe
   return { input, identifier, title: normalizeTitle(rest) ? rest : undefined, year: year ?? (inferredYear ? Number(inferredYear) : undefined), firstAuthor };
 }
 
-/** Jaccard token-set similarity avoids substring matches scoring as exact titles. */
+/** Token coverage discounted by sequence order; ordered prefixes retain coverage scores. */
 export function titleSimilarity(left: string, right: string): number {
-  const a = new Set(normalizeTitle(left).split(' ').filter(Boolean));
-  const b = new Set(normalizeTitle(right).split(' ').filter(Boolean));
-  const union = new Set([...a, ...b]).size;
-  return union ? [...a].filter(token => b.has(token)).length / union : 0;
+  if (normalizeTitle(left) && normalizeTitle(left) === normalizeTitle(right)) return 1;
+  const a = normalizeTitle(left).split(' ').filter(Boolean);
+  const b = normalizeTitle(right).split(' ').filter(Boolean);
+  if (!a.length || !b.length) return 0;
+  const uniqueA = new Set(a), uniqueB = new Set(b);
+  const coverage = [...uniqueA].filter(token => uniqueB.has(token)).length / new Set([...a, ...b]).size;
+  const row = Array<number>(b.length + 1).fill(0);
+  for (const token of a) {
+    let diagonal = 0;
+    for (let j = 1; j <= b.length; j++) {
+      const previous = row[j];
+      row[j] = token === b[j - 1] ? diagonal + 1 : Math.max(row[j], row[j - 1]);
+      diagonal = previous;
+    }
+  }
+  // Repeated tokens must also reduce similarity even when their token sets agree.
+  const repetition = Math.min(uniqueA.size / a.length, uniqueB.size / b.length);
+  return coverage * row[b.length] / Math.min(a.length, b.length) * repetition;
+}
+
+/** Incomplete short/generic titles require an ID; unqualified very short titles need metadata. */
+export function needsTitleDisambiguation(reference: PartialReference, candidates: ScoredPaper[], incomplete: boolean): boolean {
+  if (!reference.title || candidates[0]?.score_parts.identifier === 1) return false;
+  const title = normalizeTitle(reference.title);
+  const tokens = title.split(' ');
+  const informative = tokens.filter(token => !/^(?:a|an|the|of|for|in|on|and|with|to|is|all|you)$/.test(token));
+  const exact = candidates.filter(candidate => normalizeTitle(candidate.paper.title) === title).length;
+  return (incomplete && (tokens.length <= 4 || informative.length <= 4 || exact > 1)) ||
+    (tokens.length <= 2 && reference.year === undefined && !reference.firstAuthor);
 }
 
 function surname(name: string): string {
@@ -80,23 +105,39 @@ export function classifyCandidates(candidates: ScoredPaper[]): ResolutionStatus 
 
 /** Merge only corroborated identifiers; title equality alone does not establish identity. */
 export function mergePapers(papers: ResearchPaper[]): ResearchPaper[] {
-  const merged: ResearchPaper[] = [];
-  for (const paper of papers) {
-    const identity = normalizeIdentity(paper);
-    const previous = merged.find(existing => {
-      const other = normalizeIdentity(existing);
-      const ids = ['arxivId', 'doi', 's2PaperId', 'openReviewId', 'aclId'] as const;
-      if (ids.some(key => identity[key] && other[key] && identity[key] !== other[key])) return false;
-      return ids.some(key => identity[key] && identity[key] === other[key]);
-    });
-    if (!previous) { merged.push({ ...paper }); continue; }
-    // Source order determines metadata precedence; later sources only fill missing fields.
-    for (const [key, value] of Object.entries(paper)) {
-      if (value !== undefined && (!(previous as unknown as Record<string, unknown>)[key] ||
-          (Array.isArray(previous[key as keyof ResearchPaper]) && (previous[key as keyof ResearchPaper] as unknown[]).length === 0))) {
-        (previous as unknown as Record<string, unknown>)[key] = value;
+  const ids = ['arxivId', 'doi', 's2PaperId', 'openReviewId', 'aclId'] as const;
+  const published = (paper: ResearchPaper) => Boolean(paper.doi && !parseArxivId(paper.doi));
+  const linked = (left: ResearchPaper, right: ResearchPaper) => {
+    const a = normalizeIdentity(left), b = normalizeIdentity(right);
+    if (ids.some(key => a[key] && b[key] && a[key] !== b[key] &&
+      !(key === 'doi' && a.arxivId && a.arxivId === b.arxivId && (parseArxivId(a.doi!) || parseArxivId(b.doi!))))) return false;
+    return ids.some(key => a[key] && a[key] === b[key]);
+  };
+  const combine = (left: ResearchPaper, right: ResearchPaper): ResearchPaper => {
+    // A published CrossRef record owns proceedings metadata; other sources fill gaps.
+    const preferRight = (published(right) && !published(left)) ||
+      (published(right) && right.source === 'crossref' && left.source !== 'crossref');
+    const [primary, alternate] = preferRight ? [right, left] : [left, right];
+    const result = { ...primary };
+    for (const [key, value] of Object.entries(alternate)) {
+      if (value !== undefined && (!(result as unknown as Record<string, unknown>)[key] ||
+          (Array.isArray(result[key as keyof ResearchPaper]) && (result[key as keyof ResearchPaper] as unknown[]).length === 0))) {
+        (result as unknown as Record<string, unknown>)[key] = value;
       }
     }
+    return result;
+  };
+  const merged: ResearchPaper[] = [];
+  for (const paper of papers) {
+    const { title: _title, ...identity } = normalizeIdentity(paper);
+    let work = { ...paper, ...Object.fromEntries(Object.entries(identity).filter(([, value]) => value !== undefined)) };
+    // A late S2 bridge may join two components already encountered in source order.
+    for (let i = 0; i < merged.length;) {
+      if (!linked(work, merged[i])) { i++; continue; }
+      work = combine(merged.splice(i, 1)[0], work);
+      i = 0;
+    }
+    merged.push(work);
   }
   return merged;
 }

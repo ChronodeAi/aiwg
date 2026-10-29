@@ -99,7 +99,12 @@ also to paper references extracted from issues, files and directory batches.
 Continue only on `status: resolved` (exit 0), using its canonical metadata and IDs.
 On `ambiguous` (exit 2) or `unresolved` (exit 3), stop that source, show all candidates,
 findings and `paths_tried`, and request a more specific reference; never guess or
-send it to acquisition, task filing or `memory-ingest`. Preserve supplied titles
+send it to acquisition, task filing or `memory-ingest`. On `deferred` (exit 4),
+stop that source, show `paths_tried`, and retry later: incomplete lookup does not
+establish absence. Batches pace clients and retry 429s with backoff/`Retry-After`;
+batch exit is the worst line (4 > 3 > 2 > 0); usage errors exit 1. Incomplete
+short/generic titles require a verified ID; otherwise ask for year/author/ID.
+Preserve supplied titles
 and report title mismatch findings for review. Use `already_in_corpus` and
 `corpus_matches` to identify existing REFs. Once identity is resolved, retain the
 `memory-ingest --consumer research-complete` delegation described above.

@@ -2,8 +2,8 @@
 import { ArxivClient } from '../../research/clients/arxiv.js';
 import { CrossRefClient } from '../../research/clients/crossref.js';
 import { SemanticScholarClient } from '../../research/clients/semantic-scholar.js';
-import { normalizeIdentity, normalizeTitle, type ResearchIdentifier } from '../../research/identity.js';
-import { classifyCandidates, mergePapers, parsePartialReference, scorePaper, type PartialReference, type ScoredPaper, type ResolutionStatus } from '../../research/reference-match.js';
+import { identityKeys, normalizeIdentity, normalizeTitle, type ResearchIdentifier } from '../../research/identity.js';
+import { classifyCandidates, mergePapers, needsTitleDisambiguation, parsePartialReference, scorePaper, type PartialReference, type ScoredPaper, type ResolutionStatus } from '../../research/reference-match.js';
 import { ResearchError, ResearchErrorCode, type ResearchPaper } from '../../research/types.js';
 import { findInCorpus, type CorpusIdentityMatch } from './resolve-corpus.js';
 
@@ -21,6 +21,10 @@ export type ResolutionFinding = {
   supplied: string;
   returned: string;
   candidate: string;
+} | {
+  type: 'title_ambiguous';
+  supplied: string;
+  returned: string;
 } | {
   type: 'identifier_unresolved';
   supplied: string;
@@ -53,7 +57,10 @@ export function createResolverClients(): ResolverClients {
 
 function canonicalPaper(paper: ResearchPaper): ResearchPaper {
   const identity = normalizeIdentity(paper);
-  return { ...paper, ...Object.fromEntries(Object.entries(identity).filter(([key, value]) => key !== 'title' && value !== undefined)) };
+  const validYear = (value: number) => Number.isInteger(value) && value >= 1000 && value <= 2199;
+  const year = validYear(paper.year) ? paper.year : Number(paper.publicationDate?.slice(0, 4));
+  if (!validYear(year)) throw new ResearchError(ResearchErrorCode.RF_301, 'Response lacks a valid publication year');
+  return { ...paper, year, ...Object.fromEntries(Object.entries(identity).filter(([key, value]) => key !== 'title' && value !== undefined)) };
 }
 
 function s2Identifier(identifier: ResearchIdentifier): string {
@@ -95,7 +102,7 @@ export async function resolveReference(input: string, root: string, year?: numbe
           }
           // A direct lookup establishes the requested ID when the API omits that externalId.
           if (identifier.kind !== 's2') Object.assign(paper, { [key]: identifier.id });
-          verified.add(paper.id);
+          for (const key of identityKeys(paper).filter(key => !key.startsWith('title:'))) verified.add(key);
         }
         papers.push(paper);
       }
@@ -134,17 +141,22 @@ export async function resolveReference(input: string, root: string, year?: numbe
     await attempt('crossref', 'bibliographic', input, async () => (await clients.crossref.searchBibliographic(input, { limit: 5 })).papers);
   }
 
-  const candidates = mergePapers(papers).map(paper => scorePaper(reference, paper, verified.has(paper.id)))
+  const candidates = mergePapers(papers).map(paper => scorePaper(reference, paper, identityKeys(paper).some(key => verified.has(key))))
     .sort((a, b) => b.score - a.score || a.paper.id.localeCompare(b.paper.id)).slice(0, 5);
-  for (const candidate of candidates) {
+  for (const candidate of candidates.slice(0, 1)) {
     if (reference.title && normalizeTitle(reference.title) !== normalizeTitle(candidate.paper.title)) {
       findings.push({ type: 'title_mismatch', supplied: reference.title, returned: candidate.paper.title, candidate: candidate.paper.id });
     }
   }
   const classified = classifyCandidates(candidates);
-  const status = identifierUnresolved && classified === 'resolved' ? 'ambiguous' : classified;
+  const incomplete = paths.some(path => path.status === 'error');
+  const titleAmbiguous = needsTitleDisambiguation(reference, candidates, incomplete);
+  const status = classified === 'unresolved' && incomplete ? 'deferred'
+    : classified === 'resolved' && (identifierUnresolved || titleAmbiguous) ? 'ambiguous' : classified;
+  if (titleAmbiguous && classified !== 'unresolved') findings.push({ type: 'title_ambiguous',
+    supplied: reference.title!, returned: 'Supply a year, author, or verified identifier to disambiguate this title' });
   const paper = status === 'resolved' ? candidates[0].paper : undefined;
   const corpusMatches = paper ? findInCorpus(root, paper) : [];
-  return { input, reference, status, incomplete: paths.some(path => path.status === 'error'), candidates,
+  return { input, reference, status, incomplete, candidates,
     ...(paper ? { paper } : {}), findings, paths_tried: paths, already_in_corpus: corpusMatches.length > 0, corpus_matches: corpusMatches };
 }

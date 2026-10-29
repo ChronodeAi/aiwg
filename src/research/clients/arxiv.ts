@@ -25,9 +25,9 @@ export class ArxivClient extends BaseClient {
       baseUrl: 'http://export.arxiv.org/api',
       timeout: 30000,
       rateLimit: {
-        maxTokens: 3,
+        maxTokens: 1,
         refillRate: 1 / 3, // 1 request per 3 seconds
-        currentTokens: 3,
+        currentTokens: 1,
         lastRefill: Date.now(),
       },
       retry: {
@@ -52,7 +52,7 @@ export class ArxivClient extends BaseClient {
       max_results: 1,
     });
 
-    const xmlText = await this.requestXml(url);
+    const xmlText = await this.requestText(url);
     const papers = this.parseAtomFeed(xmlText);
 
     if (papers.length === 0) {
@@ -80,7 +80,7 @@ export class ArxivClient extends BaseClient {
       max_results: limit,
     });
 
-    const xmlText = await this.requestXml(url);
+    const xmlText = await this.requestText(url);
     const papers = this.parseAtomFeed(xmlText);
 
     // arXiv doesn't provide total count, so we estimate
@@ -93,46 +93,6 @@ export class ArxivClient extends BaseClient {
       limit,
       hasMore,
     };
-  }
-
-  /**
-   * Request XML from arXiv API
-   */
-  private async requestXml(url: string): Promise<string> {
-    await this.rateLimiter.acquire();
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(
-      () => controller.abort(),
-      this.config.timeout
-    );
-
-    try {
-      const response = await fetch(url, {
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        throw new ResearchError(
-          ResearchErrorCode.RF_200,
-          `arXiv API error: ${response.status}`
-        );
-      }
-
-      return await response.text();
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new ResearchError(
-          ResearchErrorCode.RF_104,
-          `Request timeout after ${this.config.timeout}ms`,
-          error
-        );
-      }
-
-      throw error;
-    } finally {
-      clearTimeout(timeoutId);
-    }
   }
 
   /**
