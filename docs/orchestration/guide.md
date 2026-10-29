@@ -171,3 +171,15 @@ aiwg config set --project parallelism.worker_dispatch false
 ```
 
 A recorded decline (`setup.worker_dispatch_offer: "declined"`) only answers the setup question; it is the `parallelism.worker_dispatch` value that controls dispatch. Turning dispatch off does not stop the active provider from using its own native subagents; that rubric still applies. To keep a piece of work fully local, do not invoke a wrapper for it: do the work in-session instead of resolving, briefing, and dispatching it.
+
+## Background reading
+
+The defaults in this guide (start with the cheapest capable model, hand over a bounded brief, accept work only against evidence) follow from published work on model routing and multi-agent systems. None of these sources is needed to use the guide; they explain why the defaults look the way they do.
+
+- Chen, Zaharia and Zou, [FrugalGPT: How to Use Large Language Models While Reducing Cost and Improving Performance](https://arxiv.org/abs/2305.05176) (2023). Cascading from cheaper to stronger models as needed, the idea behind starting low on the wrapper ladder.
+- Ong et al., [RouteLLM: Learning to Route LLMs with Preference Data](https://arxiv.org/abs/2406.18665) (2024). Routing each request between a stronger and a weaker model to trade cost against quality.
+- Cemri et al., [Why Do Multi-Agent LLM Systems Fail?](https://arxiv.org/abs/2503.13657) (2025). A taxonomy of multi-agent failures; poor task specification and missing verification recur, which is why briefs state their success check and acceptance needs evidence.
+- Kim et al., [Towards a Science of Scaling Agent Systems](https://arxiv.org/abs/2512.08296) (2025). Controlled comparisons of single-agent and multi-agent architectures; coordination has costs, so delegation is a choice per task, not a default for everything.
+- Anthropic, [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system) and [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents). Practitioner accounts of orchestrator-worker designs and of keeping each agent's context small and focused.
+
+These summaries describe what each source studies; see the papers for their measured results and limits.
