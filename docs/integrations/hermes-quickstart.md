@@ -7,22 +7,33 @@ For the complete first-time journey, start with [Install, Connect, and Verify](.
 Hermes is the **provider** in this guide. Complete the [safe Node.js setup](../getting-started/install-node.md) first
 if `node` or `npm` is unavailable.
 
-From a terminal opened in the project's main folder, install AIWG and deploy the complete system:
+## Connect, verify, and try a first task
 
-```bash
-npm install -g aiwg
-aiwg use all --provider hermes
-```
+> "Connect AIWG to Hermes in this project, then verify it by reporting the project root, the provider files you can read, the installed frameworks, and one useful next action."
+
+Your assistant installs AIWG and runs `aiwg use all --provider hermes`, which refreshes AIWG's shared project context and prints a verification result.
+
+> "The deploy output mentions reload commands — which ones do I run before verifying?"
+
+Naming the reload output gets you the Hermes reload commands, with a chat restart as the fallback, instead of a generic retry.
+
+From a terminal opened in the project's main folder, install AIWG and deploy the complete system:
 
 The deployment command refreshes AIWG's shared project context and prints a verification result. Use Hermes reload
 commands if `aiwg use` reports them, or restart the chat as a fallback. After that, ask Hermes to verify AIWG by
 reporting the project root, provider files it can read, installed frameworks, and one useful next action.
 
+### Command reference
+```bash
+npm install -g aiwg
+aiwg use all --provider hermes
+```
+
 Try one small task immediately after verification:
 
-```text
-Review this project's README and getting-started docs for unclear positioning, missing setup steps, or unsupported claims. Save the three highest-priority fixes with file references and a recommended next edit at .aiwg/marketing/brand/audit/readme-review.md. Leave the reviewed files unchanged.
-```
+> "Review this project's README and getting-started docs for unclear positioning, missing setup steps, or unsupported claims. Save the three highest-priority fixes with file references and a recommended next edit at .aiwg/marketing/brand/audit/readme-review.md. Leave the reviewed files unchanged."
+
+Your assistant follows the AIWG bootstrap into `WORKSPACE.md` and `AIWG.md` or the provider-specific adapter and produces a concrete review you can inspect.
 
 Success means Hermes names the intended project, follows the AIWG bootstrap into `WORKSPACE.md` and `AIWG.md` or the
 provider-specific adapter, and produces a concrete review you can inspect. For advanced flags, compatibility notes,
