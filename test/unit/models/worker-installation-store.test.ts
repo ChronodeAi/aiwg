@@ -18,6 +18,7 @@ vi.mock('node:os', async importOriginal => {
 });
 const roots: string[] = [];
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
@@ -208,4 +209,164 @@ describe('qualification store permission repair', () => {
     await expect(prepareWorkerInstallationStore({ workerWritableRoots: [], apply: true }))
       .rejects.toThrow('Symlinked installation store');
   });
+});
+
+describe('approval store maintenance', () => {
+  async function fixture() {
+    const root = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-approval-store-')); roots.push(root);
+    const cwd = path.join(root, 'workspace');
+    const config = path.join(root, 'config');
+    await fs.mkdir(cwd); await fs.mkdir(config, { mode: 0o700 });
+    vi.stubEnv('AIWG_CONFIG', config);
+    const filename = path.join(config, 'worker-installations.json');
+    const records = [
+      { cli: 'codex', installation: { cwd } },
+      { cli: 'muse', installation: { cwd } },
+      { cli: 'codex', installation: { cwd: path.join(root, 'deleted') } },
+    ];
+    await fs.writeFile(filename, JSON.stringify({ version: 1, registrations: records }), { mode: 0o600 });
+    const owner = await import('../../../src/models/worker-installation-store.mjs');
+    return { root, cwd, filename, records, ...owner };
+  }
+
+  it.each(['list', 'remove'])('takes the qualification lock before %s', async operation => {
+    const f = await fixture();
+    const lock = await fs.open(`${f.filename}.lock`, 'wx', 0o600);
+    let settled = false;
+    const request = operation === 'list'
+      ? f.listWorkerApprovals({ cwd: f.cwd, cli: 'codex' })
+      : f.forgetWorkerApproval({ cwd: f.cwd, workspace: f.cwd, cli: 'codex', yes: true });
+    const result = request.finally(() => { settled = true; });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 80));
+      expect(settled).toBe(false);
+      expect(JSON.parse(await fs.readFile(f.filename, 'utf8')).registrations).toEqual(f.records);
+    } finally { await lock.close(); await fs.unlink(`${f.filename}.lock`); }
+    expect(await result).toHaveLength(operation === 'list' ? 2 : 1);
+    await expect(fs.access(`${f.filename}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await fs.stat(f.filename)).mode & 0o777).toBe(0o600);
+  });
+
+  it('lists stale workspaces and removes exact CLI/workspace keys, including deleted paths', async () => {
+    const f = await fixture();
+    expect(await f.listWorkerApprovals({ cwd: f.cwd })).toEqual([
+      { cli: 'codex', workspace: f.cwd, workspaceExists: true },
+      { cli: 'muse', workspace: f.cwd, workspaceExists: true },
+      { cli: 'codex', workspace: path.join(f.root, 'deleted'), workspaceExists: false },
+    ]);
+    await f.forgetWorkerApproval({ cwd: f.cwd, workspace: f.cwd, cli: 'codex', yes: true });
+    expect(JSON.parse(await fs.readFile(f.filename, 'utf8')).registrations).toEqual(f.records.slice(1));
+    await f.forgetWorkerApproval({ cwd: f.cwd, workspace: '../deleted', yes: true });
+    expect(JSON.parse(await fs.readFile(f.filename, 'utf8')).registrations).toEqual([f.records[1]]);
+    const bytes = await fs.readFile(f.filename, 'utf8');
+    await expect(f.forgetWorkerApproval({ cwd: f.cwd, workspace: f.cwd, cli: 'codex', yes: true })).rejects.toThrow('No worker approval found');
+    await expect(f.forgetWorkerApproval({ cwd: f.cwd, workspace: f.cwd, yes: false })).rejects.toThrow('requires --yes');
+    expect(await fs.readFile(f.filename, 'utf8')).toBe(bytes);
+  });
+
+  it('retains authority when a workspace cannot be inspected due to permissions', async () => {
+    const f = await fixture();
+    vi.spyOn(fs, 'stat').mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' }));
+    const record = { cli: 'new', installation: { cwd: f.cwd } };
+    expect(await f.retainWorkerApprovals(f.records, record)).toEqual([...f.records, record]);
+  });
+
+  it('fails closed when a held lock exhausts retries without stealing it', async () => {
+    const f = await fixture();
+    await fs.writeFile(`${f.filename}.lock`, 'held', { mode: 0o600 });
+    const bytes = await fs.readFile(f.filename, 'utf8');
+    // Keep real I/O and advance only the retry delay.
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void) => {
+      queueMicrotask(callback); return 0;
+    }) as any);
+    await expect(f.listWorkerApprovals({ cwd: f.cwd })).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(await fs.readFile(`${f.filename}.lock`, 'utf8')).toBe('held');
+    expect(await fs.readFile(f.filename, 'utf8')).toBe(bytes);
+  });
+
+  it('propagates lock I/O failures without modifying approvals', async () => {
+    const f = await fixture();
+    const bytes = await fs.readFile(f.filename, 'utf8');
+    const { open } = await vi.importActual<typeof fs>('node:fs/promises');
+    const error = Object.assign(new Error('synthetic I/O failure'), { code: 'EIO' });
+    vi.spyOn(fs, 'open').mockImplementation(((name: any, ...args: any[]) =>
+      name === `${f.filename}.lock` ? Promise.reject(error) : (open as any)(name, ...args)) as any);
+    await expect(f.listWorkerApprovals({ cwd: f.cwd })).rejects.toBe(error);
+    expect(await fs.readFile(f.filename, 'utf8')).toBe(bytes);
+  });
+
+  it.each(['{', '{"version":2,"registrations":[]}', '{"version":1,"registrations":{}}'])
+    ('rejects malformed stores and releases the lock (%s)', async bytes => {
+      const f = await fixture();
+      await fs.writeFile(f.filename, bytes);
+      await expect(f.listWorkerApprovals({ cwd: f.cwd })).rejects.toThrow();
+      expect(await fs.readFile(f.filename, 'utf8')).toBe(bytes);
+      await expect(fs.access(`${f.filename}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+  it('refuses an untrusted store without repairing permissions or taking a lock', async () => {
+    const f = await fixture();
+    await fs.chmod(f.filename, 0o666);
+    await expect(f.listWorkerApprovals({ cwd: f.cwd })).rejects.toThrow('Untrusted installation store permissions');
+    expect((await fs.stat(f.filename)).mode & 0o777).toBe(0o666);
+    await expect(fs.access(`${f.filename}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(f.listWorkerApprovals({ cwd: path.dirname(f.filename) })).rejects.toThrow('Worker-writable installation store');
+  });
+
+  it('filters CLI inventory and revokes every CLI only for the canonical target', async () => {
+    const f = await fixture();
+    const alias = path.join(f.root, 'alias');
+    await fs.symlink(f.cwd, alias);
+    expect(await f.listWorkerApprovals({ cwd: f.cwd, cli: 'muse' })).toEqual([
+      { cli: 'muse', workspace: f.cwd, workspaceExists: true },
+    ]);
+    expect(await f.listWorkerApprovals({ cwd: f.cwd, cli: 'absent' })).toEqual([]);
+    expect(await f.forgetWorkerApproval({ cwd: f.cwd, workspace: alias, yes: true })).toEqual([
+      { cli: 'codex', workspace: f.cwd }, { cli: 'muse', workspace: f.cwd },
+    ]);
+    expect(JSON.parse(await fs.readFile(f.filename, 'utf8')).registrations).toEqual([f.records[2]]);
+    expect((await fs.stat(f.filename)).mode & 0o777).toBe(0o600);
+  });
+
+  it('treats a missing store as empty and missing revocation as a non-mutating error', async () => {
+    const f = await fixture();
+    await fs.unlink(f.filename);
+    expect(await f.listWorkerApprovals({ cwd: f.cwd })).toEqual([]);
+    await expect(f.forgetWorkerApproval({ cwd: f.cwd, workspace: f.cwd, yes: true }))
+      .rejects.toThrow(`No worker approval found for ${f.cwd}`);
+    await expect(fs.access(f.filename)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.access(`${f.filename}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('retains entries on non-ENOENT identity failures and preserves unknown workspace metadata', async () => {
+    const f = await fixture();
+    const { realpath } = await vi.importActual<typeof fs>('node:fs/promises');
+    const error = Object.assign(new Error('synthetic denied'), { code: 'EACCES' });
+    vi.spyOn(fs, 'realpath').mockImplementation(((name: any, ...args: any[]) =>
+      name === f.cwd ? Promise.reject(error) : (realpath as any)(name, ...args)) as any);
+    const record = { cli: 'new', installation: { cwd: f.cwd } };
+    expect(await f.retainWorkerApprovals([f.records[0], { cli: 'unknown' }], record))
+      .toEqual([f.records[0], { cli: 'unknown' }, record]);
+    await expect(f.forgetWorkerApproval({ cwd: f.cwd, workspace: f.cwd, yes: true })).rejects.toBe(error);
+    expect(JSON.parse(await fs.readFile(f.filename, 'utf8')).registrations).toEqual(f.records);
+    vi.mocked(fs.realpath).mockRestore();
+    await fs.writeFile(f.filename, JSON.stringify({ version: 1, registrations: [{ cli: 'unknown' }] }));
+    expect(await f.listWorkerApprovals({ cwd: f.cwd })).toEqual([
+      { cli: 'unknown', workspace: null, workspaceExists: true },
+    ]);
+  });
+
+  it('prunes deleted and non-directory workspaces, replaces exact keys, and enforces the retained cap', async () => {
+    const f = await fixture();
+    const file = path.join(f.root, 'ordinary-file');
+    await fs.writeFile(file, 'fixture');
+    const record = { cli: 'codex', installation: { cwd: f.cwd } };
+    expect(await f.retainWorkerApprovals([...f.records, { cli: 'old', installation: { cwd: file } },
+      { cli: 'nested', installation: { cwd: path.join(file, 'child') } }], record)).toEqual([f.records[1], record]);
+    const full = Array.from({ length: 128 }, (_, i) => ({ cli: `live-${i}`, installation: { cwd: f.cwd } }));
+    await expect(f.retainWorkerApprovals(full, record)).rejects.toThrow('store is full (128 workspace approvals)');
+    expect(full).toHaveLength(128);
+    expect(await f.retainWorkerApprovals(full, { ...record, cli: 'live-0' })).toHaveLength(128);
+  });
+
 });

@@ -41,7 +41,6 @@ vi.mock('../../../src/channel/manager.mjs', async importOriginal => ({
   getFrameworkRoot: mockGetFrameworkRoot,
   getVersionInfo: mockGetVersionInfo,
 }));
-
 // ── File existence ───────────────────────────────────────────
 
 describe('tools/cli/doctor.mjs — file', () => {
@@ -89,7 +88,6 @@ describe('tools/cli/doctor.mjs — file', () => {
     expect(content).toContain('returned zero results for the known aiwg-doctor capability');
   });
 });
-
 // ── Installation check logic ──────────────────────────────────
 
 describe('doctor: installation check', () => {
@@ -126,7 +124,6 @@ describe('doctor: installation check', () => {
     expect(result.message).toContain(envRoot);
   });
 });
-
 // ── Version check logic ───────────────────────────────────────
 
 describe('doctor: version check', () => {
@@ -751,9 +748,11 @@ describe('doctor: unknown-provider check names installation drift (#270)', () =>
 // test/unit/models/worker-direct-readiness.test.ts.
 
 describe('doctor: direct-worker probes are opt-in (#2894)', () => {
-  const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+  const content = readFileSync(DOCTOR_SCRIPT, 'utf-8')
+    + readFileSync(resolve(__dirname, '../../../tools/cli/doctor-args.mjs'), 'utf-8');
 
   it('parses doctor flags through the shared strict parser (#3062/#3066)', () => {
+    expect(content).toContain("import { parseDoctorArgsOrExit } from './doctor-args.mjs'");
     expect(content).toContain("await importImpl(import.meta.url, 'cli/flag-parsing.js')");
     expect(content).toContain("hasDoctorFlagSwitch(argv, '--probe-workers'");
     expect(content).toContain("requireDoctorFlagValue(argv, valueOptions, '--provider')");
@@ -978,7 +977,8 @@ describe('doctor: real-process no-workers-configured output/exit regression (#28
 // an explicit timeout.
 describe('doctor: worker-probe JSON output and visible empty state (#3066)', () => {
   const content = readFileSync(DOCTOR_SCRIPT, 'utf-8')
-    + readFileSync(resolve(__dirname, '../../../tools/cli/doctor-worker-probe.mjs'), 'utf-8');
+    + readFileSync(resolve(__dirname, '../../../tools/cli/doctor-worker-probe.mjs'), 'utf-8')
+    + readFileSync(resolve(__dirname, '../../../tools/cli/doctor-args.mjs'), 'utf-8');
 
   it('rejects unknown flags naming the flag with usage exit 2', () => {
     expect(content).toContain('DOCTOR_KNOWN_FLAGS');
