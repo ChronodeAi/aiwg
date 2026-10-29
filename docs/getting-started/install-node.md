@@ -8,9 +8,17 @@ For a new setup, use the current **LTS** release of Node.js. LTS means
 the newest experimental/current release. AIWG requires Node.js 24 or newer; the
 recommended new-user line is currently Node.js 24 LTS.
 
+Each section starts with what you can ask your assistant, then gives the command reference.
+
 ## Before installing anything
 
+> "Check how Node.js and npm are installed on this computer. Do not change anything yet, just report what you find."
+
+Your assistant checks the installed versions, the installer or version manager, and PATH conflicts, then names the safest supported next step without changing anything.
+
 In the terminal, run:
+
+### Command reference
 
 ```bash
 node --version
@@ -33,7 +41,17 @@ this operating system.
 
 Do not install a second Node version manager on top of an existing one.
 
+Refinement prompt:
+
+> "Node and npm resolve to different folders. Show me each resolved path and which PATH entry wins."
+
+Your assistant reports each resolved installation folder and the conflicting PATH entry.
+
 ## Recommended defaults
+
+> "Which Node version manager should I use for my operating system?"
+
+Your assistant recommends the new-user path below for your computer environment and cites the official installation source.
 
 | Computer environment | Recommended new-user path |
 |---|---|
@@ -59,6 +77,10 @@ release, and operating system before you approve installation.
 
 ## Why not pnpm?
 
+> "Should I install pnpm to use AIWG?"
+
+Your assistant explains that pnpm is not a prerequisite and to use the npm bundled with Node.js unless the project declares otherwise.
+
 pnpm is a useful package manager for projects that choose it, but it is not an
 AIWG prerequisite. Adding it during first-time setup creates another version
 and PATH decision without helping the user install AIWG. Use the npm bundled
@@ -67,7 +89,13 @@ with Node.js unless the project already declares pnpm in its own
 
 ## Verify the toolchain
 
+> "Verify my Node toolchain in a fresh terminal and confirm I can continue."
+
+Your assistant checks both commands in a fresh terminal and confirms the version floor and the absence of file or permission errors.
+
 Close and reopen the terminal, then run:
+
+### Command reference
 
 ```bash
 node --version
@@ -79,6 +107,10 @@ newer, and neither command reports a missing file or permission error. Then
 continue to [Install, Connect, and Verify AIWG](install-connect-verify.md).
 
 ## Stop and ask for help when
+
+> "My Node install looks unusual. Diagnose it read-only before I authorize changes."
+
+Your assistant gives a read-only diagnosis and an explanation before you authorize changes.
 
 - the installer requests disabling antivirus or system security;
 - instructions tell you to use `sudo npm install -g`;
