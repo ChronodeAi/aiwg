@@ -2,7 +2,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { describeWithSqlite } from '../../helpers/sqlite.js';
 import { SessionRepository } from '../../../src/sessions/repository.js';
 import { IncrementalSessionImporter } from '../../../src/sessions/importer.js';
@@ -15,6 +15,8 @@ const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
 describeWithSqlite('session tail', () => {
+  beforeEach(() => vi.stubEnv('AIWG_GROK_BUILD_NATIVE_EXPERIMENTAL', '1'));
+  afterEach(() => vi.unstubAllEnvs());
   it('covers every adapter advertising stream', () => {
     expect(tailFixtures.map(entry => entry[0]).sort()).toEqual(createSessionAdapterRegistry().list()
       .filter(adapter => adapter.supportedOperations.includes('stream')).map(adapter => adapter.provider).sort());

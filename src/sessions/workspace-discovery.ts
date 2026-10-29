@@ -8,7 +8,7 @@ import { readOmpSessionHeader } from './adapters/omp.js';
 import { grokbotConversationIdFromLocator } from './adapters/grokbot-locator.js';
 import {
   GROK_BUILD_ACTIVE_FRESHNESS_MS,
-  grokBuildLiveState,
+  grokBuildLiveState, grokBuildNativeAvailability,
   grokBuildSourceWorkspaceMatch,
   readGrokBuildActiveRegistry,
   type GrokBuildActiveRegistry,
@@ -136,7 +136,7 @@ interface DiscoverableProvider {
 
 const MANUAL_EXPORT_PROVIDERS = new Set<SessionProviderId>([
   'copilot', 'opencode', 'openclaw', 'openhuman',
-  'warp', 'devin-desktop', 'generic',
+  'warp', 'devin-desktop', 'generic', 'grok-build',
 ]);
 
 export async function discoverWorkspaceHistories(
@@ -297,7 +297,7 @@ export async function discoverWorkspaceHistories(
         || entry.provider === 'grokbot' || entry.provider === 'grok-build'
         || entry.provider === 'hermes')
         && entry.roots.length === 0;
-      const expectedFlag = entry.provider === 'deepseek-harness' ? 'dsh' : entry.provider;
+      const expectedFlag = entry.provider === 'deepseek-harness' ? 'dsh' : entry.provider === 'grok-build' ? 'grok' : entry.provider;
       const rootKind = entry.provider === 'hermes' ? 'Hermes home (state.db is snapshotted read-only)' : 'sessions root';
       reports.set(entry.provider, providerReport(
         entry.provider,
@@ -525,10 +525,10 @@ export async function discoverWorkspaceHistories(
       manual ? 'export-required' : 'not-checked',
       manual ? 'manual-export' : 'unsupported',
       [],
-      grokBuild ? 'CLI_EXPORT_REQUIRED'
+      grokBuild ? grokBuildNativeAvailability().reasonCode
         : manual ? 'EXPLICIT_EXPORT_REQUIRED' : 'PROVIDER_NOT_CHECKED',
       grokBuild
-        ? 'Run `grok sessions list` or `grok sessions search`, then export an authorized session with `grok export <id> <id>.md`; Grok Build resolves $GROK_HOME itself.'
+        ? grokBuildNativeAvailability().remediation
         : manual
         ? `Select and authorize a supported ${provider} export before importing it.`
         : `No discovery strategy is registered for ${provider}.`,

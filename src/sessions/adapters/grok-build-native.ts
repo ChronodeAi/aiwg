@@ -29,6 +29,29 @@ export const GROK_BUILD_ACTIVE_FRESHNESS_MS = 120_000;
 export const GROK_BUILD_NATIVE_DISCOVERY_MAX_FILES = 10_000;
 const ACTIVE_SESSIONS_MAX_BYTES = 1024 * 1024;
 
+export function grokBuildNativeEnabled(): boolean {
+  return process.env.AIWG_GROK_BUILD_NATIVE_EXPERIMENTAL === '1';
+}
+
+/** One availability message for native readers, discovery and CLI capability reports. */
+export function grokBuildNativeAvailability() {
+  const enabled = grokBuildNativeEnabled();
+  return {
+    reasonCode: enabled ? 'GROK_BUILD_NATIVE_EXPERIMENTAL_ENABLED' : 'GROK_BUILD_NATIVE_EXPERIMENTAL_DISABLED',
+    remediation: `Grok Build native ingestion is experimental and ${enabled ? 'enabled but' : 'disabled by default because it is'} `
+      + 'unqualified: no released-binary schema or version range is qualified. '
+      + 'AIWG_GROK_BUILD_NATIVE_EXPERIMENTAL=1 opts in to synthetic v1 chat_history.jsonl and active_sessions.json only; '
+      + 'authorize the sessions root separately with --grok-root and the optional registry file with --grok-active-sessions. '
+      + 'Use `grok export <session-id> <session-id>.md` and import the authorized Markdown file for the documented CLI path.',
+  };
+}
+
+export function assertGrokBuildNativeEnabled(): void {
+  if (!grokBuildNativeEnabled()) {
+    throw new SessionContractError('UNSUPPORTED_OPERATION', grokBuildNativeAvailability().remediation);
+  }
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // Synthetic native record shape (v1): one JSON object per line. Real
@@ -88,6 +111,7 @@ export async function* discoverGrokBuildNativeChatHistories(
   root: string,
   maxFiles = GROK_BUILD_NATIVE_DISCOVERY_MAX_FILES,
 ): AsyncGenerator<SourceDescriptor> {
+  assertGrokBuildNativeEnabled();
   const resolved = resolve(root);
   let workspaces;
   try {
@@ -155,6 +179,7 @@ export async function readGrokBuildNativeChatHistory(
   source: SelectedSource,
   limits?: Partial<ReaderLimits>,
 ): Promise<{ records: Array<{ record: NativeRecord; line: BoundedJsonRecord }>; incompleteTail: boolean }> {
+  assertGrokBuildNativeEnabled();
   const sessionId = grokBuildNativeSessionId(source.locator);
   if (source.locatorClass !== GROK_BUILD_NATIVE_LOCATOR_CLASS || !sessionId) {
     throw new SessionContractError(
@@ -266,6 +291,7 @@ export async function readGrokBuildActiveRegistry(
   selectedPath: string,
   allowedRoots: string[],
 ): Promise<GrokBuildActiveRegistry> {
+  assertGrokBuildNativeEnabled();
   const authorized = await authorizeSourceFile({
     selectedPath, allowedRoots, maxBytes: ACTIVE_SESSIONS_MAX_BYTES,
   });

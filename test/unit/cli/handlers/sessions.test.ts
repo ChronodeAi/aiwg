@@ -168,14 +168,14 @@ describe('sessions CLI contracts', () => {
     expect(output.data.providers.find((item: any) => item.provider === 'grok-build'))
       .toMatchObject({
         disposition: 'implemented',
-        reasonCode: null,
-        supportedOperations: ['discover', 'inspect', 'stream'],
-        acquisitionModes: ['manual-export', 'jsonl'],
+        reasonCode: 'GROK_BUILD_NATIVE_EXPERIMENTAL_DISABLED',
+        supportedOperations: ['inspect', 'stream'],
+        acquisitionModes: ['manual-export'],
         discovery: {
-          disposition: 'discoverable',
-          authorization: 'explicit-root',
-          requiredFlags: ['--grok-root'],
-          liveDetection: 'supported',
+          disposition: 'manual-export',
+          authorization: 'none',
+          requiredFlags: [],
+          liveDetection: 'unsupported',
         },
       });
     expect(output.data.providers.find((item: any) => item.provider === 'copilot'))
