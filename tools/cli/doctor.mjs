@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { runResourceDoctor } from './doctor-resources.mjs';
 import { parseDoctorArgsOrExit } from './doctor-args.mjs';
 /**
  * AIWG Doctor Command
@@ -106,7 +107,7 @@ const { auditProjectArtifactHealth } = await importImpl(
 // AIWG_ROOT: env override > channel-manager resolved path > legacy edge path
 // getFrameworkRoot() resolves correctly for npm global installs, edge, and dev channels.
 const AIWG_ROOT = process.env.AIWG_ROOT || await getFrameworkRoot({
-  createIfMissing: !process.argv.includes('--decision-offload'),
+  createIfMissing: !process.argv.includes('--decision-offload') && !process.argv.includes('--resources'),
 });
 
 // Installation identity drift, when present, is published by bin/aiwg.mjs for
@@ -713,8 +714,6 @@ async function checkOpenHumanHarnessTier2() {
 const BRAND_HEX = '#818CF8';
 
 export async function runDoctor() {
-  // Usage errors (unknown flags, valueless value flags, --json without
-  // --probe-workers/--decision-offload) exit 2 here, before any check, spawn, or write.
   const options = parseDoctorArgsOrExit(process.argv.slice(2));
   const {
     provider: providerArg,
@@ -736,6 +735,7 @@ export async function runDoctor() {
     }
   }
 
+  if (options.resources) return runResourceDoctor(process.cwd(), options);
   if (options.decisionOffload) {
     const decisionOffload = await collectDecisionOffloadReport(process.cwd());
     const warnings = await readNativeSandboxWarnings(process.cwd()).catch(() => []);

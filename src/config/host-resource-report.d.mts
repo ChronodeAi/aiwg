@@ -1,0 +1,17 @@
+import type { AiwgConfig, DispatchHostThresholds } from './aiwg-config.js';
+import type { HostResourceSample, HostResourceReaders } from './host-resource-runtime.mjs';
+export interface HostResourceCap { threshold: string; limit?: number | null; running?: number }
+export interface HostResourceReport {
+  measured: HostResourceSample;
+  thresholds: DispatchHostThresholds | null;
+  origins: Record<string, string[]>;
+  slots: number;
+  ok: boolean;
+  limits: Array<{ threshold: string; slots: number }>;
+  failures: Array<{ signal: string; reason: string; actual?: number; threshold?: number }>;
+  counting?: string;
+}
+export function hostResourceReport(input?: {
+  config?: AiwgConfig; live?: HostResourceSample; readers?: HostResourceReaders; paths?: string[];
+  thresholdOverlay?: DispatchHostThresholds; caps?: HostResourceCap[];
+}): HostResourceReport;

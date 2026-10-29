@@ -5,4 +5,5 @@ export function resolveDispatchHostThresholds(
   buildDispatch?: DispatchHostThresholds,
   admissionHostResources?: DispatchHostThresholds,
   overlay?: DispatchHostThresholds,
+  origins?: Record<string, string[]>,
 ): Required<Omit<DispatchHostThresholds, 'max_workers'>> & Pick<DispatchHostThresholds, 'max_workers'>;

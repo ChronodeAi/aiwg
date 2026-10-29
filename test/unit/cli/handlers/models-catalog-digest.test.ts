@@ -1,9 +1,10 @@
+import { idleHostResourceReaders } from '../../../fixtures/host-resources.js';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadWorkerInputs, modelsHandler } from '../../../../src/cli/handlers/models.js';
+import { createModelsHandler, loadWorkerInputs as loadHostWorkerInputs } from '../../../../src/cli/handlers/models.js';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 import { ConfigLoader } from '../../../../src/models/config-loader.js';
 import * as discovery from '../../../../src/models/model-discovery.js';
@@ -23,6 +24,8 @@ vi.mock('../../../../src/models/worker-installation.mjs', async importOriginal =
   loadRecordedWorkerInstallations: vi.fn(),
 }));
 
+const loadWorkerInputs = (ctx: Parameters<typeof loadHostWorkerInputs>[0]) => loadHostWorkerInputs(ctx, idleHostResourceReaders());
+const modelsHandler = createModelsHandler({ load: loadWorkerInputs });
 const roots: string[] = [];
 afterEach(async () => {
   vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs();

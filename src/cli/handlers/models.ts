@@ -2,6 +2,8 @@ import { MODELS_HELP } from './models-help.js';
 import { updateJson } from '../../models/config-writer.js';
 import { atomicConfigWrite as atomicWrite } from '../../config/worker-write.js';
 import { handleWorkerAdoptionArgs } from '../../config/worker-adoption-cli.js';
+import type { HostResourceReaders } from '../../config/host-resource-runtime.mjs';
+import { sampleWorkerHostResources } from './models-resource-sample.js';
 import { resolveParallelism } from '../../config/aiwg-config.js';
 /**
  * Safe model-policy audit, resolution, and mutation commands.
@@ -27,7 +29,6 @@ import { ConfigLoader } from '../../models/config-loader.js';
 import { loadRecordedWorkerInstallations, normalizeWorkerVersionBanner } from '../../models/worker-installation.mjs';
 import type { WorkerPlanSnapshot } from '../../models/resolver.js';
 import { parseWorkerCommandArgs, resolveWorkerInvocation, workerInvocationDiagnostic, type WorkerInvocationDriver } from '../../serve/worker-invocation.js';
-
 /** Compare selection facts without observation times or approval/provenance metadata. */
 function approvalFacts(row: DiscoveredModel) {
   if (!row.worker) return null;
@@ -36,7 +37,6 @@ function approvalFacts(row: DiscoveredModel) {
   return { id: row.id, apiModelId: row.apiModelId, llmProvider: row.llmProvider,
     hidden: row.hidden, reasoningEfforts: row.reasoningEfforts, facts };
 }
-
 /** #2885's trusted installation owner supplies qualified bindings and installed drivers.
  * This is an in-process dependency, never a CLI flag or project-config module path. */
 export interface ModelsWorkerServices {
@@ -50,7 +50,7 @@ export interface ModelsWorkerServices {
  * without shelling out to the CLI. No new loader is introduced; this is the
  * CLI's own existing default `ModelsWorkerServices.load`.
  */
-export async function loadWorkerInputs(ctx: HandlerContext) {
+export async function loadWorkerInputs(ctx: HandlerContext, resourceReaders?: HostResourceReaders) {
   const config = await readAiwgConfig(ctx.cwd) ?? emptyConfig();
   const loader = new ConfigLoader(ctx.cwd);
   const models = await loader.load(config.parallelism);
@@ -122,7 +122,7 @@ export async function loadWorkerInputs(ctx: HandlerContext) {
     }) };
   }
   return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
-    registry: qualifiedRegistry, installations }, drivers };
+    registry: qualifiedRegistry, installations, hostResources: sampleWorkerHostResources(ctx, resourceReaders) }, drivers };
 }
 
 async function resolveDirect(ctx: HandlerContext, services: ModelsWorkerServices): Promise<HandlerResult> {

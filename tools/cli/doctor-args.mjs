@@ -25,7 +25,7 @@ const DOCTOR_VALUE_FLAGS = ['--provider', '--bundle', '--scope', '--context-base
 const DOCTOR_KNOWN_FLAGS = new Set([
   ...DOCTOR_VALUE_FLAGS,
   '--list-approvals', '--all-providers', '--probe-workers', '--qualify', '--yes', '--dry-run', '--no-budget-check', '--strict-context', '--json',
-  '--decision-offload', '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
+  '--resources', '--decision-offload', '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
 ]);
 
 // Refuse the first unknown `--flag` before the `--` terminator, skipping
@@ -84,13 +84,17 @@ function parseDoctorArgs(argv) {
   out.yes = hasDoctorFlagSwitch(argv, '--yes', DOCTOR_VALUE_FLAGS);
   out.dryRun = hasDoctorFlagSwitch(argv, '--dry-run', DOCTOR_VALUE_FLAGS);
   out.json = hasDoctorFlagSwitch(argv, '--json', DOCTOR_VALUE_FLAGS);
+  out.resources = hasDoctorFlagSwitch(argv, '--resources', DOCTOR_VALUE_FLAGS);
   out.decisionOffload = hasDoctorFlagSwitch(argv, '--decision-offload', DOCTOR_VALUE_FLAGS);
   out.noBudgetCheck = hasDoctorFlagSwitch(argv, '--no-budget-check', DOCTOR_VALUE_FLAGS);
   out.strictContext = hasDoctorFlagSwitch(argv, '--strict-context', DOCTOR_VALUE_FLAGS);
   assertNoUnknownDoctorFlags(argv);
   // JSON is available for worker probes or the explicit offline offload report.
-  if (out.json && !out.probeWorkers && !out.decisionOffload) {
-    throw new Error('Unknown flag combination: --json requires --probe-workers or --decision-offload. See \'aiwg doctor --help\'.');
+  if (out.json && !out.probeWorkers && !out.decisionOffload && !out.resources) {
+    throw new Error('Unknown flag combination: --json requires --probe-workers or --decision-offload or --resources. See \'aiwg doctor --help\'.');
+  }
+  if (out.resources && (out.probeWorkers || out.decisionOffload || ['--deployment', '--user', '--project-local'].some(flag => hasDoctorFlagSwitch(argv, flag, DOCTOR_VALUE_FLAGS)) || requireDoctorFlagValue(argv, { rejectEmpty: true }, '--scope') !== undefined)) {
+    throw new Error('--resources must run separately from other doctor modes');
   }
   if (out.decisionOffload && (out.probeWorkers || hasDoctorFlagSwitch(argv, '--deployment', DOCTOR_VALUE_FLAGS) || hasDoctorFlagSwitch(argv, '--user', DOCTOR_VALUE_FLAGS) || requireDoctorFlagValue(argv, { rejectEmpty: true, precedence: 'last' }, '--scope') !== undefined)) {
     throw new Error('--decision-offload is a separate offline mode; do not combine it with worker, deployment or user-scope checks');

@@ -28,6 +28,10 @@
       "status": "partial",
       "testFiles": [
         "test/unit/models/worker-resolution.test.ts",
+        "test/unit/models/host-resource-admission.test.ts",
+        "test/unit/config/host-resource-report.test.ts",
+        "test/unit/config/host-resource-runtime.test.ts",
+        "test/unit/cli/doctor-resources.test.ts",
         "test/unit/models/worker-ceilings.test.ts",
         "test/unit/models/resolver-election.test.ts",
         "test/unit/models/policy-resources.test.ts",

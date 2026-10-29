@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as preflight from '../../../tools/scripts/resource-preflight.mjs';
+import { countWorkerProcesses } from '../../../src/config/host-resource-runtime.mjs';
 import {
   checkWorkerDispatch,
   defaultCountWorkers,
@@ -366,7 +367,7 @@ describe('dispatch regression checks (#2954 review)', () => {
     expect(() => resolveDispatchThresholds({ overlay: { min_free_disk_gb: -1 } })).toThrow(/non-negative/);
   });
 
-  it('counts only exact worker comm names for the current UID', () => {
+  it('retains exact current-UID CLI comm counts as information without consuming admission', () => {
     const records = {
       '1': { uid: 1000, comm: 'codex' },
       '2': { uid: 2000, comm: 'codex' },
@@ -375,7 +376,7 @@ describe('dispatch regression checks (#2954 review)', () => {
       '5': { uid: 1000, comm: 'node' },
       '6': { uid: 1000, comm: 'muse-bin-fake' },
     };
-    expect(defaultCountWorkers({
+    const readers = {
       uid: 1000, countWorkerUnits: () => undefined,
       readDir: () => Object.keys(records),
       readText: path => {
@@ -385,20 +386,28 @@ describe('dispatch regression checks (#2954 review)', () => {
         if (field === 'status') return `Uid: ${record.uid} ${record.uid} ${record.uid} ${record.uid}\n`;
         return 'shell mentions muse-bin; node resource-preflight.mjs';
       },
-    })).toBe(2);
+    };
+    expect(countWorkerProcesses(readers)).toMatchObject({ total: 0, hostCliProcesses: { codex: 1, muse: 1 } });
+    expect(defaultCountWorkers(readers)).toBe(0);
   });
 
-  it('takes the larger of aiwg-worker units and current-user worker processes so no worker class hides', () => {
+  it('adds distinct marked invocations outside active units and deduplicates their descendants', () => {
     expect(defaultCountWorkers({ countWorkerUnits: () => 3, readDir: () => [] })).toBe(3);
-    // Zero units but live worker processes (degraded launches, other conductors) must still count.
-    const records = { 11: { uid: 1000, comm: 'codex' }, 12: { uid: 1000, comm: 'codex' }, 13: { uid: 1000, comm: 'muse-bin' } };
+    const unit = 'aiwg-worker-one.service';
+    const records = { 11: { uid: 1000, comm: 'codex', invocation: 'a' },
+      12: { uid: 1000, comm: 'codex', invocation: 'a' }, 13: { uid: 1000, comm: 'muse-bin', invocation: 'b' } };
     const readText = path => {
       const [, , pid, field] = path.split('/');
-      return field === 'comm' ? records[pid].comm : `Uid: ${records[pid].uid} ${records[pid].uid} ${records[pid].uid} ${records[pid].uid}\n`;
+      if (field === 'comm') return records[pid].comm;
+      if (field === 'environ') return `AIWG_WORKER_INVOCATION_ID=${records[pid].invocation}\0`;
+      if (field === 'cgroup') return `0::/${pid === '13' ? 'session.scope' : unit}\n`;
+      return `Uid: ${records[pid].uid} ${records[pid].uid} ${records[pid].uid} ${records[pid].uid}\n`;
     };
-    expect(defaultCountWorkers({ uid: 1000, countWorkerUnits: () => 0, readDir: () => Object.keys(records), readText })).toBe(3);
-    expect(defaultCountWorkers({ uid: 1000, countWorkerUnits: () => 1, readDir: () => Object.keys(records), readText })).toBe(3);
-    expect(defaultCountWorkers({ uid: 1000, countWorkerUnits: () => 5, readDir: () => Object.keys(records), readText })).toBe(5);
+    const readers = { uid: 1000, readDir: () => Object.keys(records), readText };
+    expect(defaultCountWorkers({ ...readers, listWorkerUnits: () => undefined })).toBe(2);
+    expect(defaultCountWorkers({ ...readers, listWorkerUnits: () => [] })).toBe(2);
+    expect(defaultCountWorkers({ ...readers, listWorkerUnits: () => [unit] })).toBe(2);
+    expect(defaultCountWorkers({ ...readers, listWorkerUnits: () => [unit, 'aiwg-worker-two.service'] })).toBe(3);
     // Unreadable /proc falls back to the unit count.
     expect(defaultCountWorkers({ uid: 1000, countWorkerUnits: () => 2, readDir: () => { throw new Error('no proc'); } })).toBe(2);
   });

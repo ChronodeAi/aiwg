@@ -71,6 +71,12 @@ describe('T-OG-05/06 orchestration changed-code coverage helper', () => {
       '../outside/repo.ts']) expect(classifyChangedFile(file)).toBeNull();
   });
 
+  it('excludes declaration-only types while keeping every runtime extension in scope', () => {
+    for (const extension of ['d.ts', 'd.mts', 'd.cts']) expect(classifyChangedFile(`src/config/resources.${extension}`)).toBeNull();
+    for (const extension of ['ts', 'mts', 'mjs', 'js', 'cjs']) expect(classifyChangedFile(`src/config/resources.${extension}`)).toBe('validators');
+    expect(VALIDATOR_THRESHOLDS).toEqual({ statements: 90, branches: 85 });
+  });
+
   it('prefers validators when a file matches both scopes', () => {
     expect(classifyChangedFile('src/serve/shared-host-starvation.ts')).toBe('validators');
   });
