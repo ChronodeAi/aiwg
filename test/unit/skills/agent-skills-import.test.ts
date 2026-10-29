@@ -530,7 +530,10 @@ describe('import security boundaries', () => {
       'AS_IMPORT_SYMLINK',
     );
 
-    const socketSkill = createSkill('socket-skill');
+    // Unix socket paths are limited to about 108 bytes, and a long TMPDIR (CI tags, nested
+    // worktrees) pushes the fixture past it (listen EINVAL). Keep this one parent short.
+    const socketParent = fs.mkdtempSync('/tmp/as-');
+    const socketSkill = createSkill('socket-skill', { parent: socketParent });
     const socketPath = path.join(socketSkill, 'fixture.sock');
     const server = net.createServer();
     await new Promise<void>((resolve, reject) => {
@@ -547,6 +550,7 @@ describe('import security boundaries', () => {
       );
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(socketParent, { recursive: true, force: true });
     }
 
     const largeSkill = createSkill('large-skill');
