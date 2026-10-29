@@ -189,7 +189,7 @@ describe('provider policy', () => {
     expect(shouldEmitContextFiles('grokbot')).toBe(true);
     expect(shouldEmitContextFiles('grok-build')).toBe(true);
     expect(shouldEmitContextFiles('muse')).toBe(true);
-    expect(shouldEmitContextFiles('openhuman')).toBe(false);
+    expect(shouldEmitContextFiles('openhuman')).toBe(true);
     expect(AGENTS_MD_PROVIDERS.size).toBe(14);
   });
 
@@ -201,23 +201,23 @@ describe('provider policy', () => {
     expect(shouldEmitClaudeMdHook('claude')).toBe(true);
   });
 
-  it('does NOT emit for OpenClaw (home-dir-only deployment)', () => {
-    expect(shouldEmitContextFiles('openclaw')).toBe(false);
-    expect(shouldEmitAiwgMd('openclaw')).toBe(false);
+  it('emits root AIWG.md for OpenClaw with home-scoped provider artifacts', () => {
+    expect(shouldEmitContextFiles('openclaw')).toBe(true);
+    expect(shouldEmitAiwgMd('openclaw')).toBe(true);
     expect(shouldEmitAgentsMd('openclaw')).toBe(false);
     expect(shouldEmitClaudeMdHook('openclaw')).toBe(false);
   });
 
-  it('does NOT emit for OpenHuman (home-dir-only deployment)', () => {
-    expect(shouldEmitContextFiles('openhuman')).toBe(false);
-    expect(shouldEmitAiwgMd('openhuman')).toBe(false);
+  it('emits root AIWG.md for OpenHuman with home-scoped provider artifacts', () => {
+    expect(shouldEmitContextFiles('openhuman')).toBe(true);
+    expect(shouldEmitAiwgMd('openhuman')).toBe(true);
     expect(shouldEmitAgentsMd('openhuman')).toBe(false);
     expect(shouldEmitClaudeMdHook('openhuman')).toBe(false);
   });
 
-  it('does NOT emit for generic', () => {
-    expect(shouldEmitContextFiles('generic')).toBe(false);
-    expect(shouldEmitAiwgMd('generic')).toBe(false);
+  it('emits root AIWG.md for generic', () => {
+    expect(shouldEmitContextFiles('generic')).toBe(true);
+    expect(shouldEmitAiwgMd('generic')).toBe(true);
     expect(shouldEmitAgentsMd('generic')).toBe(false);
     expect(shouldEmitClaudeMdHook('generic')).toBe(false);
   });
@@ -462,10 +462,12 @@ describe('generateAiwgMd', () => {
     expect(signatureCount).toBe(1);
   });
 
-  it('falls back to a stub when CLAUDE.md is absent', async () => {
+  it('emits complete framework context when CLAUDE.md is absent', async () => {
     const content = await generateAiwgMd(tmpDir);
     expect(content).toContain('# AIWG.md');
     expect(content).toContain('<!-- aiwg-managed -->');
-    expect(content).toContain('CLAUDE.md was not found');
+    expect(content).not.toContain('CLAUDE.md was not found');
+    expect(content).toContain('aiwg show rule skill-discovery');
+    expect(content).toContain('Tracker Authority Protocol');
   });
 });

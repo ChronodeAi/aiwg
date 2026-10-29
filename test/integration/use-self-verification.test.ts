@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -154,6 +154,25 @@ describe('human-output child failure diagnostics', () => {
 });
 
 describe.sequential('aiwg use self-verifying provider deployment (#2069)', () => {
+  it('migrates legacy generated context through deployment and retains operator notes on redeploy (#3762)', () => {
+    const projectRoot = isolatedRoot('aiwg-use-context-project-');
+    const homeRoot = isolatedRoot('aiwg-use-context-home-');
+    mkdirSync(path.join(projectRoot, '.aiwg'));
+    const notes = '# Local notes\n\nUse the team fixture convention.\n';
+    writeFileSync(path.join(projectRoot, '.aiwg/AIWG.md'),
+      '# AIWG.md\n<!-- aiwg-managed -->\n<!-- Normalized project-local AIWG context. Operator notes may live outside AIWG-managed blocks. -->\n'
+      + '<!-- aiwg-context-finalization:START -->\nLegacy generated context.\n<!-- aiwg-context-finalization:END -->\n' + notes);
+    for (let pass = 0; pass < 2; pass++) {
+      const result = runUse(projectRoot, homeRoot, ['--provider', 'codex']);
+      expect(result.exitCode, result.stderr || result.stdout).toBe(0);
+      expect(readFileSync(path.join(projectRoot, '.aiwg/AIWG.md'), 'utf8')).toBe(notes);
+      const rootContext = readFileSync(path.join(projectRoot, 'AIWG.md'), 'utf8');
+      expect(rootContext).toContain(notes.trim());
+      expect(rootContext).not.toContain('Legacy generated context.');
+      expect(result.payload.findings.some((item: { id: string }) => item.id === 'context-diagnostic:duplicate-generated-context')).toBe(false);
+    }
+  }, 240_000);
+
   it('returns a planned preview without mutating the target', () => {
     const projectRoot = isolatedRoot('aiwg-use-verify-preview-project-');
     const homeRoot = isolatedRoot('aiwg-use-verify-preview-home-');
@@ -178,8 +197,10 @@ describe.sequential('aiwg use self-verifying provider deployment (#2069)', () =>
     const projectRoot = isolatedRoot('aiwg-use-verify-codex-project-');
     const homeRoot = isolatedRoot('aiwg-use-verify-codex-home-');
     const first = runUse(projectRoot, homeRoot, ['--provider', 'codex']);
+    expect(existsSync(path.join(projectRoot, '.aiwg/AIWG.md'))).toBe(false);
     const firstDiscovery = runDiscover(projectRoot, homeRoot);
     const repeated = runUse(projectRoot, homeRoot, ['--provider', 'codex']);
+    expect(existsSync(path.join(projectRoot, '.aiwg/AIWG.md'))).toBe(false);
     const repeatedDiscovery = runDiscover(projectRoot, homeRoot);
 
     for (const result of [first, repeated]) {

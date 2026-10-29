@@ -1,0 +1,362 @@
+// Built-in provider adapter definitions, preserving canonical registry order.
+import type { BuiltInSeed } from './provider-definition-schema.js';
+
+export const BUILT_IN_SEEDS_1: BuiltInSeed[] = [
+  {
+    id: 'antigravity',
+    displayName: 'Google Antigravity CLI',
+    aliases: ['agy'],
+    status: 'experimental',
+    builtIn: true,
+    surfaces: {
+      primary: 'antigravity',
+      compatibility: ['agy'],
+      precedence: ['AGENTS.md', 'GEMINI.md', '.agents/agents/', '.agents/skills/'],
+      related: [],
+    },
+    detection: { env: [], process: ['agy'], capabilityId: 'antigravity' },
+    paths: {
+      deployTarget: 'project',
+      artifacts: {
+        agents: '.agents/agents', commands: null, skills: '.agents/.aiwg/skills', rules: '.antigravity/rules', behaviors: null,
+      },
+      kernelSkills: '.agents/skills',
+      contextDiscovery: { agents: '.agents/agents', skills: '.agents/skills', rules: null, behaviors: null },
+      configFile: 'AGENTS.md',
+      contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
+    },
+    smithPaths: {
+      agents: '.agents/agents', commands: null, skills: '.agents/skills', rules: '.antigravity/rules',
+      fileExtension: '.md', configFile: 'AGENTS.md', aggregated: false,
+    },
+    skillNamespace: {
+      deploymentGroup: 'deep-recursion', pathType: 'project', skillsBaseDir: '.agents/skills', subdirLayout: true,
+    },
+    adapters: {
+      agentFormat: 'antigravity-markdown', hookBridge: null, mcpInjection: 'antigravity',
+      contextAggregation: 'agents-md', ruleFormat: null,
+    },
+    matrixRef: 'antigravity',
+  },
+  {
+    id: 'claude',
+    displayName: 'Claude Code',
+    aliases: ['claude-code'],
+    builtIn: true,
+    surfaces: { primary: 'claude-code', compatibility: ['claude'], precedence: ['.claude/', 'CLAUDE.md'], related: [] },
+    detection: {
+      // CLAUDECODE / CLAUDE_CODE_ENTRYPOINT / CLAUDE_CODE_DESKTOP_APP_VERSION
+      // are the markers current Claude Code (CLI and Desktop Code tab)
+      // actually sets; confirmed empirically in both a CLI session and a
+      // Desktop Code-tab session (docs/planning/claude-desktop-provider/
+      // assessment-and-issue-plan.md §2.1). `CLAUDE_CODE_VERSION` is not set
+      // by current Claude Code, and `ANTHROPIC_API_KEY` is a false-positive
+      // signal — any non-Claude session with that key set would otherwise
+      // identify as `claude` (#2627).
+      env: ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_DESKTOP_APP_VERSION'],
+      process: ['claude-code', 'claude'],
+      capabilityId: 'claude-code',
+      runtimeEnvPriority: 100,
+    },
+    paths: {
+      artifacts: {
+        agents: '.claude/agents',
+        commands: '.claude/commands',
+        skills: '.claude/.aiwg/skills',
+        rules: '.claude/rules',
+        behaviors: '.claude/hooks',
+      },
+      kernelSkills: '.claude/skills',
+      configFile: 'CLAUDE.md',
+      contextFiles: { aiwgMd: true, agentsMd: false, claudeMdHook: true, hookFile: null, contextFile: 'CLAUDE.md' },
+    },
+    smithPaths: {
+      agents: '.claude/agents',
+      commands: '.claude/commands',
+      skills: '.claude/skills',
+      rules: '.claude/rules',
+      fileExtension: '.md',
+      configFile: 'CLAUDE.md',
+      aggregated: false,
+    },
+    skillNamespace: {
+      deploymentGroup: 'deep-recursion',
+      pathType: 'project',
+      skillsBaseDir: '.claude/skills',
+      subdirLayout: true,
+    },
+    adapters: {
+      agentFormat: 'claude-markdown',
+      hookBridge: null,
+      mcpInjection: 'claude-code',
+      contextAggregation: 'claude-hook',
+      ruleFormat: 'markdown',
+    },
+    matrixRef: 'claude-code',
+  },
+  {
+    id: 'codex',
+    aliases: ['openai'],
+    builtIn: true,
+    surfaces: { primary: 'codex', compatibility: ['openai'], precedence: ['.agents/skills/', '.codex/'], related: [] },
+    detection: {
+      env: ['CODEX_SANDBOX', 'CODEX_HOME', 'CODEX_API_KEY', 'OPENAI_API_KEY'],
+      process: ['@openai/codex', 'codex'],
+      capabilityId: 'codex',
+      runtimeEnvPriority: 10,
+    },
+    paths: {
+      artifacts: {
+        agents: '.codex/agents',
+        commands: '.codex/commands',
+        skills: '.codex/.aiwg/skills',
+        rules: '.codex/rules',
+        behaviors: '.codex/rules',
+      },
+      kernelSkills: '.agents/skills',
+      contextDiscovery: {
+        agents: '.codex/agents',
+        skills: '.agents/skills',
+        rules: '.codex/rules',
+        behaviors: null,
+      },
+      configFile: 'AGENTS.md',
+      contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
+    },
+    smithPaths: {
+      agents: '.codex/agents',
+      commands: '.codex/commands',
+      skills: '.codex/skills',
+      rules: '.codex/rules',
+      fileExtension: '.md',
+      configFile: 'AGENTS.md',
+      aggregated: false,
+    },
+    skillNamespace: {
+      deploymentGroup: 'deep-recursion',
+      pathType: 'home-dir',
+      skillsBaseDir: '.codex/skills',
+      maxNameLength: 100,
+      maxDescriptionLength: 500,
+      subdirLayout: true,
+    },
+    adapters: {
+      agentFormat: 'codex-markdown',
+      hookBridge: 'codex',
+      mcpInjection: 'codex',
+      contextAggregation: 'agents-md',
+      ruleFormat: 'markdown',
+    },
+    matrixRef: 'codex',
+  },
+  {
+    id: 'copilot',
+    aliases: ['github-copilot'],
+    builtIn: true,
+    surfaces: { primary: 'copilot', compatibility: ['github-copilot'], precedence: ['.github/'], related: [] },
+    detection: {
+      env: ['COPILOT_AGENT', 'GITHUB_COPILOT_TOKEN'],
+      process: ['copilot'],
+      capabilityId: 'copilot',
+      runtimeEnvPriority: 50,
+    },
+    paths: {
+      artifacts: {
+        agents: '.github/agents',
+        commands: '.github/commands',
+        skills: '.github/.aiwg/skills',
+        rules: '.github/copilot-rules',
+        behaviors: '.github/copilot-rules',
+      },
+      kernelSkills: '.github/skills',
+      contextDiscovery: {
+        agents: '.github/agents',
+        skills: '.github/.aiwg/skills',
+        rules: '.github/instructions',
+        behaviors: null,
+      },
+      configFile: 'copilot-instructions.md',
+      contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
+    },
+    smithPaths: {
+      agents: '.github/agents',
+      commands: '.github/agents',
+      skills: '.github/skills',
+      rules: '.github/copilot-rules',
+      fileExtension: '.md',
+      configFile: 'copilot-instructions.md',
+      aggregated: false,
+    },
+    skillNamespace: {
+      deploymentGroup: 'deep-recursion',
+      pathType: 'project',
+      skillsBaseDir: '.github/skills',
+      subdirLayout: true,
+    },
+    adapters: {
+      agentFormat: 'copilot-markdown',
+      hookBridge: 'copilot',
+      mcpInjection: null,
+      contextAggregation: 'agents-md',
+      ruleFormat: 'markdown',
+    },
+    matrixRef: 'copilot',
+  },
+  {
+    id: 'cursor',
+    aliases: [],
+    builtIn: true,
+    surfaces: { primary: 'cursor', compatibility: [], precedence: ['AGENTS.md', '.cursor/rules/'], related: [] },
+    detection: {
+      env: ['CURSOR_TRACE_ID', 'CURSOR_VERSION'],
+      process: ['cursor'],
+      capabilityId: 'cursor',
+      runtimeEnvPriority: 20,
+    },
+    paths: {
+      artifacts: {
+        agents: '.cursor/agents',
+        commands: '.cursor/commands',
+        skills: '.cursor/.aiwg/skills',
+        rules: '.cursor/rules',
+        behaviors: '.cursor/rules',
+      },
+      kernelSkills: '.cursor/skills',
+      configFile: 'AGENTS.md',
+      contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
+    },
+    smithPaths: {
+      agents: '.cursor/agents',
+      commands: '.cursor/commands',
+      skills: '.cursor/skills',
+      rules: '.cursor/rules',
+      fileExtension: '.json',
+      configFile: 'AGENTS.md',
+      aggregated: false,
+    },
+    skillNamespace: {
+      deploymentGroup: 'deep-recursion',
+      pathType: 'project',
+      skillsBaseDir: '.cursor/skills',
+      subdirLayout: true,
+    },
+    adapters: {
+      agentFormat: 'cursor-json',
+      hookBridge: null,
+      mcpInjection: 'cursor',
+      contextAggregation: 'agents-md',
+      ruleFormat: 'mdc',
+    },
+    matrixRef: 'cursor',
+  },
+  {
+    id: 'factory',
+    aliases: ['factory-ai'],
+    builtIn: true,
+    surfaces: { primary: 'factory', compatibility: ['factory-ai'], precedence: ['.factory/', 'AGENTS.md'], related: [] },
+    detection: {
+      env: ['FACTORY_AGENT_ID'],
+      process: ['factory'],
+      capabilityId: 'factory',
+      runtimeEnvPriority: 80,
+    },
+    paths: {
+      artifacts: {
+        agents: '.factory/droids',
+        commands: '.factory/commands',
+        skills: '.factory/.aiwg/skills',
+        rules: '.factory/rules',
+        behaviors: '.factory/rules',
+      },
+      kernelSkills: '.factory/skills',
+      configFile: 'AGENTS.md',
+      contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
+    },
+    smithPaths: {
+      agents: '.factory/droids',
+      commands: '.factory/commands',
+      skills: '.factory/skills',
+      rules: '.factory/rules',
+      fileExtension: '.md',
+      configFile: 'AGENTS.md',
+      aggregated: false,
+    },
+    skillNamespace: {
+      deploymentGroup: 'deep-recursion',
+      pathType: 'project',
+      skillsBaseDir: '.factory/skills',
+      appendToDescription: 'Use when relevant to the task.',
+      subdirLayout: true,
+    },
+    adapters: {
+      agentFormat: 'factory-droid',
+      hookBridge: 'factory',
+      mcpInjection: 'factory',
+      contextAggregation: 'agents-md',
+      ruleFormat: 'markdown',
+    },
+    matrixRef: 'factory',
+  },
+  {
+    id: 'grokbot',
+    displayName: 'Grok Bot',
+    aliases: [],
+    // #210: promoted stable — Linux PUW + security + migration + maintainer Linux-only waiver 2026-09-16.
+    status: 'stable',
+    builtIn: true,
+    surfaces: {
+      primary: 'grokbot',
+      compatibility: [],
+      precedence: ['AGENTS.md', 'AIWG_GROKBOT_SKILLS_DIR when configured'],
+      related: [],
+    },
+    // Do not treat xAI API keys or generic GROK_* model env as Grok Bot evidence.
+    detection: { env: [], process: [], capabilityId: 'grokbot' },
+    paths: {
+      deployTarget: 'mixed',
+      artifacts: {
+        agents: null,
+        commands: null,
+        // Native skill copies only when AIWG_GROKBOT_SKILLS_DIR is set at deploy time.
+        skills: null,
+        rules: null,
+        behaviors: null,
+      },
+      kernelSkills: null,
+      contextDiscovery: {
+        agents: '.agents/agents',
+        skills: null,
+        rules: null,
+        behaviors: null,
+      },
+      configFile: 'AGENTS.md',
+      contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
+    },
+    smithPaths: {
+      agents: null,
+      commands: null,
+      skills: null,
+      rules: null,
+      fileExtension: '.md',
+      configFile: 'AGENTS.md',
+      aggregated: false,
+    },
+    // Skills root is env-gated (AIWG_GROKBOT_SKILLS_DIR). skillsBaseDir is a
+    // documentation sentinel only — deployer resolves via resolveGrokbotSkillsDir
+    // and never joins ~/grokbot-skills.
+    skillNamespace: {
+      deploymentGroup: 'deep-recursion',
+      pathType: 'home-dir',
+      skillsBaseDir: 'AIWG_GROKBOT_SKILLS_DIR',
+      subdirLayout: true,
+    },
+    adapters: {
+      agentFormat: 'agents-md',
+      hookBridge: null,
+      mcpInjection: null,
+      contextAggregation: 'agents-md',
+      ruleFormat: 'agents-md-section',
+    },
+    matrixRef: 'grokbot',
+  },
+];

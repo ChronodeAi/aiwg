@@ -4550,9 +4550,6 @@ export class UseHandler implements CommandHandler {
         if (verbose && ctxResult.aiwgMdPath) {
           ui.dim(`  Wrote AIWG.md`);
         }
-        if (verbose && ctxResult.normalizedAiwgMdPath) {
-          ui.dim(`  Wrote .aiwg/AIWG.md`);
-        }
         if (verbose && ctxResult.claudeMdHookPath && ctxResult.claudeMdHookAction && ctxResult.claudeMdHookAction !== 'unchanged') {
           // #1437: CLAUDE.md hook for claude provider; mirrors AGENTS.md for other providers.
           const verb =

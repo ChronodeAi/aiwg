@@ -86,7 +86,8 @@ describe('Wave 4 compact kernel and startup deduplication (#2944)', () => {
     fs.writeFileSync(path.join(project, 'AIWG.md'), '<!-- aiwg-managed -->\n<!-- aiwg-context-finalization:START -->\n### Discover-First Protocol\nClassify every user turn FIRST\n<!-- aiwg-context-finalization:END -->\n');
     for (let pass = 0; pass < 2; pass++) {
       expect((await regenerateHandler.execute(ctx)).exitCode).toBe(0);
-      const surfaces = ['CLAUDE.md', 'AIWG.md', '.aiwg/AIWG.md'].map(file => read(path.join(project, file)));
+      expect(fs.existsSync(path.join(project, '.aiwg/AIWG.md'))).toBe(false);
+      const surfaces = ['CLAUDE.md', 'AIWG.md'].map(file => read(path.join(project, file)));
       surfaces.push(read(path.join(source, 'skills/aiwg-utils-quickref/SKILL.md')));
       for (const template of ['aiwg-sections/01-sdlc-framework.md', 'aiwg-sections/02b-discover-first.md', 'project/AIWG.md', 'project/AIWG-sdlc-fragment.md', 'openclaw/AGENTS.md.aiwg-template', 'openhuman/AGENTS.md.aiwg-template', 'copilot/copilot-instructions.md.aiwg-template']) {
         surfaces.push(read(path.join(repo, 'agentic/code/frameworks/sdlc-complete/templates', template)));

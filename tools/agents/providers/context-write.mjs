@@ -38,3 +38,7 @@ export function retireLegacyBridge(content) {
   if (!ownership) throw new Error('Startup ownership layer is unavailable', { cause: loadError });
   return ownership.retireLegacyBridge(content);
 }
+
+// Generated context outputs and the optional notes input share staging/rollback ownership.
+export const GENERATED_CONTEXT_NAMES = ['AGENTS.md', 'AIWG.md', 'WORKSPACE.md', 'CLAUDE.md', 'WARP.md', '.hermes.md'];
+export const OPERATOR_CONTEXT_NAMES = ['.aiwg/AIWG.md'];
