@@ -673,7 +673,10 @@ workspace) in
 `test/unit/cli/handlers/sessions-export-packaged.test.ts`, reusing the
 `claude/web-export.json` fixture. The same file covers the negative paths:
 a missing attachment, digest drift after planning (`SCHEMA_DRIFT`), and an
-existing shard or recovery without `--force` (`OUTPUT_EXISTS`).
+existing shard or recovery without `--force` (`OUTPUT_EXISTS`). Three
+further offline negatives -- a generic-interchange source, an interrupted
+shard write, and a malformed plan profile -- run in-process against the same
+handler in `test/unit/cli/handlers/sessions-export-negatives.test.ts`.
 
 What the archive contains: one `aiwg.session` record per selected session,
 one `aiwg.session-event` record per event (linked to its parent session via a
@@ -764,6 +767,9 @@ as supported; everything else is unverified, not assumed to work.
 | Codex -> `export plan/build/verify` | Verified | `test/unit/cli/handlers/sessions-export.test.ts`, using the `codex/threads.app-server.jsonl` fixture |
 | OpenCode -> `export plan/build/unpack` with provider-native attachment payloads omitted by import policy | Verified | `test/unit/cli/handlers/sessions-export.test.ts`, using the `opencode/complete.json` fixture (plan carries zero attachments; no `attachments/` directory is recovered) |
 | Registered-output bytes embedded with `--include-bytes` and recovered exactly | Verified | `test/unit/cli/handlers/sessions-export.test.ts`; packaged-CLI journey in `test/unit/cli/handlers/sessions-export-packaged.test.ts`; native BLAKE3 blob sidecars validated by `@fortemi/core` |
+| Generic interchange (`generic` manual-export) -> `export plan/build/verify/unpack` | Verified | `test/unit/cli/handlers/sessions-export-negatives.test.ts`, using the `generic/valid-v1.jsonl` fixture |
+| Interrupted shard write leaves no partial shard or receipt; a re-run succeeds | Verified (fail closed) | `test/unit/cli/handlers/sessions-export-negatives.test.ts` (injected temp-write failure against the atomic temp+rename in `src/cli/handlers/sessions.ts`) |
+| Plan with an unsupported profile version refused before any output (`UNKNOWN_SCHEMA_MAJOR`) | Verified (fail closed) | `test/unit/cli/handlers/sessions-export-negatives.test.ts` |
 | Remaining provider sources (Copilot, Cursor, Hermes, etc.) -> `export plan/build` | Unverified but expected to work | The mapping in `src/sessions/fortemi-export-mapping.ts` reads only the normalized `Session`/`SessionEvent` catalog, not provider-specific fields -- Claude and Codex both pass through it unmodified, but no dedicated test exercises the remaining providers through the export pipeline yet |
 | A real external Fortemi consumer application importing the built shard | Verified (CI job `producer-consumer-receipt`) | `.gitea/workflows/fortemi-shard-conformance.yml` imports the synthetic Claude fixture into a temporary catalog and builds a full-v1 shard. It then checks the pinned Fortemi consumer's import, note and provenance APIs, and semantic re-export. First passing run: Gitea Actions run 92878 (2026-10-28). The job reruns on every main push that touches the session-export paths. |
 | Remote or provider-reference-only attachment bytes | Not available | Never fetched; providers such as Claude web exports expose metadata/extracted text rather than original bytes |
