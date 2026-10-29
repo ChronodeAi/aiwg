@@ -20,7 +20,8 @@ async function snapshot(root: string): Promise<Record<string, Buffer | null>> {
       for (const [key, value] of Object.entries(await snapshot(full))) {
         result[path.join(entry.name, key)] = value;
       }
-    } else result[entry.name] = await fs.readFile(full);
+    } else if (entry.isSymbolicLink()) result[entry.name] = Buffer.from(`symlink:${await fs.readlink(full)}`);
+    else result[entry.name] = await fs.readFile(full);
   }
   return result;
 }
@@ -82,6 +83,46 @@ describe.each(['registry', 'CLI'] as const)('project relocation via %s (#3741)',
     expect(await snapshot(nextRoot)).toEqual(before);
     await expect(fs.stat(oldRoot)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await lookupProjectMemory({ id: 'demo' })).toEqual({ status: 'found', entry, matchedBy: 'id' });
+  });
+
+  it.each(['file', 'dangling-symlink'])('refuses a %s destination without changing any state', async kind => {
+    if (kind === 'file') await fs.writeFile(nextRoot, 'owned destination');
+    else await fs.symlink(path.join(tmp, 'missing-target'), nextRoot);
+    const before = await snapshot(tmp);
+    await expect(relocate()).rejects.toThrow(
+      `Cannot relocate project memory from '${oldRoot}' to '${nextRoot}': destination is not empty`,
+    );
+    expect(await snapshot(tmp)).toEqual(before);
+    expect(fs.rename).not.toHaveBeenCalled();
+    expect(output).not.toHaveBeenCalled();
+  });
+
+  it('removes newly created empty parents when rename fails', async () => {
+    nextRoot = path.join(tmp, 'new-parent', 'nested', 'destination');
+    const before = await snapshot(tmp);
+    const failure = Object.assign(new Error('fixture: EXDEV'), { code: 'EXDEV' });
+    vi.mocked(fs.rename).mockRejectedValueOnce(failure);
+    await expect(relocate()).rejects.toBe(failure);
+    expect(fs.rename).toHaveBeenCalledWith(oldRoot, nextRoot);
+    expect(await snapshot(tmp)).toEqual(before);
+    expect(output).not.toHaveBeenCalled();
+  });
+
+  it('retains pre-existing parents and new parents populated during a failed rename', async () => {
+    const retained = path.join(tmp, 'retained');
+    await fs.mkdir(retained);
+    nextRoot = path.join(retained, 'new-parent', 'nested', 'destination');
+    const before = await snapshot(tmp);
+    const failure = new Error('fixture: rename failed after another writer added a file');
+    vi.mocked(fs.rename).mockImplementationOnce(async () => {
+      await fs.writeFile(path.join(retained, 'new-parent', 'witness'), 'concurrent content');
+      throw failure;
+    });
+    await expect(relocate()).rejects.toBe(failure);
+    expect(await snapshot(tmp)).toEqual({ ...before,
+      'retained/new-parent': null,
+      'retained/new-parent/witness': Buffer.from('concurrent content'),
+    });
   });
 
   it.each([
