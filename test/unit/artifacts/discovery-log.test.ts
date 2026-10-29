@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { logDiscovery, renderDiscoveryBlock } from '../../../src/artifacts/corpus-tools/discovery-log.js';
+import { parseFrontmatter } from '../../../src/artifacts/corpus-views/ref-parser.js';
 
 let root: string;
 const TODAY = '2026-05-26';
@@ -29,11 +30,103 @@ afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe('renderDiscoveryBlock', () => {
   it('renders the block with curator-id null when absent', () => {
-    expect(renderDiscoveryBlock({ surface: 'x-search' }, TODAY)).toBe(`discovery:\n  date: ${TODAY}\n  surface: x-search\n  curator-id: null`);
+    expect(renderDiscoveryBlock({ surface: 'x-search' }, TODAY)).toBe(`discovery:\n  date: "${TODAY}"\n  surface: x-search\n  curator-id: null`);
+  });
+
+  it('renders the complete block with a quoted date and simple scalar styles', () => {
+    expect(renderDiscoveryBlock({ surface: 's2-recommendation', date: TODAY, via: 'S2 recommendations for REF-200',
+      curatorId: 'PROF-S-a', harvestBatch: '2026-05-26-am', harvestedBy: 'claude-opus-4-7' }, TODAY))
+      .toBe(`discovery:\n  date: "${TODAY}"\n  surface: s2-recommendation\n  via: "S2 recommendations for REF-200"\n  curator-id: PROF-S-a\n  harvest-batch: 2026-05-26-am\n  harvested-by: claude-opus-4-7`);
+  });
+
+  it.each(['a "quote"', 'C:\\papers\\new', 'key: value', 'value # comment', '- leading dash',
+    'first\nsecond\n', '\n---\ndiscovery:\n  via: injected', 'true', 'null', '42', ' padded ',
+    '\tafter tab', 'café ☃', 'yes', 'no', 'on', 'off', '2026-05-26'])
+  ('round-trips every rendered string field: %j', value => {
+    const block = renderDiscoveryBlock({ date: value, surface: value, via: value, curatorId: value,
+      harvestBatch: value, harvestedBy: value }, TODAY);
+    expect(parseFrontmatter(`---\n${block}\n---\n`).discovery).toEqual({
+      date: value, surface: value, via: value, 'curator-id': value, 'harvest-batch': value, 'harvested-by': value,
+    });
   });
 });
 
 describe('logDiscovery', () => {
+  it.each(['a "quote"', 'C:\\papers\\new', 'key: value', 'value # comment', '- leading dash',
+    'first\nsecond\n', '\n---\ndiscovery:\n  via: injected',
+    '\tafter tab', 'café ☃', 'yes', 'no', 'on', 'off', '2026-05-26'])('round-trips written provenance: %j', value => {
+    const opts = { surface: 's2-recommendation', date: value, via: value, curatorId: value,
+      harvestBatch: value, harvestedBy: value, write: true };
+    for (let update = 0; update < 2; update++) {
+      expect(logDiscovery(root, 'REF-201', opts).status).toBe('wrote');
+      const out = readFileSync(join(root, 'documentation/citations/REF-201-citations.md'), 'utf-8');
+      expect(parseFrontmatter(out).discovery).toEqual({ date: value, surface: opts.surface, via: value,
+        'curator-id': value, 'harvest-batch': value, 'harvested-by': value });
+    }
+  });
+
+  it.each([false, true])('preserves all surrounding bytes when existing discovery is %s', existing => {
+    const file = join(root, 'documentation/citations/REF-201-citations.md');
+    const prefix = '---\n# Keep comment\nref: REF-201\ntitle: "Unchanged: # title"\n\n';
+    const old = 'discovery:\n  date: 2025-01-01\n  surface: rss\n  curator-id: null\n';
+    const suffix = '\n# Keep spacing\nauthors: ["Lee, Sam"]  # inline\ncustom: |\n  untouched\n\n';
+    const body = '---\n# Body\n\n  Indented body  \n---\nNo final newline';
+    writeFileSync(file, prefix + (existing ? old : '') + suffix + body);
+    const opts = { surface: 's2-recommendation', date: TODAY, via: 'S2 "quoted"\nrecommendation', write: true };
+    const block = renderDiscoveryBlock(opts, TODAY);
+    const expected = existing ? prefix + block + '\n' + suffix + body
+      : prefix + suffix.slice(0, -1) + '\n' + block + '\n' + body;
+    logDiscovery(root, 'REF-201', opts);
+    expect(readFileSync(file)).toEqual(Buffer.from(expected));
+    logDiscovery(root, 'REF-201', opts);
+    expect(readFileSync(file)).toEqual(Buffer.from(expected));
+  });
+
+  it('replaces a commented top-level discovery header', () => {
+    const file = join(root, 'documentation/citations/REF-201-citations.md');
+    const prefix = '---\nref: REF-201\n';
+    const suffix = '\ntitle: "Keep: # title"\n---\nBody without final newline';
+    writeFileSync(file, prefix + 'discovery: # tracked\n  surface: rss' + suffix);
+    const opts = { surface: 'web', date: TODAY, write: true };
+    const expected = prefix + renderDiscoveryBlock(opts, TODAY) + suffix;
+    for (let update = 0; update < 2; update++) {
+      logDiscovery(root, 'REF-201', opts);
+      expect(readFileSync(file)).toEqual(Buffer.from(expected));
+      expect(parseFrontmatter(readFileSync(file, 'utf-8')).discovery)
+        .toEqual({ date: TODAY, surface: 'web', 'curator-id': null });
+    }
+  });
+
+  it.each([false, true])('preserves nested discovery when top-level discovery exists: %s', existing => {
+    const file = join(root, 'documentation/citations/REF-201-citations.md');
+    const prefix = '---\nref: REF-201\ncustom:\n  discovery:\n    surface: rss\n    via: nested\n';
+    const body = '\n---\nBody without final newline';
+    writeFileSync(file, prefix + (existing ? 'discovery:\n  surface: direct' : 'title: Keep') + body);
+    const opts = { surface: 'web', date: TODAY, write: true };
+    const expected = prefix + (existing ? '' : 'title: Keep\n') + renderDiscoveryBlock(opts, TODAY) + body;
+    for (let update = 0; update < 2; update++) {
+      logDiscovery(root, 'REF-201', opts);
+      expect(readFileSync(file)).toEqual(Buffer.from(expected));
+      const fm = parseFrontmatter(readFileSync(file, 'utf-8'));
+      expect(fm.custom).toEqual({ discovery: { surface: 'rss', via: 'nested' } });
+      expect(fm.discovery).toEqual({ date: TODAY, surface: 'web', 'curator-id': null });
+    }
+  });
+
+  it.each(['', '\n\n'])('preserves bytes with discovery last and trailing blanks %j', blanks => {
+    const file = join(root, 'documentation/citations/REF-201-citations.md');
+    const prefix = '---\n# Keep comment\nref: REF-201\ntitle: "Keep: # title"\n\n';
+    const old = 'discovery:\n  date: 2025-01-01\n  surface: rss\n  curator-id: null';
+    const suffix = blanks + '\n---\n# Body\n\n  Indented body  \nNo final newline';
+    writeFileSync(file, prefix + old + suffix);
+    const opts = { surface: 'web', date: TODAY, via: 'café ☃', write: true };
+    const expected = prefix + renderDiscoveryBlock(opts, TODAY) + suffix;
+    for (let update = 0; update < 2; update++) {
+      logDiscovery(root, 'REF-201', opts);
+      expect(readFileSync(file)).toEqual(Buffer.from(expected));
+    }
+  });
+
   it.each(['x-account', 'x-search', 'x-bookmarks', 'x-foryou', 'x-following', 'rss', 'newsletter', 'web', 'referral', 'direct', 's2-recommendation'])('accepts vocabulary surface %s', surface => {
     expect(logDiscovery(root, 'REF-200', { surface }).content).toContain(`surface: ${surface}`);
   });
