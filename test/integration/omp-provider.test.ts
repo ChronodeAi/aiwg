@@ -1,3 +1,4 @@
+import { assertStartupRuleDelivery } from '../helpers/rule-delivery-context.js';
 import { afterAll, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -36,7 +37,7 @@ describe('OMP public use command integration',()=>{
     const foreign={'.pi/AGENTS.md':'Pi operator context','.claude/CLAUDE.md':'Claude operator context','.codex/config.toml':'# Codex operator configuration','.agents/skills/operator/SKILL.md':'---\nname: operator\ndescription: operator owned\n---\nKeep this.'};
     for(const [name,body] of Object.entries(foreign))put(name,body);
     cli([...common,'--copy-all']);
-    expect(readFileSync(join(workspace,'.omp/AGENTS.md'),'utf8')).toContain('@../WORKSPACE.md');
+    assertStartupRuleDelivery(workspace, 'omp', readFileSync(join(workspace,'.omp/AGENTS.md'),'utf8'));
     expect(existsSync(join(workspace,'.omp/extensions/aiwg-bridge.ts'))).toBe(true);
     const full=files(join(workspace,'.agents/skills')).filter(f=>f.endsWith('/SKILL.md'));
     expect(full.some(f=>f.includes('/aiwg-doctor/'))).toBe(true);
@@ -50,8 +51,10 @@ describe('OMP public use command integration',()=>{
     cli(['use','sdlc','--provider','omp','--no-project-local','--json']);
     const startup=readFileSync(join(workspace,'.omp/AGENTS.md'),'utf8');
     expect(startup).toContain('## Core rules');
-    expect(startup).toContain('Review tunnel access policies and credentials');
-    expect(startup).toContain('Interactive Command Gate');
+    const index = assertStartupRuleDelivery(workspace, 'omp', startup);
+    expect(index).toContain('Review tunnel access policies and credentials');
+    expect(index).toContain('aiwg show rule net-tunnel-safety --body');
+    expect(readFileSync(join(workspace, '.omp/rules/sys-interactive-gate.md'), 'utf8')).toContain('Interactive Command Gate');
     const kernel=files(join(workspace,'.agents/skills')).filter(f=>f.endsWith('/SKILL.md'));
     expect(kernel.length).toBeLessThan(full.length);
     expect(kernel.some(f=>f.includes('/aiwg-doctor/'))).toBe(true);

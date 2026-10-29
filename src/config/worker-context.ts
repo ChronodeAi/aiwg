@@ -155,8 +155,26 @@ export function resolveWorkerContextProvidersFromConfig(
   return { providers, skipped };
 }
 
-/** AIWG-managed rule-section markers written into a deployed AGENTS.md. */
-const WORKER_CONTEXT_RULE_MARKER = /<!--\s*AIWG:[A-Za-z0-9_-]+:(start|end)\s*-->/;
+/** Complete managed sections are required; a bootstrap marker alone is insufficient. */
+function ruleSection(content: string, owner: string): string {
+  return content.match(new RegExp(`<!--\\s*AIWG:${owner}:start\\s*-->([\\s\\S]*?)<!--\\s*AIWG:${owner}:end\\s*-->`))?.[1].trim() ?? '';
+}
+function readNonempty(file: string): string {
+  try { return readFileSync(file, 'utf8').trim(); } catch { return ''; }
+}
+function hasRuleBootstrap(content: string, workdir: string, provider: string, rulesDir: string | null): boolean {
+  // Older complete inline deployments remain usable during migration.
+  if (ruleSection(content, 'rule-startup')) return true;
+  const hook = ruleSection(content, `rule-hook-${provider}`);
+  if (!ruleSection(content, 'rule-core') || !rulesDir) return false;
+  const entry = path.join(rulesDir, 'RULES-INDEX.md');
+  if (!hook.includes(`\`${entry.replaceAll('\\', '/')}\``)) return false;
+  const indexFile = path.resolve(workdir, entry);
+  const index = readNonempty(indexFile);
+  if (!index) return false;
+  return [...index.matchAll(/\]\(\.\/([^)]*\.md)\)/g)]
+    .every(match => Boolean(readNonempty(path.resolve(path.dirname(indexFile), match[1]))));
+}
 
 export interface WorkerContextBootstrapStatus {
   present: boolean;
@@ -194,7 +212,10 @@ export function workerContextBootstrapStatus(
     } catch {
       entries = null;
     }
-    if (!entries || entries.length === 0) missing.push(`provider dir '${dir}'`);
+    if (!entries || entries.length === 0 || (dir === paths?.rules &&
+      !entries.some(name => /\.(md|mdc)$/.test(name) && readNonempty(path.join(absolute, name))))) {
+      missing.push(`provider dir '${dir}'`);
+    }
   }
   if ((definition.context?.bootstrapTargets ?? []).includes('AGENTS.md')) {
     let content: string | null = null;
@@ -203,7 +224,7 @@ export function workerContextBootstrapStatus(
     } catch {
       content = null;
     }
-    if (!content || !WORKER_CONTEXT_RULE_MARKER.test(content)) {
+    if (!content || !hasRuleBootstrap(content, workdir, definition.id, paths?.rules ?? null)) {
       missing.push('AGENTS.md rule sections');
     }
   }

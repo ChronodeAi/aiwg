@@ -1,6 +1,7 @@
+import { assertStartupRuleDelivery } from '../helpers/rule-delivery-context.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
-import { access, readFile, rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -140,9 +141,10 @@ describe('model worker provider matrix', () => {
       const warpTarget = join(root, 'warp');
       deploy('warp', warpTarget, home);
       const warp = await readFile(join(warpTarget, 'WARP.md'), 'utf8');
+      const warpIndex = assertStartupRuleDelivery(warpTarget, 'warp', warp);
       for (const role of roles) {
         const definition = `.warp/agents/aiwg-model-${role}-worker.md`;
-        expect(warp).toContain(definition);
+        expect(warpIndex).toContain(definition);
         const content = await readFile(join(warpTarget, definition), 'utf8');
         expect(content).toContain(`# AIWG ${role[0].toUpperCase()}${role.slice(1)} Model Worker`);
         expect(content).toContain('exactly pinned, semantically hinted, or inherited');
@@ -155,21 +157,23 @@ describe('model worker provider matrix', () => {
       const windsurfTarget = join(root, 'windsurf');
       deploy('windsurf', windsurfTarget, home);
       const windsurf = await readFile(join(windsurfTarget, 'AGENTS.md'), 'utf8');
-      for (const role of roles) expect(windsurf).toContain(`aiwg-model-${role}-worker`);
+      const index = assertStartupRuleDelivery(windsurfTarget, 'windsurf', windsurf);
+      for (const role of roles) {
+        expect(index).toContain(`aiwg-model-${role}-worker`);
+        const content = await readFile(join(windsurfTarget, `.windsurf/agents/aiwg-model-${role}-worker.md`), 'utf8');
+        expect(content).toContain('exactly pinned, semantically hinted, or inherited');
+        expect(content).not.toMatch(/^model:/m);
+      }
     }
 
     if (provider === 'hermes') {
       const hermesTarget = join(root, 'hermes');
-      // Full all-framework rules exceed the cap in CRITICAL bodies alone;
-      // unlike `use all` (kernel skills only), this requests the full rules.
-      const fullHermesTarget = join(root, 'hermes-full');
-      expect(() => deploy('hermes', fullHermesTarget, home)).toThrow(/CRITICAL kernel set alone/);
-      await expect(access(join(fullHermesTarget, 'AGENTS.md'))).rejects.toThrow();
-      deploy('hermes', hermesTarget, home, false, join(REPO_ROOT, 'agentic/code/addons/aiwg-utils'));
+      deploy('hermes', hermesTarget, home);
       const hermes = await readFile(join(hermesTarget, 'AGENTS.md'), 'utf8');
+      const hermesIndex = assertStartupRuleDelivery(hermesTarget, 'hermes', hermes);
       for (const role of roles) {
         const definition = `.hermes/agents/aiwg-model-${role}-worker.md`;
-        expect(hermes).toContain(definition);
+        expect(hermesIndex).toContain(definition);
         const content = await readFile(join(hermesTarget, definition), 'utf8');
         expect(content).toContain('exactly pinned, semantically hinted, or inherited');
       }

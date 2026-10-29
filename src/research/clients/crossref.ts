@@ -54,10 +54,19 @@ export class CrossRefClient extends BaseClient {
     query: string,
     options: SearchOptions = {}
   ): Promise<SearchResult> {
+    return this.queryWorks('query', query, options);
+  }
+
+  /** Resolve a partial citation using CrossRef's bibliographic search field. */
+  async searchBibliographic(query: string, options: SearchOptions = {}): Promise<SearchResult> {
+    return this.queryWorks('query.bibliographic', query, options);
+  }
+
+  private async queryWorks(field: string, query: string, options: SearchOptions): Promise<SearchResult> {
     const { limit = 10, offset = 0 } = options;
 
     const url = this.buildUrl('/works', {
-      query,
+      [field]: query,
       rows: limit,
       offset,
     });
@@ -114,6 +123,7 @@ export class CrossRefClient extends BaseClient {
       title,
       authors,
       year,
+      publicationDate: response.published?.['date-parts']?.[0]?.map((part, i) => String(part).padStart(i === 0 ? 4 : 2, '0')).join('-'),
       abstract: response.abstract,
       doi: response.DOI,
       venue,

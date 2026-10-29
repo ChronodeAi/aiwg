@@ -347,3 +347,27 @@ describe('#2508 kernel-only flat prune is gated on bundle ownership', () => {
   });
 });
 
+
+
+describe('#3740 activation projection owns rule retirement', () => {
+  it.each([true, false])('preserves projected kernels only with delivery ownership (%s)', async projected => {
+    const { pruneStaleAiwgArtifacts } = await import('../../../tools/agents/providers/stale-artifact-prune.mjs');
+    const rules = path.join(dir, '.omp/rules');
+    const agents = path.join(dir, '.omp/agents');
+    fs.mkdirSync(rules, { recursive: true });
+    fs.mkdirSync(agents, { recursive: true });
+    const kernel = path.join(rules, 'dev-pipeline-safety.md');
+    fs.writeFileSync(kernel, MARKER + 'Extension kernel policy');
+    fs.writeFileSync(path.join(agents, 'retired-agent.md'), MARKER + 'Retired definition');
+    fs.writeFileSync(path.join(rules, 'operator.md'), 'Operator policy');
+    fs.writeFileSync(path.join(rules, '.aiwg-manifest.json'), JSON.stringify({
+      managed: { 'dev-pipeline-safety.md': {} },
+      ...(projected ? { delivery: { rules: '.omp/rules', entryPoint: '.omp/rules/RULES-INDEX.md' } } : {}),
+    }));
+    pruneStaleAiwgArtifacts({ paths: { rules: '.omp/rules', agents: '.omp/agents' } }, dir, REPO_ROOT,
+      { deployRules: true, quiet: true }, null);
+    expect(fs.existsSync(kernel)).toBe(projected);
+    expect(fs.existsSync(path.join(agents, 'retired-agent.md'))).toBe(false);
+    expect(fs.readFileSync(path.join(rules, 'operator.md'), 'utf8')).toBe('Operator policy');
+  });
+});

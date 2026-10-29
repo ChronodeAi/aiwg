@@ -13,9 +13,11 @@ Options:
   --scope <scope>       Verification scope: project or user
   --user                Alias for --scope user
   --qualify             With --probe-workers, record installation and configured model/role approval
-  --yes                 Confirm worker qualification without a terminal
+  --list-approvals      With --probe-workers, list recorded approvals offline (supports --json)
+  --forget-approval PATH With --probe-workers --yes, remove approvals for this workspace
+  --yes                 Confirm worker qualification or approval removal
   --dry-run             With --probe-workers, preview qualification without writes
-  --cli NAME            Limit worker probes/qualification to one configured CLI
+  --cli NAME            Limit worker probes, qualification, or approvals to one CLI
   --decision-offload    Show offline advisory decision readiness and adoption report
   --probe-workers       Run bounded worker CLI version probes (default: config-only, no subprocess)
   --project-local       Include project-local artifact diagnostics
@@ -29,4 +31,3 @@ Exit status:
   2  Invalid usage.
   --qualify uses the same exit status in text and JSON output.
 `;
-

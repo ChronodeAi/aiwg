@@ -1,3 +1,4 @@
+import { assertStartupRuleDelivery } from '../helpers/rule-delivery-context.js';
 /**
  * Practical end-to-end coverage for `aiwg use --provider grok-build`.
  * Project deploy, $GROK_HOME user mirroring, registry record, and receipts.
@@ -180,7 +181,7 @@ describe('aiwg use grok-build e2e (#2575)', () => {
     const projectAgents = path.join(project, '.grok', 'agents');
     expect(existsSync(projectAgents)).toBe(true);
     expect(readdirSync(projectAgents).filter(name => name.endsWith('.md')).length).toBeGreaterThan(0);
-    expect(existsSync(path.join(project, '.grok', 'rules'))).toBe(false);
+    assertStartupRuleDelivery(project, 'grok-build', readFileSync(path.join(project, 'AGENTS.md'), 'utf8'), '.grok/rules');
 
     // User-scope mirror via $GROK_HOME/skills
     expect(existsSync(path.join(grokHome, 'skills'))).toBe(true);

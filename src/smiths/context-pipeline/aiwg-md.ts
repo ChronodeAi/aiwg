@@ -75,6 +75,9 @@ export async function buildAiwgMdContent(
     // that managed block here too so legacy duplicate policy never reaches
     // AIWG.md, even on the first refresh. Operator content stays untouched.
     claudeMdContent = dedupeProviderBootstrap(claudeMdContent);
+    // Each provider startup owns core and hooks; mirroring them would load a
+    // second copy through the shared framework companion.
+    claudeMdContent = claudeMdContent.replace(/<!-- AIWG:(rule-core|rule-startup|rule-hook-[\w-]+):start -->[\s\S]*?<!-- AIWG:\1:end -->\r?\n?/g, '');
     const start = claudeMdContent.indexOf(CLAUDE_HOOK_START);
     const end = claudeMdContent.indexOf(CLAUDE_HOOK_END, start);
     if (start >= 0 && end >= start) {

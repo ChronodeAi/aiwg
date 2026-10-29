@@ -1,3 +1,4 @@
+import { parsePublicDoctorFlags } from './doctor-args.js';
 /**
  * Utility Command Handlers
  *
@@ -20,7 +21,6 @@ import { getFrameworkRoot } from '../../channel/manager.mjs';
 import { updateInstallation } from '../../update/service.mjs';
 import { useHandler as useFrameworkHandler } from './use.js';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
-import { argsTerminatorIndex, hasPositionalOrSwitch, requireFlagValue, valueTokenIndexes } from '../flag-parsing.js';
 import {
   checkCollisions,
 } from '../../smiths/skillsmith/collision-detector.js';
@@ -555,38 +555,12 @@ export const doctorHandler: CommandHandler = {
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     // Validate before any early-return mode: deployment and user-scope doctor
     // never invoke doctor.mjs, so they must enforce the same flag contract.
-    const valueFlags = ['--provider', '--bundle', '--scope', '--context-baseline', '--context-budget-tokens', '--cli'];
-    const knownFlags = new Set([
-      ...valueFlags, '--all-providers', '--probe-workers', '--qualify', '--yes', '--dry-run', '--no-budget-check', '--strict-context', '--json',
-      '--decision-offload', '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
-    ]);
-    const hasSwitch = (name: string): boolean => hasPositionalOrSwitch(ctx.args, name, valueFlags);
-    const values = new Map<string, string | undefined>();
-    try {
-      for (const flag of valueFlags) {
-        values.set(flag, requireFlagValue(ctx.args, { rejectEmpty: true, precedence: 'last' }, flag));
-      }
-      const consumed = valueTokenIndexes(ctx.args, valueFlags);
-      for (let i = 0; i < argsTerminatorIndex(ctx.args); i += 1) {
-        const token = ctx.args[i]!;
-        if (consumed.has(i) || !token.startsWith('-')) continue;
-        const name = token.split('=')[0]!;
-        if (!knownFlags.has(name) || (token.includes('=') && !valueFlags.includes(name))) {
-          throw new Error(`Unknown flag: ${name}`);
-        }
-      }
-      if (hasSwitch('--decision-offload') && (hasSwitch('--probe-workers') || hasSwitch('--deployment') || hasSwitch('--user') || values.get('--scope') !== undefined)) {
-        throw new Error('--decision-offload is a separate offline mode; do not combine it with worker, deployment or user-scope checks');
-      }
-      if (['--qualify', '--cli', '--yes', '--dry-run'].some(flag => hasSwitch(flag) || values.get(flag)) && !hasSwitch('--probe-workers')) {
-        throw new Error('--qualify, --cli, --yes and --dry-run require --probe-workers');
-      }
-      if (hasSwitch('--json') && !hasSwitch('--probe-workers') && !hasSwitch('--deployment') && !hasSwitch('--decision-offload')) {
-        throw new Error('--json requires --probe-workers or --deployment or --decision-offload');
-      }
-    } catch (error) {
+    let flags: ReturnType<typeof parsePublicDoctorFlags>;
+    try { flags = parsePublicDoctorFlags(ctx.args); }
+    catch (error) {
       return { exitCode: 2, message: `${error instanceof Error ? error.message : String(error)}. See 'aiwg doctor --help'.` };
     }
+    const { hasSwitch, values } = flags;
     if (hasSwitch('--help') || hasSwitch('-h')) {
       return { exitCode: 0, message: DOCTOR_HELP, rawOutput: true };
     }
@@ -632,7 +606,7 @@ export const doctorHandler: CommandHandler = {
     // printed exactly one JSON document (or a usage error) on its own
     // stdio — every section below writes human-readable text, so returning
     // here keeps stdout to the JSON document alone.
-    if (hasSwitch('--decision-offload') || hasSwitch('--json') || hasSwitch('--qualify') || hasSwitch('--cli') || hasSwitch('--dry-run') || result.exitCode === 2) return result;
+    if (hasSwitch('--list-approvals') || values.get('--forget-approval') || hasSwitch('--decision-offload') || hasSwitch('--json') || hasSwitch('--qualify') || hasSwitch('--cli') || hasSwitch('--dry-run') || result.exitCode === 2) return result;
     let agentSkillsFailure = false;
 
     try {

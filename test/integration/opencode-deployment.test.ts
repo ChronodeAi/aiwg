@@ -1,3 +1,4 @@
+import { assertStartupRuleDelivery } from '../helpers/rule-delivery-context.js';
 import { mkdtempSync } from '../helpers/temp-dir.js';
 /**
  * Integration tests for OpenCode provider deployment
@@ -191,8 +192,7 @@ describe('OpenCode Deployment', () => {
       expect(fs.existsSync(agentsMdPath)).toBe(true);
 
       const content = fs.readFileSync(agentsMdPath, 'utf-8');
-      expect(content).toContain('AIWG SDLC Framework');
-      expect(content).toContain('.opencode/skill/');
+      expect(assertStartupRuleDelivery(testDir, 'opencode', content, '.opencode/rule')).toContain('.opencode/agent/');
     });
 
     it('should append to existing AGENTS.md without duplicating', () => {
@@ -210,14 +210,7 @@ describe('OpenCode Deployment', () => {
 
       const content = fs.readFileSync(agentsMdPath, 'utf-8');
 
-      // Should contain AIWG marker comment only once (not duplicated by second deploy)
-      // Note: The template contains "AIWG SDLC Framework" twice (in comment and heading), which is expected
-      const markerMatches = content.match(/<!-- AIWG SDLC Framework Integration -->/g);
-      expect(markerMatches?.length).toBe(1);
-
-      // Should contain the heading only once
-      const headerMatches = content.match(/## AIWG SDLC Framework/g);
-      expect(headerMatches?.length).toBe(1);
+      assertStartupRuleDelivery(testDir, 'opencode', content, '.opencode/rule');
 
       // Should preserve original content
       expect(content).toContain('Existing content.');

@@ -95,8 +95,8 @@ export function sealUpstream(metadata: QualificationIntegrityMetadata): Upstream
  * `frozen.digest === heldoutDigest(frozen.bundle)`): a spread-copied or edited
  * record is refused. The seal is an unkeyed integrity digest, not an
  * authenticity proof, so the holdout inputs are trusted caller inputs built from
- * verified HeldoutFrozen and access records (verification of the frozen record
- * itself is tracked in #2833). `frozenDigest` is the binding digest in the frozen record.
+ * verified HeldoutFrozen and access records via `sealGateHoldoutFromFrozen`
+ * in `./heldout.js`. `frozenDigest` is the binding digest pinned by that record.
  */
 export function sealGateHoldout(input: {
   frozenDigest: Sha256Digest; firstAccessedAt: string | null;

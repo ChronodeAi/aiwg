@@ -18,6 +18,8 @@ async function fixture(files: Record<string, string>) {
   return root;
 }
 
+const CLOSURE_WALK_TIMEOUT_MS = 120_000;
+
 describe('CLI package dependency closure (default lane)', () => {
   it.each([
     "import './missing.mjs';",
@@ -93,12 +95,18 @@ describe('CLI package dependency closure (default lane)', () => {
       .toThrow('tools/missing.mjs: source missing for packages/cli/package.json "files"');
   });
 
+  // Walks the full package import graph (about 6 s on an idle host); the default 30 s
+  // timeout failed under the 4-worker default lane on a busy host. The assertions are unchanged.
   it('the real package ships the complete import graph from every entry point', async () => {
     const root = path.resolve(import.meta.dirname, '../../..');
     const manifest = JSON.parse(await readFile(path.join(root, 'packages/cli/package.json'), 'utf8'));
     const result = inspectCliPackageClosure(root, manifest.files);
     expect(result.visited).toContain('tools/ralph-external/lib/worker-context.mjs');
     expect(result.visited).toContain('dist/src/cli/router.js');
+    for (const module of [
+      'artifacts/corpus-tools/resolve-cli', 'artifacts/corpus-tools/resolve',
+      'artifacts/corpus-tools/resolve-corpus', 'research/identity', 'research/reference-match',
+    ]) expect(result.visited).toContain(`dist/src/${module}.js`);
     expect(result.violations).toEqual([]);
-  });
+  }, CLOSURE_WALK_TIMEOUT_MS);
 });

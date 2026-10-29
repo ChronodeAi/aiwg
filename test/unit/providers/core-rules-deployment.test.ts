@@ -15,7 +15,7 @@ const MARKER = '# Core: Anti-Laziness';
 const PROVIDER_FILES: Record<string, string[]> = {
   claude: ['.claude/rules/core-anti-laziness.md'],
   cursor: ['.cursor/rules/core-anti-laziness.mdc'],
-  codex: ['AIWG.md'],
+  codex: ['AGENTS.md'],
   hermes: ['AGENTS.md'],
   warp: ['WARP.md'],
 };
@@ -66,9 +66,11 @@ describe('core rule delivery (#3450)', () => {
   it('places the core section first in the managed startup block, before kernel rules', () => {
     const root = tempRoot();
     run(fixtureSource(root), join(root, 'target'), 'codex', { mode: 'all' });
-    const aiwg = readFileSync(join(root, 'target/AIWG.md'), 'utf8');
+    const aiwg = readFileSync(join(root, 'target/AGENTS.md'), 'utf8');
     expect(aiwg.indexOf('## Core rules')).toBeGreaterThan(-1);
-    expect(aiwg.indexOf('FIXTURE_CORE_BODY')).toBeLessThan(aiwg.indexOf('FIXTURE_KERNEL_BODY'));
+    expect(aiwg.indexOf('FIXTURE_CORE_BODY')).toBeLessThan(aiwg.indexOf('codex: Before every task'));
+    expect(aiwg).not.toContain('FIXTURE_KERNEL_BODY');
+    expect(readFileSync(join(root, 'target/.codex/rules/fixture-kernel.md'), 'utf8')).toContain('FIXTURE_KERNEL_BODY');
     expect(aiwg).not.toContain('FULL_fixture-core_BODY');
     expect(readFileSync(join(root, 'target/AGENTS.md'), 'utf8')).toContain('Read and follow');
   }, 90_000);

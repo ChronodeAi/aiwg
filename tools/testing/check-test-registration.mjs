@@ -4,7 +4,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { globSync } from 'glob';
 import ts from 'typescript';
-import { parse as parseYaml } from 'yaml';
+import { expandScripts, workflowRunSteps } from './workflow-commands.mjs';
+import { inspectScriptLanes } from './check-script-lanes.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -29,7 +30,7 @@ function sourceRunner(file, body) {
 // Inspect declarations and owning lanes without executing test source bodies.
 export async function inspectTestRegistration(root = repositoryRoot) {
   root = path.resolve(root);
-  const { nodeFiles, releaseLaneWorkflows = {}, optInPackageTests = [] } = await import(pathToFileURL(path.join(root, 'config/test-lanes.mjs')).href);
+  const { nodeFiles, releaseLaneWorkflows = {}, optInPackageTests = [], scriptLaneExemptions = [] } = await import(pathToFileURL(path.join(root, 'config/test-lanes.mjs')).href);
   const configs = globSync('config/vitest*.config.js', { cwd: root }).sort();
   const lanes = [];
   for (const config of configs) {
@@ -63,18 +64,12 @@ export async function inspectTestRegistration(root = repositoryRoot) {
   // A config file alone is not an enforced lane: expand canonical CI npm scripts
   // and require every offline config to be reachable from that workflow.
   const scripts = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).scripts;
-  const workflow = parseYaml(fs.readFileSync(path.join(root, '.gitea/workflows/ci.yml'), 'utf8'));
-  let reachable = Object.values(workflow.jobs ?? {}).flatMap(job => (job.steps ?? []).map(step => step.run ?? '')).join('\n');
-  const seen = new Set();
-  for (;;) {
-    const names = [...reachable.matchAll(/npm run ([\w:-]+)/g)].map(m => m[1]).filter(name => !seen.has(name));
-    if (!names.length) break;
-    for (const name of names) {
-      seen.add(name);
-      if (!scripts[name]) errors.push(`Canonical CI references missing npm script ${name}`);
-      else reachable += '\n' + scripts[name];
-    }
-  }
+  const scriptLanes = inspectScriptLanes(root, scripts, scriptLaneExemptions);
+  errors.push(...scriptLanes.errors);
+  const ciRun = workflowRunSteps(fs.readFileSync(path.join(root, '.gitea/workflows/ci.yml'), 'utf8'))
+    .map(step => step.run).join('\n');
+  const { text: reachable, names: seen } = expandScripts(ciRun, scripts);
+  for (const name of seen) if (!scripts[name]) errors.push(`Canonical CI references missing npm script ${name}`);
   const invokedNodePatterns = [...reachable.matchAll(/node --test ([^\n;&]+)/g)].flatMap(match => match[1].trim().split(/\s+/));
   for (const pattern of invokedNodePatterns) {
     if (!nodeFiles.includes(pattern)) errors.push(`Unclassified Node CLI argument/pattern in canonical CI: ${pattern}`);
@@ -86,18 +81,10 @@ export async function inspectTestRegistration(root = repositoryRoot) {
       releaseReachable.set(config, '');
       continue;
     }
-    const releaseWorkflow = parseYaml(fs.readFileSync(path.join(root, workflowFile), 'utf8'));
-    let commands = Object.values(releaseWorkflow.jobs ?? {}).flatMap(job => (job.steps ?? []).map(step => step.run ?? '')).join('\n');
-    const expanded = new Set();
-    for (;;) {
-      const names = [...commands.matchAll(/npm run ([\w:-]+)/g)].map(m => m[1]).filter(name => !expanded.has(name));
-      if (!names.length) break;
-      for (const name of names) {
-        expanded.add(name);
-        if (!scripts[name]) errors.push(`Release workflow references missing npm script ${name}`);
-        else commands += '\n' + scripts[name];
-      }
-    }
+    const run = workflowRunSteps(fs.readFileSync(path.join(root, workflowFile), 'utf8'))
+      .map(step => step.run).join('\n');
+    const { text: commands, names } = expandScripts(run, scripts);
+    for (const name of names) if (!scripts[name]) errors.push(`Release workflow references missing npm script ${name}`);
     releaseReachable.set(config, commands);
   }
   // Workspace package test ownership (#3729): every `test`/`test:*` script in
@@ -164,7 +151,7 @@ export async function inspectTestRegistration(root = repositoryRoot) {
     records.push({ file, runner, lanes: owners.map(({ id, live }) => ({ id, live })) });
   }
   if (!records.length) errors.push('No candidate test files found');
-  const report = { schemaVersion: 1, scope: 'Root test/, framework/addon test/, src/ and tool tests, including inline Vitest and unsuffixed runner imports. Owned input-fixture trees and addon templates excluded. Workspace package test scripts are covered by the package ownership check (CI-invoked or reasoned opt-in); generated plugin mirrors and manual harnesses require separate review.', units: 'Source files and imported APIs, not registered or executed cases', totalFiles: records.length, files: records, errors };
+  const report = { schemaVersion: 1, scope: 'Root test/, framework/addon test/, src/ and tool tests, including inline Vitest and unsuffixed runner imports. Owned input-fixture trees and addon templates excluded. Workspace package test scripts are covered by the package ownership check (CI-invoked or reasoned opt-in); generated plugin mirrors and manual harnesses require separate review.', units: 'Source files and imported APIs, not registered or executed cases', totalFiles: records.length, files: records, scriptLanes: scriptLanes.records, errors };
   return report;
 }
 

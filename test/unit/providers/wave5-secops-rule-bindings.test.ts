@@ -1,3 +1,4 @@
+import { readRuleDeliveryContext } from '../../helpers/rule-delivery-context.js';
 import { showBindingEnvelopes } from '../../helpers/show-binding-envelopes.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
@@ -183,7 +184,7 @@ describe('Wave 5 secops canonical rule delivery (#2945)', () => {
       console.info('Hermes fixture', owner, chars, 'chars');
       expect(chars).toBeLessThanOrEqual(19000); // ADR 220–224: full bodies, no compression.
     }
-    const startup = report.contributors.map((file: any) => read(file.path)).join('\n');
+    const startup = readRuleDeliveryContext(report, provider);
     const allFiles = walk(deployedRoot);
     const outputs = allFiles.filter(file => /\.(md|mdc|toml)$/.test(file));
     for (const { name, file, data } of selectedRules) {
@@ -194,6 +195,7 @@ describe('Wave 5 secops canonical rule delivery (#2945)', () => {
       }
       if (data.activation === 'summary' || data.activation === 'paths' && !['claude', 'cursor'].includes(provider)) {
         expect(startup).toContain(data.summary);
+        expect(startup).toContain(data.activation === 'paths' ? `aiwg show rule ${name} --body` : `- ${name} — ${data.summary}`);
         expect(startup).toContain(`aiwg show rule ${name} --body`);
         expect(startup).not.toContain(heading);
       }

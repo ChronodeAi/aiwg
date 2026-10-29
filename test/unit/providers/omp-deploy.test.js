@@ -106,7 +106,8 @@ describe('OMP native deployment', () => {
       pinConfigs: { project: {}, user: {} } });
     for (const index of [0, 1]) {
       expect(fs.existsSync(path.join(target, '.agents/skills', `kernel-${index}`, 'SKILL.md'))).toBe(true);
-      expect(fs.readFileSync(path.join(target, '.omp/AGENTS.md'), 'utf8')).toContain(`Follow bundle ${index}.`);
+      expect(fs.readFileSync(path.join(target, '.omp/AGENTS.md'), 'utf8')).toContain('.omp/rules/RULES-INDEX.md');
+      expect(fs.readFileSync(path.join(target, '.omp/rules/RULES-INDEX.md'), 'utf8')).toContain(`Follow bundle ${index}.`);
     }
     const manifest = JSON.parse(fs.readFileSync(path.join(target, '.omp/rules/.aiwg-manifest.json'), 'utf8'));
     expect(manifest.ruleSources).toEqual(expect.arrayContaining(sources.map((source, index) => path.join(source, 'rules', `policy-${index}.md`))));

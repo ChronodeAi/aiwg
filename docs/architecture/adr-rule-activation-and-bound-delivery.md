@@ -64,7 +64,7 @@ activation does not install an excluded addon or authorize an operation.
 Core delivery by provider (#3450): Claude writes `.claude/rules/core-<name>.md`;
 Cursor writes `.cursor/rules/core-<name>.mdc` with `alwaysApply: true`; Codex,
 Hermes, Warp and the other emulated providers put a `## Core rules` section
-first in their managed startup block (`AIWG.md`, `AGENTS.md`, `WARP.md`), inline
+first in their managed startup block (`AGENTS.md`, `.github/copilot-instructions.md`, `.omp/AGENTS.md`, `WARP.md`), inline
 for Hermes even when the rule is not `critical`. A deploy fails with a clear
 diagnostic when a body exceeds 1024 bytes, the core set exceeds 6144 bytes, a
 body is missing, or a body contains an `@` file reference. `aiwg doctor` reports
@@ -194,19 +194,36 @@ Native behavior hook/script execution remains owned by its current runtime.
 
 ### Provider projection
 
-These capability statements describe the checked-in adapters, not unverified
-claims about future vendor releases. `support.rules: native` alone does not
-establish native support for every activation mode. The target projections
-below are work for #2939, not descriptions of already-shipping bindings.
+**Operator decision 2026-10-29 (#3740):** startup owners contain only the
+WORKSPACE.md → AIWG.md bootstrap, precedence statement, unchanged compact core
+bodies, and one hook line per deployed harness. Kernel bodies, summary indexes,
+path indexes and definition routes live in each harness's rules location.
+Provider-specific managed sections preserve other deployed harnesses' hooks and
+operator text outside AIWG blocks. Redeployment removes former inline blocks.
 
-| Provider and current source | `kernel` / `summary` target | `bound` / `on-demand` target | `paths` target |
-|---|---|---|---|
-| [Cursor](../../tools/agents/providers/cursor.mjs): native MDC rules; conventional agents/commands | Full kernel MDC with `alwaysApply: true`; always-applied summary index. Optional full summary-mode rule uses `alwaysApply: false` plus `description` for native auto selection. | Bound artifact blocks and show/MCP; no auto description or always-applied body for bound rules. On-demand bodies use explicit show/manual reference. | Native MDC `globs` from `paths`, `alwaysApply: false`; no severity prefilter. |
-| [Claude](../../tools/agents/providers/claude.mjs): native `.claude/rules`, agents and skills | Complete kernel bodies and summary-only `RULES-INDEX.md` in native rules. | Blocks in native artifact bodies plus show/MCP. Keep bound/on-demand full bodies outside the recursively loaded rules tree. | Native rule frontmatter `paths`; preserve any tier. |
-| [Codex](../../tools/agents/providers/codex.mjs): conventional `.codex/rules`, native skill/agent deployment | Managed startup context reached through `AGENTS.md` must carry full trimmed kernel bodies and the summary index; a conventional rules directory alone is insufficient. | Blocks in loaded artifacts plus show/MCP; no assumed rule-directory loader. | Emulated path index/check through the startup instruction; fetch matches before file work. No native glob attachment in this adapter. |
-| [Hermes](../../tools/agents/providers/hermes.mjs): native home skills, aggregated agent routing, no rule loader | Startup context reached through `.hermes.md`/`AGENTS.md`. Per operator decision **2026-10-19**, inline complete kernel bodies only when frontmatter `enforcement: critical`; deliver every other kernel rule as its one-line summary plus `aiwg show rule <name>`, with an explicit fetch-and-follow obligation before every task and subagent task. Summary-mode rules retain their kernel index delivery. | Blocks in skills and fetched agent/flow definitions plus show/MCP. Aggregated routing entries point to definitions rather than inlining bound blocks. | Emulated path index/check; no native glob loader in this adapter. |
-| [Warp](../../tools/agents/providers/warp.mjs): native skills; agents/rules aggregated into `WARP.md` via setup script | Managed kernel/summary section in startup context reached through `WARP.md`. Include the aggregate writer in the change; discrete `.warp/rules` copies are insufficient. | Blocks in skills/fetched definitions plus show/MCP; keep only agent/flow routing pointers in startup aggregation. | Emulated path index/check; no native glob attachment in this adapter. |
-| [OpenClaw](../../tools/agents/providers/openclaw.mjs): native rule/behavior directories, active workspace `AGENTS.md` bridge | Kernel/summary delivery through native rules and the active-workspace bridge; verify actual loading, not just home-directory file existence. | Blocks in artifact definitions plus show/MCP; native behavior activation remains available. | Emulated path index/check: the adapter has no path-condition translator despite its native rule directory. |
+| Provider | `kernel` / `summary` delivery | `paths` delivery |
+|---|---|---|
+| Claude | Complete bodies and summary `RULES-INDEX.md` in `.claude/rules/`, loaded natively; compact core remains native. | Native `paths` frontmatter. |
+| Cursor | Complete MDC bodies and index in `.cursor/rules/`, `alwaysApply: true`; compact core remains native. | Native MDC `globs`, `alwaysApply: false`. |
+| Grok Build | Complete Markdown bodies and index in `.grok/rules/`, discovered by the verified native loader. AGENTS.md names the index. | Index and explicit fetch; no verified glob attachment. |
+| Windsurf | Complete bodies and index in `.windsurf/rules/`, `trigger: always_on`. AGENTS.md names the index. | `trigger: glob` with the translator's `glob` field. |
+| OpenCode | Complete bodies and index in `.opencode/rule/`, registered through `opencode.json` `instructions` (recursive Markdown glob). Preserve existing config and instruction entries. | Index and explicit fetch; instructions registration is unconditional. |
+| Codex | `.codex/rules/RULES-INDEX.md` lists every complete local kernel file; AGENTS.md requires reading it before every task and subagent task. | Prompt index/check, fetch matching rules. |
+| Muse | `.muse/rules/RULES-INDEX.md`, reached through its own AGENTS.md hook. No declared rules path exists; `.muse` follows its existing harness directory convention. | Prompt index/check. Workspace trust still applies. |
+| Factory / Antigravity / Pi | `.factory/rules/`, `.antigravity/rules/`, `.pi/rules/` respectively; RULES-INDEX and complete local kernel files reached through each harness's AGENTS.md hook. | Prompt index/check. |
+| Hermes | `.hermes/rules/RULES-INDEX.md` and every complete kernel file, reached through hooks in both `.hermes.md` and AGENTS.md. | Prompt index/check. |
+| Copilot | `.github/instructions/RULES-INDEX.md` and complete local kernel files reached through `.github/copilot-instructions.md`; this adapter does not claim an automatic rule loader. | Prompt index/check. |
+| Warp / OMP | `.warp/rules/` through WARP.md; `.omp/rules/` through `.omp/AGENTS.md`. Each hook requires reading RULES-INDEX and every local kernel file. | Prompt index/check. |
+| OpenClaw | Complete bodies and index in its existing rules location, reached through the active workspace AGENTS.md hook. | Prompt index/check. |
+
+On prose-only harnesses, kernel rules are reached because the hook directs the
+agent to read them, not through an automatic loader. RULES-INDEX names every
+kernel file and requires reading all of them before every task and subagent
+task. It also carries summary instructions, full-rule fetch commands and path
+checks. Bound rules still use artifact-body blocks and show/MCP; on-demand
+bodies stay outside native recursively loaded rule trees. No startup hook
+inlines kernel, summary or path indexes. All rule-file bytes reached through
+hooks remain included in deployment accounting and managed-file receipts.
 
 Cursor's `auto(description)` is a model-selected retrieval hint, not an exact
 binding or a guaranteed policy gate. It supplements summary-mode delivery; it
@@ -224,35 +241,18 @@ emulation, not an OS hook or mechanically guaranteed interception; fixtures
 and positive/negative probes must expose that limitation. Do not inline all
 path-rule bodies as a fallback.
 
-Codex currently inlines no rule bodies: its benefit is compliance, not a
-claimed token saving. Kernel parity may add text there; deduplicate existing
-startup directives and measure total startup context, including bridge reads.
-The epic's no-provider-regression gate still applies; an adapter that cannot
-meet parity and its budget blocks that wave rather than claiming a free gain.
-Keep Codex `AGENTS.md` below 32 KB. Hermes warns above 15,000 characters
-and fails above 19,000. **Operator decision, 2026-10-19:** Hermes truncates
-context above 20,000 characters, and main shipped a thin startup file (1,334
-characters). Inlining every kernel body on this stack produced 41,931 characters
-and broke otherwise successful deployments. For Hermes only, inline the full
-bodies of kernel rules with frontmatter `enforcement: critical` (for example,
-no-attribution, token-security, and citation-policy when installed). Deliver all
-other kernel rules in the kernel index as authored one-line summaries plus
-`aiwg show rule <name>` pointers, with an explicit instruction to fetch and
-follow them before governed work, including subagent work. If an optional kernel
-summary is absent, use an imperative fetch instruction rather than truncating
-or synthesizing a summary from its body. This is a fixed Hermes projection,
-not activation demotion; other providers retain complete kernel bodies.
-When the remaining summary/path index and definition routes would overflow
-startup, preserve them in the existing `.hermes/rules/RULES-INDEX.md` and require
-reading that index before every task/subagent task. Non-critical kernel
-summaries and fetch pointers remain inline in either case. If the CRITICAL set
-alone exceeds 19,000 characters, fail atomically with the total and a per-rule
-character report. Preserve the final context cap for wrappers and
-operator-authored additions as well.
-Bulk `use all` retains its kernel-skill-only selection; a full all-framework
-rule deployment can still fail when its CRITICAL set alone exceeds the cap.
-Reuse the existing bootstrap/context owners and preserve
-operator content instead of creating a second provider policy file hierarchy.
+The 8 KiB per-file bridge guard is unchanged; this repository's fixture config
+must produce AGENTS.md ≤4 KB. Compact core budgets remain ≤1,024 B per body and
+≤6,144 B total, always loaded and never demoted or spilled. Core full bodies
+remain fetchable without automatic imports.
+
+The **Operator decision 2026-10-29** supersedes Hermes's **2026-10-19**
+CRITICAL-only inline exception. All kernel bodies now live in rule files,
+including CRITICAL rules and explicit pins. There is no 19,000-byte overflow
+projection or inline kernel index. Keep Hermes's final context hard cap of
+19,000 characters for bootstrap, core, wrappers and operator additions; rule
+file bodies do not consume that file's cap. Preserve its explicit fetch-and-follow
+obligation in the hook. Bulk `use all` retains its kernel-skill-only selection.
 
 ### Budget is a guard, never an activation selector
 
@@ -326,16 +326,10 @@ A proposed kernel rule must pass **all** of these review/fixture checks:
    examples/rationale into on-demand companions, without truncating the rule
    at deployment. Reject duplicate normative text already supplied by another
    kernel rule or startup template; verify generated startup output for repeats.
-4. **Provider fit:** a deployment fixture for all six providers loads the
-   complete selected kernel once, including subagent dispatch, and passes the
-   configured guard and provider caps. The **2026-10-19 Hermes exception**
-   admits complete CRITICAL kernel bodies plus summaries and fetch pointers for
-   all other kernel rules: Hermes has a 20K context limit and main shipped a
-   thin startup file. Its fixture must verify CRITICAL bodies verbatim,
-   non-critical summaries without their bodies, and explicit retrieval before
-   governed work. Other providers still require complete kernel bodies.
-   References without demonstrated loading or this explicit Hermes retrieval
-   obligation fail this check.
+4. **Provider fit:** deployment fixtures verify complete selected kernel files
+   and native activation or the explicit task/subagent hook. No kernel body may
+   be inline in AGENTS.md. Missing hooks or kernel files fail the fixture.
+   Preserve configured budgets and provider caps, counting hook-reached files.
 5. **Observed compliance:** provide positive probes for the universal invariant
    and ordinary tasks outside its originating workflow, n=5 each. Meet or
    exceed baseline with no probe below 80%. Failed admission retains the prior
@@ -586,8 +580,7 @@ least baseline and ≥80%; U6 top-three natural-language rule discovery; U7 no
 irrelevant fetch in at least 4/5 negatives; U8 full-deploy steward/mission
 subagent dispatch headroom; U9 provider fixtures and Codex <32 KB.
 Re-derive U1 from retained contracts rather than inventing a smaller root set:
-let K be the complete retained kernel bodies (with the documented Hermes
-projection), I the required rule indexes/routing wrappers, P the native
+let K be the complete retained kernel bodies in each harness rules surface, I the required rule indexes/routing wrappers, P the native
 path-conditioned bodies counted by the measurement fixture, and B its behavior
 bytes. The emitted rule-byte total is K + I + P, and total policy footprint
 also reports B. The historical five-core Wave 4 fixture measured 9,706 B of
@@ -725,7 +718,7 @@ epic_rule_outside_profile:
 Copilot, Factory, OpenCode, Windsurf, Antigravity, Muse, OMP and Grok Build
 use the shared transactional activation projector for direct deployments as
 well as kernel-only `use all`. Compact core bodies are first in the managed
-startup rule block; kernel bodies and the activation index follow. Core bodies
+startup rule block; a harness-specific hook reaches kernel bodies and the activation index in rule files. Core bodies
 retain the shared 1,024-byte per-body and 6,144-byte aggregate caps, with no
 imports of full rule files.
 
@@ -733,12 +726,12 @@ imports of full rule files.
 |---|---|---|
 | Copilot | `.github/copilot-instructions.md` | Copilot custom instructions contract |
 | Factory | `AGENTS.md` | Factory AGENTS discovery hierarchy |
-| OpenCode | `AGENTS.md` | OpenCode rules and instructions registration |
+| OpenCode | `AGENTS.md`, `AIWG.md`, `.opencode/rule/*.md` | [OpenCode rules and instructions registration](https://opencode.ai/docs/rules/) (`CONTEXT_CONTRACTS`) |
 | Windsurf | `AGENTS.md` | Windsurf/Devin topology contract |
-| Antigravity | `AGENTS.md` | Qualified CLI 1.1.26 project context |
+| Antigravity | `AGENTS.md` | [Qualified CLI 1.1.26 project context](https://antigravity.google/docs/cli/overview/) (`CONTEXT_CONTRACTS`, verified 2026-09-04) |
 | Muse | `AGENTS.md` | Muse context contract; workspace trust required |
-| OMP | `.omp/AGENTS.md` | OMP 18.1.10 context loader; shadows root context |
-| Grok Build (`grok-build`) | `AGENTS.md` | xAI project-rules hierarchical discovery |
+| OMP | `.omp/AGENTS.md` | [OMP 18.1.10 context loader at 5964a0f7649275bcde818f20073193fd032451f2](https://github.com/can1357/oh-my-pi/blob/5964a0f7649275bcde818f20073193fd032451f2/packages/coding-agent/src/system-prompt.ts#L451); shadows root context |
+| Grok Build (`grok-build`) | `AGENTS.md`, `.grok/rules/*.md` | [xAI project-rules hierarchical discovery](https://docs.x.ai/build/features/project-rules); [released CLI 1.0.38, reviewed public tree 2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8](../providers/grok-build-qualification.md) (source pin, not binary build provenance) |
 
 The authoritative loader evidence and source links are in
 `src/providers/provider-definitions.ts` (`CONTEXT_CONTRACTS`), with qualified

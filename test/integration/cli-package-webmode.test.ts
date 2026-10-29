@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { cliToolFiles } from '../../tools/release/cli-package-files.mjs';
 import { createExternalPluginProject, listFixtureEntries, listRelativeFiles, probeCliApi } from '../helpers/cli-package-fixtures.js';
 import { buildCliPackage } from '../../tools/release/build-cli-package.mjs';
+import { assertOfflinePluginDelivery } from '../helpers/cli-core-contract.js';
 import { hasSevenDayReleaseAge } from '../helpers/npm-release-age.js';
 import {
   createWebResourceReleaseFixture,
@@ -25,7 +26,6 @@ let trustRootFile = '';
 let fixture: ReturnType<typeof createWebResourceReleaseFixture>;
 let packMetadata: { name: string; version: string; size: number; unpackedSize: number; files: Array<{ path: string }> };
 
-// Registry isolation must retain an explicit offline policy from the caller.
 function isolatedNpmEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(process.env).filter(([key]) =>
@@ -128,6 +128,7 @@ describe('@aiwg/cli offline plugin packaging', () => {
       expect(unpack.status, unpack.stderr).toBe(0);
       // Borrow existing dependencies read-only; never run npm install.
       await symlink(path.join(PROJECT_ROOT, 'node_modules'), path.join(extracted, 'node_modules'), 'dir');
+      await assertOfflinePluginDelivery(extracted, scratch, isolatedNpmEnv());
       expect(await readFile(path.join(extracted, 'tools/plugin/plugin-links.mjs'), 'utf8'))
         .toBe(await readFile(path.join(PROJECT_ROOT, 'tools/plugin/plugin-links.mjs'), 'utf8'));
       const project = path.join(scratch, 'consumer');
@@ -176,7 +177,6 @@ describe('@aiwg/cli packaged web distribution', () => {
         '--min-release-age=7', '--ignore-scripts', '--no-audit', '--no-fund',
         path.join(tempRoot, packed[0]!.filename),
     ];
-    // Probe the same options that will reach npm, not the repository's ambient config.
     const policyStartedAt = Date.now();
     const policy = spawnSync(
       process.platform === 'win32' ? 'npm.cmd' : 'npm',
@@ -226,8 +226,9 @@ describe('@aiwg/cli packaged web distribution', () => {
     for (const prefix of ['docs/', 'prebuilt/', 'templates/', 'apps/']) {
       expect(paths.some((entry) => entry.startsWith(prefix)), `${prefix} must not ship in @aiwg/cli`).toBe(false);
     }
-    // The composition runtime (not corpus) ships for managed Flow bindings (#2922).
     const allowedAgenticRuntime = [
+      'agentic/code/addons/aiwg-utils/rules/anti-laziness.md',
+      'agentic/code/addons/aiwg-utils/rules/anti-laziness.core.md',
       'agentic/code/addons/composition-engine/lib/runtime.mjs',
       'agentic/code/addons/composition-engine/lib/validator.mjs',
       'agentic/code/addons/composition-engine/schemas/flow-graph.schema.json',

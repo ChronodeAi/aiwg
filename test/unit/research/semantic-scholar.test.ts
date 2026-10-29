@@ -11,6 +11,8 @@ describe('SemanticScholarClient', () => {
   let mockFetch: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubEnv('S2_API_KEY', '');
     client = new SemanticScholarClient({
       rateLimit: {
         maxTokens: 100,
@@ -21,11 +23,14 @@ describe('SemanticScholarClient', () => {
     });
 
     mockFetch = vi.fn();
-    global.fetch = mockFetch;
+    vi.stubGlobal('fetch', mockFetch);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
   });
 
   describe('getPaperByDoi', () => {
@@ -57,6 +62,10 @@ describe('SemanticScholarClient', () => {
 
       const paper = await client.getPaperByDoi('10.1234/test.2024');
 
+      expect(mockFetch.mock.calls[0][0]).toBe(
+        'https://api.semanticscholar.org/graph/v1/paper/DOI:10.1234%2Ftest.2024' +
+        '?fields=paperId%2Ctitle%2Cabstract%2Cyear%2Cauthors%2CcitationCount%2Cvenue%2CpublicationDate%2CpublicationVenue%2CexternalIds%2CopenAccessPdf'
+      );
       expect(paper.id).toBe('123abc');
       expect(paper.title).toBe('Test Paper');
       expect(paper.year).toBe(2024);
@@ -129,6 +138,10 @@ describe('SemanticScholarClient', () => {
 
       const paper = await client.getPaperByArxivId('2024.12345');
 
+      expect(mockFetch.mock.calls[0][0]).toBe(
+        'https://api.semanticscholar.org/graph/v1/paper/ARXIV:2024.12345' +
+        '?fields=paperId%2Ctitle%2Cabstract%2Cyear%2Cauthors%2CcitationCount%2Cvenue%2CpublicationDate%2CpublicationVenue%2CexternalIds%2CopenAccessPdf'
+      );
       expect(paper.id).toBe('123abc');
       expect(paper.title).toBe('arXiv Paper');
       expect(paper.arxivId).toBe('2024.12345');
@@ -218,9 +231,9 @@ describe('SemanticScholarClient', () => {
         fields: ['paperId', 'title'],
       });
 
-      // Verify the URL includes the custom fields
+      // Verify the full URL, including the configured API namespace.
       expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining('fields=paperId%2Ctitle'),
+        'https://api.semanticscholar.org/graph/v1/paper/search?query=test&limit=10&offset=0&fields=paperId%2Ctitle',
         expect.any(Object)
       );
     });
@@ -247,6 +260,92 @@ describe('SemanticScholarClient', () => {
       await expect(client.getPaperByDoi('test')).rejects.toMatchObject({
         code: ResearchErrorCode.RF_103,
       });
+    });
+  });
+
+  describe('namespaces and credentials', () => {
+    it.each(['environment', 'config', 'absent'])('sends the %s key only as a header', async (source) => {
+      vi.stubEnv('S2_API_KEY', source === 'absent' ? '' : 'synthetic-env-key');
+      client = new SemanticScholarClient(source === 'config' ? { apiKey: 'synthetic-config-key' } : {});
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ data: [] }) });
+      await expect(client.requestApi('graph', '/paper/search', { query: 'test' }))
+        .resolves.toEqual({ data: [] });
+
+      expect(mockFetch.mock.calls[0][0]).toBe('https://api.semanticscholar.org/graph/v1/paper/search?query=test');
+      const headers = new Headers(mockFetch.mock.calls[0][1].headers);
+      expect(headers.get('x-api-key')).toBe(source === 'absent' ? null : `synthetic-${source === 'config' ? 'config' : 'env'}-key`);
+    });
+
+    it('requests recommendations without changing subsequent graph calls', async () => {
+      client = new SemanticScholarClient({ apiKey: 'synthetic-key' });
+      const response = { recommendedPapers: [{ paperId: 'recommended', title: 'A recommendation' }] };
+      mockFetch.mockResolvedValue({ ok: true, json: async () => response });
+      await expect(client.requestApi('recommendations', '/papers/forpaper/seed', { limit: 2, fields: 'paperId,title' }))
+        .resolves.toEqual(response);
+      expect(mockFetch.mock.calls[0][0]).toBe(
+        'https://api.semanticscholar.org/recommendations/v1/papers/forpaper/seed?limit=2&fields=paperId%2Ctitle'
+      );
+      expect(new Headers(mockFetch.mock.calls[0][1].headers).get('x-api-key')).toBe('synthetic-key');
+      const graph = client.requestApi('graph', 'paper/seed');
+      await vi.advanceTimersByTimeAsync(1000);
+      await graph;
+      expect(mockFetch.mock.calls[1][0]).toBe('https://api.semanticscholar.org/graph/v1/paper/seed');
+    });
+
+    it('supports independent namespace base URL overrides', async () => {
+      client = new SemanticScholarClient({
+        baseUrl: 'https://fixture.invalid/proxy/graph/v1/',
+        recommendationsBaseUrl: 'https://fixture.invalid/proxy/recommendations/v1/',
+      });
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+      await client.requestApi('recommendations', '/papers/forpaper/seed');
+      const graph = client.requestApi('graph', '/paper/seed');
+      await vi.advanceTimersByTimeAsync(1000);
+      await graph;
+      expect(mockFetch.mock.calls.map(([url]) => url)).toEqual([
+        'https://fixture.invalid/proxy/recommendations/v1/papers/forpaper/seed',
+        'https://fixture.invalid/proxy/graph/v1/paper/seed',
+      ]);
+    });
+
+    it.each([401, 403, 500, 'network'])('keeps the key out of %s errors and logs', async (status) => {
+      const key = 'synthetic-secret-key';
+      client = new SemanticScholarClient({ apiKey: key, retry: { maxRetries: 0, initialDelay: 0, maxDelay: 0, backoffMultiplier: 1 } });
+      const logs = ['log', 'warn', 'error', 'debug', 'info'].map((method) =>
+        vi.spyOn(console, method as 'log').mockImplementation(() => {})
+      );
+      if (status === 'network') mockFetch.mockRejectedValueOnce(new Error(`transport echoed ${key}`));
+      else mockFetch.mockResolvedValueOnce({ ok: false, status });
+      const error = await client.requestApi('graph', '/paper/seed').catch((error) => error);
+      expect(mockFetch.mock.calls[0][0]).toBe('https://api.semanticscholar.org/graph/v1/paper/seed');
+      expect(error).toMatchObject({ code: status === 401 || status === 403 ? ResearchErrorCode.RF_102 :
+        status === 500 ? ResearchErrorCode.RF_200 : ResearchErrorCode.RF_500 });
+      expect(`${error}\n${error.stack}\n${JSON.stringify(error)}`).not.toContain(key);
+      for (const log of logs) expect(log).not.toHaveBeenCalled();
+    });
+
+    it('keeps an invalid header value out of errors', async () => {
+      client = new SemanticScholarClient({ apiKey: 'synthetic-secret\ninvalid' });
+      const error = await client.requestApi('graph', '/paper/seed').catch((error) => error);
+      expect(error).toMatchObject({ code: ResearchErrorCode.RF_500, message: 'Semantic Scholar request failed' });
+      expect(`${error}\n${error.stack}\n${JSON.stringify(error)}`).not.toContain('synthetic-secret');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it.each(['server', 'network'])('paces an unauthenticated %s retry with the default limiter', async (failure) => {
+      client = new SemanticScholarClient({ retry: { maxRetries: 1, initialDelay: 10, maxDelay: 10, backoffMultiplier: 1 } });
+      if (failure === 'server') mockFetch.mockResolvedValueOnce({ ok: false, status: 503 });
+      else mockFetch.mockRejectedValueOnce(new Error('synthetic network failure'));
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ data: [] }) });
+      const pending = client.requestApi('graph', '/paper/search', { query: 'retry' });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(mockFetch.mock.calls[0][0]).toBe('https://api.semanticscholar.org/graph/v1/paper/search?query=retry');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toEqual({ data: [] });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[1][0]).toBe(mockFetch.mock.calls[0][0]);
+      expect(new Headers(mockFetch.mock.calls[1][1].headers).has('x-api-key')).toBe(false);
     });
   });
 });

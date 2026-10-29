@@ -26,9 +26,11 @@ export {
 } from './floors.js';
 export type { ProjectFloors, ProjectFloorSource } from './floors.js';
 export {
-  GateEvaluationError, maxOutcome, gateStatusOutcome, sealUpstream, sealGateHoldout,
+  GateEvaluationError, maxOutcome, gateStatusOutcome, sealUpstream,
   evaluateGates, type EvaluateGatesInput,
 } from './evaluate.js';
+export { sealGateHoldoutFromFrozen, evaluateGatesFromHeldoutFrozen } from './heldout.js';
+export type { HeldoutGateRecords, HeldoutGateAnalysis, HeldoutGateAccess } from './heldout.js';
 export { assertGateReportDecision, validateGateReport, type GateReportValidation } from './report.js';
 export { createCoreProviderRegistry, evidenceProvider, pairedProvider, proportionProvider, scalarProvider, screeningProvider } from './providers/index.js';
 export type { MetricProvider } from './providers/index.js';

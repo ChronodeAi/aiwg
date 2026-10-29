@@ -1,3 +1,4 @@
+import { readRuleDeliveryContext } from '../../helpers/rule-delivery-context.js';
 import { showBindingEnvelopes } from '../../helpers/show-binding-envelopes.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
@@ -182,19 +183,21 @@ describe('Wave 5 sdlc-b canonical rule delivery (#2945)', () => {
       console.info('Hermes fixture', 'sdlc-b', chars, 'chars');
       expect(chars).toBeLessThanOrEqual(19000); // ADR 220–224: full bodies, no compression.
     }
-    const startup = report.contributors.map((file: any) => read(file.path)).join('\n');
+    const startup = readRuleDeliveryContext(report, provider);
     for (const { name, data } of rules) {
       const canonical = read(path.join(bundle, 'rules', `${name}.md`));
       const body = canonical.replace(/^---\n[\s\S]*?\n---\s*/, '').trim();
       if (data.activation === 'kernel') expect(startup, `${provider}: ${name}`).toContain(body);
       if (data.activation === 'summary') {
         expect(startup).toContain(data.summary);
+        expect(startup).toContain(`- ${name} — ${data.summary}`);
         expect(startup).toContain(`aiwg show rule ${name} --body`);
         expect(startup).not.toContain(body);
       }
       if (data.activation === 'bound') expect(startup).not.toContain(data.summary);
       if (data.activation === 'paths' && !['claude', 'cursor'].includes(provider)) {
         expect(startup).toContain(data.summary);
+        expect(startup).toContain(`aiwg show rule ${name} --body`);
         expect(startup).toContain(`aiwg show rule ${name} --body`);
         expect(startup).not.toContain(body);
         for (const glob of data.paths) expect(startup).toContain(glob);

@@ -14,8 +14,10 @@ export const CONTEXT_STAGE_ENV = 'AIWG_CONTEXT_STAGE_LOG';
 
 let loadError = null;
 let writer = null;
+let ownership = null;
 try {
   writer = await importImpl(import.meta.url, 'smiths/context-pipeline/context-file-safety.js');
+  ownership = await importImpl(import.meta.url, 'smiths/context-pipeline/bridge-ownership.js');
 } catch (error) {
   loadError = error;
 }
@@ -25,4 +27,14 @@ export function writeContextFileSync(file, content, encoding) {
     throw new Error(`Context-file safety layer is unavailable; refusing to write ${file}`, { cause: loadError });
   }
   return writer.writeContextFileSync(file, content, encoding);
+}
+
+export function normalizeRuleStartup(content, bootstrap, agentsHeader) {
+  if (!ownership) throw new Error('Startup ownership layer is unavailable', { cause: loadError });
+  return ownership.normalizeRuleStartup(content, bootstrap, agentsHeader);
+}
+
+export function retireLegacyBridge(content) {
+  if (!ownership) throw new Error('Startup ownership layer is unavailable', { cause: loadError });
+  return ownership.retireLegacyBridge(content);
 }

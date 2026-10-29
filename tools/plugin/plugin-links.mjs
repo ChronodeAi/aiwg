@@ -94,6 +94,9 @@ export function rewritePublishedMarkdown(body, file, payloadRoot, repoRoot = pat
   let rewritten = body;
   for (const link of markdownLinks(body).reverse()) {
     let published = PUBLISHED_LINKS[link.target];
+    if (link.target.startsWith('$AIWG_ROOT/docs/')) {
+      published = link.target.slice('$AIWG_ROOT/'.length);
+    }
     // Root docs appear at different depths in skills and copied docs.
     // Never let a path into this checkout satisfy an installed plugin.
     if (!published && /^(?:\.\.\/)+docs\//.test(link.target)) {

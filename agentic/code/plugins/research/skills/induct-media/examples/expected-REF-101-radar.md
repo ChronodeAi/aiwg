@@ -14,7 +14,7 @@ sources-searched: []
 
 # REF-101 Radar
 
-**Source**: [citation sidecar](../citations/REF-101-citations.md) · [analysis doc](../references/REF-101.md)
+**Source**: citation sidecar `../citations/REF-101-citations.md` · analysis doc `../references/REF-101.md`
 **Title**: Attention Mechanisms in Practice
 **Last refreshed**: 2026-05-24
 **Next refresh due**: 2027-05-24 (annual)
@@ -56,8 +56,8 @@ sources-searched: []
 ## 6. Notable Links
 
 **Primary**:
-- Analysis doc: [REF-101](../references/REF-101.md)
-- Citation sidecar: [REF-101-citations.md](../citations/REF-101-citations.md)
+- Analysis doc: `../references/REF-101.md`
+- Citation sidecar: `../citations/REF-101-citations.md`
 - Source media: hash-only record (platform ToS only)
 
 ## 7. Open Questions / Watch Items

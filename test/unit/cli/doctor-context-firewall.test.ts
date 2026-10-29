@@ -96,7 +96,8 @@ describe('tools/cli/doctor.mjs — context/memory firewall (#2040)', () => {
   beforeEach(async () => {
     const { readFileSync } = await import('fs');
     content = readFileSync(path.join(repo, 'tools/cli/doctor.mjs'), 'utf-8')
-      + readFileSync(path.join(repo, 'tools/cli/doctor-context-firewall.mjs'), 'utf-8');
+      + readFileSync(path.join(repo, 'tools/cli/doctor-context-firewall.mjs'), 'utf-8')
+      + readFileSync(path.join(repo, 'tools/cli/doctor-args.mjs'), 'utf-8');
   });
 
   it('imports and invokes the cross-category firewall', () => {
@@ -174,4 +175,3 @@ describe('tools/cli/doctor.mjs — context/memory firewall (#2040)', () => {
   });
 
 });
-

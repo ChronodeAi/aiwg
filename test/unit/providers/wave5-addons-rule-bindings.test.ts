@@ -1,3 +1,4 @@
+import { readRuleDeliveryContext } from '../../helpers/rule-delivery-context.js';
 import { showBindingEnvelopes } from '../../helpers/show-binding-envelopes.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
@@ -190,10 +191,11 @@ describe('Wave 5 addon rule delivery (#2945)', () => {
       console.info('Hermes fixture', 'addons', chars, 'chars');
       expect(chars).toBeLessThanOrEqual(19000); // ADR 220–224: full bodies, no compression.
     }
-    const startup = report.contributors.map((file: any) => read(file.path)).join('\n');
+    const startup = readRuleDeliveryContext(report, provider);
     for (const { name, data } of rules) {
       if (data.activation === 'summary') {
         expect(startup).toContain(data.summary);
+        expect(startup).toContain(`- ${data.name ?? name} — ${data.summary}`);
         expect(startup).toContain(`aiwg show rule ${data.name ?? name} --body`);
       } else if (data.activation === 'bound') {
         expect(startup).not.toContain(`aiwg show rule ${data.name ?? name}`);

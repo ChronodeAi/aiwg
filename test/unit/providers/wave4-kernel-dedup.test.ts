@@ -1,3 +1,4 @@
+import { readRuleDeliveryContext } from '../../helpers/rule-delivery-context.js';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -123,19 +124,11 @@ describe('Wave 4 compact kernel and startup deduplication (#2944)', () => {
       PATH: process.env.PATH, HOME: home, HERMES_HOME: path.join(home, '.hermes'), AIWG_ROOT: bundle,
       XDG_DATA_HOME: path.join(home, '.local/share'), CI: '1' }, encoding: 'utf8', timeout: 60_000, stdio: 'pipe' });
     const report = JSON.parse(output.split('REPORT:')[1].trim());
-    // OpenClaw's budget report includes conventional rule mirrors as well as
-    // AIWG.md; its session bridge loads AIWG.md as the complete kernel owner.
-    const loaded = report.contributors.filter((file: { path: string }) => provider !== 'openclaw' || !file.path.includes('/.openclaw/rules/'));
-    const startup = loaded.map((file: { path: string }) => read(file.path)).join('\n');
+    const startup = readRuleDeliveryContext(report, provider);
     for (const name of names) {
       // Some adapters shift heading depth; compare every imperative paragraph verbatim.
       const core = body(read(path.join(source, 'rules', `${name}.md`))).split('\n').filter(line => line.startsWith('- '));
-      for (const paragraph of core) expect(startup.split(paragraph).length - 1, `${provider}: ${name}`).toBe(provider === 'hermes' ? 0 : 1);
-      if (provider === 'hermes') {
-        expect(startup).toContain(meta(read(path.join(source, 'rules', `${name}.md`))).summary || 'Fetch and follow the full rule before governed work.');
-        expect(startup).toContain(`aiwg show rule ${name}`);
-        expect(startup).toContain('Before every task and subagent task, fetch and follow');
-      }
+      for (const paragraph of core) expect(startup.split(paragraph).length - 1, `${provider}: ${name}`).toBe(1);
       const guidance = body(read(path.join(source, 'rules', `${name}-guidance.md`))).split('\n').find(line => line.startsWith('# '))!;
       expect(startup).not.toContain(guidance);
     }

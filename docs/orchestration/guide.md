@@ -1,12 +1,27 @@
 # Agent orchestration guide
 
-How to hand bounded work to helper CLIs, pick a wrapper, write the brief, and get the result accepted. Every command below is verified against the CLI source in this checkout.
+How to hand bounded work to helper CLIs, pick a wrapper, write the brief, and get the result accepted. Each section starts with what you can ask your assistant, then gives the command reference. Every command is verified against the CLI source.
 
 Out of scope here: research-corpus induction, and the default-delegation policy (which work delegates by default). Those are decided elsewhere; this guide covers only the shipped handoff mechanics.
 
+## Prompting for good results
+
+- Give one bounded objective: "Fix the failing Codex provider tests; nothing else."
+- Name the acceptance check: "Done means `go test ./providers/...` passes."
+- Say what must not be touched: "Don't touch `src/models`."
+- Ask for evidence, not a summary: "Bring back the test output, not a summary."
+- Say when to stop and ask: "Stop and ask before changing any public API."
+- Pick the model tier only when it matters: "Stay on standard models unless you confirm premium with me first; flagship only if I elect it."
+
 ## 1. Hand work to a helper CLI explicitly
 
-Direct dispatch places work onto other AI CLIs installed on your machine. It is controlled by `parallelism.worker_dispatch` in `.aiwg/aiwg.config`, and it is off by default. Start with [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md) to enable it, then qualify the installed CLIs:
+> "Hand the failing provider tests to Codex in its own worktree. Don't touch `src/models`. Bring back the test output, and I'll review the diff before anything merges."
+
+Your assistant qualifies the installed CLIs, resolves a worker for the job, and returns the result for your review before anything merges.
+
+Direct dispatch places work onto other AI CLIs installed on your machine. It is controlled by `parallelism.worker_dispatch` in `.aiwg/aiwg.config`, and it is off by default. Start with [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md) to enable it, then qualify the installed CLIs.
+
+### Command reference — resolving a worker
 
 ```bash
 aiwg doctor --probe-workers --qualify
@@ -37,6 +52,10 @@ The JSON plan reports the resolved ceilings and their origins, so you can see wh
 
 ## 2. Choose a wrapper
 
+> "This is a quick codebase search, not a fix. Which helper should do it, and what will it bring back?"
+
+Your assistant matches the work to a wrapper — a model-pinned subagent — and states what that wrapper returns.
+
 Wrappers are model-pinned subagent definitions. Pick by the shape of the work, not by brand:
 
 | Wrapper | Tier | Use for | Returns |
@@ -53,6 +72,21 @@ Flagship is used only when you choose it. Flagship models are user-elected: with
 
 ## 3. Write a bounded brief
 
+> "Brief a helper to fix the login retry bug: one objective, the failing test as the acceptance check, and stop-and-report if anything is unclear."
+
+Your assistant writes a bounded brief the worker can finish without guessing. Where the path is agent-to-agent, the conductor briefs the worker with a prompt like this one:
+
+**Conductor-to-worker brief (example):**
+
+```markdown
+# Brief: fix login retry budget
+Objective: make `TestLoginRetryBudget` pass; nothing else.
+Inputs: `auth/retry.go` at the current head; failing log attached. Must not touch: `src/models`, the network, or other packages.
+Acceptance: AC1 `go test ./auth/ -run TestLoginRetryBudget` exits 0.
+Limits: 20 minutes, 1 attempt. Uncertainty policy: stop-and-report.
+Return: WorkerClaims per criterion plus test evidence, or `partial` with omissions.
+```
+
 The reusable brief template is `agentic/code/addons/aiwg-utils/templates/subagent-brief.md`. It is a prose rendering of the `WorkerBrief` / `WorkerDirectBrief` and delegation contracts, not a new schema. Fill every field:
 
 - One bounded objective, specific input files and revisions, and the workspace or read-only snapshot plus revision.
@@ -67,6 +101,10 @@ The reusable brief template is `agentic/code/addons/aiwg-utils/templates/subagen
 
 ## 4. Acceptance
 
+> "Have a different model family review the final diff against the current head. Show me the findings ledger before anything is accepted."
+
+Your assistant runs a cross-family review of the exact final version and tracks findings across rounds.
+
 Acceptance needs a review of the exact final version by a different model family, with findings tracked across rounds:
 
 - Exact head: the final review record must carry the current head SHA supplied by the trusted conductor. A review bound to a stale head fails.
@@ -78,7 +116,13 @@ A condensed worker return never grants acceptance on its own. The conductor asse
 
 ## 5. Approvals
 
+> "Preapprove only routine local test runs. Everything else still asks me."
+
+Your assistant checks the authorization policy before each step: auto-authorized steps run with a signed receipt, `escalate` keeps the prompt, and `deny` keeps the refusal.
+
 `authorization.hitl` in project config preauthorizes bounded, reversible work. It never replaces platform constraints, and explicit denies always win. The steepest grants lose to denies, session-scoped user authorization, freshness and expiry bounds, and finally escalation by default.
+
+### Command reference — authorization
 
 Manage profiles with either surface (`aiwg config authorization` or `aiwg steward authorization`):
 
@@ -97,6 +141,10 @@ What is never pre-approved: secret access, destructive or irreversible actions, 
 
 ## 6. Provider limits
 
+> "Can my economy helper do this, or does my provider substitute the model at runtime?"
+
+Your assistant checks wrapper tier enforcement for your provider and confirms whether the model pin is exact, hinted, or inherited before running.
+
 Wrapper model pins are an offline artifact contract: provider or account policy can substitute a model at runtime. Enforcement falls into three bands:
 
 | Band | Meaning | Providers |
@@ -109,7 +157,13 @@ Native effort fields also vary: Claude, Codex, Factory, and OMP enforce theirs; 
 
 ## 7. How to opt out of delegation
 
+> "Turn worker dispatch off and do this one yourself in this session."
+
+Your assistant switches dispatch back off. To keep a piece of work fully local, it does the work in-session instead of resolving, briefing, and dispatching it.
+
 Direct dispatch stays off until you turn it on. To decline the setup offer headlessly, or to switch dispatch back off later:
+
+### Command reference — opting out
 
 ```bash
 aiwg setup project --yes --worker-dispatch decline

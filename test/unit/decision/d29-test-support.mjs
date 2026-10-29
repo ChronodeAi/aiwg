@@ -10,6 +10,7 @@
  * working. A test that installs its own fake timers adds ADMISSION_CLOCK to its
  * toFake list.
  */
+import { heldoutDigest } from '../../../src/decision/heldout/contract.js';
 import { afterAll, beforeAll, beforeEach, vi } from 'vitest';
 
 export const ADMISSION_CLOCK = Object.freeze(['performance']);
@@ -46,3 +47,13 @@ export function preparedOnceMissCount() { return preparedMisses; }
 /** Timeouts sized from CI under load (a v7 prepare hook took over 30 s, V8-06 over 120 s). */
 export const PREPARE_HOOK_TIMEOUT = 300_000;
 export const MULTI_AUDIT_TIMEOUT = 180_000;
+
+/** Explicit synthetic host records for offline report probes; never used by production scoring. */
+export function offlineD29GateInputs(prepared, analysis, firstTestAccessAt) {
+  const analysisDigest = heldoutDigest(analysis);
+  const preregistration = { ...prepared.preregistration, studyAnalysisDigest: analysisDigest };
+  const bundle = { corpus: prepared.corpus, preregistration, approval: prepared.approval };
+  const access = { schemaVersion: 'decision-d29-access/v1', analysisDigest,
+    anchoredAt: analysis.native.frozenAt, firstTestAccessAt, reference: 'synthetic-offline-fixture' };
+  return { frozen: { bundle, digest: heldoutDigest(bundle) }, access, trustedAccessDigest: heldoutDigest(access) };
+}

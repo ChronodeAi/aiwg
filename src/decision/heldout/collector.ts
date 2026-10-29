@@ -312,7 +312,7 @@ export async function scoreHeldoutStudy(input: { run: string; trustedEvidenceDig
   const approvedCalibration = structuredClone(approval.calibration);
   const calibrated = approvedCalibration.mode === 'uncalibrated-diagnostic'
     || approvedCalibration.mode === 'staged' && approvedCalibration.phase === 'calibration' ? false : null;
-  const diagnostics = await input.module.score({ corpus: { ...corpus, rows }, preregistration, attempts, gold: input.gold,
+  const diagnostics = await input.module.score({ frozen, corpus: { ...corpus, rows }, preregistration, attempts, gold: input.gold,
     integrity: structuredClone(input.integrity), approvedCalibration: structuredClone(approvedCalibration), calibrated });
   if (calibrated === false && (!diagnostics || typeof diagnostics !== 'object'
     || (diagnostics as Record<string, unknown>).calibrated !== false
