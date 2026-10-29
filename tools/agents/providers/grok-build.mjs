@@ -48,7 +48,10 @@ export const support = {
   agents: 'native',
   commands: 'indexed', // discoverable through the AIWG index; no native command writer
   skills: 'native',
-  rules: 'native', // Markdown rules are discovered hierarchically by Grok Build
+  // CONTEXT_CONTRACTS: https://docs.x.ai/build/features/project-rules
+  // .grok/rules/*.md loads hierarchically on every task; no frontmatter marker
+  // is required for always-on rules (unlike Windsurf's trigger field).
+  rules: 'native', // always-on Markdown rules discovered root-to-cwd by Grok Build
 };
 
 export const capabilities = {

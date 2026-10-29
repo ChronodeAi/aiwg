@@ -726,12 +726,12 @@ imports of full rule files.
 |---|---|---|
 | Copilot | `.github/copilot-instructions.md` | Copilot custom instructions contract |
 | Factory | `AGENTS.md` | Factory AGENTS discovery hierarchy |
-| OpenCode | `AGENTS.md` | OpenCode rules and instructions registration |
+| OpenCode | `AGENTS.md`, `AIWG.md`, `.opencode/rule/*.md` | [OpenCode rules and instructions registration](https://opencode.ai/docs/rules/) (`CONTEXT_CONTRACTS`) |
 | Windsurf | `AGENTS.md` | Windsurf/Devin topology contract |
-| Antigravity | `AGENTS.md` | Qualified CLI 1.1.26 project context |
+| Antigravity | `AGENTS.md` | [Qualified CLI 1.1.26 project context](https://antigravity.google/docs/cli/overview/) (`CONTEXT_CONTRACTS`, verified 2026-09-04) |
 | Muse | `AGENTS.md` | Muse context contract; workspace trust required |
-| OMP | `.omp/AGENTS.md` | OMP 18.1.10 context loader; shadows root context |
-| Grok Build (`grok-build`) | `AGENTS.md` | xAI project-rules hierarchical discovery |
+| OMP | `.omp/AGENTS.md` | [OMP 18.1.10 context loader at 5964a0f7649275bcde818f20073193fd032451f2](https://github.com/can1357/oh-my-pi/blob/5964a0f7649275bcde818f20073193fd032451f2/packages/coding-agent/src/system-prompt.ts#L451); shadows root context |
+| Grok Build (`grok-build`) | `AGENTS.md`, `.grok/rules/*.md` | [xAI project-rules hierarchical discovery](https://docs.x.ai/build/features/project-rules); [released CLI 1.0.38, reviewed public tree 2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8](../providers/grok-build-qualification.md) (source pin, not binary build provenance) |
 
 The authoritative loader evidence and source links are in
 `src/providers/provider-definitions.ts` (`CONTEXT_CONTRACTS`), with qualified

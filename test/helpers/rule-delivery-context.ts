@@ -20,9 +20,24 @@ export function readRuleDeliveryContext(report: { contributors: Array<{ path: st
     expect(fs.existsSync(entryPoint), `${provider}: index entry point`).toBe(true);
     const startup = startupFiles.map(read).join('\n');
     if (!['claude', 'cursor'].includes(provider)) {
-      expect(startup, `${provider}: hook`).toContain(`${provider}: Before every task and subagent task, read and follow`);
-      expect(startup).toContain(path.relative(projectRoot, entryPoint).replaceAll('\\', '/'));
+      for (const file of startupFiles) {
+        expect(read(file), `${provider}: hook in ${file}`).toContain(`${provider}: Before every task and subagent task, read and follow`);
+        expect(read(file)).toContain(path.relative(projectRoot, entryPoint).replaceAll('\\', '/'));
+      }
     }
+    const assertLoaded = (file: string) => {
+      const data = parseRuleFrontmatter(read(file)).data as Record<string, unknown>;
+      if (provider === 'windsurf') expect(data.trigger, `${provider}: always-on ${file}`).toBe('always_on');
+      if (provider === 'cursor') expect(data.alwaysApply, `${provider}: alwaysApply ${file}`).toBe(true);
+      if (provider === 'opencode') {
+        const { instructions } = JSON.parse(read(path.join(projectRoot, 'opencode.json')));
+        expect(instructions).toEqual(expect.arrayContaining(['AGENTS.md', 'AIWG.md']));
+        const relative = path.relative(projectRoot, file).replaceAll('\\', '/');
+        const dir = path.posix.dirname(relative);
+        expect(instructions.some((item: string) => item === relative || item === `${dir}/*.md`), `${provider}: registered ${relative}`).toBe(true);
+      }
+    };
+    if (native) assertLoaded(entryPoint);
     const rules = manifest.ruleSources.map((file: string) => {
       const content = read(file), parsed = parseRuleFrontmatter(content);
       return { ...parsed.rule, content, body: parsed.body, file,
@@ -33,7 +48,11 @@ export function readRuleDeliveryContext(report: { contributors: Array<{ path: st
       const name = path.basename(rule.file) === 'BEHAVIOR.md' ? `${['grok-build', 'windsurf'].includes(provider) ? 'behavior-' : 'behaviors/'}${path.basename(path.dirname(rule.file))}` : path.basename(rule.file, '.md');
       const dest = path.join(path.dirname(entryPoint), `${name}.${provider === 'cursor' ? 'mdc' : 'md'}`);
       expect(read(dest), `${provider}: complete ${name}`).toContain(rule.body.trim());
-      if (!native) expect(read(entryPoint)).toContain(`[${name}.md](./${name}.md)`);
+      const index = read(entryPoint);
+      const link = `[${name}.${provider === 'cursor' ? 'mdc' : 'md'}](./${name}.${provider === 'cursor' ? 'mdc' : 'md'})`;
+      const fetch = `aiwg show rule ${rule.name} --body`;
+      expect(index.includes(link) || (native && index.includes(fetch)), `${provider}: index reaches ${name}`).toBe(true);
+      if (native) assertLoaded(dest);
       expect(startup, `${provider}: no inline ${name}`).not.toContain(rule.body.trim());
     }
   }

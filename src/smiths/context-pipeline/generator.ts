@@ -1,4 +1,5 @@
 // Generate canonical workspace context and provider adapters after artifact deployment.
+import { ensureCoreStartup } from '../../rules/core-startup.mjs';
 import { preserveBridgeOperatorText } from './bridge-ownership.js';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
@@ -185,6 +186,7 @@ async function atomicWrite(filePath: string, content: string, provider?: string)
     const managed = existing.match(new RegExp(`<!-- AIWG:${owner}:start -->[\\s\\S]*?<!-- AIWG:${owner}:end -->`));
     if (managed) content = `${content.trimEnd()}\n\n${managed[0]}\n`;
   }
+  if (provider) content = ensureCoreStartup(content);
   const bytes = Buffer.byteLength(content, 'utf8');
   if (provider === 'codex' && path.basename(filePath) === 'AGENTS.md' && bytes >= 32768) {
     throw new Error('Codex AGENTS.md exceeds its 32 KB hard cap');
@@ -240,6 +242,7 @@ async function writeTwinFiles(
             ? `${twinName} is operator-owned and already loads WORKSPACE.md then AIWG.md — left as-is.`
             : `${twinName} is operator-owned; ${hook.action} the WORKSPACE.md → AIWG.md hook additively (existing content preserved). Pass --force to replace the whole file.`,
         );
+        await atomicWrite(twinPath, await fs.readFile(twinPath, 'utf8'), provider);
         result.twinPaths.push(twinPath);
         continue;
       }
@@ -378,6 +381,7 @@ export async function generate(opts: ContextPipelineOptions): Promise<ContextPip
       // canonical graph hook (preserve operator content; no --force needed) so Codex/
       // fallback consumers load the generated AIWG.md.
       const hook = await ensureManagedHook(agentsMdPath, { provider: opts.provider });
+      result.agentsMdBytes = await atomicWrite(agentsMdPath, await fs.readFile(agentsMdPath, 'utf8'), opts.provider);
       result.agentsMdPath = agentsMdPath;
       result.warnings.push(
         hook.action === 'unchanged'
@@ -434,6 +438,7 @@ export async function generate(opts: ContextPipelineOptions): Promise<ContextPip
       force: opts.force,
       detectExistingFiles: opts.detectExistingFiles,
     });
+    await atomicWrite(hookResult.claudeMdPath, await fs.readFile(hookResult.claudeMdPath, 'utf8'), opts.provider);
     result.claudeMdHookPath = hookResult.claudeMdPath;
     result.claudeMdHookAction = hookResult.action;
     if (hookResult.backupPath) {

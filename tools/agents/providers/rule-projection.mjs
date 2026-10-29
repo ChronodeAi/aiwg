@@ -8,7 +8,8 @@ import { projectOnDemandReferences, renderRuleKernelIndex } from './rule-present
 import { projectStartup } from './rule-startup.mjs';
 import { writeContextFileSync } from './context-write.mjs';
 export { inlineStartup } from './rule-startup.mjs';
-const { parseRuleFrontmatter, CORE_RULES_START, CORE_RULES_END } = await importImpl(import.meta.url, 'rules/activation.mjs');
+const { parseRuleFrontmatter } = await importImpl(import.meta.url, 'rules/activation.mjs');
+const { renderCoreStartup } = await importImpl(import.meta.url, 'rules/core-startup.mjs');
 const read = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
 const walk = dir => fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
   entry.isDirectory() ? walk(path.join(dir, entry.name)) : [path.join(dir, entry.name)]) : [];
@@ -41,8 +42,8 @@ function registerOpenCode(opts, provider, rulesDir) {
     (config.instructions !== undefined && !Array.isArray(config.instructions))) {
     throw new Error('OpenCode rule delivery requires an object with an instructions array in opencode.json');
   }
-  const glob = `${path.relative(opts.target, rulesDir).replaceAll('\\', '/')}/**/*.md`;
-  config.instructions = [...new Set([...(config.instructions || []), 'AGENTS.md', glob])];
+  const glob = `${path.relative(opts.target, rulesDir).replaceAll('\\', '/')}/*.md`;
+  config.instructions = [...new Set([...(config.instructions || []), 'AGENTS.md', 'AIWG.md', glob])];
   writeContextFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
 }
 export function projectRules(opts, provider) {
@@ -94,9 +95,9 @@ export function projectRules(opts, provider) {
     '# On-demand rules', '', 'These rules require explicit activation metadata. Fetch the applicable full rule before governed work.', '',
     ...legacyDemand.map(rule => `- \`${rule.name}\` — \`aiwg show rule ${rule.name} --body\``), '',
   ].join('\n')));
-  const coreSection = cores.length ? `${CORE_RULES_START}\n## Core rules\n\n${cores.map(rule => rule.coreBody).join('\n\n')}\n${CORE_RULES_END}` : '';
+  const coreSection = renderCoreStartup(cores);
   // Even an all-core install needs a real entry point rather than a dangling hook.
-  if (!index && (!['claude', 'cursor'].includes(provider.name) || tagged.length)) put(indexFile, managed('# Rule kernel index\n\nNo kernel or path rules selected.\n'));
+  if (!index && (!['claude', 'cursor'].includes(provider.name) || tagged.length)) put(indexFile, managed(nativeContent(provider, { activation: 'kernel', file: indexFile }, '# Rule kernel index\n\nNo kernel or path rules selected.\n', opts)));
   const startups = projectStartup(opts, provider, coreSection, indexFile);
   registerOpenCode(opts, provider, rulesDir);
   fs.rmSync(path.join(rulesDir, '.aiwg-rules-budget.json'), { force: true });

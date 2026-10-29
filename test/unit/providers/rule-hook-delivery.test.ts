@@ -20,7 +20,7 @@ function setup() {
   fs.writeFileSync(path.join(source, 'rules/core-policy.core.md'), 'CORE_POLICY');
   return { root, source, target };
 }
-function deploy(root: string, provider: string) {
+function deploy(root: string, provider: string, kernelOnly = true) {
   let source = path.join(root, 'source');
   const target = path.join(root, 'target');
   if (provider === 'omp') {
@@ -35,7 +35,7 @@ function deploy(root: string, provider: string) {
   }
   const stdout = execFileSync(process.execPath, ['--input-type=module', '-e', `
     const { deploy } = await import(${JSON.stringify(path.join(repo, 'tools/agents/providers'))} + '/' + ${JSON.stringify(provider)} + '.mjs');
-    const report = await deploy(${JSON.stringify({ srcRoot: source, target, mode: 'all', kernelOnly: true, deployRules: true, quiet: true, ruleSources: fs.readdirSync(path.join(source, 'rules')).filter(file => !file.endsWith('.core.md')).map(file => path.join(source, 'rules', file)) })});
+    const report = await deploy(${JSON.stringify({ srcRoot: source, target, mode: 'all', kernelOnly, deployRules: true, quiet: true, ruleSources: fs.readdirSync(path.join(source, 'rules')).filter(file => !file.endsWith('.core.md')).map(file => path.join(source, 'rules', file)) })});
     console.log('REPORT:' + JSON.stringify(report));
   `], { cwd: repo, encoding: 'utf8', timeout: 60_000, stdio: 'pipe', env: {
     PATH: process.env.PATH, HOME: path.join(root, 'home'), HERMES_HOME: path.join(root, 'home/.hermes'),
@@ -66,7 +66,7 @@ describe('per-harness rule hooks (#3740)', () => {
     }
     if (provider === 'opencode') {
       const config = JSON.parse(read(path.join(target, 'opencode.json')));
-      expect(config.instructions).toContain('.opencode/rule/**/*.md');
+      expect(config.instructions).toContain('.opencode/rule/*.md');
     }
     const before = read(path.join(target, dir, 'RULES-INDEX.md'));
     deploy(root, provider);
@@ -91,18 +91,105 @@ describe('per-harness rule hooks (#3740)', () => {
     expect(Buffer.byteLength(content)).toBeLessThanOrEqual(4096);
   }, 90_000);
 
-  it.each(['drop hook', 'drop kernel file', 'inline kernel body'])('negative control rejects %s, then passes after restoring', mutation => {
+  it('F1 suppresses legacy Hermes directives on full deploy and retires them on redeploy', () => {
     const { root, target } = setup();
-    const report = deploy(root, 'codex');
-    const bridge = path.join(target, 'AGENTS.md'), kernel = path.join(target, '.codex/rules/fixture-kernel.md');
+    deploy(root, 'hermes', false);
+    for (const name of ['AGENTS.md', '.hermes.md']) {
+      const file = path.join(target, name);
+      const initial = read(file);
+      expect.soft(initial).not.toContain('### Rule: token-security');
+      expect.soft(initial).not.toContain('CRITICAL Rules (always apply)');
+      fs.writeFileSync(file, initial + '\n## CRITICAL Rules (always apply)\n\n### Rule: token-security\nNever hard-code tokens, API keys, or secrets in source files or commit messages.\n\n## Operator after\nKeep me.\n');
+    }
+    deploy(root, 'hermes', false);
+    for (const name of ['AGENTS.md', '.hermes.md']) {
+      const content = read(path.join(target, name));
+      expect(content).not.toContain('CRITICAL Rules (always apply)');
+      expect(content).not.toContain('### Rule: token-security');
+      expect(content).toContain('## Operator after\nKeep me.');
+      expect(content.match(/CORE_POLICY/g)).toHaveLength(1);
+      expect(content.match(/AIWG:rule-hook-hermes:start/g)).toHaveLength(1);
+    }
+  }, 90_000);
+
+  it('F2 registers OpenCode framework context and shallow rules while preserving operator entries', () => {
+    const { root, target } = setup();
+    const file = path.join(target, 'opencode.json');
+    fs.writeFileSync(file, JSON.stringify({ model: 'operator-model', instructions: ['operator.md', 'AGENTS.md', 'operator.md'] }));
+    deploy(root, 'opencode');
+    const config = JSON.parse(read(file));
+    expect(config.model).toBe('operator-model');
+    expect(config.instructions.slice(0, 2)).toEqual(['operator.md', 'AGENTS.md']);
+    expect([...config.instructions].sort()).toEqual(['operator.md', 'AGENTS.md', 'AIWG.md', '.opencode/rule/*.md'].sort());
+    const before = read(file);
+    deploy(root, 'opencode');
+    expect(read(file)).toBe(before);
+  }, 90_000);
+
+  it('F5 retires only removed provider hooks from shared startup on next deployment', () => {
+    const { root, target } = setup();
+    fs.mkdirSync(path.join(target, '.aiwg'));
+    const config = path.join(target, '.aiwg/aiwg.config');
+    fs.writeFileSync(config, JSON.stringify({ providers: ['codex', 'muse', 'hermes'] }));
+    for (const provider of ['codex', 'muse', 'hermes']) deploy(root, provider);
+    const removedDir = path.join(target, '.muse/rules');
+    const managed = read(path.join(removedDir, 'fixture-kernel.md'));
+    fs.writeFileSync(path.join(removedDir, 'operator.md'), 'Operator rule.');
+    fs.writeFileSync(config, JSON.stringify({ providers: ['codex', 'hermes'] }));
+    deploy(root, 'codex');
+    const bridge = read(path.join(target, 'AGENTS.md'));
+    expect(bridge).not.toContain('AIWG:rule-hook-muse:');
+    expect(bridge).toContain('AIWG:rule-hook-codex:start');
+    expect(bridge).toContain('AIWG:rule-hook-hermes:start');
+    expect(read(path.join(removedDir, 'fixture-kernel.md'))).toBe(managed);
+    expect(read(path.join(removedDir, 'operator.md'))).toBe('Operator rule.');
+  }, 90_000);
+
+  it.each(['claude', 'cursor', 'windsurf', 'opencode', 'grok-build'])('F4 rejects an unreachable %s kernel index entry and restores it', provider => {
+    const { root, target } = setup();
+    const report = deploy(root, provider);
+    const dir = provider === 'opencode' ? '.opencode/rule' : provider === 'grok-build' ? '.grok/rules' : `.${provider}/rules`;
+    const file = path.join(target, dir, `RULES-INDEX.${provider === 'cursor' ? 'mdc' : 'md'}`);
+    const original = read(file);
+    fs.writeFileSync(file, original.replace(/^- fixture-kernel[^\n]*\n/gm, ''));
+    expect(() => readRuleDeliveryContext(report, provider)).toThrow();
+    fs.writeFileSync(file, original);
+    readRuleDeliveryContext(report, provider);
+  }, 90_000);
+
+  it.each(['windsurf', 'cursor', 'opencode'])('F4 rejects a disabled %s native loader and restores it', provider => {
+    const { root, target } = setup();
+    const report = deploy(root, provider);
+    const file = path.join(target, provider === 'opencode' ? 'opencode.json' : provider === 'cursor'
+      ? '.cursor/rules/fixture-kernel.mdc' : '.windsurf/rules/fixture-kernel.md');
+    const original = read(file);
+    readRuleDeliveryContext(report, provider);
+    fs.writeFileSync(file, provider === 'opencode' ? JSON.stringify({ instructions: ['AGENTS.md', 'AIWG.md'] })
+      : original.replace(provider === 'cursor' ? 'alwaysApply: true' : 'trigger: always_on', provider === 'cursor' ? 'alwaysApply: false' : 'trigger: manual'));
+    expect(() => readRuleDeliveryContext(report, provider)).toThrow();
+    fs.writeFileSync(file, original);
+    readRuleDeliveryContext(report, provider);
+  }, 90_000);
+
+  it('F6 records Grok always-on project rule discovery beside its projection', () => {
+    const source = read(path.join(repo, 'tools/agents/providers/grok-build.mjs'));
+    expect(source).toMatch(/rules: 'native',[^\n]*always-on/);
+    expect(source).toContain('https://docs.x.ai/build/features/project-rules');
+    expect(source).toContain('no frontmatter marker');
+  });
+
+  it.each(['codex', 'windsurf', 'hermes'].flatMap(provider => ['drop hook', 'drop kernel file', 'inline kernel body'].map(mutation => ({ provider, mutation }))))('negative control $provider rejects $mutation, then passes after restoring', ({ provider, mutation }) => {
+    const { root, target } = setup();
+    const report = deploy(root, provider);
+    const bridge = path.join(target, 'AGENTS.md'), kernel = path.join(target, `.${provider}/rules/fixture-kernel.md`);
     const original = read(bridge), body = read(kernel);
-    readRuleDeliveryContext(report, 'codex');
-    if (mutation === 'drop hook') fs.writeFileSync(bridge, original.replace(/codex: Before every task[^\n]*/g, ''));
+    readRuleDeliveryContext(report, provider);
+    if (mutation === 'drop hook') fs.writeFileSync(bridge, original.replace(new RegExp(`${provider}: Before every task[^\\n]*`, 'g'), ''));
     if (mutation === 'drop kernel file') fs.rmSync(kernel);
     if (mutation === 'inline kernel body') fs.writeFileSync(bridge, original + '\n' + body.replace(/^---\n[\s\S]*?\n---\s*/, ''));
-    expect(() => readRuleDeliveryContext(report, 'codex')).toThrow();
+    expect(() => readRuleDeliveryContext(report, provider)).toThrow();
     console.info(`Negative control rejected: ${mutation}`);
     fs.writeFileSync(bridge, original); fs.writeFileSync(kernel, body);
-    readRuleDeliveryContext(report, 'codex');
+    readRuleDeliveryContext(report, provider);
   }, 90_000);
 });

@@ -23,7 +23,7 @@ export function projectOnDemandReferences(rules, nativePaths = false) {
 export function renderRuleKernelIndex(rules, nativePaths = false, perRuleFetch = false, kernelFile) {
   const summary = rules.filter(rule => rule.tagged && (rule.canonicalActivation || rule.activation) === 'summary');
   const paths = rules.filter(rule => rule.tagged && (rule.canonicalActivation || rule.activation) === 'paths');
-  const kernels = rules.filter(rule => rule.tagged && (kernelFile ? rule.activation : rule.canonicalActivation || rule.activation) === 'kernel');
+  const kernels = rules.filter(rule => rule.tagged && (kernelFile || perRuleFetch ? rule.activation : rule.canonicalActivation || rule.activation) === 'kernel');
   if (!summary.length && !paths.length && !kernels.length) return '';
   const lines = ['# Rule kernel index', ''];
   // RULES-INDEX receipts are parsed by deployment accounting; retain their command format.

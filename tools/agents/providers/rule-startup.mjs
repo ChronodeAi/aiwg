@@ -32,9 +32,18 @@ export function retireInlineStartup(opts, provider, startupFile) {
   for (const context of contexts) {
     if (!fs.existsSync(context)) continue;
     let content = read(context);
-    const clean = retireLegacyBridge(content)
+    let clean = retireLegacyBridge(content)
       .replace(/<!-- AIWG:rule-startup:start -->[\s\S]*?<!-- AIWG:rule-startup:end -->\n?/g, '')
       .replace(/\n?<!-- AIWG:(?:hermes-(?:context|routing)|warp-context):start -->[\s\S]*?<!-- AIWG:(?:hermes-(?:context|routing)|warp-context):end -->\n?/g, '');
+    // Old Hermes releases emitted this unmarked section. Retire only its known
+    // heading/body through the next level-1/2 heading, preserving operator text.
+    clean = clean.replace(/^## CRITICAL Rules \(always apply\)\r?\n[\s\S]*?(?=^#{1,2} |^<!-- AIWG:|$(?![\s\S]))/gm, '');
+    const config = opts.config || JSON.parse(read(path.join(opts.target, '.aiwg/aiwg.config')) || '{}');
+    if (Array.isArray(config.providers)) {
+      const active = new Set([...config.providers, provider.name]);
+      clean = clean.replace(/<!-- AIWG:rule-hook-([\w-]+):start -->[\s\S]*?<!-- AIWG:rule-hook-\1:end -->\n?/g,
+        (block, name) => active.has(name) ? block : '');
+    }
     if (clean !== content) writeContextFileSync(context, clean);
   }
 }
@@ -49,7 +58,7 @@ export function projectStartup(opts, provider, coreSection, indexFile) {
   const files = provider.name === 'hermes' ? [file, path.join(opts.target, '.hermes.md')] : [file];
   for (const startup of files) {
     let content = normalizeRuleStartup(read(startup), bootstrap, path.basename(startup) === 'AGENTS.md');
-    content = section(content, 'rule-core', coreSection.replace(/<!-- AIWG:core-rules:(?:start|end) -->\n?/g, ''));
+    content = section(content, 'rule-core', coreSection.replace(/<!-- AIWG:(?:core-rules|rule-core):(?:start|end) -->\n?/g, '').trimEnd());
     const logical = opts.logicalOutputPath || (file => file);
     const location = path.relative(logical(opts.target), logical(indexFile)).replaceAll('\\', '/');
     const hook = `${provider.name}: Before every task and subagent task, read and follow \`${location}\`; read every listed kernel file and fetch matching full rules before governed work.`;
