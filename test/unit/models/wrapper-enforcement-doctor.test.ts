@@ -42,9 +42,17 @@ describe('doctor wrapper enforcement', () => {
       .toEqual(['delegation.flagship-inheritance']);
   });
 
-  it.each(['gpt-6-astra', 'gpt-6.1-sol'])('flags unelected inherited or pinned expensive model %s', inheritedModel => {
-    expect(wrapperModelRisks('codex', { inheritedModel })).toEqual(['delegation.flagship-inheritance']);
-    expect(wrapperModelRisks('codex', { model: inheritedModel })).toEqual(['delegation.flagship-inheritance']);
+  it('flags a premium model only when inherited, since pinning it is the normal ladder', () => {
+    expect(wrapperModelRisks('codex', { inheritedModel: 'gpt-6.1-sol' })).toEqual(['delegation.flagship-inheritance']);
+    expect(wrapperModelRisks('codex', { model: 'gpt-6.1-sol' })).toEqual([]);
+  });
+
+  it('flags a pinned flagship model', () => {
+    expect(wrapperModelRisks('codex', { inheritedModel: 'gpt-6-astra' })).toEqual(['delegation.flagship-inheritance']);
+    expect(wrapperModelRisks('codex', { model: 'gpt-6-astra' })).toEqual(['delegation.flagship-inheritance']);
+  });
+
+  it.each(['gpt-6-astra', 'gpt-6.1-sol'])('exempts elected or allowlisted model %s', inheritedModel => {
     expect(wrapperModelRisks('codex', { model: inheritedModel, agentName: 'worker', flagshipAllowlist: ['worker'] })).toEqual([]);
     expect(wrapperModelRisks('codex', { model: inheritedModel, election: 'user' })).toEqual([]);
     expect(wrapperModelRisks('codex', { inheritedModel, election: 'user' })).toEqual([]);
@@ -58,11 +66,10 @@ describe('doctor wrapper enforcement', () => {
     ['warp', '--model', 'effort: unavailable'],
     ['muse', '--model', '--reasoning-effort'],
     ['grokbot', 'model: unavailable', 'effort: unavailable'],
-  ])('documents native global controls for %s', (provider, model, effort) => {
+  ])('names native global controls in doctor for %s', (provider, model, effort) => {
+    // The guide describes the AIWG side and links the provider inventory; doctor names the native settings.
     const docs = readFileSync(new URL('../../../docs/configuration/model-configuration.md', import.meta.url), 'utf8');
-    const row = docs.split('\n').find(line => line.startsWith(`| ${provider} |`));
-    expect(row).toContain(model);
-    expect(row).toContain(effort);
+    expect(docs).toContain('(../providers/provider-inventory.md)');
     expect(wrapperEnforcementReport(provider)).toContain(model);
     expect(wrapperEnforcementReport(provider)).toContain(effort);
   });
@@ -78,5 +85,13 @@ describe('doctor wrapper enforcement', () => {
     expect(wrapperModelRisks('hermes', { inheritedModel: 'global-delegation-model' }))
       .toEqual(['delegation.unresolved-model']);
     expect(wrapperModelRisks('codex', { inheritedModel: 'gpt-6-luna' })).toEqual([]);
+  });
+
+  it('keeps a wrapper pinned to its premium role default clean, but never a pinned flagship', () => {
+    expect(wrapperModelRisks('claude', { model: 'opus' })).toEqual([]);
+    expect(wrapperModelRisks('claude', { model: 'claude-opus-5-5' })).toEqual([]);
+    expect(wrapperModelRisks('codex', { model: 'gpt-6.1-sol' })).toEqual([]);
+    expect(wrapperModelRisks('claude', { model: 'claude-fable-5-1' })).toEqual(['delegation.flagship-inheritance']);
+    expect(wrapperModelRisks('codex', { model: 'gpt-6-astra' })).toEqual(['delegation.flagship-inheritance']);
   });
 });

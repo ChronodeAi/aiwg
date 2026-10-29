@@ -2,6 +2,7 @@
 import { collectDecisionOffloadReport } from './decision-offload-report.mjs';
 import { importImpl } from '../_resolve-impl.mjs';
 import { collectWrapperEnforcement } from './doctor-wrapper-enforcement.mjs';
+import { wrapperTextFindings } from './doctor-wrapper-text.mjs';
 
 const { getPackageRoot } = await importImpl(import.meta.url, 'channel/manager.mjs');
 const { nativeSandboxWarnings } = await importImpl(import.meta.url, 'config/native-sandbox-warnings.js');
@@ -107,7 +108,7 @@ export async function runWorkerProbe(projectDir, options, workerConfig) {
   }
   if (options.json !== false) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else {
-    for (const finding of payload.wrapperEnforcement) console.log(`${finding.name}: ${finding.message}`);
+    for (const finding of wrapperTextFindings(payload.wrapperEnforcement)) console.log(`${finding.name}: ${finding.message}`);
     for (const warning of payload.nativeSandboxWarnings) console.log(`Warning: ${warning.message}`);
     for (const worker of workers) console.log(`Direct Worker ${worker.cli}: ${worker.reason}`);
     if (payload.sandboxChecks?.length) console.log(`Worker sandbox checks: ${JSON.stringify(payload.sandboxChecks)}`);

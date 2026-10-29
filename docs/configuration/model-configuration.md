@@ -140,21 +140,15 @@ provider-neutral; already-pinned ids, `inherit`, and explicit `sonnet[1m]` /
 `opus[1m]` opt-ins are deployed unchanged, and `--coding-model` /
 `--reasoning-model` / `--efficiency-model` overrides still win.
 
-## Provider compilation examples
+## How AIWG applies model choices per harness
 
-Codex agents compile to standalone `.codex/agents/*.toml` files with required `name`, `description`, and `developer_instructions` fields. Native controls use `model` and `model_reasoning_effort`. Codex skill model policy is `unsupported`: no documented per-skill model field exists.
+You set model choices once, in AIWG: the role ladder and `models.json` above, the `delegation` settings, and per-task overrides. AIWG then does the per-harness work:
 
-Global/run-wide providers cannot enforce heterogeneous wrapper pins (see `agentic/code/providers/model-{capabilities,catalog}.v1.json` and `tools/cli/doctor-wrapper-settings.mjs`):
+- **Deploying wrappers.** `aiwg use` compiles each worker wrapper (efficiency, coding, reasoning, verifier, explorer) into the harness's own agent format, and pins the model and effort wherever that harness can enforce a per-agent choice.
+- **Resolving a worker.** `aiwg models resolve` picks the model for a role and task from the catalog and your policy, and renders the exact launch command for the harness, so you never assemble harness flags yourself.
+- **Reporting enforcement.** `aiwg doctor` states, per harness and wrapper, whether the model and effort are `pinned`, `inherited`, `global-only` (one model for every worker in a run) or `unsupported`, and warns when a wrapper would land on a flagship or premium model you did not elect.
 
-| Provider | Wrapper class | Native model and effort controls |
-|---|---|---|
-| hermes | `global-only` | `config.yaml`: `delegation.model` / `delegation.effort` (shared by all workers). |
-| warp | `global-only` | `warp-terminal agent run --model <MODEL_ID>` (run/profile-wide); effort: unavailable. |
-| muse | `global-only` | `--model` / `--reasoning-effort`; `$XDG_CONFIG_HOME/muse/settings.json` `model` is the model fallback. Per-agent catalog support is unverified. |
-| grokbot | `global-only` | model: unavailable; effort: unavailable (no verified native setting in the catalog; routing is informational). |
-| windsurf | `inherited` (agent policy `unsupported`) | Main UI session model selection; no supported portable child model or effort setting. |
-
-`aiwg doctor --provider <name>` reports canonical agent counts and the target surface separately. It describes skills as pinned only when the provider enforces skill-local model selection.
+Harnesses differ in what they can enforce, so when `aiwg doctor` reports `global-only` or `inherited`, follow the remediation it prints for that harness rather than editing harness settings by hand. AIWG never rewrites a harness's global settings for you.
 
 ## Model management CLI
 
@@ -492,6 +486,10 @@ ajv validate -s models.schema.json -d models.json
 # Using jq (basic check)
 jq empty models.json && echo "Valid JSON" || echo "Invalid JSON"
 ```
+
+## Supported harnesses
+
+AIWG deploys to every harness in the [provider inventory](../providers/provider-inventory.md), which lists each one's status and deployment scope and links its quickstart. What each harness can enforce for models and effort is reported live by `aiwg doctor`; the per-harness matrix is in [Wrapper tier enforcement](wrapper-tier-enforcement.md).
 
 ## See Also
 

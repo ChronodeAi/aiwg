@@ -56,12 +56,18 @@ export function wrapperModelRisks(provider: string, artifact: DeployedWrapperCon
   const findings: string[] = [];
   if ((artifact.model !== undefined && !isConcreteWrapperModel(artifact.model))
     || !isConcreteWrapperModel(state.effectiveModel)) findings.push('delegation.unresolved-model');
-  const expensive = state.effectiveModel && (isFlagshipModel(state.effectiveModel)
-    || Object.values(catalog.providers).some(entry =>
-      [entry?.tiers?.flagship?.id, entry?.tiers?.premium?.id, entry?.roles.reasoning.id]
-        .filter(isConcreteWrapperModel).some(id => state.effectiveModel === id || state.effectiveModel?.endsWith(`/${id}`)))
+  const matches = (ids: Array<string | undefined>) => ids.filter(isConcreteWrapperModel)
+    .some(id => state.effectiveModel === id || state.effectiveModel?.endsWith(`/${id}`));
+  const flagship = !!state.effectiveModel && (isFlagshipModel(state.effectiveModel)
+    || Object.values(catalog.providers).some(entry => matches([entry?.tiers?.flagship?.id])));
+  const premium = !!state.effectiveModel && (Object.values(catalog.providers)
+    .some(entry => matches([entry?.tiers?.premium?.id, entry?.roles.reasoning.id]))
     || (provider === 'claude' && state.effectiveModel === 'opus'));
-  if (expensive && !flagshipElected(artifact)) findings.push('delegation.flagship-inheritance');
+  // Flagship always needs an operator election, pinned or not. Premium is a normal ladder tier
+  // (the reasoning role's default), so it is a risk only when a wrapper inherits it.
+  if ((flagship || (premium && state.model !== 'pinned')) && !flagshipElected(artifact)) {
+    findings.push('delegation.flagship-inheritance');
+  }
   return findings;
 }
 
