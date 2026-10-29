@@ -82,6 +82,8 @@ describe('D29 signed first-access creation (#3747)', () => {
     expect(() => validateHeldoutAccess(valid)).not.toThrow();
     expect(() => validateStudyArtifact(access)).not.toThrow();
     expect(() => verifyHeldoutAccess(access, trust.keyring)).not.toThrow();
+    // The committed fixture is shape-only: its signature must never verify.
+    expect(() => verifyHeldoutAccess(valid, trust.keyring)).toThrow();
   });
 
   it.each(['unsigned', 'missing-bundle', 'bad-time', 'unknown-field'])('refuses the governed %s fixture', name => {
