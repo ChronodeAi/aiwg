@@ -1912,7 +1912,7 @@ for general AIWG CLI execution, `AIWG_MCP_TOOLSETS=flows` with
 `AIWG_MCP_TOOLSETS=missions` with `mission-guide` / `mission-dispatch` /
 `mission-status` for Mission access.
 
-**Opt-in toolsets**: see [MCP capability audit](../integrations/mcp-capability-audit.md) and [Tool reference](../integrations/hermes-quickstart.md#tool-name-mangling) for details.
+**Opt-in toolsets**: see [MCP capability audit](../integrations/mcp-capability-audit.md) and [Tool reference](../integrations/hermes-quickstart.md) for details.
 
 #### mcp install
 
