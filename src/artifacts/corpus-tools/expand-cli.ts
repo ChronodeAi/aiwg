@@ -2,7 +2,7 @@
 import { AiwgError } from '../../cli/errors.js';
 import { expandCorpus, renderExpansion } from './expand.js';
 
-export const EXPAND_USAGE = 'aiwg corpus expand [--seeds REF-0001,REF-0002 | --since YYYY-MM-DD | --all] [--per-seed 20] [--from recent|all-cs] [--min-year 2018] [--reexplore-after 180d] [--max-seeds N] [--overlap] [--write] [--json]\nA scope (--seeds, --since or --all) is required. Default: dry run. --since uses induction/discovery date, then document mtime.\n--overlap checks at most 20 candidates, after convergence and recency.\nExit codes: 0 complete, 3 incomplete/retryable, 1 usage or storage error.\n';
+export const EXPAND_USAGE = 'aiwg corpus expand [--seeds REF-0001,REF-0002 | --since YYYY-MM-DD | --all] [--per-seed 20] [--from recent|all-cs] [--min-year 2018] [--reexplore-after 180d] [--max-seeds N] [--overlap] [--write] [--json]\nA scope (--seeds, --since or --all) is required. Default: dry run. --since uses induction/discovery date (including citation sidecars), then Git first-add date, then document mtime with a summary warning.\n--overlap checks at most 20 candidates, after convergence and recency.\nExit codes: 0 complete, 3 incomplete/retryable, 1 usage or storage error.\n';
 
 export interface ExpandOptions {
   seeds?: string[];

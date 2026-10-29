@@ -1,5 +1,4 @@
 // Traverse the due corpus frontier, suppress known papers, and checkpoint ranked recommendations.
-import { statSync } from 'node:fs';
 import { AiwgError } from '../../cli/errors.js';
 import { SemanticScholarClient } from '../../research/clients/semantic-scholar.js';
 import { identityKeys } from '../../research/identity.js';
@@ -8,6 +7,7 @@ import { findInCorpus, loadCorpusIdentities, type CorpusIdentityRecord } from '.
 import { ExpansionQueue, rankCandidates, type ExpansionCandidate } from './expand-queue.js';
 import { appendState, expansionPaths, readJsonl, writeQueue, type ExpansionState } from './expand-state.js';
 import type { ExpandOptions } from './expand-cli.js';
+import { expansionDates } from './expand-dates.js';
 
 export interface ExpansionResult {
   dry_run: boolean;
@@ -34,17 +34,6 @@ function seedId(record: CorpusIdentityRecord): string | null {
   return arxiv ? `arXiv:${arxiv.slice(8)}` : null;
 }
 
-function seedDate(record: CorpusIdentityRecord): number {
-  for (const fields of record.fields) {
-    const discovery = fields.discovery as Record<string, unknown> | undefined;
-    for (const value of [fields.inducted, fields.inducted_on, fields.added, fields.created, fields.date, discovery?.date]) {
-      const date = value instanceof Date ? value.getTime() : typeof value === 'string' ? Date.parse(value) : NaN;
-      if (Number.isFinite(date)) return date;
-    }
-  }
-  return statSync(record.path).mtimeMs;
-}
-
 export async function expandCorpus(root: string, cwd: string, options: ExpandOptions): Promise<ExpansionResult> {
   const corpus = loadCorpusIdentities(root);
   if (options.seeds?.some(ref => !corpus.some(record => record.ref === ref))) {
@@ -62,8 +51,9 @@ export async function expandCorpus(root: string, cwd: string, options: ExpandOpt
   for (const row of readJsonl<ExpansionCandidate>(paths.queue)) {
     if (!excluded(row.paper, row.identity_keys)) queue.add(row.paper, row.seed_refs, row);
   }
-  const scoped = corpus.filter(record => (!options.seeds || options.seeds.includes(record.ref))
-    && (options.since === undefined || seedDate(record) >= options.since));
+  const selected = corpus.filter(record => !options.seeds || options.seeds.includes(record.ref));
+  const dates = options.since === undefined ? undefined : expansionDates(root, selected);
+  const scoped = selected.filter(record => options.since === undefined || dates!.get(record.path)! >= options.since);
   const now = Date.now();
   const due = scoped.map(record => ({ record, id: seedId(record) })).filter(({ record, id }) => {
     const last = previous.get(record.ref);
