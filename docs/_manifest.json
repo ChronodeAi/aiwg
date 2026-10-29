@@ -193,6 +193,7 @@
     "references/REF-003-agentic-development-antipatterns",
     "references/REF-066-mcp-specification-2025",
     "releases",
+    "releases/v2026.10.15-announcement",
     "releases/v2026.10.14-announcement",
     "releases/v2026.10.12-announcement",
     "releases/v2026.10.11-announcement",
@@ -1632,6 +1633,13 @@
       "title": "Releases",
       "summary": "Release notes and changelog",
       "collapsed": true
+    },
+    {
+      "id": "releases/v2026.10.15-announcement",
+      "title": "v2026.10.15 — Check a Half-Remembered Reference and Find Related Papers",
+      "summary": "Two research commands that resolve partial references and find similar papers, a shorter AGENTS.md hook, prompt-first orchestration docs, and a security fix for aiwg serve.",
+      "file": "releases/v2026.10.15-announcement.md",
+      "parent": "releases"
     },
     {
       "id": "releases/v2026.10.14-announcement",

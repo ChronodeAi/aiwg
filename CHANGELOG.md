@@ -7,6 +7,196 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.15] - 2026-10-29
+
+### Added
+
+- `aiwg corpus resolve "<title | URL | arXiv ID | DOI | bibliography line>"`
+  (or `--from-file`, one reference per line) finds the paper a partial
+  reference means, and refuses to guess:
+  - IDs first: every arXiv form (abs/pdf/html URLs, 4- and 5-digit and
+    old-style IDs, vN recorded, 10.48550 DOIs), DOI URLs, OpenReview, ACL
+    Anthology and Semantic Scholar IDs.
+  - Title fallback: S2 title match, an arXiv ti: query with hyphens and
+    operators normalized, and CrossRef query.bibliographic.
+  - Resolved only when the top score is >= 0.92 and leads by >= 0.05;
+    0.6-0.92 or close candidates are ambiguous and all are listed; below
+    0.6 is unresolved. A title mismatch is a finding, never an overwrite.
+  - Every result lists paths_tried; all-sources-failed is unresolved with
+    incomplete: true. Reports whether the work is already in the corpus by
+    arXiv ID, DOI or normalized title (both arxiv: and arxiv_id: keys).
+  - Exit codes: 0 resolved, 2 ambiguous, 3 unresolved; a batch exits with
+    its worst line; usage errors exit 1.
+  - research-acquire and induct-research route non-ID input through it and
+    stop on ambiguous or unresolved.
+  - src/research/identity.ts holds the shared ID and title normalization
+    that corpus expand reuses (#3736).
+- `aiwg corpus expand --seeds REF-… | --since YYYY-MM-DD | --all` asks
+  Semantic Scholar's Recommendations API for papers similar to each seed
+  REF and builds a ranked candidate queue. It never inducts papers or
+  files issues:
+  - Seeds: REFs with an arXiv ID or DOI, from `arxiv:` or `arxiv_id:`
+    frontmatter or an arXiv URL in the body, through the shared identity
+    module from `corpus resolve`.
+  - Dry run by default; only --write touches the frontier ledger, the
+    candidate queue, the report and the rejected list, under the artifact
+    root.
+  - A throttled or failed seed is recorded and retried next run, never
+    marked explored. An immediate re-run makes zero requests;
+    --reexplore-after re-checks old seeds; --max-seeds makes a first pass
+    over a large corpus resumable.
+  - Candidates are deduplicated against the corpus (any ID or normalized
+    title), the queue and the rejected list, then ranked by convergence
+    (how many seeds recommended them), then recency. Score components are
+    stored. --overlap is optional and off by default.
+  - A scope flag is required, so a bare call never scans a whole corpus.
+  - Exit codes: 0 complete, 3 incomplete (retryable), 1 usage or storage
+    error.
+  - New `s2-recommendation` discovery surface and a `research-expand`
+    skill, found by `aiwg discover "find papers similar to the corpus"`
+    (#3735).
+- Gate holdout sealing now verifies the HeldoutFrozen record before sealing
+  holdout inputs. The new entry points (src/gates/heldout.ts:
+  sealGateHoldoutFromFrozen, evaluateGatesFromHeldoutFrozen):
+  - verify the frozen bundle digest against its content;
+  - verify the analysis against the bundle's studyAnalysisDigest and take
+    the gate binding from inside it;
+  - require the first-access record to match an independently retained host
+    pin, and to belong to the same analysis.
+  - An edited bundle, a wrong binding, or a forged or mismatched access
+    record is refused. D29 v8 builds its holdout inputs through it.
+  - Frozen demo fixtures: the v6, v7 and v8 synthetic demos were re-frozen
+    through the existing prepare and dry-run path to the new scorer digest.
+    Only the scorer pin and the digests derived from it changed; corpus,
+    gold, labels and analysis are unchanged, and the disposition is recorded
+    alongside the scorer pin. The exact-match test that the scorer pin equals
+    the current scorer bytes is kept, and the extracted d29-gates and
+    d29-provenance modules are pinned through checked digests in d29.mjs
+    (#3730, refs #2319).
+
+### Changed
+
+- AGENTS.md is now a short hook instead of a rulebook. It points to
+  WORKSPACE.md and AIWG.md, keeps the compact core rules inline, and carries
+  one line naming each harness's AIWG rules location. The remaining kernel,
+  summary and path rules now live in each tool's own rules location: native
+  rule loaders for Claude, Cursor, Grok Build, Windsurf and OpenCode, and a
+  rules folder each assistant is told to read for Codex, Muse, Hermes and the
+  others; on those harnesses the hook tells the agent to read the rules, as no
+  automatic loader exists. Everything outside the AIWG blocks stays owned by
+  the user, and redeploys are byte-identical. Hermes no longer carries the
+  legacy CRITICAL directives beside the core block; OpenCode's registered
+  instructions keep AIWG.md; a fresh `aiwg regenerate` injects the core rules;
+  CLAUDE.md skips them once .claude/rules carries them natively; and a
+  removed provider's hook line is cleaned up on the next deploy. This
+  repository's AGENTS.md drops from 20 KB to 2.5 KB, and `lint:context-sizes`
+  now runs in CI (#3740, refs #2631).
+- The orchestration guide and both worker-dispatch getting-started pages now
+  open each task section with an example prompt and what the assistant does in
+  response. The guide gains a "Prompting for good results" section and a
+  conductor-to-worker brief example; commands, defaults and limits are
+  unchanged under "Command reference" headings (#3739).
+- The skills budget guide and the Claude context budget note now name three
+  separate budgets and the check that measures each one: startup skill
+  listing, bridge bytes (8 KiB per file), and runtime reattachment. The
+  guard's report says it measures bridge files per file. No ceiling changes
+  (#2631).
+- sealGateHoldout no longer appears in the public gates API
+  (src/gates/index.ts). Code outside src/gates seals through
+  sealGateHoldoutFromFrozen, pinned by test; the function stays in
+  evaluate.ts for the gates internals and the conformance tests. The D29
+  re-freeze note now says exactly what the scorer pin covers: d29.mjs plus
+  the two modules extracted from it (#3730).
+- vscode-extension dependency updates: fast-uri 3.1.9, undici 7.30.1,
+  qs 6.16.1. serialize-javascript 7.1.4 and qs 6.17 are newer than the
+  release-age gate allows and are left for a later update (#3738).
+
+### Fixed
+
+- Worker qualification no longer keeps approvals for deleted worktrees
+  forever. Writing the store drops entries whose workspace directory no
+  longer exists (ENOENT/ENOTDIR only; other filesystem errors keep the
+  entry), live approvals are never evicted, and the "store is full" error
+  names the removal command. `aiwg doctor --probe-workers --list-approvals
+  [--json]` lists approvals; `--forget-approval <workspace> [--cli <name>]
+  --yes` removes them under the store lock. Store I/O moved to
+  src/models/worker-installation-store.mjs, shared by qualification and
+  management (#3746).
+- Provider wrappers now emit only each provider's native model and effort
+  fields. Portable effort aliases no longer leak into deployed metadata next
+  to the resolved native field, and a raw `model:` key no longer survives on
+  providers with no model control (Warp, OpenClaw). Explicit pins are still
+  written wherever the provider supports a model control, and Grok Build
+  keeps its gated configured selector (#2321, refs #2577).
+- `aiwg corpus resolve` and `aiwg corpus expand` keep --json output valid on
+  every exit path: usage and storage errors print a JSON error envelope and
+  --help prints JSON help under --json. resolve also rejects a repeated flag
+  with exit 1 before any request (#2322).
+- Eleven broken shipped plugin links are repaired at their canonical source
+  and the plugin copies regenerated. Old local-share paths now use
+  $AIWG_ROOT/docs links, which the packager publishes as repository URLs and
+  fails when the target doc does not exist. The known-offenders fixture is
+  empty, and ci.yml runs lint:plugin-links, lint:claude-context and
+  lint:context-firewall after build:cli (#3745).
+- corpus resolve never resolves past a failed ID or a same-title twin. An
+  explicit ID that no ID lookup verifies caps the status at ambiguous or
+  unresolved with an identifier_unresolved finding; records merge only on a
+  shared identifier; a bare 40-hex string counts as an S2 ID only with a
+  prefix or S2 URL; a 4-digit number in a title is not taken as the year
+  without a citation cue (#3736).
+- Research HTTP clients keep each client's API base path: leading-slash
+  paths resolve under the full configured base instead of the origin, every
+  attempt including retries takes a rate-limiter token, Semantic Scholar
+  sends S2_API_KEY as x-api-key and paces unauthenticated use at one request
+  per second, and the graph and recommendations namespaces are addressable
+  (#3737, refs #2325).
+
+### Security
+
+- @hono/node-server 2.0.11 -> 2.1.5 in the root, packages/cli, both
+  droid-bridge lockfiles, and the feature-install pin. 2.1.3 fixes
+  GHSA-rmxm-3fg6-px4f (serveStatic decoded paths twice); 2.1.5 serves static
+  files for GET and HEAD only. `aiwg serve` mounts serveStatic for dashboard
+  assets. New serve tests cover GET/HEAD assets, refused methods, encoded and
+  double-encoded paths, protected-prefix middleware, and API and WebSocket
+  routes (#3738).
+
+### Testing and CI
+
+- Two default-lane tests keep working on a long TMPDIR and a busy host: the
+  agent-skills-import special-file case builds its Unix socket under a short
+  temporary parent, and cli-package-closure carries an explicit 120 s timeout
+  with unchanged assertions (#3748).
+- An interrupted corpus expand resumes without losing or repeating work:
+  finished seeds are kept and resumed after, the in-flight seed is retried,
+  candidates are not duplicated, committed rows survive a torn queue write,
+  and a malformed JSONL line is refused with its path and line (#2320).
+- The wrapper format and packed corpus resolve now fail main CI, not just the
+  cut: model-wrapper-translations checks the deployed Factory inline-tools
+  format and Worker boundaries on every main run (the lost droid format from
+  #3734 is its negative control), cli-package-closure pins the five
+  corpus-resolve modules, and tools-packed-relative-imports loads
+  `aiwg corpus` help offline from both tarballs (#2326).
+- Effect restarts reconcile to one effect and replay cannot revive a revoked
+  approval: crash recovery applies exactly one effect with a continuous
+  checkpoint chain, idempotency keys deduplicate or refuse conflicts, and
+  persisted deny, revoke and expiry stay authoritative over replayed approval
+  receipts (#2323).
+- lint:test-registration now checks that each `lint:*`, `test:*` and `check:*`
+  npm script runs in at least one main workflow job or is listed with an owner
+  and a reason: 47 ran in main CI and 31 were exempt, with four `unwired`.
+  This release wires all four: lint:plugin-links, lint:claude-context and
+  lint:context-firewall (#3745) and lint:context-sizes (#3740). The
+  workflow parser is shared from tools/testing/workflow-commands.mjs (#2317).
+- A workflow oracle fails when a step that needs the build runs before it,
+  following npm aliases against the one reviewable consumer list in
+  ci/build-required-commands.json; a fixture of the pre-fix order that broke
+  main after 2026.10.14 produces both violations (#2318, refs #3732).
+- Offline sessions-export negatives cover a generic-interchange round trip, a
+  torn shard write that leaves no shard or receipt with a succeeding re-run,
+  and an unsupported plan schema version refused before any output exists
+  (#2567).
+
 ## [2026.10.14] - 2026-10-28
 
 ### Added
