@@ -90,7 +90,7 @@ export const FEATURE_CATALOG: FeatureDefinition[] = [
     packages: ['hono', '@hono/node-server', 'ws'],
     packageSpecs: {
       hono: '4.12.31',
-      '@hono/node-server': '2.0.11',
+      '@hono/node-server': '2.1.5',
       ws: '8.21.1',
     },
     enables: [

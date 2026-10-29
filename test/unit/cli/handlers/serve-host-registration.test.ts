@@ -1,12 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { request } from 'node:http';
+import { once } from 'node:events';
+import { WebSocket } from 'ws';
+import { Hono } from 'hono';
+import { serveStatic } from '@hono/node-server/serve-static';
 import type { ExecutorRegistry } from '../../../../src/serve/executor-registry.js';
 
-const server = vi.hoisted(() => ({ fetch: undefined as undefined | ((request: Request) => Promise<Response>) }));
+const server = vi.hoisted(() => ({ real: false, fetch: undefined as undefined | ((request: Request) => Promise<Response>) }));
 vi.mock('../../../../src/features/runtime.js', () => ({
   loadFeaturePackage: async (name: string) => {
+    if (server.real) {
+      if (name === '@hono/node-server') return import('@hono/node-server');
+      if (name === '@hono/node-server/serve-static') return import('@hono/node-server/serve-static');
+      if (name === 'ws') return import('ws');
+    }
     if (name === 'hono') return import('hono');
     if (name === '@hono/node-server') return { serve: (options: { fetch: typeof server.fetch }) => {
       server.fetch = options.fetch;
@@ -19,8 +29,10 @@ vi.mock('../../../../src/features/runtime.js', () => ({
 
 let root: string, registry: ExecutorRegistry;
 beforeEach(async () => {
+  server.real = false;
   root = mkdtempSync(join(tmpdir(), 'serve-host-registration-'));
   vi.stubEnv('AIWG_EXECUTOR_IDENTITY_STORE', join(root, 'identities.json'));
+  vi.stubEnv('AIWG_SANDBOX_IDENTITY_STORE', join(root, 'sandbox-identities.json'));
   const module = await import('../../../../src/serve/executor-registry.js');
   registry = new module.ExecutorRegistry(join(root, 'trusted', 'identities.json'));
   vi.spyOn(module.executorRegistry, 'register').mockImplementation((payload, token) => registry.register(payload, token));
@@ -99,5 +111,94 @@ describe('host executor registration HTTP authentication', () => {
       expect(response.status).toBe(201);
       expect(store.read().hostRegistrationRevoked).toBe(true);
     } finally { app.close(); }
+  });
+});
+
+
+// Exercise the real handler mount and adapter without URL-client path normalization.
+describe('dashboard static assets and route coexistence', () => {
+  let app: Awaited<ReturnType<typeof import('../../../../src/cli/handlers/serve.js').startServer>>;
+  let assets: string;
+  beforeEach(async () => {
+    server.real = true;
+    assets = join(root, 'apps', 'web', 'dist');
+    mkdirSync(assets, { recursive: true });
+    writeFileSync(join(assets, 'asset.txt'), 'dashboard asset');
+    writeFileSync(join(assets, 'hello world.txt'), 'encoded asset');
+    writeFileSync(join(root, 'apps', 'web', 'outside.txt'), 'outside secret');
+    // These collisions must never mask the API or the upgrade handler.
+    mkdirSync(join(assets, 'api'), { recursive: true });
+    writeFileSync(join(assets, 'api', 'health'), 'static API collision');
+    mkdirSync(join(assets, 'ws', 'sandbox'), { recursive: true });
+    writeFileSync(join(assets, 'ws', 'sandbox', 'unknown'), 'static WS collision');
+    const { startServer } = await import('../../../../src/cli/handlers/serve.js');
+    app = await startServer({ port: 0, host: '127.0.0.1', readOnly: true, frameworkRoot: root });
+  });
+  afterEach(() => app?.close());
+
+  function rawRequest(path: string, method = 'GET'): Promise<{ status: number; body: string; headers: import('node:http').IncomingHttpHeaders }> {
+    return new Promise((resolve, reject) => {
+      const req = request(app.url, { path, method, agent: false }, response => {
+        const chunks: Buffer[] = [];
+        response.on('data', chunk => chunks.push(chunk));
+        response.on('end', () => resolve({ status: response.statusCode!, body: Buffer.concat(chunks).toString(), headers: response.headers }));
+        response.on('error', reject);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  it.each(['GET', 'HEAD'])('serves an asset with %s', async method => {
+    const response = await rawRequest('/asset.txt', method);
+    expect(response.status).toBe(200);
+    expect(response.headers['content-length']).toBe(String(Buffer.byteLength('dashboard asset')));
+    expect(response.body).toBe(method === 'HEAD' ? '' : 'dashboard asset');
+  });
+
+  it.each(['POST', 'PUT', 'DELETE'])('falls through for %s on a static asset', async method => {
+    const response = await rawRequest('/asset.txt', method);
+    expect(response.status).toBe(404);
+    expect(response.body).toBe('Not found');
+  });
+
+  it('serves an ordinary percent-encoded filename', async () => {
+    expect(await rawRequest('/hello%20world.txt')).toMatchObject({ status: 200, body: 'encoded asset' });
+  });
+
+  it.each(['/%2e%2e/outside.txt', '/%252e%252e/outside.txt', '/%252e/outside.txt'])('keeps %s inside the static root', async path => {
+    const response = await rawRequest(path);
+    expect(response.status).toBe(404);
+    expect(response.body).not.toContain('outside secret');
+  });
+
+  it('does not decode a protected percent-encoded prefix again (GHSA-rmxm-3fg6-px4f)', async () => {
+    mkdirSync(join(assets, '%2e'), { recursive: true });
+    writeFileSync(join(assets, '%2e', 'secret.txt'), 'protected secret');
+    const protectedApp = new Hono();
+    protectedApp.use('/%2e/*', context => context.text('denied', 403));
+    protectedApp.use('/*', serveStatic({ root: assets }));
+    // Hono routes /%252e; a second decoding would read /%2e behind the guard.
+    const response = await protectedApp.request('http://localhost/%252e/secret.txt');
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain('protected secret');
+  });
+
+  it('keeps API routing ahead of static assets', async () => {
+    const response = await rawRequest('/api/health');
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ status: 'ok', readOnly: true });
+    expect(await rawRequest('/api/nonexistent')).toMatchObject({ status: 404, body: '{"error":"Not found"}' });
+  });
+
+  it('keeps the sandbox WebSocket upgrade and authentication working', async () => {
+    const ws = new WebSocket(`${app.url.replace('http:', 'ws:')}/ws/sandbox/unknown`);
+    try {
+      const closed = once(ws, 'close');
+      await once(ws, 'open');
+      const [code, reason] = await closed;
+      expect(code).toBe(4001);
+      expect(reason.toString()).toBe('Unauthorized');
+    } finally { ws.terminate(); }
   });
 });
