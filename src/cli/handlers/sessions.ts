@@ -32,7 +32,7 @@ import {
   GROK_BUILD_ADAPTER_VERSION,
   GROK_BUILD_CLI_EXPORT_LOCATOR_CLASS,
   GROK_BUILD_NATIVE_LOCATOR_CLASS,
-  GrokBuildSessionAdapter,
+  GrokBuildSessionAdapter, grokBuildNativeAvailability,
   grokBuildList,
   grokBuildSearch,
   grokBuildExport,
@@ -223,8 +223,8 @@ Options:
   --muse-root <path>  Explicitly authorize a Muse Code sessions root
   --dsh-root <path>  Explicitly authorize a DeepSeek Harness sessions root
   --grokbot-root <path>  Explicitly authorize a Grok Bot sand-client-persistence root
-  --grok-root <path>  Explicitly authorize a Grok Build sessions root (native chat_history.jsonl discovery)
-  --grok-active-sessions <path>  Explicitly authorize active_sessions.json for Grok Build live detection (read-only; requires --grok-root)
+  --grok-root <path>  Authorize experimental Grok Build native sessions (requires AIWG_GROK_BUILD_NATIVE_EXPERIMENTAL=1; unqualified)
+  --grok-active-sessions <path>  Authorize experimental active_sessions.json live detection (same opt-in; requires --grok-root)
   --hermes-root <path>  Explicitly authorize a Hermes home for a read-only state.db backup snapshot
   --grok-bin <path>  Absolute Grok Build CLI path for grok-list/grok-search/grok-export
                    (default: grok on PATH, then $GROK_HOME/bin/grok)
@@ -2000,12 +2000,12 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
     };
   }
   if (provider === 'grok-build') {
+    const adapter = new GrokBuildSessionAdapter();
     return {
       provider, disposition: 'implemented', operationalState: 'available',
-      supportedOperations: ['discover', 'inspect', 'stream'],
-      acquisitionModes: ['manual-export', 'jsonl'],
-      reasonCode: null,
-      remediation: 'Pass --grok-root with an explicitly authorized sessions root for native chat_history.jsonl discovery, optionally with --grok-active-sessions for live detection; or run `grok export <session-id> <session-id>.md` and import the explicitly authorized Markdown file.',
+      supportedOperations: adapter.supportedOperations,
+      acquisitionModes: adapter.acquisitionModes,
+      ...grokBuildNativeAvailability(),
       evidence: {
         adapterVersion: GROK_BUILD_ADAPTER_VERSION,
         verifiedAt: '2026-09-21',
