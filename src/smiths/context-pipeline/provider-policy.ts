@@ -11,8 +11,8 @@
  * with the misleading rationale "claude uses CLAUDE.md natively." That
  * conflated two facts: claude DOES read CLAUDE.md without aiwg-side
  * wiring, but regenerate STILL needs to refresh AIWG.md and ensure the
- * `@AIWG.md` link is present in CLAUDE.md. The fix splits the policy
- * into three granular gates so each provider gets exactly what it needs.
+ * `@AIWG.md` link is present in CLAUDE.md. The provider hooks remain granular;
+ * root AIWG.md is now universal (#3762).
  *
  * @issue #1437
  */
@@ -35,20 +35,14 @@ export const AGENTS_MD_PROVIDERS: ReadonlySet<Platform> = new Set(
 
 export type AgentsMdProvider = Platform & ('antigravity' | 'codex' | 'copilot' | 'cursor' | 'windsurf' | 'hermes' | 'grokbot' | 'grok-build' | 'muse' | 'pi' | 'omp' | 'warp' | 'factory' | 'opencode');
 
-/**
- * Whether the context-pipeline has ANY work to do for this provider.
- * Returns false only for providers that have no project-local context
- * footprint: OpenClaw/OpenHuman (home-dir-only) and 'generic' (no specific provider).
- *
- * Claude returns TRUE — it needs AIWG.md + a CLAUDE.md hook update.
- */
+/** Compatibility query: every registered provider receives root AIWG.md (#3762). */
 export function shouldEmitContextFiles(provider: Platform): boolean {
-  return shouldEmitAiwgMd(provider) || shouldEmitClaudeMdHook(provider);
+  return shouldEmitAiwgMd(provider);
 }
 
 /**
- * Whether to emit AIWG.md at project root. True for every project-local
- * provider; false only for home-dir-only providers and 'generic'.
+ * Compatibility query, no longer an emission gate. Root AIWG.md is always
+ * generated; only an explicit caller opt-out can suppress it (#3762).
  */
 export function shouldEmitAiwgMd(provider: Platform): boolean {
   return getProviderDefinition(provider)?.paths.contextFiles.aiwgMd ?? false;

@@ -17,32 +17,8 @@ import {
 import { BOOTSTRAP_AUTHORITY_SIGNATURE, WORKSPACE_PRECEDENCE_SIGNATURE, WORKSPACE_PRECEDENCE_SUPERSEDED } from './workspace-document.js';
 import { configuredProviders } from './workspace-migration.js';
 
-/**
- * Blank out fenced code blocks and inline code spans, preserving offsets and line
- * structure, so link extraction sees only prose. Illustrative paths inside an
- * example block are documentation, not context links the graph should resolve (#2536).
- */
-export function maskCodeRegions(content: string): string {
-  const lines = content.split('\n');
-  let fence: { marker: string; length: number } | null = null;
-  const masked = lines.map((line) => {
-    const openOrClose = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (fence) {
-      // A closing fence uses the same character, is at least as long, and carries no info string.
-      if (openOrClose && openOrClose[1][0] === fence.marker && openOrClose[1].length >= fence.length && openOrClose[2].trim() === '') {
-        fence = null;
-      }
-      return ' '.repeat(line.length);
-    }
-    if (openOrClose) {
-      fence = { marker: openOrClose[1][0], length: openOrClose[1].length };
-      return ' '.repeat(line.length);
-    }
-    // Inline code spans: a run of N backticks closes on the next run of exactly N.
-    return line.replace(/(`+)(?:[^`]|(?!\1)`)*?\1/g, (span) => ' '.repeat(span.length));
-  });
-  return masked.join('\n');
-}
+import { maskCodeRegions } from './code-regions.js';
+export { maskCodeRegions } from './code-regions.js';
 
 export function markdownLinks(content: string): string[] {
   const prose = maskCodeRegions(content);
@@ -193,7 +169,9 @@ export async function diagnoseWorkspaceContext(projectPath: string): Promise<Wor
         try {
           const parsed = JSON.parse(config) as Record<string, unknown>;
           const values = Array.isArray(parsed[registration.key]) ? parsed[registration.key] as unknown[] : [];
-          if (!values.includes('WORKSPACE.md')) diagnostics.push({ severity: 'error', code: 'registration-drift', message: `${registration.file} does not register WORKSPACE.md.`, path: registration.file });
+          for (const required of ['WORKSPACE.md', 'AIWG.md']) {
+            if (!values.includes(required)) diagnostics.push({ severity: 'error', code: 'registration-drift', message: `${registration.file} does not register ${required}.`, path: registration.file });
+          }
         } catch {
           diagnostics.push({ severity: 'error', code: 'registration-invalid', message: `${registration.file} is invalid JSON.`, path: registration.file });
         }

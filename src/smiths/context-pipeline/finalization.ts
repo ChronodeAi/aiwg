@@ -1,3 +1,4 @@
+import { maskCodeRegions } from './code-regions.js';
 import { assertSafeContextFile, writeContextFileSync } from './context-file-safety.js';
 /**
  * Context-finalization pass for generated provider context files.
@@ -130,22 +131,42 @@ export async function buildNormalizedAiwgMd(projectPath: string, existing = ''):
   );
 }
 
+/** Remove only the contiguous legacy wrapper at the head, never quoted body lines. */
+function stripLegacyNotesHeader(content: string): string {
+  const lines = content.replace(/^\uFEFF/, '').split(/(?<=\n)/);
+  const wrappers = [
+    /^# AIWG\.md$/,
+    /^<!-- aiwg-managed -->$/,
+    /^<!-- Normalized project-local AIWG context\. Operator notes may live outside AIWG-managed blocks\. -->$/,
+    /^This file is the stable `[^`]+` entry point for AIWG skills, rules, and generated provider context\.$/,
+  ];
+  const removed = new Set<number>();
+  for (let i = 0; i < Math.min(lines.length, 12); i++) {
+    const line = lines[i].replace(/\r?\n$/, '');
+    if (!line.trim()) continue;
+    const wrapper = wrappers.findIndex(pattern => pattern.test(line));
+    if (wrapper < 0 || removed.has(wrapper)) break;
+    removed.add(wrapper);
+    lines[i] = '';
+  }
+  return lines.join('');
+}
+
 /** Strip only known generated wrappers; unknown text always belongs to the operator. */
 export function extractAiwgOperatorNotes(existing: string): string {
   if (!existing.includes(AIWG_SIGNATURE_COMMENT)) return existing;
-  let notes = existing;
+  let notes = stripLegacyNotesHeader(existing);
   for (const [start, end] of [
     [FINALIZATION_START, FINALIZATION_END],
     ['<!-- aiwg-external-links:start -->', '<!-- aiwg-external-links:end -->'],
   ]) {
     const pattern = new RegExp(`${start}[\\s\\S]*?${end}\\r?\\n?`, 'g');
-    notes = notes.replace(pattern, '');
+    // Match in masked prose, then cut those exact offsets from the original.
+    const matches = [...maskCodeRegions(notes).matchAll(pattern)];
+    for (const match of matches.reverse()) {
+      notes = notes.slice(0, match.index) + notes.slice(match.index! + match[0].length);
+    }
   }
-  notes = notes
-    .replace(/^<!-- aiwg-managed -->\r?\n?/gm, '')
-    .replace(/^# AIWG\.md\r?\n/, '')
-    .replace(/^<!-- Normalized project-local AIWG context\. Operator notes may live outside AIWG-managed blocks\. -->\r?\n?/gm, '')
-    .replace(/^This file is the stable `[^`]+` entry point for AIWG skills, rules, and generated provider context\.\r?\n?/gm, '');
   return notes.trim() ? notes.replace(/^(?:\r?\n)+/, '') : '';
 }
 
