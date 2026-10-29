@@ -15,6 +15,12 @@ const roots: string[] = [];
 const catalog = loadProviderModelCatalog();
 const source = (name: string) => join(process.cwd(), 'agentic/code/addons/aiwg-utils/agents', `${name}.md`);
 const metadata = (text: string) => load(text.match(/^---\n([\s\S]*?)\n---/)![1]) as Record<string, any>;
+function expectWorkerBoundaries(text: string) {
+  expect(text).toContain('## Worker boundaries');
+  expect(text).toContain('child allowance is zero');
+  expect(text).toContain('Write only allowed artifacts');
+  expect(text).toContain('bounded blocked result');
+}
 afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
 async function translator(provider: string) {
@@ -52,6 +58,20 @@ describe('model wrapper provider translations', () => {
       const output = translate(source(wrapper.name), await readFile(source(wrapper.name), 'utf8'), { modelCatalog: catalog, quiet: true });
       expect(output.match(/^---\n([\s\S]*?)\n---/)![1]).toMatch(pattern);
       expect(Array.isArray(metadata(output).tools)).toBe(true);
+      if (provider === 'factory') {
+        const tools = JSON.parse(output.match(/^tools: (\[.*\])$/m)![1]);
+        expect(tools).toEqual(metadata(output).tools);
+        expect(tools.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  // Fast equivalents of the cut-time Factory format and #2893 source contracts.
+  it.each(providers)('%s serialization retains the Worker boundaries section', async provider => {
+    const { translate } = await translator(provider);
+    for (const wrapper of MODEL_WRAPPER_DEFINITIONS.filter(item => item.name.endsWith('-worker'))) {
+      const output = translate(source(wrapper.name), await readFile(source(wrapper.name), 'utf8'), { modelCatalog: catalog, quiet: true });
+      expectWorkerBoundaries(output);
     }
   });
 
@@ -96,6 +116,14 @@ describe('model wrapper provider translations', () => {
     const destination = join(root, adapter.paths.agents);
     const files = await readdir(destination);
     expect(files.filter(file => /\.(?:md|toml)$/.test(file))).toHaveLength(5);
+    for (const file of files.filter(file => /\.(?:md|toml)$/.test(file))) {
+      const text = await readFile(join(destination, file), 'utf8');
+      if (file.includes('-worker')) expectWorkerBoundaries(text);
+      if (provider === 'factory') {
+        expect(text).toMatch(/^tools: \[".*"\]$/m);
+        expect(JSON.parse(text.match(/^tools: (\[.*\])$/m)![1])).toEqual(metadata(text).tools);
+      }
+    }
     const result = await verifyModelWrapperDeployment(destination, { provider,
       models: Object.fromEntries(Object.entries(catalog.providers[provider].roles).map(([role, model]) => [role, model.id])) });
     expect(result.missing).toEqual([]);
