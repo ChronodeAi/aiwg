@@ -38,8 +38,9 @@ import { auditInductions, renderAudit, backfillFrontmatter, renderBackfill as re
 import { buildProfileEdges, renderProfileEdges } from './profile-edges.js';
 import { extractPages, renderExtract, resolveAdapter, rasterizePdf } from './vision-extract.js';
 import { runSnapshot, type SnapshotOptions } from './snapshot.js';
-import { resolveCli } from './resolve-cli.js';
-import { expandCli } from './expand-cli.js';
+import { resolveCli, RESOLVE_USAGE } from './resolve-cli.js';
+import { expandCli, EXPAND_USAGE } from './expand-cli.js';
+import { exitCodeFor, isAiwgError } from '../../cli/errors.js';
 
 function flagValue(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -272,12 +273,31 @@ export async function corpusMain(args: string[], cwd: string = process.cwd()): P
     process.stdout.write(HELP);
     return;
   }
+  if (sub === 'resolve' || sub === 'expand') {
+    const json = hasFlag(rest, '--json');
+    if (hasFlag(rest, '--help') || hasFlag(rest, '-h')) {
+      const usage = sub === 'resolve' ? RESOLVE_USAGE : EXPAND_USAGE;
+      process.stdout.write(json ? JSON.stringify({ usage }) + '\n' : usage);
+      return;
+    }
+    try {
+      const root = await resolveCorpusRoot(cwd);
+      return await (sub === 'resolve' ? resolveCli(rest, root, cwd) : expandCli(rest, root, cwd));
+    } catch (error) {
+      // Semantic failures already emitted their result; only pre-result failures need an envelope.
+      const resultEmitted = isAiwgError(error) && ['ERR_CORPUS_RESOLVE_RESULT', 'ERR_CORPUS_EXPAND_RESULT'].includes(error.code);
+      if (json && !resultEmitted) {
+        process.stdout.write(JSON.stringify({ error: {
+          code: isAiwgError(error) ? error.code : 'ERR_CORPUS_COMMAND',
+          message: error instanceof Error ? error.message : String(error),
+          ...(isAiwgError(error) && error.hint ? { hint: error.hint } : {}),
+        }, exitCode: exitCodeFor(error) }) + '\n');
+      }
+      throw error;
+    }
+  }
   const root = await resolveCorpusRoot(cwd);
   switch (sub) {
-    case 'expand':
-      return expandCli(rest, root, cwd);
-    case 'resolve':
-      return resolveCli(rest, root, cwd);
     case 'radar-init':
       return radarInit(root, rest);
     case 'radar-status':
