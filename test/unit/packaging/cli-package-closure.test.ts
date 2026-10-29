@@ -103,6 +103,11 @@ describe('CLI package dependency closure (default lane)', () => {
     const result = inspectCliPackageClosure(root, manifest.files);
     expect(result.visited).toContain('tools/ralph-external/lib/worker-context.mjs');
     expect(result.visited).toContain('dist/src/cli/router.js');
+    for (const module of ['index', 'daemon-main', 'ipc-client', 'tmux-manager']) {
+      expect(result.visited).toContain(`tools/daemon/${module}.mjs`);
+    }
+    expect(result.visited).toContain('dist/src/process/signal-child.mjs');
+    expect(result.visited).toContain('dist/src/process/bounded-child-process.mjs');
     for (const module of [
       'artifacts/corpus-tools/resolve-cli', 'artifacts/corpus-tools/resolve',
       'artifacts/corpus-tools/resolve-corpus', 'research/identity', 'research/reference-match',

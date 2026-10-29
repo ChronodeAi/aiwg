@@ -122,6 +122,17 @@ describe('installed user entry points load their shipped implementations (#3077)
       .toContain('Would remove 0 unchanged OMP-owned files');
   });
 
+  it.each(['aiwg', '@aiwg/cli'])('%s routes daemon help and status offline (#3758)', name => {
+    const packageRoot = name === 'aiwg' ? installed : cliInstalled;
+    for (const args of [['daemon', '--help'], ['daemon', 'start', '--help']]) {
+      expect(run('bin/aiwg.mjs', args, 0, packageRoot).stdout).toContain('aiwg daemon start');
+    }
+    expect(run('bin/aiwg.mjs', ['daemon', 'status'], 0, packageRoot).stdout).toContain('Daemon: stopped');
+    expect(JSON.parse(run('bin/aiwg.mjs', ['housekeeper', 'status', '--json'], 0, packageRoot).stdout))
+      .toMatchObject({ command: 'housekeeper.status', status: 'ok', mode: 'offline', pid: null });
+    expect(existsSync(path.join(consumer, '.aiwg/daemon.pid'))).toBe(false);
+  });
+
   it.each(['aiwg', '@aiwg/cli'])('%s loads corpus resolve from its tarball offline (#2326)', name => {
     const packageRoot = name === 'aiwg' ? installed : cliInstalled;
     const result = run('bin/aiwg.mjs', ['corpus', 'resolve', '--help'], 0, packageRoot);

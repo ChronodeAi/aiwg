@@ -47,6 +47,7 @@ import {
 } from './scaffolding.js';
 import {
   behaviorHandler,
+  daemonHandler,
   daemonInitHandler,
   daemonHandlers,
 } from './daemon.js';
@@ -281,6 +282,7 @@ export {
 
   // Daemon
   behaviorHandler,
+  daemonHandler,
   daemonInitHandler,
   housekeeperHandler,
 

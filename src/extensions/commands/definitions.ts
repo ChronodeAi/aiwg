@@ -12,6 +12,8 @@
  */
 
 import type { CommandMetadata, Extension, SkillMetadata } from '../types.js';
+import { daemonCommand, behaviorCommand, daemonInitCommand, housekeeperCommand } from './daemon.js';
+export { daemonCommand, behaviorCommand, daemonInitCommand, housekeeperCommand } from './daemon.js';
 
 // ============================================
 // Individual Command Definitions
@@ -3272,96 +3274,6 @@ export const reproducibilityValidateCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
-export const behaviorCommand: Extension = {
-  id: 'behavior',
-  type: 'skill',
-  name: 'Behavior',
-  description: 'Manage behavior YAML bundles that bind directives and toolsets to agent types',
-  version: '1.0.0',
-  capabilities: ['cli', 'behavior', 'daemon', 'configuration'],
-  keywords: ['behavior', 'directive', 'toolset', 'daemon', 'ops', 'agent-type'],
-  category: 'daemon',
-  platforms: {
-    claude: 'full',
-    generic: 'full',
-  },
-  deployment: {
-    pathTemplate: '.{platform}/commands/{id}.md',
-    core: false,
-  },
-  metadata: {
-    type: 'skill',
-    triggerPhrases: ['behavior', 'list behaviors', 'apply behavior', 'manage behaviors'],
-    commandHint: {
-      template: 'utility',
-      argumentHint: '<list|info|apply|remove> [name] [--to <agent>] [--from <agent>]',
-      allowedTools: ['Read', 'Bash', 'Write'],
-    },
-  } satisfies SkillMetadata,
-};
-
-export const daemonInitCommand: Extension = {
-  id: 'daemon-init',
-  type: 'skill',
-  name: 'Daemon Init',
-  description: 'Initialize daemon config from a profile template (default: manager)',
-  version: '1.0.0',
-  capabilities: ['cli', 'daemon', 'configuration', 'scaffolding'],
-  keywords: ['daemon', 'init', 'profile', 'manager', 'orchestrator', 'config'],
-  category: 'daemon',
-  platforms: {
-    claude: 'full',
-    generic: 'full',
-  },
-  deployment: {
-    pathTemplate: '.{platform}/commands/{id}.md',
-    core: false,
-  },
-  metadata: {
-    type: 'skill',
-    triggerPhrases: ['daemon init', 'init daemon', 'initialize daemon', 'daemon setup'],
-    commandHint: {
-      template: 'utility',
-      argumentHint: '[profile-name] [--force]',
-      allowedTools: ['Bash', 'Read', 'Write'],
-    },
-  } satisfies SkillMetadata,
-};
-
-export const housekeeperCommand: Extension = {
-  id: 'housekeeper',
-  type: 'skill',
-  name: 'Housekeeper',
-  description: 'Deterministic maintenance daemon: start/stop/status/run-once, jobs, watch roots, autostart units',
-  version: '1.0.0',
-  capabilities: ['cli', 'daemon', 'maintenance', 'scheduler'],
-  keywords: ['housekeeper', 'daemon', 'maintenance', 'schedule', 'run-once', 'autostart'],
-  category: 'daemon',
-  platforms: {
-    claude: 'full',
-    generic: 'full',
-  },
-  deployment: {
-    pathTemplate: '.{platform}/commands/{id}.md',
-    core: false,
-  },
-  metadata: {
-    type: 'skill',
-    triggerPhrases: ['housekeeper', 'housekeeper status', 'housekeeper start', 'maintenance daemon'],
-    commandHint: {
-      template: 'utility',
-      argumentHint: '<start|stop|status|run-once|job|watch|install|uninstall> [options]',
-      allowedTools: ['Bash', 'Read', 'Write'],
-      executionSteps: [
-        'Parse subcommand and flags',
-        'Start/stop/query the housekeeper-profile daemon or edit its config',
-        'Run one job without a daemon (run-once) or write autostart units (install)',
-        'Display result',
-      ],
-    },
-  } satisfies SkillMetadata,
-};
-
 // Config Commands
 
 export const configCommand: Extension = {
@@ -3973,7 +3885,7 @@ export const rlmCacheCommand: Extension = {
  * - SDLC Orchestration (1): sdlc-accelerate
  * - Index (1): index
  * - Reproducibility (4): execution-mode, snapshot, checkpoint, reproducibility-validate
- * - Daemon (3): behavior, daemon-init, housekeeper
+ * - Daemon (4): daemon, behavior, daemon-init, housekeeper
  * - Config (1): config
  * - Ops (1): ops
  * - Agentic Tools (5): chunk, fanout, rlm-prep, rlm-search, rlm-status
@@ -4127,7 +4039,8 @@ export const commandDefinitions: Extension[] = [
   checkpointCommand,
   reproducibilityValidateCommand,
 
-  // Daemon (3)
+  // Daemon (4)
+  daemonCommand,
   behaviorCommand,
   daemonInitCommand,
   housekeeperCommand,
