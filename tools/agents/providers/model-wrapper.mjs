@@ -62,7 +62,11 @@ export function withModelWrapper(provider, translate) {
     if (!target) return `${mapped.trim()}\n\n${notice}\n`;
     const metadata = target.metadata;
     if (pin) metadata[controls.model] = pin;
-    else if (!override) delete metadata.model;
+    else if (!override || provider !== 'grok-build') delete metadata.model;
+    // Portable input aliases are not provider controls. Emit only the resolved native field.
+    for (const key of ['effort', 'model-effort', 'model_reasoning_effort', 'reasoningEffort', 'thinkingLevel']) {
+      if (key !== controls.effort || !nativeEffort) delete metadata[key];
+    }
     if (nativeEffort) metadata[controls.effort] = nativeEffort;
     if (metadata['model-tier']) metadata['model-tier'] = tier;
     if (wrapper.readOnly) {

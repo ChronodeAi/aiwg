@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { load } from 'js-yaml';
+import { getStaticTOMLValue, parseTOML } from 'toml-eslint-parser';
+import { wrapperControls } from '../../../src/models/wrapper-enforcement.js';
 import { MODEL_WRAPPER_DEFINITIONS } from '../../../src/models/wrapper-definitions.js';
 import { loadProviderModelCatalog } from '../../../src/models/catalog-policy.js';
 import { verifyModelWrapperDeployment } from '../../../src/models/wrapper-deployment.js';
@@ -11,6 +13,51 @@ import { isFlagshipModel } from '../../../src/models/tiers.js';
 
 const providers = ['claude', 'codex', 'copilot', 'cursor', 'factory', 'opencode', 'omp',
   'antigravity', 'grok-build', 'openclaw', 'warp', 'windsurf'];
+// Independent format expectations: do not derive these from the translators under test.
+const nativeControls: Record<string, { model?: string; effort?: string }> = {
+  claude: { model: 'model', effort: 'effort' },
+  codex: { model: 'model', effort: 'model_reasoning_effort' },
+  factory: { model: 'model', effort: 'reasoningEffort' },
+  omp: { model: 'model', effort: 'thinkingLevel' },
+  cursor: { model: 'model' }, copilot: { model: 'model' }, opencode: { model: 'model' },
+};
+const references = ['hermes', 'muse', 'pi', 'deepseek-harness', 'grokbot', 'openhuman'];
+const effortKeys = ['effort', 'model-effort', 'model_reasoning_effort', 'reasoningEffort', 'thinkingLevel'];
+const toml = (text: string) => getStaticTOMLValue(parseTOML(text)) as Record<string, any>;
+function serialized(provider: string, output: string) {
+  if (provider === 'codex') {
+    const fields = toml(output);
+    return { fields, body: fields.developer_instructions as string };
+  }
+  if (provider === 'windsurf') {
+    const capabilities = output.match(/<capabilities>\n([\s\S]*?)\n<\/capabilities>/)![1];
+    expect(capabilities.split('\n').every(line => /^- \S+$/.test(line))).toBe(true);
+    return { fields: { capabilities: capabilities.split('\n').map(line => line.slice(2)) }, body: output };
+  }
+  return { fields: metadata(output), body: output.split(/\n---\n/).slice(1).join('\n---\n') };
+}
+function expectedCapabilities(provider: string, readOnly: boolean) {
+  const tools = readOnly ? ['Read', 'Grep', 'Glob', 'Bash'] : ['Bash', 'Read', 'Write', 'Edit', 'Grep'];
+  if (provider === 'codex') return { tools: undefined, sandbox_mode: readOnly ? 'read-only' : undefined };
+  if (provider === 'opencode') return { permission: readOnly
+    ? { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', bash: 'ask', edit: 'deny', task: 'deny' }
+    : { bash: { 'aiwg *': 'allow', 'git status': 'allow', 'git diff': 'allow', 'git log*': 'allow',
+      'npm test': 'allow', 'npm run *': 'allow', 'git push': 'ask', 'rm -rf': 'deny', '*': 'ask' } } };
+  if (provider === 'factory') return { tools: readOnly ? ['Execute', 'Glob', 'Grep', 'Read'] : ['Create', 'Edit', 'Execute', 'Grep', 'Read'] };
+  if (provider === 'copilot') return { tools: readOnly ? ['search/codebase', 'terminal'] : ['terminal', 'search/codebase', 'edit'] };
+  if (provider === 'antigravity') return { tools: readOnly ? ['view_file', 'grep_search', 'run_command']
+    : ['run_command', 'view_file', 'write_to_file', 'replace_file_content', 'grep_search'] };
+  if (provider === 'omp') return { tools: tools.map(tool => tool.toLowerCase()) };
+  if (provider === 'grok-build') return { tools: tools.join(', ') };
+  if (provider === 'windsurf') return { capabilities: tools };
+  return { tools };
+}
+function expectControls(provider: string, fields: Record<string, any>, model?: string, effort?: string) {
+  const controls = nativeControls[provider] ?? {};
+  expect(wrapperControls(provider)).toEqual(controls);
+  expect(fields.model).toBe(model);
+  for (const key of effortKeys) expect(fields[key], `${provider}.${key}`).toBe(key === controls.effort ? effort : undefined);
+}
 const roots: string[] = [];
 const catalog = loadProviderModelCatalog();
 const source = (name: string) => join(process.cwd(), 'agentic/code/addons/aiwg-utils/agents', `${name}.md`);
@@ -38,7 +85,11 @@ describe('model wrapper provider translations', () => {
     expect(result.emitted).toBe(5);
     for (const wrapper of MODEL_WRAPPER_DEFINITIONS) {
       const text = await readFile(join(root, 'home/agents', `aiwg_${wrapper.name.replaceAll('-', '_')}.toml`), 'utf8');
-      expect(text).toContain(`hint = "${wrapper.role}"`);
+      const fields = toml(text);
+      expect(fields.model).toEqual({ hint: wrapper.role });
+      expect(fields.model_reasoning_effort).toBeUndefined();
+      if (wrapper.name.endsWith('-worker')) expectWorkerBoundaries(fields.system_prompt.inline);
+      expect(fields.sandbox_mode).toBe(wrapper.readOnly ? 'read_only' : 'none');
       expect(text).toContain('WorkerClaims');
       expect(text).toContain('Stop rules');
       if (wrapper.readOnly) {
@@ -66,12 +117,85 @@ describe('model wrapper provider translations', () => {
     }
   });
 
-  // Fast equivalents of the cut-time Factory format and #2893 source contracts.
-  it.each(providers)('%s serialization retains the Worker boundaries section', async provider => {
+  it.each(providers)('%s serialization retains exact capabilities and the Worker boundaries section', async provider => {
     const { translate } = await translator(provider);
-    for (const wrapper of MODEL_WRAPPER_DEFINITIONS.filter(item => item.name.endsWith('-worker'))) {
-      const output = translate(source(wrapper.name), await readFile(source(wrapper.name), 'utf8'), { modelCatalog: catalog, quiet: true });
-      expectWorkerBoundaries(output);
+    for (const wrapper of MODEL_WRAPPER_DEFINITIONS) {
+      const input = await readFile(source(wrapper.name), 'utf8');
+      const output = translate(source(wrapper.name), input, { modelCatalog: catalog, quiet: true });
+      const { fields, body } = serialized(provider, output);
+      for (const [key, value] of Object.entries(expectedCapabilities(provider, wrapper.readOnly))) {
+        expect(fields[key], `${provider}.${wrapper.name}.${key}`).toEqual(value);
+      }
+      if (wrapper.name.endsWith('-worker')) {
+        expectWorkerBoundaries(body);
+        const section = input.match(/## Worker boundaries\n[\s\S]*?(?=\n## |$)/)![0].trim();
+        expect(body).toContain(section);
+      }
+    }
+  });
+
+  it.each(providers)('%s serializes explicit pins and effort only through supported native controls', async provider => {
+    const { translate } = await translator(provider);
+    const controls = nativeControls[provider] ?? {};
+    for (const wrapper of MODEL_WRAPPER_DEFINITIONS) {
+      // Exercise an explicit operator selector even for OMP's placeholder catalog defaults.
+      for (const effortKey of effortKeys) {
+        const input = requireSource(wrapper.name).replace(/^(model:.*)$/m, `$1\n${effortKey}: low`);
+        const output = translate(source(wrapper.name), input, { modelCatalog: catalog, quiet: true,
+          ...(controls.model ? { [`${wrapper.role}Model`]: 'operator/model-v42' } : {}) });
+        expectControls(provider, serialized(provider, output).fields, controls.model ? 'operator/model-v42' : undefined,
+          controls.effort ? 'low' : undefined);
+      }
+    }
+  });
+
+  it.each(Object.keys(nativeControls))('%s keeps an unknown source model pin as written', async provider => {
+    const { translate } = await translator(provider);
+    for (const wrapper of MODEL_WRAPPER_DEFINITIONS) {
+      const input = requireSource(wrapper.name).replace(/^model:.*$/m, 'model: vendor/future-model-v42\nmodel-effort: high');
+      const output = translate(source(wrapper.name), input, { modelCatalog: catalog, quiet: true });
+      expectControls(provider, serialized(provider, output).fields, 'vendor/future-model-v42',
+        nativeControls[provider].effort ? 'high' : undefined);
+    }
+  });
+
+  it.each(['antigravity', 'openclaw', 'warp', 'windsurf'])('%s omits unsupported native pins for unknown source models', async provider => {
+    const { translate } = await translator(provider);
+    for (const wrapper of MODEL_WRAPPER_DEFINITIONS) {
+      const input = requireSource(wrapper.name).replace(/^model:.*$/m, 'model: vendor/future-model-v42');
+      const output = translate(source(wrapper.name), input, { modelCatalog: catalog, quiet: true });
+      expectControls(provider, serialized(provider, output).fields);
+    }
+  });
+
+  it('Grok Build keeps its gated configured selector and refuses an unqualified source pin', async () => {
+    const { translate } = await translator('grok-build');
+    const input = requireSource('aiwg-model-coding-worker');
+    expect(() => translate(source('aiwg-model-coding-worker'),
+      input.replace(/^model:.*$/m, 'model: vendor/future-model-v42'), { modelCatalog: catalog, quiet: true }))
+      .toThrow(/exact model pin.*not a qualified Grok Build selector/);
+    const output = translate(source('aiwg-model-coding-worker'), input,
+      { codingModel: 'vendor/future-model-v42', modelCatalog: catalog, quiet: true });
+    expect(metadata(output).model).toBe('vendor/future-model-v42');
+    for (const key of effortKeys) expect(metadata(output)[key]).toBeUndefined();
+    expect(output).toContain('Native-agent tier enforcement remains gated by #2577; not enforced.');
+  });
+
+  it.each(references)('%s has a reference translation, without native wrapper pin controls', async provider => {
+    const { adapter, translate } = await translator(provider);
+    expect(wrapperControls(provider)).toEqual({});
+    for (const wrapper of MODEL_WRAPPER_DEFINITIONS) {
+      const input = requireSource(wrapper.name);
+      const output = translate(source(wrapper.name), input, { modelCatalog: catalog, quiet: true });
+      expect(output).toBe(input);
+      expect(metadata(output).tools).toEqual(metadata(input).tools);
+      if (wrapper.name.endsWith('-worker')) expectWorkerBoundaries(serialized(provider, output).body);
+    }
+    // Indexed/skill-only providers emit no native agent files. Hermes does not export this writer.
+    if (provider !== 'hermes') {
+      const root = await mkdtemp(join(tmpdir(), 'aiwg-wrapper-reference-')); roots.push(root);
+      expect(adapter.deployAgents(MODEL_WRAPPER_DEFINITIONS.map(item => source(item.name)), root, { quiet: true })).toBe(0);
+      expect(await readdir(root)).toEqual([]);
     }
   });
 
@@ -83,10 +207,8 @@ describe('model wrapper provider translations', () => {
       const output = translate(source(wrapper.name), text, { modelCatalog: catalog, quiet: true });
       expect(output).toContain('WorkerClaims');
       expect(output).toContain('Stop rules');
-      const fields = provider === 'codex' ? Object.fromEntries(output.split('\n').flatMap(line => {
-        const match = line.match(/^(name|model|model_reasoning_effort|sandbox_mode) = (.*)$/);
-        return match ? [[match[1], JSON.parse(match[2])]] : [];
-      }))
+      const fields = provider === 'codex' ? Object.fromEntries(Object.entries(toml(output))
+        .filter(([key]) => ['name', 'model', 'model_reasoning_effort', 'sandbox_mode'].includes(key)))
         : provider === 'windsurf' ? { capabilities: output.match(/<capabilities>([\s\S]*?)<\/capabilities>/)?.[1] }
         : metadata(output);
       if (wrapper.readOnly) {
@@ -118,7 +240,14 @@ describe('model wrapper provider translations', () => {
     expect(files.filter(file => /\.(?:md|toml)$/.test(file))).toHaveLength(5);
     for (const file of files.filter(file => /\.(?:md|toml)$/.test(file))) {
       const text = await readFile(join(destination, file), 'utf8');
-      if (file.includes('-worker')) expectWorkerBoundaries(text);
+      const { fields, body } = serialized(provider, text);
+      const extension = provider === 'codex' ? '.toml' : provider === 'copilot' ? '.agent.md' : '.md';
+      const wrapper = MODEL_WRAPPER_DEFINITIONS.find(item => file === `${item.name}${extension}`)!;
+      expect(wrapper).toBeDefined();
+      for (const [key, value] of Object.entries(expectedCapabilities(provider, wrapper.readOnly))) {
+        expect(fields[key], `${provider}.${file}.${key}`).toEqual(value);
+      }
+      if (file.includes('-worker')) expectWorkerBoundaries(body);
       if (provider === 'factory') {
         expect(text).toMatch(/^tools: \[".*"\]$/m);
         expect(JSON.parse(text.match(/^tools: (\[.*\])$/m)![1])).toEqual(metadata(text).tools);
