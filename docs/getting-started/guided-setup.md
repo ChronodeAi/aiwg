@@ -8,11 +8,15 @@ the intended project. The [public installer](https://aiwg.io/setup.aiwg.yaml)
 can handle bootstrap and repair in your provider session. It remains a
 provider-orchestrated manifest; `aiwg setup-run` does not execute it.
 
+Each section starts with what you can ask your assistant, then gives the command reference.
+
 ## Save the interview plan
 
-```bash
-aiwg setup --scope project --providers claude
-```
+> "Save a guided setup interview plan for the claude provider in this project. Ask me about targets, intent, tools, locations, and optional capabilities."
+
+> "I answered something wrong. Take me back to that question without losing the saved plan."
+
+Your assistant runs the guided interview, writes the plan beneath the configured AIWG artifact root, and lets you revisit answers with `back` or `edit`.
 
 Replace `claude` with your provider, or use a comma-separated list such as
 `claude,codex`. Explicit flags win over saved answers and existing settings.
@@ -35,12 +39,17 @@ The scope flag controls provider deployment: `project` targets project files;
 writes still use their own owners. This is separate from globally installing
 the CLI with npm, and from the direct deployment command's global mode.
 
-## Review, then apply
+### Command reference
 
 ```bash
-aiwg setup --review
-aiwg setup --apply
+aiwg setup --scope project --providers claude
 ```
+
+## Review, then apply
+
+> "Review the saved setup plan grouped by workspace and provider. Report conflicts, stale facts, and missing credentials without writing anything."
+
+Your assistant reviews without writing, then applies with confirmation, invoking the existing owners and saving receipts after each action.
 
 Review groups actions by workspace and provider and reports conflicts, stale
 facts, and missing credential references without writing anything. With a
@@ -64,13 +73,24 @@ owner's external side effect and its saved receipt requires checking that owner
 before retrying. Changed environment facts are refused: rerun discovery through
 the interview and review the new plan rather than forcing stale actions.
 
-## Headless answers use the same flow
+Refinement prompt:
+
+> "The review reports a conflict. Tell me which workspace it is in and what to change before applying."
+
+Your assistant names the conflicted workspace and the change needed before apply.
+
+### Command reference
 
 ```bash
-aiwg setup --scope project --providers claude --intent code --jev decline --worker-dispatch decline --non-interactive --json
-aiwg setup --review --json
-aiwg setup --apply --yes --non-interactive --json
+aiwg setup --review
+aiwg setup --apply
 ```
+
+## Headless answers use the same flow
+
+> "Answer this setup headlessly with intent code and both optional integrations declined. Record the plan, review it as JSON, then apply with yes."
+
+Your assistant records the plan with the given answers, reviews it as JSON without prompting, and applies with explicit confirmation.
 
 Headless mode never prompts. Required unanswered choices fail with the flag to
 supply; optional integrations stay off when unanswered. Apply requires `--yes`
@@ -82,10 +102,6 @@ Credential flags store locators only. Supply the named environment variable
 securely in the apply process, or use an absolute file reference or redirected
 stdin. Do not paste a token into an argument or plan. For example:
 
-```bash
-aiwg setup --scope project --providers claude --credential claude=env:ANTHROPIC_API_KEY --non-interactive
-```
-
 `--credential claude=file:/absolute/path` references a file;
 `--credential claude=store:claude-production` references a named entry in the
 existing native store; `--credential claude=stdin` defers input until apply. The interview and review
@@ -96,7 +112,23 @@ validation; use stdin or a store reference.
 See [Supplying sensitive values](../cli/sensitive-values.md) for terminal entry,
 stdin, file/store/environment exposure, named-value setup and headless errors.
 
+### Command reference
+
+```bash
+aiwg setup --scope project --providers claude --intent code --jev decline --worker-dispatch decline --non-interactive --json
+aiwg setup --review --json
+aiwg setup --apply --yes --non-interactive --json
+```
+
+```bash
+aiwg setup --scope project --providers claude --credential claude=env:ANTHROPIC_API_KEY --non-interactive
+```
+
 ## Multiple roots and monorepos
+
+> "Observe another root for this monorepo and select the package explicitly for headless setup."
+
+Your assistant observes the additional root only with explicit opt-in and selects the monorepo root or package explicitly.
 
 Discovery starts with the current workspace and registered roots. Additional
 scanning requires explicit opt-in; it is bounded and refuses home/filesystem
@@ -104,23 +136,25 @@ roots. Use `--scan-roots <dir>` to observe another root and repeat
 `--workspace <root>` to select observed roots. Selection of a monorepo root or
 package must be explicit in headless mode:
 
+The package must be an observed package root. Review project/user scope
+conflicts and provider destinations before applying; a scope switch does not
+authorize replacing existing files.
+
+### Command reference
+
 ```bash
 aiwg setup --scope project --monorepo root --non-interactive
 aiwg setup --scope project --monorepo package --package packages/app --non-interactive
 ```
 
-The package must be an observed package root. Review project/user scope
-conflicts and provider destinations before applying; a scope switch does not
-authorize replacing existing files.
-
 ## Optional integrations
+
+> "Enable Jev with an environment credential reference and enable worker dispatch. Tell me what each choice costs before applying."
+
+Your assistant enables each integration only with an explicit reference and reports that Jev needs account access with usage charges and workers use their own accounts' quota.
 
 Jev sends decisions to an external service and requires an account/API access;
 usage charges apply. Enable it explicitly with a reference:
-
-```bash
-aiwg setup --scope project --jev enable --credential jev=env:JEV_API_KEY --non-interactive
-```
 
 `--jev decline` leaves it off; `--jev defer` leaves the choice unresolved.
 Existing Jev options include `--region <r>`, `--endpoint <https-url>`,
@@ -128,13 +162,19 @@ Existing Jev options include `--region <r>`, `--endpoint <https-url>`,
 request at apply; no network probe runs in the interview. Removal is explicit
 and cannot be combined with enable options.
 
-```bash
-aiwg setup --scope project --worker-dispatch enable --non-interactive
-```
-
 Direct workers use their own accounts' quota. Installing a worker CLI does not
 qualify it: apply delegates to worker setup and doctor qualification, and launch
 checks availability again. Configure worker paths, groups, and limits through
 the existing parallelism configuration. Worker qualification or Jev failures
 are reported separately so core readiness remains visible. See
 [worker dispatch](worker-dispatch.md) for account and qualification details.
+
+### Command reference
+
+```bash
+aiwg setup --scope project --jev enable --credential jev=env:JEV_API_KEY --non-interactive
+```
+
+```bash
+aiwg setup --scope project --worker-dispatch enable --non-interactive
+```
