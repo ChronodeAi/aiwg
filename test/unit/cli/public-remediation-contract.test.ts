@@ -28,7 +28,7 @@ const EXEMPTIONS: Exemption[] = [
   { path: /^tools\/cli\/doctor\.mjs$/, text: /npm run (?:build:cli|release:fortemi-index)/, classification: 'contributor', rationale: 'source and release-package maintenance only' },
   { path: /^src\/cli\/handlers\/ralph-launcher\.ts$/, text: /npm run build.*dev repo/, classification: 'contributor', rationale: 'explicit development-checkout recovery' },
   { path: /^src\/cli\/git-hooks\.ts$/, text: /node tools\/cli\/aiwg\.mjs workflow/, classification: 'embedded-dispatch', rationale: 'generated Git hook uses a repository-local deterministic entrypoint, not operator guidance' },
-  { path: /^src\/smiths\/context-pipeline\/workspace-context\.ts$/, text: /npm run/, classification: 'embedded-dispatch', rationale: 'reports scripts owned by the target project; it does not remediate AIWG' },
+  { path: /^src\/smiths\/context-pipeline\/workspace-extraction\.ts$/, text: /npm run/, classification: 'embedded-dispatch', rationale: 'reports scripts owned by the target project; it does not remediate AIWG' },
   { path: /^src\/mcp\/cli\.mjs$/, text: /--command npx --args/, classification: 'external-command', rationale: 'example of an explicitly configured third-party MCP command' },
   { path: /^src\/cli\/handlers\/run\.ts$/, text: /modeled on `npm run`/, classification: 'analogy', rationale: 'describes AIWG script semantics and is not executable guidance' },
   { path: /^docs\/agents\/cli-reference\.md$/, text: /npm install -g aiwg/, classification: 'bootstrap', rationale: 'documents base-package installation and recovery' },

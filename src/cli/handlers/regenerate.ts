@@ -20,7 +20,6 @@
  */
 
 import * as path from 'path';
-import { promises as fs } from 'node:fs';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { AiwgError, EXIT_CODES, handlerResultFromError } from '../errors.js';
 import * as ui from '../ui.js';
@@ -28,7 +27,7 @@ import {
   generate as generateContextFiles,
   discoverDeployedArtifacts,
   shouldEmitContextFiles,
-  buildNormalizedAiwgMd,
+  generateAiwgMd,
   writeNormalizedAiwgMd,
   injectLegacyContext,
   migrateWorkspaceContext,
@@ -37,7 +36,6 @@ import {
 import type { Platform } from '../../agents/types.js';
 import { resolveActiveProvider } from '../provider-resolution.js';
 import { getProviderContextDiscoveryPathStrings } from '../../providers/provider-definitions.js';
-import { projectControlPath } from '../../config/project-artifacts.js';
 import { selectRegenerateBranch } from '../regenerate-selector.js';
 
 async function handleRegenerate(args: string[], cwd: string): Promise<void> {
@@ -220,18 +218,15 @@ async function handleRegenerate(args: string[], cwd: string): Promise<void> {
 
   if (legacy) {
     if (skipWorkspaceMd) console.log('  Note: --no-workspace-md is implicit in legacy mode.');
-    const normalizedPath = projectControlPath(target, 'AIWG.md');
-    let existing = '';
-    try { existing = await fs.readFile(normalizedPath, 'utf8'); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    const normalizedContent = await buildNormalizedAiwgMd(target, existing);
+    const normalizedPath = path.join(target, 'AIWG.md');
+    const normalizedContent = await generateAiwgMd(target);
     const result = skipAgentsMd
       ? { targets: [], backups: [], changed: [], dryRun, warnings: [] }
       : await injectLegacyContext(provider as Platform, target, normalizedContent, { dryRun });
     if (dryRun) {
       console.log('');
       console.log('  Would regenerate:');
-      if (!skipAiwgMd) console.log(`    - ${normalizedPath} (normalized framework source)`);
+      if (!skipAiwgMd) console.log(`    - ${normalizedPath} (generated framework context)`);
       for (const changed of result.changed) console.log(`    - ${changed} (legacy inline markers)`);
       for (const warning of result.warnings) console.log(`  WARNING: ${warning}`);
       console.log('');
@@ -257,7 +252,7 @@ async function handleRegenerate(args: string[], cwd: string): Promise<void> {
     console.log('');
     console.log(`  Would regenerate:`);
     if (!skipWorkspaceMd) console.log(`    - ${path.join(target, 'WORKSPACE.md')} (managed graph; operator section preserved)`);
-    console.log(`    - ${projectControlPath(target, 'AIWG.md')}`);
+    console.log('    - optional .aiwg/AIWG.md operator notes (migrate legacy generated sections only)');
     if (!skipAiwgMd) console.log(`    - ${aiwgMd}`);
     if (provider === 'claude') {
       console.log(`    - ${claudeMd} (managed @WORKSPACE.md then @AIWG.md hook; operator content preserved)`);

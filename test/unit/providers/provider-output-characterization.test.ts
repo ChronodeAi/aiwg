@@ -227,18 +227,18 @@ const USE_PATH_GOLDENS = {
 } as const;
 
 const REGENERATE_FILE_GOLDENS: Record<string, string[]> = {
-  claude: ['AIWG.md', '.aiwg/AIWG.md', 'CLAUDE.md'],
-  codex: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  copilot: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', '.github/copilot-instructions.md'],
-  cursor: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  factory: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  grokbot: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  hermes: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', '.hermes.md'],
+  claude: ['AIWG.md', 'CLAUDE.md'],
+  codex: ['AIWG.md', 'AGENTS.md'],
+  copilot: ['AIWG.md', 'AGENTS.md', '.github/copilot-instructions.md'],
+  cursor: ['AIWG.md', 'AGENTS.md'],
+  factory: ['AIWG.md', 'AGENTS.md'],
+  grokbot: ['AIWG.md', 'AGENTS.md'],
+  hermes: ['AIWG.md', 'AGENTS.md', '.hermes.md'],
   // #236: muse emits the discover-first AGENTS.md bridge (no CLAUDE.md shim).
-  muse: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  opencode: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  warp: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', 'WARP.md'],
-  windsurf: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
+  muse: ['AIWG.md', 'AGENTS.md'],
+  opencode: ['AIWG.md', 'AGENTS.md'],
+  warp: ['AIWG.md', 'AGENTS.md', 'WARP.md'],
+  windsurf: ['AIWG.md', 'AGENTS.md'],
 };
 
 describe('provider output characterization for registry migration', () => {
@@ -280,6 +280,7 @@ describe('provider output characterization for registry migration', () => {
       const result = await regenerateHandler.execute(makeCtx(tmpDir, ['--provider', provider]));
       expect(result.exitCode, provider).toBe(0);
 
+      expect(existsSync(join(tmpDir, '.aiwg/AIWG.md')), provider).toBe(false);
       for (const rel of expectedFiles) {
         const filePath = join(tmpDir, rel);
         expect(existsSync(filePath), `${provider} should emit ${rel}`).toBe(true);

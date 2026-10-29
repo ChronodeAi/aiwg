@@ -1,4 +1,4 @@
-import { writeContextFileSync } from './context-file-safety.js';
+import { assertSafeContextFile, writeContextFileSync } from './context-file-safety.js';
 /**
  * Context-finalization pass for generated provider context files.
  *
@@ -10,9 +10,7 @@ import { writeContextFileSync } from './context-file-safety.js';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import {
-  projectAiwgPath,
   projectControlPath,
-  resolveProjectAiwgDir,
 } from '../../config/project-artifacts.js';
 import { renderTrackerProtocol, resolveTrackerAuthority } from '../../tracker/capability-protocol.js';
 import { readConfig, readGitRemoteUrls } from '../../tracker/project-inputs.js';
@@ -60,8 +58,7 @@ export async function buildContextFinalizationBlock(
   const installed = Object.entries(config?.installed ?? {});
   const installedNames = installed.map(([name]) => name);
   const providerDeployments = new Set<string>();
-  const normalizedAiwgMdPath = displayProjectPath(projectPath, projectControlPath(projectPath, 'AIWG.md'));
-  const normalizedAiwgMdLabel = `\`${normalizedAiwgMdPath}\``;
+  const notesPath = displayProjectPath(projectPath, projectControlPath(projectPath, 'AIWG.md'));
 
   for (const [, entry] of installed) {
     for (const provider of Object.keys(entry.deployedTo ?? {})) {
@@ -82,7 +79,7 @@ export async function buildContextFinalizationBlock(
     `- Configured providers: ${formatList(providers)}`,
     `- Installed frameworks/addons: ${formatList(installedNames)}`,
     `- Recorded deployments: ${formatList([...providerDeployments].sort())}`,
-    `- Normalized project context: \`${normalizedAiwgMdPath}\``,
+    '- Generated framework context: `AIWG.md`',
     '',
     '### Capability Routing',
     '',
@@ -98,9 +95,10 @@ export async function buildContextFinalizationBlock(
     '',
     '### Source Model',
     '',
-    `- ${normalizedAiwgMdLabel} is the normalized project-local context entry point.`,
-    '- Root `AIWG.md` is the generated cross-provider companion loaded through `AGENTS.md` and provider twins.',
-    `- \`AGENTS.md\`, \`WARP.md\`, \`.hermes.md\`, and \`.github/copilot-instructions.md\` are provider-facing bridges, not replacements for ${normalizedAiwgMdLabel}.`,
+    '- Root `AIWG.md` is the single generated framework context loaded through provider startup hooks.',
+    `- Optional \`${notesPath}\` contains only operator-authored notes, folded into root AIWG.md on regenerate.`,
+    '- Edit WORKSPACE.md Project Context for project conventions; edit .aiwg/AIWG.md only for optional framework notes, then run `aiwg regenerate`.',
+    '- `AGENTS.md`, `CLAUDE.md`, `WARP.md`, `.hermes.md`, and `.github/copilot-instructions.md` are provider-facing bridges.',
     ...(decision.shouldAnchor ? ['', '## Compact Instructions', '', DECISION_COMPACT_ANCHOR] : []),
     FINALIZATION_END,
     '',
@@ -122,53 +120,58 @@ export function replaceOrAppendFinalizationBlock(content: string, block: string)
   return `${trimmed}\n\n${block}`;
 }
 
+/** Compatibility renderer: normalized context now lives at the project root. */
 export async function buildNormalizedAiwgMd(projectPath: string, existing = ''): Promise<string> {
-  const normalizedDocumentPath = projectControlPath(projectPath, 'AIWG.md');
-  const block = await buildContextFinalizationBlock(projectPath, normalizedDocumentPath);
-  const externalLinksSection = await buildExternalLinksSection(projectPath);
-  const normalizedAiwgMdPath = displayProjectPath(projectPath, projectControlPath(projectPath, 'AIWG.md'));
-  const base = existing.trim().length > 0
-    ? existing
-    : [
-        '# AIWG.md',
-        AIWG_SIGNATURE_COMMENT,
-        '<!-- Normalized project-local AIWG context. Operator notes may live outside AIWG-managed blocks. -->',
-        '',
-        `This file is the stable \`${normalizedAiwgMdPath}\` entry point for AIWG skills, rules, and generated provider context.`,
-        '',
-      ].join('\n');
-
-  const signed = base.includes(AIWG_SIGNATURE_COMMENT)
-    ? base
-    : base.replace(/^([^\n]*)(\n|$)/, `$1\n${AIWG_SIGNATURE_COMMENT}\n`);
-
-  const withFinalization = replaceOrAppendFinalizationBlock(signed, block);
-  return replaceOrAppendExternalLinksBlock(withFinalization, externalLinksSection);
+  const block = await buildContextFinalizationBlock(projectPath);
+  const base = existing || '# AIWG.md\n<!-- aiwg-managed -->\n';
+  const signed = base.includes(AIWG_SIGNATURE_COMMENT) ? base : `${AIWG_SIGNATURE_COMMENT}\n${base}`;
+  return replaceOrAppendExternalLinksBlock(
+    replaceOrAppendFinalizationBlock(signed, block), await buildExternalLinksSection(projectPath),
+  );
 }
 
+/** Strip only known generated wrappers; unknown text always belongs to the operator. */
+export function extractAiwgOperatorNotes(existing: string): string {
+  if (!existing.includes(AIWG_SIGNATURE_COMMENT)) return existing;
+  let notes = existing;
+  for (const [start, end] of [
+    [FINALIZATION_START, FINALIZATION_END],
+    ['<!-- aiwg-external-links:start -->', '<!-- aiwg-external-links:end -->'],
+  ]) {
+    const pattern = new RegExp(`${start}[\\s\\S]*?${end}\\r?\\n?`, 'g');
+    notes = notes.replace(pattern, '');
+  }
+  notes = notes
+    .replace(/^<!-- aiwg-managed -->\r?\n?/gm, '')
+    .replace(/^# AIWG\.md\r?\n/, '')
+    .replace(/^<!-- Normalized project-local AIWG context\. Operator notes may live outside AIWG-managed blocks\. -->\r?\n?/gm, '')
+    .replace(/^This file is the stable `[^`]+` entry point for AIWG skills, rules, and generated provider context\.\r?\n?/gm, '');
+  return notes.trim() ? notes.replace(/^(?:\r?\n)+/, '') : '';
+}
+
+export async function readAiwgOperatorNotes(projectPath: string): Promise<{ path: string; existing: string | null; notes: string }> {
+  const target = projectControlPath(projectPath, 'AIWG.md');
+  await assertSafeContextFile(target);
+  let existing: string | null = null;
+  try { existing = await fs.readFile(target, 'utf8'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  return { path: target, existing, notes: extractAiwgOperatorNotes(existing ?? '') };
+}
+
+/** Keep legacy files notes-only; journal even an empty migration for rollback. */
+export async function migrateAiwgOperatorNotes(projectPath: string): Promise<void> {
+  const { path: target, existing, notes } = await readAiwgOperatorNotes(projectPath);
+  if (existing !== null && existing !== notes) writeContextFileSync(target, notes, 'utf8');
+}
+
+/** Compatibility writer used by init: emit only the generated root context. */
 export async function writeNormalizedAiwgMd(projectPath: string): Promise<string> {
-  const targetPath = projectControlPath(projectPath, 'AIWG.md');
-  let existing = '';
-  try {
-    existing = await fs.readFile(targetPath, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-  }
-
-  const content = await buildNormalizedAiwgMd(projectPath, existing);
-  await fs.mkdir(path.dirname(targetPath), { recursive: true });
-  const normalizedContent = content.endsWith('\n') ? content : `${content}\n`;
-  writeContextFileSync(targetPath, normalizedContent, 'utf8');
-
-  const artifactRoot = resolveProjectAiwgDir(projectPath);
-  const artifactPath = projectAiwgPath(projectPath, 'AIWG.md');
-  if (artifactPath !== targetPath) {
-    try {
-      await fs.access(artifactRoot);
-      writeContextFileSync(artifactPath, normalizedContent, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-  }
-  return targetPath;
+  const target = path.join(projectPath, 'AIWG.md');
+  await assertSafeContextFile(target);
+  const { isOverwriteSafe } = await import('./generator.js');
+  if (!(await isOverwriteSafe(target))) return target;
+  const { buildAiwgMdContent } = await import('./aiwg-md.js');
+  writeContextFileSync(target, await buildAiwgMdContent(projectPath), 'utf8');
+  await migrateAiwgOperatorNotes(projectPath);
+  return target;
 }

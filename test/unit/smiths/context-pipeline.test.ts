@@ -248,13 +248,13 @@ describe('context finalization emission', () => {
     return dir;
   }
 
-  it('builds normalized .aiwg/AIWG.md without erasing operator-authored content', async () => {
+  it('builds canonical root AIWG.md without erasing operator-authored content', async () => {
     const content = await buildNormalizedAiwgMd('/tmp/test-project', '# Local AIWG Notes\n\nOperator note.\n');
 
     expect(content).toContain('Operator note.');
     expect(content).toContain('<!-- aiwg-managed -->');
     expect(content).toContain('## Context Finalization');
-    expect(content).toContain('`.aiwg/AIWG.md` is the normalized project-local context entry point.');
+    expect(content).toContain('Root `AIWG.md` is the single generated framework context');
   });
 
   it('refreshes the managed finalization block idempotently', async () => {
@@ -267,7 +267,7 @@ describe('context finalization emission', () => {
     expect(second.match(/## Context Finalization/g)).toHaveLength(1);
   });
 
-  it('emits root, normalized, and provider twin context files with discovery authority pointers', async () => {
+  it('emits one root context and provider twin context files with discovery authority pointers', async () => {
     const dir = makeTmpDir();
     try {
       mkdirSync(join(dir, '.aiwg'), { recursive: true });
@@ -306,10 +306,11 @@ describe('context finalization emission', () => {
 
       expect(result.aiwgMdPath).toBe(join(dir, 'AIWG.md'));
       expect(result.agentsMdPath).toBe(join(dir, 'AGENTS.md'));
-      expect(result.normalizedAiwgMdPath).toBe(join(dir, '.aiwg', 'AIWG.md'));
+      expect(result.normalizedAiwgMdPath).toBe(result.aiwgMdPath);
+      expect(existsSync(join(dir, '.aiwg', 'AIWG.md'))).toBe(false);
       expect(result.twinPaths).toContain(join(dir, '.github', 'copilot-instructions.md'));
 
-      for (const file of [result.aiwgMdPath, result.normalizedAiwgMdPath]) {
+      for (const file of [result.aiwgMdPath]) {
         const content = readFileSync(file, 'utf8');
         expect(content).toContain('aiwg show rule skill-discovery');
         expect(content).toContain('aiwg show');
@@ -324,7 +325,6 @@ describe('context finalization emission', () => {
       }
       const sourceLinks = [
         [result.aiwgMdPath, './.aiwg/aiwg.config'],
-        [result.normalizedAiwgMdPath, './aiwg.config'],
       ] as const;
       for (const [file, href] of sourceLinks) {
         const content = readFileSync(file, 'utf8');
@@ -387,7 +387,7 @@ describe('context finalization emission', () => {
       await generate({ provider: 'codex', projectPath: dir, sections: [], detectExistingFiles: true });
 
       expect(readFileSync(overridePath, 'utf8')).toBe('# AGENTS.override.md\n\nOperator tracker notes stay here.\n');
-      const normalized = readFileSync(join(dir, '.aiwg', 'AIWG.md'), 'utf8');
+      const normalized = readFileSync(join(dir, 'AIWG.md'), 'utf8');
       expect(normalized).toContain('Tracker Authority Protocol');
       expect(normalized).toContain('Internal/canonical tracker: `github` (github;');
       expect(normalized).toContain('Issue storage mode: github-only');

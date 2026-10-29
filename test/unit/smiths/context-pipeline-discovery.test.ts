@@ -462,10 +462,12 @@ describe('generateAiwgMd', () => {
     expect(signatureCount).toBe(1);
   });
 
-  it('falls back to a stub when CLAUDE.md is absent', async () => {
+  it('emits complete framework context when CLAUDE.md is absent', async () => {
     const content = await generateAiwgMd(tmpDir);
     expect(content).toContain('# AIWG.md');
     expect(content).toContain('<!-- aiwg-managed -->');
-    expect(content).toContain('CLAUDE.md was not found');
+    expect(content).not.toContain('CLAUDE.md was not found');
+    expect(content).toContain('aiwg show rule skill-discovery');
+    expect(content).toContain('Tracker Authority Protocol');
   });
 });
