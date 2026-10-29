@@ -90,9 +90,6 @@ export abstract class BaseClient {
     url: string,
     options: RequestInit = {}
   ): Promise<T> {
-    // Apply rate limiting
-    await this.rateLimiter.acquire();
-
     // Execute with retry
     return this.executeWithRetry<T>(url, options);
   }
@@ -106,6 +103,9 @@ export abstract class BaseClient {
     attempt = 0,
     firstError?: ResearchError
   ): Promise<T> {
+    // Every attempt consumes a token, after any retry backoff and before timeout.
+    await this.rateLimiter.acquire();
+
     const controller = new AbortController();
     let timeoutId: NodeJS.Timeout | undefined;
 
@@ -275,9 +275,11 @@ export abstract class BaseClient {
    */
   protected buildUrl(
     path: string,
-    params: Record<string, string | number | boolean | undefined>
+    params: Record<string, string | number | boolean | undefined>,
+    baseUrl = this.config.baseUrl
   ): string {
-    const url = new URL(path, this.config.baseUrl);
+    // API endpoints are relative to the complete base path, even with a slash.
+    const url = new URL(path.replace(/^\/+/, ''), `${baseUrl.replace(/\/+$/, '')}/`);
 
     Object.entries(params).forEach(([key, value]) => {
       if (value !== undefined) {

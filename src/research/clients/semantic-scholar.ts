@@ -12,20 +12,26 @@ import {
   SearchOptions,
   SearchResult,
   Author,
+  ResearchError,
+  ResearchErrorCode,
 } from '../types.js';
+
+export type SemanticScholarNamespace = 'graph' | 'recommendations';
 
 /**
  * Semantic Scholar API client
  */
 export class SemanticScholarClient extends BaseClient {
-  constructor(config?: Partial<ClientConfig>) {
+  private readonly recommendationsBaseUrl: string;
+
+  constructor(config?: Partial<ClientConfig> & { recommendationsBaseUrl?: string }) {
     super({
       baseUrl: 'https://api.semanticscholar.org/graph/v1',
       timeout: 30000,
       rateLimit: {
-        maxTokens: 100,
+        maxTokens: 1,
         refillRate: 1, // 1 request per second
-        currentTokens: 100,
+        currentTokens: 1,
         lastRefill: Date.now(),
       },
       retry: {
@@ -35,7 +41,44 @@ export class SemanticScholarClient extends BaseClient {
         backoffMultiplier: 2,
       },
       ...config,
+      apiKey: config?.apiKey ?? process.env.S2_API_KEY,
     });
+    this.recommendationsBaseUrl = config?.recommendationsBaseUrl ??
+      'https://api.semanticscholar.org/recommendations/v1';
+  }
+
+  /** Request raw JSON in an explicit namespace; baseUrl overrides graph only. */
+  async requestApi<T>(
+    namespace: SemanticScholarNamespace,
+    path: string,
+    params: Record<string, string | number | boolean | undefined> = {}
+  ): Promise<T> {
+    const baseUrl = namespace === 'graph'
+      ? this.config.baseUrl
+      : this.recommendationsBaseUrl;
+    return this.request<T>(this.buildUrl(path, params, baseUrl));
+  }
+
+  /** Attach credentials once for all endpoints and keep transport causes private. */
+  protected override async request<T>(url: string, options: RequestInit = {}): Promise<T> {
+    const key = this.config.apiKey;
+
+    try {
+      const headers = new Headers(options.headers);
+      if (key) headers.set('x-api-key', key);
+      return await super.request<T>(url, { ...options, headers });
+    } catch (error) {
+      // A transport error can echo request headers, including in its cause/stack.
+      if (key) {
+        throw new ResearchError(
+          error instanceof ResearchError ? error.code : ResearchErrorCode.RF_500,
+          error instanceof ResearchError
+            ? error.message.replaceAll(key, '[REDACTED]')
+            : 'Semantic Scholar request failed'
+        );
+      }
+      throw error;
+    }
   }
 
   /**

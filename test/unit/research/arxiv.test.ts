@@ -11,6 +11,7 @@ describe('ArxivClient', () => {
   let mockFetch: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     client = new ArxivClient({
       rateLimit: {
         maxTokens: 3,
@@ -21,11 +22,13 @@ describe('ArxivClient', () => {
     });
 
     mockFetch = vi.fn();
-    global.fetch = mockFetch;
+    vi.stubGlobal('fetch', mockFetch);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   describe('getPaperById', () => {
@@ -50,6 +53,7 @@ describe('ArxivClient', () => {
 
       const paper = await client.getPaperById('2024.12345');
 
+      expect(mockFetch.mock.calls[0][0]).toBe('http://export.arxiv.org/api/query?id_list=2024.12345&max_results=1');
       expect(paper.id).toBe('2024.12345');
       expect(paper.title).toBe('Test arXiv Paper');
       expect(paper.abstract).toBe('This is a test paper from arXiv');
@@ -150,6 +154,7 @@ describe('ArxivClient', () => {
 
       const result = await client.search('machine learning', { limit: 2 });
 
+      expect(mockFetch.mock.calls[0][0]).toBe('http://export.arxiv.org/api/query?search_query=machine+learning&start=0&max_results=2');
       expect(result.papers).toHaveLength(2);
       expect(result.papers[0].title).toBe('Paper 1');
       expect(result.papers[1].title).toBe('Paper 2');
@@ -258,9 +263,11 @@ describe('ArxivClient', () => {
           })
       );
 
-      await expect(timeoutClient.getPaperById('test')).rejects.toMatchObject({
+      const check = expect(timeoutClient.getPaperById('test')).rejects.toMatchObject({
         code: ResearchErrorCode.RF_104,
       });
+      await vi.runAllTimersAsync();
+      await check;
     });
   });
 });
