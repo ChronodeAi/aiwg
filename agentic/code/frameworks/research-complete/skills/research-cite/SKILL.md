@@ -176,7 +176,9 @@ Schmidgall, S., et al. (2024). Agent Laboratory: Using LLM Agents...
 
 All citations are validated against:
 
-- [ ] Source exists in `.aiwg/research/`
+Use `aiwg corpus resolve` for verified paper identity before selecting a REF; exact REF existence does not itself verify paper metadata.
+
+- [ ] Source is a regular corpus Markdown file with the exact REF token (including zero padding and any letter suffix); reject blank or malformed IDs and directories
 - [ ] Metadata is complete (title, authors, year)
 - [ ] DOI/identifier is valid
 - [ ] GRADE level is assessed

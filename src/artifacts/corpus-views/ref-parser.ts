@@ -20,8 +20,8 @@ import {
 } from './taxonomies.js';
 import { normalizeSourceType, loadSourceTypeRegistry } from '../corpus-tools/source-types.js';
 
-const REF_FILE_RE = /^REF-(\d{3,4}[a-z]?)-/;
-const REF_ID_RE = /REF-\d{3,4}[a-z]?/g;
+import { refIdFromFilename as extractRefId, REF_ID_PATTERN } from '../../research/identity.js';
+const REF_ID_RE = new RegExp(REF_ID_PATTERN, 'g');
 const YEAR_RE = /\b(?:19|20)(\d{2})\b/;
 
 export interface RefRecord {
@@ -91,18 +91,7 @@ export interface CorpusParse {
   checksum: string;
 }
 
-/** Sort key for REF ids: [numeric, alpha-suffix]. Mirrors build.py ref_sort_key. */
-export function refSortKey(refId: string): [number, string] {
-  const m = refId.match(/REF-(\d+)([a-z]?)/);
-  return m ? [parseInt(m[1], 10), m[2]] : [999999, refId];
-}
-
-/** Compare two REF ids by (numeric, suffix). */
-export function compareRefId(a: string, b: string): number {
-  const [an, as_] = refSortKey(a);
-  const [bn, bs] = refSortKey(b);
-  return an !== bn ? an - bn : as_ < bs ? -1 : as_ > bs ? 1 : 0;
-}
+export { refSortKey, compareRefId } from '../../research/identity.js';
 
 /** Title-case matching Python str.title(): cap first letter of each alpha run, lowercase the rest. */
 export function slugToTitle(value: string): string {
@@ -126,11 +115,6 @@ export function parseFrontmatter(text: string): Record<string, unknown> {
   } catch {
     return {};
   }
-}
-
-function extractRefId(filename: string): string | null {
-  const m = filename.match(REF_FILE_RE);
-  return m ? `REF-${m[1]}` : null;
 }
 
 function extractTitle(text: string, fm: Record<string, unknown>): string {

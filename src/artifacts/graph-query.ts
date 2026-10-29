@@ -9,6 +9,8 @@
  * @tests @test/unit/artifacts/graph-query.test.ts
  */
 
+import path from 'node:path';
+import { isRefId, refIdFromFilename } from '../research/identity.js';
 import type { ArtifactIndex, MetadataEntry, DependencyGraph, GraphType, TypedEdge } from './types.js';
 import { normalizeEdges } from './types.js';
 import { buildFortemiCoreDependencyGraph, loadFortemiCoreMetadataEntries } from './fortemi-core-query-adapter.js';
@@ -105,7 +107,7 @@ export function getNeighbors(
  *
  * Supports:
  * - Exact path match ("documentation/citations/REF-008-citations.md")
- * - REF-XXX shorthand — finds the first key containing the REF identifier
+ * - REF-XXX shorthand — finds a key with the exact REF filename token
  * - Partial path match — finds the first key ending with the given string
  */
 export function resolveNode(graph: DependencyGraph, node: string): string | null {
@@ -113,8 +115,8 @@ export function resolveNode(graph: DependencyGraph, node: string): string | null
   if (graph[node]) return node;
 
   // REF-XXX shorthand
-  if (/^REF-\d+$/.test(node)) {
-    const key = Object.keys(graph).find(k => k.includes(node));
+  if (isRefId(node)) {
+    const key = Object.keys(graph).find(k => refIdFromFilename(path.basename(k)) === node);
     return key ?? null;
   }
 

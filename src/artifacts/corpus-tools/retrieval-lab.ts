@@ -2,6 +2,7 @@
 
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import { refIdsInText } from '../../research/identity.js';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { bm25Rank, tokenizeText } from '../fulltext.js';
@@ -177,7 +178,7 @@ export function parseConceptScheme(content: string): { scheme: RetrievalConceptS
 
 function documentId(entry: MetadataEntry): string {
   const text = [entry.name, entry.title, entry.path].filter(Boolean).join(' ');
-  return text.match(/\bREF-\d+\b/i)?.[0]?.toUpperCase() ?? path.basename(entry.path).replace(/\.[^.]+$/, '');
+  return refIdsInText(text)[0] ?? path.basename(entry.path).replace(/\.[^.]+$/, '');
 }
 
 function isResearch(entry: MetadataEntry): boolean {

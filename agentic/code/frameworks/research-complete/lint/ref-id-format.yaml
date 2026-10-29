@@ -1,10 +1,10 @@
 id: research/ref-id-format
 name: REF identifier format
-description: REF identifiers have at least three digits and an optional lowercase slug; ref metadata matches the identifier
+description: REF identifiers have at least three digits, an optional case-sensitive letter suffix and an optional lowercase slug; ref metadata matches the identifier
 severity: warn
 applies-to:
   glob: "{findings,documentation/references}/REF-*.md"
 checks:
   - type: id-format
     field: ref
-    pattern: "^(REF-\\d{3,})(?:-[a-z0-9][a-z0-9-]*)?$"
+    pattern: "^(REF-\\d{3,}[a-zA-Z]?)(?:-[a-z0-9][a-z0-9-]*)?$"
