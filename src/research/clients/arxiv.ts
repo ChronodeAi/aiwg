@@ -5,6 +5,7 @@
  */
 
 import { BaseClient } from './base.js';
+import { normalizeDoi, parseArxivId } from '../identity.js';
 import {
   ClientConfig,
   ResearchPaper,
@@ -44,7 +45,7 @@ export class ArxivClient extends BaseClient {
    */
   async getPaperById(arxivId: string): Promise<ResearchPaper> {
     // Normalize arXiv ID (remove version if present)
-    const normalizedId = arxivId.replace(/v\d+$/, '');
+    const normalizedId = parseArxivId(arxivId)?.id ?? arxivId;
 
     const url = this.buildUrl('/query', {
       id_list: normalizedId,
@@ -172,7 +173,9 @@ export class ArxivClient extends BaseClient {
     };
 
     const id = extractTag('id');
-    const arxivId = id.split('/').pop()?.replace(/v\d+$/, '') || '';
+    const identity = parseArxivId(id);
+    if (!identity) throw new ResearchError(ResearchErrorCode.RF_301, 'Invalid arXiv entry identifier');
+    const arxivId = identity.id;
 
     const title = extractTag('title').replace(/\s+/g, ' ');
     const summary = extractTag('summary').replace(/\s+/g, ' ');
@@ -183,8 +186,8 @@ export class ArxivClient extends BaseClient {
     const authors: Author[] = authorNames.map((name) => ({ name }));
 
     // Extract DOI if present
-    const doiMatch = entry.match(/doi:([^\s<]+)/i);
-    const doi = doiMatch ? doiMatch[1] : undefined;
+    const doiMatch = entry.match(/<arxiv:doi[^>]*>([^<]+)<\/arxiv:doi>/i);
+    const doi = doiMatch ? normalizeDoi(doiMatch[1]) : undefined;
 
     // Extract PDF link
     const pdfLinkMatch = entry.match(/<link[^>]*title="pdf"[^>]*href="([^"]+)"/i);
@@ -197,6 +200,8 @@ export class ArxivClient extends BaseClient {
       year,
       abstract: summary,
       arxivId,
+      arxivVersion: identity.version,
+      publicationDate: published || undefined,
       doi,
       pdfUrl,
       type: 'preprint',

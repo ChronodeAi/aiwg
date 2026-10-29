@@ -30,7 +30,7 @@ describe('CrossRefClient', () => {
     const paper = await client.getPaperByDoi(work.DOI);
     expect(fetchMock.mock.calls[0][0]).toBe('https://api.crossref.org/works/10.1234%2Fexample');
     expect(paper).toEqual({
-      id: work.DOI, doi: work.DOI, title: 'Example work', year: 2024,
+      id: work.DOI, doi: work.DOI, title: 'Example work', year: 2024, publicationDate: '2024-01-15',
       authors: [{ name: 'Ada Lovelace', affiliations: ['Institute'] }],
       abstract: 'Synthetic abstract', venue: 'Example Journal', citationCount: 42,
       type: 'journal', source: 'crossref', retrievedAt: expect.any(String),

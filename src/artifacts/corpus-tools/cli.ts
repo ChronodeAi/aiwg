@@ -38,6 +38,7 @@ import { auditInductions, renderAudit, backfillFrontmatter, renderBackfill as re
 import { buildProfileEdges, renderProfileEdges } from './profile-edges.js';
 import { extractPages, renderExtract, resolveAdapter, rasterizePdf } from './vision-extract.js';
 import { runSnapshot, type SnapshotOptions } from './snapshot.js';
+import { resolveCli } from './resolve-cli.js';
 
 function flagValue(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -51,6 +52,8 @@ function hasFlag(args: string[], name: string): boolean {
 const HELP = `aiwg corpus — research-corpus tools
 
 Usage:
+  aiwg corpus resolve "<title | URL | arXiv ID | DOI | bibliography line>" [--year YYYY] [--json]
+  aiwg corpus resolve --from-file refs.txt [--year YYYY] [--json]
   aiwg corpus radar-init --ref REF-XXX [--cadence C] [--cluster T] [--write]
   aiwg corpus radar-init --all-missing [--write]
   aiwg corpus radar-status [--stale-only] [--format table|csv|list] [--out PATH]
@@ -79,6 +82,7 @@ Usage:
   aiwg corpus retrieval-lab --queries PATH --concepts PATH [--expected-scheme-hash SHA256] [--limit K] [--latency-ceiling MS] [--json] [--out PATH]
   aiwg corpus vision-extract --slug SLUG [--images DIR] [--out DIR] [--start N] [--end N] [--provider codex|command] [--command TMPL] [--model M] [--retries N] [--title T] [--force] [--rasterize PDF] [--dpi N]
 
+resolve verifies paper identities, refuses ambiguous matches (exit 2) and reports unresolved references (exit 3).
 radar-init scaffolds radar sidecars (dry-run unless --write; skips existing).
 radar-status reports overdue radars (most-overdue-first).
 radar-report aggregates corpus/cluster freshness.
@@ -267,6 +271,8 @@ export async function corpusMain(args: string[], cwd: string = process.cwd()): P
   }
   const root = await resolveCorpusRoot(cwd);
   switch (sub) {
+    case 'resolve':
+      return resolveCli(rest, root, cwd);
     case 'radar-init':
       return radarInit(root, rest);
     case 'radar-status':
