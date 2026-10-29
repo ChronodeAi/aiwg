@@ -1,12 +1,18 @@
 // Public corpus-handler coverage using real research clients and offline HTTP fixtures.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout as yieldToIO } from 'node:timers/promises';
+import { setImmediate as yieldToIO } from 'node:timers/promises';
 import { corpusHandler } from '../../../src/cli/handlers/subcommands.js';
 import type { ExpansionResult } from '../../../src/artifacts/corpus-tools/expand.js';
 import { expansionFetch, expansionHttp, recommended, type ExpansionHttp } from '../../fixtures/research/expand-http.js';
+
+// Keep real reads/renames and inject failures only at durable-write boundaries.
+vi.mock('node:fs', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs')>();
+  return { ...fs, appendFileSync: vi.fn(fs.appendFileSync), writeFileSync: vi.fn(fs.writeFileSync) };
+});
 
 let root: string;
 let artifacts: string;
@@ -14,7 +20,10 @@ let state: ExpansionHttp;
 let fetchMock: ReturnType<typeof vi.fn>;
 let output: string;
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Settle lazy CLI loading before driving fake timers; no wall-clock sleeps.
+  await import('../../../src/artifacts/corpus-tools/cli.js');
+  await import('../../../src/artifacts/corpus-tools/expand-cli.js');
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
   vi.setSystemTime(new Date('2026-10-28T12:00:00Z'));
   root = mkdtempSync(join(tmpdir(), 'aiwg-expand-'));
@@ -53,7 +62,7 @@ async function cli(args: string[], json = true, sub = 'expand') {
   const pending = corpusHandler.execute({ args: all, rawArgs: ['corpus', ...all], cwd: root, frameworkRoot: root });
   void pending.then(() => { done = true; });
   for (let turn = 0; !done && turn < 10000; turn++) {
-    await yieldToIO(1); await vi.advanceTimersByTimeAsync(1000);
+    await yieldToIO(); await vi.advanceTimersByTimeAsync(1000);
   }
   expect(done).toBe(true);
   const result = await pending;
@@ -146,6 +155,119 @@ describe('corpus expand frontier and HTTP contract', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     seed('REF-0001', 'arxiv: 2401.12345'); state.recommendations['arXiv:2401.12345'] = [];
     expect((await cli(['--all', '--write'])).data!.processed[0].status).toBe('explored');
+  });
+});
+
+describe('corpus expand interrupted storage recovery', () => {
+  function frontier() {
+    for (let n = 1; n <= 3; n++) {
+      seed(`REF-000${n}`, `arxiv: 2401.0000${n}`);
+      state.recommendations[`arXiv:2401.0000${n}`] = [recommended('shared'), recommended(`unique-${n}`)];
+    }
+  }
+
+  const calledSeeds = () => state.calls.map(call => decodeURIComponent(call.url.pathname.split('/').at(-1)!));
+
+  it('keeps two completed seeds and re-fetches only the uncommitted third without inflating convergence', async () => {
+    frontier();
+    const append = await vi.importActual<typeof import('node:fs')>('node:fs');
+    vi.mocked(appendFileSync).mockImplementation((file, data, options) => {
+      if (String(file).endsWith('expansion-state.jsonl') && String(data).includes('REF-0003')) {
+        throw new Error('Injected interruption before seed 3 ledger append');
+      }
+      append.appendFileSync(file, data, options);
+    });
+    const interrupted = await cli(['--all', '--write']);
+    expect(interrupted.exitCode).toBe(1);
+    expect(interrupted.message).toContain('Injected interruption');
+    expect(rows('expansion-state.jsonl').map(row => row.ref)).toEqual(['REF-0001', 'REF-0002']);
+    expect(rows('candidates.jsonl')).toHaveLength(4); // Third seed's queue is already committed.
+    expect(calledSeeds()).toEqual(['arXiv:2401.00001', 'arXiv:2401.00002', 'arXiv:2401.00003']);
+    vi.mocked(appendFileSync).mockImplementation(append.appendFileSync);
+    state.calls = []; fetchMock.mockClear();
+    const resumed = await cli(['--all', '--write']);
+    expect(resumed.exitCode).toBe(0);
+    expect(resumed.data!.processed.map(row => row.ref)).toEqual(['REF-0003']);
+    expect(calledSeeds()).toEqual(['arXiv:2401.00003']);
+    expect(rows('expansion-state.jsonl').map(row => [row.ref, row.status])).toEqual([
+      ['REF-0001', 'explored'], ['REF-0002', 'explored'], ['REF-0003', 'explored'],
+    ]);
+    const candidates = rows('candidates.jsonl');
+    expect(candidates.map(row => row.paper.id).sort()).toEqual(['shared', 'unique-1', 'unique-2', 'unique-3']);
+    expect(candidates.find(row => row.paper.id === 'shared')).toMatchObject({
+      seed_refs: ['REF-0001', 'REF-0002', 'REF-0003'], score_parts: { convergence: 3 },
+    });
+    expect(candidates.filter(row => row.paper.id !== 'shared').map(row => row.score_parts.convergence)).toEqual([1, 1, 1]);
+  });
+
+  it('preserves the committed queue when a temporary candidate write tears and leaves the in-flight seed due', async () => {
+    frontier();
+    await cli(['--all', '--write', '--max-seeds', '1']);
+    const before = readFileSync(discovery('candidates.jsonl'), 'utf8');
+    const fs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    vi.mocked(writeFileSync).mockImplementation((file, data, options) => {
+      if (String(file).includes('candidates.jsonl') && String(data).includes('unique-2')) {
+        fs.writeFileSync(file, String(data).slice(0, -20), options);
+        throw new Error('Injected torn candidate write');
+      }
+      fs.writeFileSync(file, data, options);
+    });
+    expect((await cli(['--all', '--write'])).exitCode).toBe(1);
+    expect(readFileSync(discovery('candidates.jsonl'), 'utf8')).toBe(before);
+    expect(rows('expansion-state.jsonl').map(row => row.ref)).toEqual(['REF-0001']);
+    vi.mocked(writeFileSync).mockImplementation(fs.writeFileSync);
+    state.calls = [];
+    const resumed = await cli(['--all', '--write']);
+    expect(resumed.exitCode).toBe(0);
+    expect(calledSeeds()).toEqual(['arXiv:2401.00002', 'arXiv:2401.00003']);
+    expect(rows('candidates.jsonl').map(row => row.paper.id).sort()).toEqual(['shared', 'unique-1', 'unique-2', 'unique-3']);
+  });
+
+  it.each(['candidates.jsonl', 'expansion-state.jsonl'])('refuses a torn last line in %s without dropping earlier rows', async file => {
+    frontier();
+    await cli(['--all', '--write', '--max-seeds', '1']);
+    const beforeQueue = readFileSync(discovery('candidates.jsonl'), 'utf8');
+    const beforeLedger = readFileSync(discovery('expansion-state.jsonl'), 'utf8');
+    const prefix = readFileSync(discovery(file), 'utf8');
+    appendFileSync(discovery(file), '{"partial":');
+    const damaged = readFileSync(discovery(file), 'utf8');
+    state.calls = []; fetchMock.mockClear();
+    const result = await cli(['--all', '--write']);
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toContain(`Invalid JSONL at ${discovery(file)}:${prefix.trim().split('\n').length + 1}; repair it before expanding`);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(readFileSync(discovery(file), 'utf8')).toBe(damaged);
+    expect(readFileSync(discovery(file === 'candidates.jsonl' ? 'expansion-state.jsonl' : 'candidates.jsonl'), 'utf8'))
+      .toBe(file === 'candidates.jsonl' ? beforeLedger : beforeQueue);
+    // Explicit operator repair removes only the partial suffix; completed rows remain.
+    writeFileSync(discovery(file), prefix);
+    expect((await cli(['--all', '--write'])).exitCode).toBe(0);
+    expect(calledSeeds()).toEqual(['arXiv:2401.00002', 'arXiv:2401.00003']);
+    expect(rows('expansion-state.jsonl').map(row => row.ref)).toEqual(['REF-0001', 'REF-0002', 'REF-0003']);
+    expect(rows('candidates.jsonl')).toHaveLength(4);
+  });
+
+  it('resumes exclusively in a configured artifact root outside the repository', async () => {
+    const external = mkdtempSync(join(tmpdir(), 'aiwg-expand-external-'));
+    try {
+      artifacts = external;
+      vi.stubEnv('AIWG_ARTIFACTS_PATH', '');
+      write('.aiwg-location', external);
+      frontier();
+      const fs = await vi.importActual<typeof import('node:fs')>('node:fs');
+      vi.mocked(appendFileSync).mockImplementationOnce(() => { throw new Error('Injected external interruption'); });
+      expect((await cli(['--all', '--write'])).exitCode).toBe(1);
+      vi.mocked(appendFileSync).mockImplementation(fs.appendFileSync);
+      const resumed = await cli(['--all', '--write']);
+      expect(resumed.exitCode).toBe(0);
+      expect(resumed.data!.paths.directory).toBe(join(external, 'research/discovery'));
+      for (const file of ['candidates.jsonl', 'expansion-state.jsonl', 'expansion-report.md', 'rejected-candidates.jsonl']) {
+        expect(existsSync(discovery(file))).toBe(true);
+      }
+      expect(rows('expansion-state.jsonl')).toHaveLength(3);
+      expect(rows('candidates.jsonl')).toHaveLength(4);
+      expect(existsSync(join(root, '.aiwg'))).toBe(false);
+    } finally { rmSync(external, { recursive: true, force: true }); }
   });
 });
 
