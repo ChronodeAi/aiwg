@@ -56,6 +56,8 @@
     "tools/ralph-external/lib/worker-final.mjs",
     "tools/ralph-external/lib/worker-launch-cli.mjs",
     "tools/ralph-external/lib/worker-isolation.mjs",
+    "tools/ralph-external/lib/worker-isolation-args.mjs",
+    "tools/ralph-external/lib/worker-unit-cleanup.mjs",
     "tools/ralph-external/lib/worker-native-sandbox.mjs",
     "tools/ralph-external/lib/worker-isolation-status.mjs",
     "tools/ralph-external/lib/worker-retry-evidence.mjs",

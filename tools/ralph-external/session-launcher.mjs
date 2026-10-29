@@ -57,12 +57,12 @@ import { buildWorkerInvocationEnvironment, WORKER_INVOCATION_MARKER } from './li
 import { resolveRetryReference } from './lib/worker-launch-cli.mjs';
 import { launcherRecoveryEvidence, observeLauncherRecoveryOutcome, recordLauncherRecoveryHint } from './lib/launcher-recovery-evidence.mjs';
 export { observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence.mjs';
+import { publishWorkerUnitExit, readRecordedWorkerUnitStop } from './lib/worker-unit-cleanup.mjs';
 import { workerNeedsNativeNamespaces, probeWorkerNativeSandbox, nativeSandboxFailure, nativeSandboxProbeMessage, NATIVE_SANDBOX_UNAVAILABLE, checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
 const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 // Resolve the same installation owner as CLI/MCP inputs in source and packaged layouts.
 const { getWorkerRecoveryCapabilities, workerVersionProbeEnvironment } = await importImpl(import.meta.url, 'models/worker-installation.mjs');
-
 /**
  * Kernel-verified containment gate for any candidate worker identity,
  * whether it came from a worker-writable disk record (`worker-identity.json`)
@@ -1135,7 +1135,7 @@ async function captureOneWorker(owner, ctx) {
     // Prefer the unit's retained state whenever a unit name is recorded
     // (#3674 round 4): launch-mode selection is unchanged, but unit (cgroup)
     // evidence is used wherever it is available.
-    const native = outcome.unit ? readNative() : null;
+    const native = outcome.unit ? readNative() ?? readRecordedWorkerUnitStop(outcome, { native: true }) : null;
     const members = identity ? sampleWorkerGroup(identity.pgid) : null;
     // Require positive kernel evidence of owned containment being empty.
     const confirmed = (outcome.mode !== 'systemd-unit' && child.pid === undefined) || observeWorkerTermination({ mode: outcome.mode, native,
@@ -1269,7 +1269,7 @@ async function captureOneWorker(owner, ctx) {
     try { await recordProcess(); }
     catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
     finally {
-      try { await publish('exit.json', result); }
+      try { await publishWorkerUnitExit(publish, outcome, native, result); }
       catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
     }
     result.health = observer.finish({ ...result, finalValid: healthFinalValid });
@@ -1292,7 +1292,7 @@ async function captureOneWorker(owner, ctx) {
         ? (healthAttemptFinalValid && result.errorCode !== 'METADATA_WRITE' ? 'succeeded' : 'uncertain')
         : processLevelOutcome;
     }
-    try { await publish('exit.json', result); }
+    try { await publishWorkerUnitExit(publish, outcome, native, result); }
     catch {
       result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; result.health.termination = 'uncertain';
       // #2915 review 5 (finding 1b): the PRIOR round left this as a
@@ -1805,7 +1805,7 @@ async function captureOneWorkerBaseline(owner, ctx) {
     // Prefer the unit's retained state whenever a unit name is recorded
     // (#3674 round 4): launch-mode selection is unchanged, but unit (cgroup)
     // evidence is used wherever it is available.
-    const native = outcome.unit ? readNative() : null;
+    const native = outcome.unit ? readNative() ?? readRecordedWorkerUnitStop(outcome, { native: true }) : null;
     const members = identity ? sampleWorkerGroup(identity.pgid) : null;
     const confirmed = (outcome.mode !== 'systemd-unit' && child.pid === undefined) || observeWorkerTermination({ mode: outcome.mode, native,
       workerExited: sawExit, identity, supervisor, invocationId }).confirmed;
@@ -1854,12 +1854,12 @@ async function captureOneWorkerBaseline(owner, ctx) {
     try { await recordProcess(); }
     catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
     finally {
-      try { await publish('exit.json', result); }
+      try { await publishWorkerUnitExit(publish, outcome, native, result); }
       catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
     }
     result.health = observer.finish({ ...result, finalValid: healthFinalValid });
     result.healthEvidence = observer.evidence();
-    try { await publish('exit.json', result); }
+    try { await publishWorkerUnitExit(publish, outcome, native, result); }
     catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; result.health.termination = 'uncertain'; }
     await reportHealth();
     owner.emit('complete', result);
