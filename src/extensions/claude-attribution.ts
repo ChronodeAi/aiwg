@@ -13,14 +13,18 @@ export function mergeClaudeAttribution(settings: Settings, warnings: string[]): 
     warnings.push('Preserved operator attribution setting; expected an object.');
     return;
   }
+  if (settings.aiwg !== undefined && !object(settings.aiwg)) {
+    warnings.push('Preserved the existing non-object "aiwg" setting; AIWG attribution defaults were not merged.');
+    return;
+  }
   const attribution = (settings.attribution ??= {}) as Settings;
-  const aiwg = object(settings.aiwg) ? settings.aiwg : {};
+  const aiwg = (settings.aiwg ?? {}) as Settings;
   const owned = new Set(Array.isArray(aiwg.attributionKeys) ? aiwg.attributionKeys : []);
   for (const [key, value] of Object.entries(DEFAULTS)) {
     if (attribution[key] === undefined) {
       attribution[key] = value;
       owned.add(key);
-    } else if ((key === 'commit' || key === 'pr') && attribution[key] !== '') {
+    } else if (attribution[key] !== value) {
       warnings.push(`Preserved operator attribution.${key}; attribution remains enabled. Clear it explicitly to disable attribution.`);
     }
   }
