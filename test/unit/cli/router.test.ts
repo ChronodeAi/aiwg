@@ -59,6 +59,24 @@ describe('router', () => {
     console.log = originalConsoleLog;
   });
 
+  it('routes daemon status and help through the registered command table (#3758)', async () => {
+    const registry = await initRouter();
+    expect(registry.registry.resolveCommand('daemon')).toBe('daemon');
+    const handler = registry.handlerMap.get('daemon')!;
+    const execute = vi.spyOn(handler, 'execute').mockResolvedValue({ exitCode: 0 });
+    const help = vi.spyOn(handler, 'help').mockResolvedValue({ exitCode: 0 });
+    try {
+      await run(['daemon', 'status']);
+      expect(execute).toHaveBeenCalledWith(expect.objectContaining({ args: ['status'] }));
+      await run(['daemon', 'start', '--help']);
+      expect(help).toHaveBeenCalledOnce();
+      expect(execute).toHaveBeenCalledOnce();
+    } finally {
+      execute.mockRestore();
+      help.mockRestore();
+    }
+  });
+
   describe('initRouter', () => {
     it('should load and cache the registry', async () => {
       const registry = await initRouter();

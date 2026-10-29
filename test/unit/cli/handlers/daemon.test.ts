@@ -1,6 +1,6 @@
 /**
  * Unit tests for daemon.ts handler
- * Covers behavior and daemon-init commands.
+ * Covers lifecycle, behavior and daemon-init commands.
  *
  * @issue #689
  * @parent #684
@@ -22,6 +22,7 @@ vi.mock('../../../../src/channel/manager.mjs', () => ({
 }));
 
 import {
+  daemonHandler,
   behaviorHandler,
   daemonInitHandler,
   daemonHandlers,
@@ -133,8 +134,9 @@ describe('daemonInitHandler', () => {
 // ── daemonHandlers array ──────────────────────────────────────
 
 describe('daemonHandlers', () => {
-  it('exports exactly 2 handlers', () => {
-    expect(daemonHandlers).toHaveLength(2);
+  it('exports exactly 3 handlers', () => {
+    expect(daemonHandlers).toHaveLength(3);
+    expect(daemonHandlers).toContain(daemonHandler);
     const ids = daemonHandlers.map(h => h.id);
     expect(ids).toContain('behavior');
     expect(ids).toContain('daemon-init');
@@ -149,5 +151,24 @@ describe('daemonHandlers', () => {
       expect(Array.isArray(handler.aliases)).toBe(true);
       expect(typeof handler.execute).toBe('function');
     }
+  });
+});
+
+describe('daemonHandler', () => {
+  beforeEach(() => { vi.clearAllMocks(); mockRun.mockResolvedValue({ exitCode: 0 }); });
+
+  it.each([['status'], ['start', '--foreground'], ['chat', 'hello']])('forwards argv %j to the existing daemon entry point', async (...args) => {
+    await daemonHandler.execute(makeCtx(args));
+    expect(mockRun).toHaveBeenCalledWith('tools/daemon/index.mjs', args, { cwd: '/mock/cwd' });
+  });
+
+  it('forces help instead of executing a lifecycle command', async () => {
+    await daemonHandler.help!(makeCtx(['start', '--help']));
+    expect(mockRun).toHaveBeenCalledWith('tools/daemon/index.mjs', ['--help'], { cwd: '/mock/cwd' });
+  });
+
+  it('preserves a daemon failure exit code', async () => {
+    mockRun.mockResolvedValue({ exitCode: 1 });
+    expect((await daemonHandler.execute(makeCtx(['stop']))).exitCode).toBe(1);
   });
 });
