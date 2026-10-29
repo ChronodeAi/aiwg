@@ -13,7 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const SURFACE_VOCAB = ['x-account', 'x-search', 'x-bookmarks', 'x-foryou', 'x-following', 'rss', 'newsletter', 'web', 'referral', 'direct'];
+const SURFACE_VOCAB = ['x-account', 'x-search', 'x-bookmarks', 'x-foryou', 'x-following', 'rss', 'newsletter', 'web', 'referral', 'direct', 's2-recommendation'];
 
 export interface DiscoveryFields {
   surface: string;

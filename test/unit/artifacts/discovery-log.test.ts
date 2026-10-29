@@ -34,6 +34,9 @@ describe('renderDiscoveryBlock', () => {
 });
 
 describe('logDiscovery', () => {
+  it.each(['x-account', 'x-search', 'x-bookmarks', 'x-foryou', 'x-following', 'rss', 'newsletter', 'web', 'referral', 'direct', 's2-recommendation'])('accepts vocabulary surface %s', surface => {
+    expect(logDiscovery(root, 'REF-200', { surface }).content).toContain(`surface: ${surface}`);
+  });
   it('dry-runs without writing and splices the block into frontmatter', () => {
     const r = logDiscovery(root, 'REF-200', { surface: 'x-account', via: 'x.com/@a', curatorId: 'PROF-S-a', date: TODAY });
     expect(r.status).toBe('dry-run');
