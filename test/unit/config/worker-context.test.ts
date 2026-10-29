@@ -36,6 +36,20 @@ function emptyDir(prefix = 'aiwg-worker-context-') {
   return dir;
 }
 
+
+function ruleBootstrap(dir: string, provider = 'muse') {
+  const rules = path.join(dir, `.${provider}/rules`);
+  mkdirSync(rules, { recursive: true });
+  writeFileSync(path.join(rules, 'RULES-INDEX.md'), '# Kernel rules\n[policy.md](./policy.md)\n');
+  writeFileSync(path.join(rules, 'policy.md'), 'Follow the synthetic policy.\n');
+  writeFileSync(path.join(dir, 'AGENTS.md'), [
+    '<!-- AIWG:rule-core:start -->', 'Finish authorized work.', '<!-- AIWG:rule-core:end -->',
+    `<!-- AIWG:rule-hook-${provider}:start -->`,
+    `Before every task read and follow \`.${provider}/rules/RULES-INDEX.md\`.`,
+    `<!-- AIWG:rule-hook-${provider}:end -->`,
+  ].join('\n'));
+}
+
 describe('validateExplicitWorkerContextProviders', () => {
   it('dedupes an explicit list', () => {
     expect(validateExplicitWorkerContextProviders(['codex', 'muse', 'codex'])).toEqual(['codex', 'muse']);
@@ -167,7 +181,7 @@ describe('workerContextBootstrapStatus: provider files plus AGENTS.md sections',
     const dir = emptyDir();
     mkdirSync(path.join(dir, '.agents', 'skills'), { recursive: true });
     writeFileSync(path.join(dir, '.agents', 'skills', 'kernel.md'), 'kernel\n');
-    writeFileSync(path.join(dir, 'AGENTS.md'), '# AGENTS.md\n<!-- AIWG:rule-startup:start -->\nx\n<!-- AIWG:rule-startup:end -->\n');
+    ruleBootstrap(dir);
     expect(workerContextBootstrapStatus({ workdir: dir, provider: 'muse' })).toEqual({ present: true, missing: [] });
   });
 
@@ -175,9 +189,41 @@ describe('workerContextBootstrapStatus: provider files plus AGENTS.md sections',
     const dir = emptyDir();
     mkdirSync(path.join(dir, '.agents', 'skills'), { recursive: true });
     writeFileSync(path.join(dir, '.agents', 'skills', 'kernel.md'), 'kernel\n');
+    ruleBootstrap(dir);
     writeFileSync(path.join(dir, 'AGENTS.md'), '# AGENTS.md\nno managed sections\n');
     const status = workerContextBootstrapStatus({ workdir: dir, provider: 'muse' });
     expect(status).toEqual({ present: false, missing: ['AGENTS.md rule sections'] });
+  });
+
+  it.each(['core', 'hook', 'wrong-hook', 'index', 'kernel', 'empty-index', 'empty-kernel', 'marker-only'])(
+    'refuses incomplete new-layout delivery: %s', defect => {
+      const dir = emptyDir();
+      mkdirSync(path.join(dir, '.agents/skills'), { recursive: true });
+      writeFileSync(path.join(dir, '.agents/skills/kernel.md'), 'kernel');
+      ruleBootstrap(dir);
+      const startup = path.join(dir, 'AGENTS.md');
+      let content = readFileSync(startup, 'utf8');
+      if (defect === 'core') content = content.replace('<!-- AIWG:rule-core:end -->', '');
+      if (defect === 'hook') content = content.replace('<!-- AIWG:rule-hook-muse:end -->', '');
+      if (defect === 'wrong-hook') content = content.replaceAll('rule-hook-muse', 'rule-hook-codex');
+      if (defect === 'marker-only') content = '<!-- AIWG:provider-bootstrap:start -->';
+      writeFileSync(startup, content);
+      const name = defect.includes('index') ? 'RULES-INDEX.md' : 'policy.md';
+      const file = path.join(dir, '.muse/rules', name);
+      if (defect === 'index' || defect === 'kernel') rmSync(file);
+      if (defect.startsWith('empty-')) writeFileSync(file, '  \n');
+      expect(workerContextBootstrapStatus({ workdir: dir, provider: 'muse' }).missing)
+        .toContain('AGENTS.md rule sections');
+    },
+  );
+
+  it('accepts a complete legacy inline deployment during migration', () => {
+    const dir = emptyDir();
+    mkdirSync(path.join(dir, '.agents/skills'), { recursive: true });
+    writeFileSync(path.join(dir, '.agents/skills/kernel.md'), 'kernel');
+    ruleBootstrap(dir);
+    writeFileSync(path.join(dir, 'AGENTS.md'), '<!-- AIWG:rule-startup:start -->\nLegacy policy\n<!-- AIWG:rule-startup:end -->');
+    expect(workerContextBootstrapStatus({ workdir: dir, provider: 'muse' })).toEqual({ present: true, missing: [] });
   });
 
   it('reports an unknown provider as missing, never present', () => {
@@ -187,7 +233,7 @@ describe('workerContextBootstrapStatus: provider files plus AGENTS.md sections',
   it('reports an empty kernel directory as missing', () => {
     const dir = emptyDir();
     mkdirSync(path.join(dir, '.agents/skills'), { recursive: true });
-    writeFileSync(path.join(dir, 'AGENTS.md'), '<!-- AIWG:bootstrap:start -->');
+    ruleBootstrap(dir);
     expect(workerContextBootstrapStatus({ workdir: dir, provider: 'muse' }))
       .toEqual({ present: false, missing: ["provider dir '.agents/skills'"] });
   });
@@ -197,7 +243,7 @@ describe('workerContextBootstrapStatus: provider files plus AGENTS.md sections',
     const skills = path.join(dir, 'native-skills');
     mkdirSync(skills);
     writeFileSync(path.join(skills, 'kernel.md'), 'kernel');
-    writeFileSync(path.join(dir, 'AGENTS.md'), '<!-- AIWG:bootstrap:start -->');
+    writeFileSync(path.join(dir, 'AGENTS.md'), '<!-- AIWG:rule-startup:start -->\nLegacy inline policy\n<!-- AIWG:rule-startup:end -->');
     vi.stubEnv('AIWG_GROKBOT_SKILLS_DIR', skills);
     try {
       expect(workerContextBootstrapStatus({ workdir: dir, provider: 'grokbot' }))
@@ -310,7 +356,7 @@ describe('ensureWorkerContextBootstrap: no-op when present, one pass when missin
     const dir = emptyDir();
     mkdirSync(path.join(dir, '.agents', 'skills'), { recursive: true });
     writeFileSync(path.join(dir, '.agents', 'skills', 'kernel.md'), 'kernel\n');
-    writeFileSync(path.join(dir, 'AGENTS.md'), '<!-- AIWG:rule-startup:start -->\nx\n<!-- AIWG:rule-startup:end -->\n');
+    ruleBootstrap(dir);
     return dir;
   }
 
@@ -331,7 +377,7 @@ describe('ensureWorkerContextBootstrap: no-op when present, one pass when missin
         seen.push({ worktreePath, providers: [...providers] });
         mkdirSync(path.join(worktreePath, '.agents', 'skills'), { recursive: true });
         writeFileSync(path.join(worktreePath, '.agents', 'skills', 'kernel.md'), 'kernel\n');
-        writeFileSync(path.join(worktreePath, 'AGENTS.md'), '<!-- AIWG:rule-startup:start -->\nx\n<!-- AIWG:rule-startup:end -->\n');
+        ruleBootstrap(worktreePath);
         return { providers: [...providers] };
       },
       skipWorktreeFn: () => ['AGENTS.md'],
@@ -348,7 +394,7 @@ describe('ensureWorkerContextBootstrap: no-op when present, one pass when missin
       deployFn: ({ worktreePath, providers }) => {
         mkdirSync(path.join(worktreePath, '.agents', 'skills'), { recursive: true });
         writeFileSync(path.join(worktreePath, '.agents', 'skills', 'kernel.md'), 'kernel\n');
-        writeFileSync(path.join(worktreePath, 'AGENTS.md'), '<!-- AIWG:rule-startup:start -->\nx\n<!-- AIWG:rule-startup:end -->\n');
+        ruleBootstrap(worktreePath);
         return { providers: [...providers] };
       },
       skipWorktreeFn: () => [],

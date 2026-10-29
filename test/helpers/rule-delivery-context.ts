@@ -58,3 +58,18 @@ export function readRuleDeliveryContext(report: { contributors: Array<{ path: st
   }
   return files.map(read).join('\n');
 }
+
+/** Assert a compact startup reaches exactly one complete harness projection. */
+export function assertStartupRuleDelivery(root: string, provider: string, startup: string, rulesDir = `.${provider}/rules`): string {
+  const directory = path.join(root, rulesDir);
+  const manifest = JSON.parse(fs.readFileSync(path.join(directory, '.aiwg-manifest.json'), 'utf8'));
+  expect(manifest.ruleSources.length, `${provider}: selected source rules`).toBeGreaterThan(0);
+  for (const owner of ['provider-bootstrap', 'rule-core', `rule-hook-${provider}`]) {
+    expect(startup.split(`<!-- AIWG:${owner}:start -->`), `${provider}: one ${owner}`).toHaveLength(2);
+    expect(startup.split(`<!-- AIWG:${owner}:end -->`), `${provider}: complete ${owner}`).toHaveLength(2);
+  }
+  expect(startup).toContain(`${provider}: Before every task and subagent task, read and follow \`${rulesDir}/RULES-INDEX.md\``);
+  const contributors = Object.keys(manifest.managed).map(name => ({ path: path.join(directory, name) }));
+  readRuleDeliveryContext({ contributors }, provider);
+  return fs.readFileSync(path.join(directory, 'RULES-INDEX.md'), 'utf8');
+}

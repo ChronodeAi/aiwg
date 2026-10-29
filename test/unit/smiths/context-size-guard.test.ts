@@ -31,7 +31,7 @@ const contracts = [
 ].join('\n');
 
 describe('generated bridges with full configuration', () => {
-  it.each(['fresh', 'main', 'round3'])('keeps one flat bootstrap and canonical header across two full deployments from %s', async initial => {
+  it.each(['fresh', 'legacy', 'round3'])('keeps one flat bootstrap and canonical header across two full deployments from %s', async initial => {
     const repo = path.resolve(__dirname, '../../..');
     const project = path.join(tmpDir, 'project'), home = path.join(tmpDir, 'home');
     const configDir = path.join(home, 'config');
@@ -42,8 +42,8 @@ describe('generated bridges with full configuration', () => {
     const bridgePath = path.join(project, 'AGENTS.md');
     const operator = '\n## Operator notes\nKeep this literal separator:\n\n---\n\nAnd these instructions.\n';
     if (initial !== 'fresh') {
-      const original = initial === 'main'
-        ? execFileSync('git', ['show', 'origin/main:AGENTS.md'], { cwd: repo, encoding: 'utf8' })
+      const original = initial === 'legacy'
+        ? await fs.readFile(path.join(repo, 'test/fixtures/context/legacy-AGENTS.md'), 'utf8')
         : await fs.readFile(path.join(repo, 'test/fixtures/context/round3-AGENTS.md'), 'utf8');
       await fs.writeFile(bridgePath, original.replace('<!-- AIWG:provider-bootstrap:start -->', operator + '<!-- AIWG:provider-bootstrap:start -->') + operator);
     }
