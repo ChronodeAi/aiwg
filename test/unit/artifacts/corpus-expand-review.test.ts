@@ -117,6 +117,26 @@ describe('candidate review CLI', () => {
     expect(rows().map(row => row.review)).toEqual(reviews);
   });
 
+  it('refuses bare identity suffixes and embedded aliases without modifying storage', async () => {
+    await populate();
+    const candidate = rows()[0];
+    candidate.paper = { ...candidate.paper, id: 'candidate-a', s2PaperId: 'candidate-a', openReviewId: 'a' };
+    candidate.identity_keys = ['s2PaperId:candidate-a', 'openReviewId:a', 'title:first', 'doi:10.1234/first'];
+    writeFileSync(file('candidates.jsonl'), JSON.stringify(candidate) + '\n');
+    const names = ['candidates.jsonl', 'rejected-candidates.jsonl', 'expansion-state.jsonl', 'expansion-report.md'];
+    const before = names.map(name => readFileSync(file(name), 'utf8'));
+    for (const id of ['first', 'a', 'paper https://doi.org/10.1234/first']) {
+      const result = await cli(['reject', id, '--write']);
+      expect(result.exitCode, id).toBe(1);
+      expect(result.data.error.message).toContain('Unknown candidate ID');
+      expect(names.map(name => readFileSync(file(name), 'utf8'))).toEqual(before);
+    }
+    for (const id of ['candidate-a', 'openReviewId:a', 'openreview:a', 'title:first', 'doi:10.1234/first']) {
+      expect((await cli(['accept', id])).data.change.after.paper.id).toBe('candidate-a');
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('keeps rejection aliases suppressed after a fresh frontier expansion', async () => {
     await populate();
     seed('REF-0002', '2402.22222');
@@ -180,6 +200,33 @@ describe('candidate review CLI', () => {
     write(join(root, '.aiwg-location'), join(root, 'missing'));
     expect((await cli(['accept', 'a', '--write'])).data.exitCode).toBe(1);
     expect(existsSync(join(root, '.aiwg'))).toBe(false);
+  });
+
+  it('retains rejection when review ledger compaction fails and a rerun converges', async () => {
+    await populate();
+    const latest = rows('expansion-state.jsonl')[0];
+    const ledger = [ { ...latest, explored_on: '2020-01-01' }, latest ].map(row => JSON.stringify(row)).join('\n') + '\n';
+    writeFileSync(file('expansion-state.jsonl'), ledger);
+    const fs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    vi.mocked(writeFileSync).mockImplementation((path, content, options) => {
+      if (String(path).startsWith(file('expansion-state.jsonl') + '.')) {
+        fs.writeFileSync(path, '{"torn":', options); throw new Error('Injected review compaction failure');
+      }
+      fs.writeFileSync(path, content, options);
+    });
+    expect((await cli(['reject', 'a', '--write'])).exitCode).toBe(1);
+    expect(rows('rejected-candidates.jsonl')[0].paper.id).toBe('a');
+    expect(rows().map(row => row.paper.id)).toEqual(['b']);
+    expect(readFileSync(file('expansion-report.md'), 'utf8')).not.toContain('First candidate');
+    expect(readFileSync(file('expansion-state.jsonl'), 'utf8')).toBe(ledger);
+    vi.mocked(writeFileSync).mockImplementation(fs.writeFileSync);
+    expect((await cli(['--all', '--write'], 'expand')).data.candidates.map((row: any) => row.paper.id)).toEqual(['b']);
+    expect(rows('expansion-state.jsonl')).toEqual([latest]);
+    const names = ['candidates.jsonl', 'rejected-candidates.jsonl', 'expansion-state.jsonl', 'expansion-report.md'];
+    const converged = names.map(name => readFileSync(file(name), 'utf8'));
+    expect((await cli(['--all', '--write'], 'expand')).exitCode).toBe(0);
+    expect(names.map(name => readFileSync(file(name), 'utf8'))).toEqual(converged);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('persists suppression before a torn queue replacement and recovers through expand', async () => {

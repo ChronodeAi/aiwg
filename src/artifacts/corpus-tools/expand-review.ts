@@ -9,7 +9,7 @@ export const REVIEW_USAGE = `aiwg corpus review [list] [--json]
 aiwg corpus review accept <id> [--brief] [--write] [--json]
 aiwg corpus review reject <id> [--reason TEXT] [--write] [--json]
 aiwg corpus review defer <id> [--write] [--json]
-IDs: paper.id or any recorded identity alias (including DOI/arXiv URLs).
+IDs: paper.id, full identity keys, bare S2 IDs, or complete DOI/arXiv/OpenReview/ACL/S2 aliases and URLs.
 Default: dry run. Accept/defer retain the candidate with review metadata; reject records its identities in rejected-candidates.jsonl and removes it from the queue.
 --brief emits an induct-research brief to stdout (JSON: brief); it never inducts or files issues.
 Exit codes: 0 complete, 1 usage or storage error.
@@ -22,11 +22,12 @@ function usage(message: string): never {
 }
 
 function matches(row: ExpansionCandidate, id: string): boolean {
-  const parsed = parseResearchIdentifier(id);
+  const recognized = parseResearchIdentifier(id);
+  const parsed = recognized?.matched === id ? recognized : undefined;
   const field = parsed && ({ arxiv: 'arxivId', doi: 'doi', s2: 's2PaperId', openreview: 'openReviewId', acl: 'aclId' } as const)[parsed.kind];
   const keys = new Set([id, ...identityKeys({ s2PaperId: id, ...(field ? { [field]: parsed!.id } : {}) })]);
   return row.paper.id === id || [...row.identity_keys, ...identityKeys(row.paper)]
-    .some(key => keys.has(key) || key.slice(key.indexOf(':') + 1) === id);
+    .some(key => keys.has(key));
 }
 
 function brief(row: ExpansionCandidate): string {
@@ -86,6 +87,8 @@ export async function reviewCli(args: string[], cwd: string): Promise<void> {
     // Persist suppression first: a failed queue write cannot resurrect a rejected identity.
     if (action === 'reject') writeJsonl(paths.rejected, [...rejected, change!.after]);
     writeQueue(paths, candidates, report);
+    // Queue/report may already be replaced on compaction failure; expand reconciles
+    // from persisted suppression and retries compaction without resurrecting rejections.
     compactState(paths);
   }
   const summary = change ? `${result.dry_run ? 'Dry run' : 'Written'}: ${action} ${change.after.paper.id}${reason ? ` (${reason})` : ''}\n` : '';
