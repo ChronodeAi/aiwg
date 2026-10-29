@@ -10,6 +10,8 @@ acquisition planning, quality review, tagging, completeness checks, and export
 preparation. Use it to make collection decisions traceable before moving or
 renaming files.
 
+Each section below starts with what you can ask your assistant, then gives the command reference. Every command is kept exactly as shipped.
+
 ---
 
 ## Before You Start
@@ -34,7 +36,13 @@ analyze → discover sources → acquire → assess quality → tag → check co
 
 ## Researching a catalog
 
+> "Research the complete Radiohead catalog. Save a canonical reference I can review before acquiring anything."
+
+Your assistant researches the artist's complete discography and recommends how to structure the catalog.
+
 Start by understanding what a complete collection looks like:
+
+### Command reference — catalog research
 
 ```bash
 /analyze-artist "Radiohead"
@@ -45,6 +53,12 @@ The `discography-analyst` agent researches the artist's complete discography —
 ---
 
 ## Discovering sources
+
+> "Find complete sources for Radiohead. Rank them so I can review the list before acquiring anything."
+
+Your assistant searches configured sources for available content and ranks candidates by the evidence available for quality, legitimacy, and completeness.
+
+### Command reference — source discovery
 
 ```bash
 /find-sources "Radiohead" --scope "complete"
@@ -65,6 +79,12 @@ Filter by format or quality threshold:
 
 ## Acquiring content
 
+> "Acquire the approved source plan. Track progress and flag errors for review."
+
+Your assistant orchestrates parallel downloads with format selection and logs the download plan for reproducibility. Where the manager briefs a worker, the brief names the goal, inputs, boundaries, result, and success check.
+
+### Command reference — acquisition
+
 ```bash
 /acquire --plan sources.yaml
 ```
@@ -83,7 +103,13 @@ Acquire a specific item:
 
 ## Quality assessment
 
+> "Assess this collection at threshold 0.85. Flag replacements with the evidence I should check."
+
+Your assistant scores every acquired file across audio quality, completeness, and uniqueness dimensions.
+
 Every acquired file gets scored across audio quality, completeness, and uniqueness dimensions:
+
+### Command reference — quality assessment
 
 ```bash
 /quality-assess /path/to/collection --threshold 0.85
@@ -94,6 +120,12 @@ Files below the threshold are flagged for replacement. The `quality-assessor` ag
 ---
 
 ## Metadata and tagging
+
+> "Tag this collection with consistent metadata and artwork. Enforce my naming convention and do not rename anything else."
+
+Your assistant applies consistent metadata tags from MusicBrainz and your discography analysis.
+
+### Command reference — tagging
 
 ```bash
 /tag-collection /path/to/collection
@@ -111,6 +143,12 @@ Enforce a specific naming convention:
 
 ## Checking completeness
 
+> "Check this collection against the canonical discography. Show me what is missing in priority order."
+
+Your assistant compares your collection against the canonical discography to identify gaps.
+
+### Command reference — completeness
+
 ```bash
 /check-completeness "Radiohead"
 ```
@@ -121,6 +159,12 @@ Compares your collection against the canonical discography to identify gaps. Sho
 
 ## Verifying integrity
 
+> "Verify the integrity of this collection and report anything that does not match acquisition records."
+
+Your assistant runs SHA-256 integrity verification across the entire collection.
+
+### Command reference — integrity
+
 ```bash
 /verify-archive /path/to/collection
 ```
@@ -130,6 +174,12 @@ SHA-256 integrity verification across the entire collection. Detects corruption,
 ---
 
 ## Exporting to a platform
+
+> "Export this collection for Plex without touching the source files."
+
+Your assistant applies the metadata structure and directory organization that the target platform expects.
+
+### Command reference — export
 
 ```bash
 /export --profile plex /path/to/collection /path/to/output
@@ -143,7 +193,13 @@ Each export profile applies the metadata structure and directory organization th
 
 ## Full orchestration
 
+> "Curate Radiohead end to end at lossless quality. Pause for confirmation at key decisions and save verification records."
+
+Your assistant runs analyze → discover → acquire → assess → tag → verify in sequence, pausing for confirmation at key decision points.
+
 Run the entire pipeline from scratch:
+
+### Command reference — full orchestration
 
 ```bash
 /curate "Radiohead" --output /path/to/collection --quality lossless
@@ -152,6 +208,12 @@ Run the entire pipeline from scratch:
 This runs analyze → discover → acquire → assess → tag → verify in sequence,
 pausing for confirmation at key decision points. Success is a reviewed
 collection plan plus verification records for the files AIWG actually handled.
+
+**Agent-to-agent brief (example):**
+
+```brief
+Goal: acquire approved Radiohead sources at lossless quality. Inputs: source plan and output path. Boundaries: no renames outside the output path; keep source collection intact. Result: acquired files with checksums and error log. Success check: every file has a verification record.
+```
 
 ---
 

@@ -6,13 +6,17 @@ AIWG is connected to the target project and your provider session can read the d
 Addons extend AIWG's core capabilities. Start from the complete setup path,
 then focus on the addon that matches the result you need.
 
+Each section below starts with what you can ask your assistant, then gives the command reference. Every command is kept exactly as shipped.
+
 ---
 
 ## Al — Iterative task completion
 
-Al turns a bounded task into an iterative loop with an explicit completion
-check. Use it after you can name the task, the files in scope, and the command
-or evidence that proves completion.
+> "Fix all the failing auth tests. Done means npm test passes, and stop if the fix touches unrelated packages."
+
+Al turns a bounded task into an iterative loop with an explicit completion check. Use it after you can name the task, the files in scope, and the command or evidence that proves completion.
+
+### Command reference — Al setup
 
 ```bash
 aiwg use ralph
@@ -32,6 +36,10 @@ criterion is met, learns from what happened, and tries again until the criterion
 passes, a limit is reached, or it needs your input.
 
 ### Common uses
+
+> "The loop stopped early. Show me the loop state and what the next check will run."
+
+Al records the loop state so you can inspect what changed.
 
 Fix failing tests:
 ```
@@ -55,6 +63,8 @@ Resolve issues:
 
 ### Checking and controlling loops
 
+### Command reference — loop controls
+
 ```bash
 /ralph-status          # Current loop state
 /ralph-abort           # Stop the loop
@@ -72,7 +82,11 @@ explicit and records the loop state so you can inspect what changed.
 
 ## RLM — Recursive Language Models
 
+> "Search this large codebase for the login flow without loading everything at once. Cite the files you actually read."
+
 RLM enables agents to work with codebases and document sets too large to fit in a single context window. Instead of loading everything at once, it treats large contexts as an external environment that the agent selectively accesses.
+
+### Command reference — RLM setup
 
 ```bash
 aiwg use rlm
@@ -86,6 +100,12 @@ aiwg use rlm
 - Parallel fan-out over many files simultaneously
 
 ### How it works
+
+> "That fan-out missed the auth helpers. Re-run it over src/auth/** and show which files were read."
+
+Focused workers read bounded slices then synthesize their results.
+
+### Command reference — RLM queries
 
 ```bash
 # Focused sub-agent on a specific file
@@ -106,7 +126,11 @@ actual savings depend on the task shape and provider.
 
 ## Voice Framework — Consistent writing style
 
+> "Make this draft sound like our technical-authority voice and list what you changed."
+
 The voice framework is what makes AI-generated content sound like it was written by a person, not a language model. It defines writing profiles that the AI applies consistently across all generated text.
+
+### Command reference — voice setup
 
 ```bash
 aiwg use writing    # deploys voice framework
@@ -138,7 +162,12 @@ Occasional dry humor. Writing for engineers, not managers.
 
 ### Applying and validating
 
-Apply a profile to existing content:
+> "Apply the technical-authority profile to this document and flag any remaining issues."
+
+Apply a profile to existing content using the reference below.
+
+### Command reference — voice apply
+
 ```
 /voice-apply path/to/document.md --profile technical-authority
 ```
@@ -156,7 +185,11 @@ Flags passive voice overuse, vague hedging language, AI-characteristic phrase pa
 
 ## Testing Quality — Coverage and mutation testing
 
+> "Check whether my tests actually catch bugs. Report orphaned tests and mutation results I should review."
+
 Ensures tests actually catch what they claim to catch.
+
+### Command reference — testing quality
 
 ```bash
 aiwg use sdlc    # testing quality is included in the SDLC addon
@@ -174,6 +207,12 @@ Mutation testing introduces small changes to your code (mutations) and checks wh
 ---
 
 ## Security Addon — Continuous security validation
+
+> "Run a security gate on the current changes and show me what failed with evidence."
+
+Security gates run at key points in the lifecycle.
+
+### Command reference — security addon
 
 ```bash
 aiwg use sdlc    # security addon is included
@@ -193,6 +232,8 @@ behaviors are enabled and configured for the provider.
 
 ## Context Curator — Focus agent attention
 
+> "Focus the next task on the auth phase only. Filter out unrelated artifacts first."
+
 Filters context to remove distractors before task execution. The Context Curator pre-reads available artifacts and removes irrelevant content before passing context to working agents.
 
 This addresses a common failure pattern: when irrelevant context is present,
@@ -204,6 +245,12 @@ Particularly useful in large SDLC projects where `.aiwg/` has accumulated many a
 ---
 
 ## Auto Memory — Persistent agent memory
+
+> "Remember this project convention for future sessions and show me what you stored."
+
+Agents accumulate memory across sessions from approaches that worked and corrections received.
+
+### Command reference — auto memory
 
 ```bash
 aiwg use auto-memory
@@ -218,6 +265,12 @@ Memory is organized by type: user preferences, project state, feedback on past w
 ---
 
 ## Semantic Memory Kernel — Shared artifact operations
+
+> "Ingest this source into shared memory and report the pages and cross-references you created."
+
+The kernel factors common semantic memory operations out of individual frameworks into shared capabilities.
+
+### Command reference — semantic memory
 
 ```bash
 aiwg use semantic-memory   # core addon, auto-installed
@@ -243,6 +296,12 @@ You don't invoke these directly most of the time — five existing skills (`indu
 
 ## LLM Wiki — Obsidian-native knowledge base
 
+> "Start a research deep-dive wiki from these sources. Show me the pages and cross-references for review."
+
+A thin topology on top of the semantic memory kernel ships five page-template profiles.
+
+### Command reference — LLM wiki
+
 ```bash
 aiwg use llm-wiki
 # interactive prompt picks one of: book-companion | personal | research-deep-dive | business-team | generic
@@ -260,7 +319,11 @@ Docs on Obsidian integration (Web Clipper, Graph View, Dataview patterns, hotkey
 
 ## Guided Implementation — Structured feature delivery
 
+> "Break down OAuth2 for the API into phases. Validate each phase and save a construction-ready brief."
+
 For complex features that need to be broken down carefully before implementation:
+
+### Command reference — guided implementation
 
 ```bash
 /flow-guided-implementation "Add OAuth2 to the API"
@@ -271,6 +334,12 @@ Breaks the implementation into phases, validates each phase before proceeding, a
 ---
 
 ## Network Analysis — Governed saved-capture evidence
+
+> "Analyze this saved capture for the stated question. Stay metadata-first and return digest-bound evidence with locators."
+
+Use Network Analysis for an authorized saved PCAP or PCAPNG.
+
+### Command reference — network analysis
 
 ```bash
 aiwg use network-analysis --provider <provider>
@@ -290,8 +359,14 @@ traffic, retention policy, and question before analysis.
 
 ## Enabling Addons
 
+> "Enable the writing addon for this project and confirm what I can review first."
+
+Complete setup is the default route for new users. Your assistant deploys the addon and names one output to review.
+
 Complete setup is the default route for new users. These commands remain useful
 when you intentionally want a targeted addon or framework:
+
+### Command reference — enabling addons
 
 ```bash
 aiwg use ralph              # Al iterative loops
