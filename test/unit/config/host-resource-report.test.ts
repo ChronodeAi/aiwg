@@ -28,7 +28,7 @@ describe('normalized host resource capacity', () => {
       { invocation: 'b' }, { invocation: 'b', comm: 'muse-bin' }, {}, {},
     ]);
     const result = hostResourceReport({ config, readers });
-    expect(result).toMatchObject({ ok: true, slots: 4, measured: { workers: 2,
+    expect(result).toMatchObject({ ok: true, slots: 3, measured: { workers: 2,
       workerCountingSource: units ? 'systemd-units-and-marked-processes' : 'owned-process-fallback',
       hostCliProcesses: { codex: 5, muse: 1 } } });
     expect(result.counting).toContain('not used for admission');

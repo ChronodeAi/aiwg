@@ -144,9 +144,13 @@ when the supplied config has worker_dispatch off.
 
 Threshold precedence is monotonic: build dispatch, admission hostResources,
 and caller/task overlay are combined per field. Minimum thresholds take MAX;
-maximum thresholds (including max_workers) take MIN. No layer can relax another
-configured limit or the conservative defaults, which form the base layer. All
-layers are validated, including values superseded by stricter limits. At N
+maximum thresholds take MIN. `max_workers` defaults to **5** with origin `default`;
+as the sole exception to tightening defaults, a configured worker cap replaces 5,
+including values above 5. Configured worker caps still combine by MIN. Raise it with
+`aiwg config set --project parallelism.admission.hostResources.max_workers 10`
+(use an integer >= 1). All other threshold defaults remain unchanged. No layer
+can relax another configured limit. All layers are validated, including values
+superseded by stricter limits. At N
 running workers, max_workers=N blocks the next launch. Counts use current-user
 `aiwg-worker-*` service units when available; otherwise exact `codex`/`muse-bin`
 process names owned by the current UID. Legacy build bypass environment flags

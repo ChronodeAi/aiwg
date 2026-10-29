@@ -8,9 +8,37 @@ import { parseDoctorArgsOrExit } from '../../../tools/cli/doctor-args.mjs';
 import { parsePublicDoctorFlags } from '../../../src/cli/handlers/doctor-args.js';
 import { hostResourceReport } from '../../../src/config/host-resource-report.mjs';
 import { hostResourceReaders, ownedWorkerReaders } from '../../fixtures/host-resources.js';
+import { main as configMain } from '../../../src/config/cli.js';
+import { emptyConfig, readAiwgConfigCandidate, writeAiwgConfig } from '../../../src/config/aiwg-config.js';
 
 const roots: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+
+it('raises the worker cap through the documented project config command', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'aiwg-worker-cap-config-')); roots.push(root);
+  const initial = emptyConfig();
+  initial.parallelism!.max_parallel_subagents = 20;
+  await writeAiwgConfig(root, initial);
+  vi.spyOn(console, 'log').mockImplementation(() => {});
+  await configMain(['set', '--project', '--target', root, 'parallelism.admission.hostResources.max_workers', '10']);
+  const config = (await readAiwgConfigCandidate(root))!;
+  expect(config.parallelism!.admission!.hostResources!.max_workers).toBe(10);
+  expect(hostResourceReport({ config, readers: { ...hostResourceReaders(), countWorkers: () => 6,
+    statfsPath: () => ({ bavail: 32, bsize: 1024 ** 3 }) } })).toMatchObject({ ok: true, slots: 4 });
+});
+
+it('prints max_workers=5 with default origin and exposes its remaining slots in JSON', async () => {
+  const readers = { ...hostResourceReaders(), countWorkers: () => 3,
+    statfsPath: () => ({ bavail: 32, bsize: 1024 ** 3 }) };
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  expect(await runResourceDoctor('/synthetic', { config: {}, readers })).toBe(0);
+  expect(log.mock.calls.flat()).toContain('max_workers=5 (default)');
+  log.mockClear();
+  expect(await runResourceDoctor('/synthetic', { config: {}, readers, json: true })).toBe(0);
+  expect(JSON.parse(String(log.mock.calls[0][0]))).toMatchObject({ slots: 2,
+    thresholds: { max_workers: 5 }, origins: { max_workers: ['default'] },
+    limits: expect.arrayContaining([{ threshold: 'max_workers', slots: 2 }]) });
+});
 
 it('accepts the resource mode in both strict doctor parsers and honors the terminator', () => {
   expect(parsePublicDoctorFlags(['--resources', '--json']).hasSwitch('--resources')).toBe(true);

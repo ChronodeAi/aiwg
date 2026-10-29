@@ -21,6 +21,23 @@ const fixture = () => {
 const resolve = (f: ReturnType<typeof fixture>) => resolveWorkerPlan(f.snapshot, f.request);
 
 describe('resolver host capacity', () => {
+  it('uses the default worker cap and permits an operator to raise it', () => {
+    const f = fixture();
+    f.snapshot.config.parallelism!.max_parallel_subagents = 20;
+    f.snapshot.config.parallelism!.groups!.workers.maxParallel = 20;
+    f.snapshot.hostResources = { ...healthyHostResources(), workers: 6, availMemGb: 128 };
+    const blocked = resolve(f);
+    expect(blocked).toMatchObject({ status: 'blocked', selected: null, slots: 0,
+      resources: { thresholds: { max_workers: 5 }, origins: { max_workers: ['default'] } } });
+    expect(blocked.diagnostics.at(-1)?.message).toContain('max_workers');
+    f.snapshot.config.build = { resource_preflight: { dispatch: { max_workers: 10 } } };
+    expect(resolve(f)).toMatchObject({ status: 'eligible', slots: 4,
+      resources: { limits: expect.arrayContaining([{ threshold: 'max_workers', slots: 4 }]) } });
+    f.snapshot.config.parallelism!.admission = { hostResources: { max_workers: 7 } };
+    expect(resolve(f)).toMatchObject({ status: 'eligible', slots: 1,
+      resources: { thresholds: { max_workers: 7 } } });
+  });
+
   it.each([0, 1, 2, 3])('agrees with doctor for the selected group with %i workers', async workers => {
     const f = fixture();
     f.request.group = 'workers';

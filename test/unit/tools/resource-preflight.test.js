@@ -205,7 +205,7 @@ describe('dispatch gate (FR-OG-107)', () => {
       min_avail_mem_gb: 8, max_load_ratio: 1.0, max_mem_psi_avg10: 30, max_mem_psi_avg60: 10,
       min_free_disk_gb: 2,
     });
-    expect(resolveDispatchThresholds({}).max_workers).toBeUndefined();
+    expect(resolveDispatchThresholds({}).max_workers).toBe(5);
     expect(() => resolveDispatchThresholds({ overlay: { max_load_ratio: -1 } })).toThrow(/non-negative/);
     expect(() => resolveDispatchThresholds({ overlay: { max_workers: 0 } })).toThrow(/max_workers/);
   });
@@ -220,13 +220,14 @@ describe('dispatch gate (FR-OG-107)', () => {
     const result = evaluateDispatchGate(incidentLive, resolveDispatchThresholds());
     expect(result.ok).toBe(false);
     expect(result.failures.map((failure) => failure.signal)).toEqual([
-      'avail-mem', 'load', 'mem-psi-avg10', 'mem-psi-avg60', 'free-disk',
+      'avail-mem', 'load', 'mem-psi-avg10', 'mem-psi-avg60', 'workers', 'free-disk',
     ]);
   });
 
-  it('BLOCKs on worker count only when max_workers is configured', () => {
+  it('BLOCKs on the default worker cap and permits a configured increase', () => {
     const crowded = { ...healthyLive, workers: 9 };
-    expect(evaluateDispatchGate(crowded, resolveDispatchThresholds()).ok).toBe(true);
+    expect(evaluateDispatchGate(crowded, resolveDispatchThresholds()).ok).toBe(false);
+    expect(evaluateDispatchGate(crowded, resolveDispatchThresholds({ overlay: { max_workers: 10 } })).ok).toBe(true);
     const limited = evaluateDispatchGate(crowded, resolveDispatchThresholds({ overlay: { max_workers: 4 } }));
     expect(limited.ok).toBe(false);
     expect(limited.failures.map((failure) => failure.signal)).toEqual(['workers']);
@@ -236,7 +237,7 @@ describe('dispatch gate (FR-OG-107)', () => {
     const unknown = evaluateDispatchGate({ supported: true }, resolveDispatchThresholds());
     expect(unknown.ok).toBe(false);
     expect(unknown.failures.map((failure) => failure.signal)).toEqual([
-      'avail-mem', 'load', 'mem-psi-avg10', 'mem-psi-avg60', 'free-disk',
+      'avail-mem', 'load', 'mem-psi-avg10', 'mem-psi-avg60', 'workers', 'free-disk',
     ]);
     const platform = evaluateDispatchGate({ supported: false, reason: 'no /proc here' }, resolveDispatchThresholds());
     expect(platform.ok).toBe(false);

@@ -218,6 +218,8 @@ export async function refreshResourceGate(workspace: string, live?: Record<strin
     admissionHostResources: config?.parallelism?.admission?.hostResources,
     overlay: { max_load_ratio: 0.8 },
   });
+  // An index refresh is not a worker launch, so the worker cap never gates it.
+  delete thresholds.max_workers;
   const result = preflight.evaluateDispatchGate(live ?? preflight.readLiveHostResources({ paths: [workspace] }), thresholds);
   return { ok: result.ok, reason: result.failures.map((failure: { reason: string }) => failure.reason).join('; ') || undefined };
 }

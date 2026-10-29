@@ -271,6 +271,12 @@ describe('index refresh', () => {
     expect(jobs.filter(job => job.scope !== 'host').every(job => job.workspace === workspace)).toBe(true);
   });
 
+  it('is not gated by the worker cap, since a refresh is not a worker launch', async () => {
+    const live = { supported: true, availMemGb: 16, loadRatio: 0, memPsiAvg10: 0, memPsiAvg60: 0, freeDiskGb: 100 };
+    expect(await refreshResourceGate(workspace, { ...live, workers: 12 })).toEqual({ ok: true, reason: undefined });
+    expect(await refreshResourceGate(workspace, live)).toEqual({ ok: true, reason: undefined });
+  });
+
   it('uses the dispatch gate with 8 GiB memory and 0.8 load per core, including stricter configured limits', async () => {
     const live = { supported: true, availMemGb: 8, loadRatio: 0.8, memPsiAvg10: 0, memPsiAvg60: 0, freeDiskGb: 100 };
     expect(await refreshResourceGate(workspace, live)).toEqual({ ok: true, reason: undefined });

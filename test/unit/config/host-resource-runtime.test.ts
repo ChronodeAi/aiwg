@@ -83,7 +83,7 @@ describe('shared preflight measurement regressions', () => {
     }
     for (const freeDiskGb of [NaN, Infinity, -1]) expect(evaluateDispatchGate({ ...good, freeDiskGb }, thresholds).ok).toBe(false);
     expect(evaluateDispatchGate({ ...good, availMemGb: 8, loadRatio: 1, memPsiAvg10: 30, memPsiAvg60: 10, freeDiskGb: 2, workers: 2 }, thresholds).ok).toBe(true);
-    expect(evaluateDispatchGate({ ...good, workers: 99 }, resolveDispatchHostThresholds()).ok).toBe(true);
+    expect(evaluateDispatchGate({ ...good, workers: 99 }, resolveDispatchHostThresholds()).ok).toBe(false);
     expect(evaluateDispatchGate({ ...good, freeDiskGb: undefined }, { ...thresholds, min_free_disk_gb: 0 }).ok).toBe(true);
   });
 });
