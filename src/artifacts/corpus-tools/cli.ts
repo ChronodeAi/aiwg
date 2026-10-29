@@ -39,6 +39,7 @@ import { buildProfileEdges, renderProfileEdges } from './profile-edges.js';
 import { extractPages, renderExtract, resolveAdapter, rasterizePdf } from './vision-extract.js';
 import { runSnapshot, type SnapshotOptions } from './snapshot.js';
 import { resolveCli } from './resolve-cli.js';
+import { expandCli } from './expand-cli.js';
 
 function flagValue(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -52,6 +53,7 @@ function hasFlag(args: string[], name: string): boolean {
 const HELP = `aiwg corpus — research-corpus tools
 
 Usage:
+  aiwg corpus expand [--seeds REF-a,REF-b | --since YYYY-MM-DD | --all] [--per-seed N] [--from recent|all-cs] [--min-year YYYY] [--reexplore-after 180d] [--max-seeds N] [--overlap] [--write] [--json]
   aiwg corpus resolve "<title | URL | arXiv ID | DOI | bibliography line>" [--year YYYY] [--json]
   aiwg corpus resolve --from-file refs.txt [--year YYYY] [--json]
   aiwg corpus radar-init --ref REF-XXX [--cadence C] [--cluster T] [--write]
@@ -83,6 +85,7 @@ Usage:
   aiwg corpus vision-extract --slug SLUG [--images DIR] [--out DIR] [--start N] [--end N] [--provider codex|command] [--command TMPL] [--model M] [--retries N] [--title T] [--force] [--rasterize PDF] [--dpi N]
 
 resolve verifies paper identities, refuses ambiguous matches (exit 2) and reports unresolved references (exit 3).
+expand queues similar papers by convergence and recency (dry-run unless --write; never inducts or files issues).
 radar-init scaffolds radar sidecars (dry-run unless --write; skips existing).
 radar-status reports overdue radars (most-overdue-first).
 radar-report aggregates corpus/cluster freshness.
@@ -271,6 +274,8 @@ export async function corpusMain(args: string[], cwd: string = process.cwd()): P
   }
   const root = await resolveCorpusRoot(cwd);
   switch (sub) {
+    case 'expand':
+      return expandCli(rest, root, cwd);
     case 'resolve':
       return resolveCli(rest, root, cwd);
     case 'radar-init':

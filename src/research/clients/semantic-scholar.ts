@@ -114,6 +114,26 @@ export class SemanticScholarClient extends BaseClient {
     return response.data.map(paper => this.transformResponse(paper));
   }
 
+  /** Similar papers share the normal transport, key header, limiter and retries. */
+  async recommendations(identifier: string, limit = 20, from: 'recent' | 'all-cs' = 'recent'): Promise<ResearchPaper[]> {
+    const colon = identifier.indexOf(':');
+    const encoded = `${identifier.slice(0, colon + 1)}${encodeURIComponent(identifier.slice(colon + 1))}`;
+    const response = await this.requestApi<{ recommendedPapers: SemanticScholarResponse[] }>(
+      'recommendations', `/papers/forpaper/${encoded}`, { limit, from, fields: IDENTITY_FIELDS });
+    if (!Array.isArray(response.recommendedPapers) || response.recommendedPapers.some(p => !p?.paperId || !p.title)) {
+      throw new ResearchError(ResearchErrorCode.RF_301, 'Invalid recommendations response');
+    }
+    return response.recommendedPapers.map(paper => this.transformResponse(paper));
+  }
+
+  /** One graph lookup for each candidate selected for optional citation overlap. */
+  async recommendationReferences(paperId: string): Promise<ResearchPaper[]> {
+    const response = await this.requestApi<{ references: SemanticScholarResponse[] }>(
+      'graph', `/paper/${encodeURIComponent(paperId)}`, { fields: 'references.paperId,references.title,references.externalIds' });
+    if (!Array.isArray(response.references)) throw new ResearchError(ResearchErrorCode.RF_301, 'Invalid references response');
+    return response.references.filter(paper => paper?.paperId).map(paper => this.transformResponse(paper));
+  }
+
   /**
    * Search papers by query
    */
