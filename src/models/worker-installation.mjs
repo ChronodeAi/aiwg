@@ -1,10 +1,10 @@
+import { canonicalFuturePath, inside, readInstalledFile, installationStorePath, assertTrustedStore, readInstallationStore, withWorkerInstallationStore, writeWorkerInstallationStore, retainWorkerApprovals } from './worker-installation-store.mjs';
+export { prepareWorkerInstallationStore } from './worker-installation-store.mjs';
 /** Shared installed-worker qualification owner, also used by the Ralph compatibility facade. */
 import { spawn } from 'node:child_process';
 import { buildInstalledWorkerTransport } from './worker-artifact-binding.mjs';
-import { constants } from 'node:fs';
-import { open, realpath, lstat, mkdir, rename, writeFile, unlink } from 'node:fs/promises';
+import { open, realpath, lstat } from 'node:fs/promises';
 import path from 'node:path';
-import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { parse } from 'acorn';
@@ -225,7 +225,6 @@ const providerRegistry = new Map();
 const installedModules = new Map();
 let installedLoad = Promise.resolve();
 // Same default byte ceiling as workerAdapter.catalogAdapter.maxBytes.
-const installedModuleMaxBytes = 5 * 1024 * 1024;
 
 async function binaryIdentity(filename, workerWritableRoots) {
   if (typeof filename !== 'string' || !path.isAbsolute(filename) || filename.includes('\0')) throw new Error('Absolute installed binary required');
@@ -252,20 +251,6 @@ async function binaryIdentity(filename, workerWritableRoots) {
     }
     return { realpath: canonical, sha256: `sha256:${hash.digest('hex')}` };
   } finally { await handle.close(); }
-}
-
-// Resolve existing ancestors too: a not-yet-created output can traverse a symlink.
-async function canonicalFuturePath(filename) {
-  try { return await realpath(filename); }
-  catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    // A dangling link is not a new output: following it may leave the scope.
-    try { if ((await lstat(filename)).isSymbolicLink()) throw new Error('Dangling worker path'); }
-    catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
-    const parent = path.dirname(filename);
-    if (parent === filename) throw error;
-    return path.join(await canonicalFuturePath(parent), path.basename(filename));
-  }
 }
 
 export async function inspectWorkerInstallation(instance, request) {
@@ -504,11 +489,6 @@ function runBoundedVersionProbe(executable, argv, environment, cwd, timeoutMs, m
   });
 }
 
-function inside(root, target) {
-  const relative = path.relative(root, target);
-  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
-}
-
 // Inspect syntax without executing module bodies (including top-level effects).
 // Only statically declared interfaceVersion and callable register exports qualify.
 function checkInstalledExports(source) {
@@ -557,27 +537,6 @@ function checkInstalledExports(source) {
     }
   }
   inspect(ast);
-}
-
-async function readInstalledFile(filename) {
-  const file = await open(filename, 'r');
-  try {
-    const stat = await file.stat();
-    if (!stat.isFile()) throw new Error('Installed module inputs must be regular files');
-    if (stat.size > installedModuleMaxBytes) throw new Error('Installed module input exceeds maxBytes (5 MiB)');
-    // Bound the actual read too: an fstat size check alone allows concurrent growth.
-    const bytes = Buffer.alloc(installedModuleMaxBytes + 1);
-    let length = 0;
-    while (length < bytes.length) {
-      const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
-      if (!bytesRead) break;
-      length += bytesRead;
-    }
-    if (length > installedModuleMaxBytes) throw new Error('Installed module input exceeds maxBytes (5 MiB)');
-    return bytes.subarray(0, length);
-  } finally {
-    await file.close();
-  }
 }
 
 async function inspectInstalledModule(entry, workerWritableRoots, platform) {
@@ -757,74 +716,6 @@ export function hasProvider(name) {
 
 // This host-owned record extends the installation owner. It is not project
 // configuration and never accepts module locations from models.json/aiwg.config.
-function installationStorePath() {
-  const root = process.env.AIWG_CONFIG || path.join(homedir(), '.config/aiwg');
-  if (!path.isAbsolute(root)) throw new Error('Installation store must be absolute');
-  return path.join(root, 'worker-installations.json');
-}
-
-// HOME is the operator's trust boundary; custom stores outside it are checked
-// back to /. O_NOFOLLOW on the store itself does not protect its ancestors.
-async function assertTrustedStoreAncestors(directory) {
-  const home = path.resolve(homedir());
-  const boundary = inside(home, directory) ? home : path.parse(directory).root;
-  // The store directory itself is checked by the caller.
-  if (directory === boundary) return;
-  const ancestors = [];
-  for (let target = path.dirname(directory); ; target = path.dirname(target)) {
-    ancestors.push(target);
-    if (target === boundary) break;
-  }
-  for (const target of ancestors.reverse()) {
-    const stat = await lstat(target);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.mode & 0o022
-      || process.getuid && stat.uid !== 0 && stat.uid !== process.getuid()) {
-      throw new Error(`Untrusted installation store ancestor: ${target}`);
-    }
-  }
-}
-
-async function assertTrustedStore(filename, writableRoots, repairDirectory = false, apply = false) {
-  const changes = [];
-  const canonical = await canonicalFuturePath(filename);
-  if (canonical !== filename) throw new Error('Symlinked installation store');
-  for (const root of writableRoots) {
-    if (inside(await realpath(root), canonical)) throw new Error('Worker-writable installation store');
-  }
-  for (const target of [path.dirname(filename), filename]) {
-    try {
-      const stat = await lstat(target);
-      if (process.getuid && stat.uid !== process.getuid()) throw new Error(`Installation store path is owned by another user: ${target}`);
-      if (stat.isSymbolicLink() || stat.isFile() && stat.nlink !== 1
-        || target === path.dirname(filename) && !stat.isDirectory()
-        || target === filename && !stat.isFile()) throw new Error(`Untrusted installation store permissions: ${target}`);
-      if (stat.mode & 0o022) {
-        if (!repairDirectory || target !== path.dirname(filename) || !process.getuid) {
-          throw new Error(`Untrusted installation store permissions: ${target}`);
-        }
-        await assertTrustedStoreAncestors(target);
-        changes.push({ path: target, action: 'chmod go-w' });
-        if (apply) {
-          const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
-          try {
-            const current = await handle.stat();
-            if (current.uid !== process.getuid() || current.ino !== stat.ino || current.dev !== stat.dev) {
-              throw new Error(`Installation store directory changed: ${target}`);
-            }
-            await handle.chmod(current.mode & ~0o022);
-          } finally { await handle.close(); }
-        }
-      }
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
-  return changes;
-}
-
-/** Qualification's confirmed write may secure its own directory; ordinary readers never repair. */
-export async function prepareWorkerInstallationStore({ workerWritableRoots, apply = false }) {
-  return assertTrustedStore(installationStorePath(), workerWritableRoots, true, apply);
-}
-
 // Use the existing delivery ledger's host-selected keyring, never public keys
 // supplied by a registration. PAE separates this authority from effect records.
 const qualificationPayloadType = 'application/vnd.aiwg.worker-installation-qualification+json';
@@ -857,22 +748,6 @@ async function qualificationSignatureFailure(record, trust) {
   const result = checkSignature(keyring, keyid, sig, qualificationPayloadType,
     await qualificationPayload(record, signedAt, projectDir, scope), signedAt);
   return result === 'ok' ? null : result === 'signature-invalid' ? result : `signature-${result}`;
-}
-
-async function readInstallationStore(filename, expectedDigest) {
-  try {
-    const bytes = await readInstalledFile(filename);
-    const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
-    if (expectedDigest !== undefined && digest !== expectedDigest) throw new Error('Installation store binding changed');
-    const stored = JSON.parse(bytes.toString('utf8'));
-    if (stored.version !== 1 || !Array.isArray(stored.registrations) || stored.registrations.length > 128) {
-      throw new Error('Unsupported installation record');
-    }
-    return { stored, digest };
-  } catch (error) {
-    if (error.code === 'ENOENT' && expectedDigest === undefined) return { stored: { version: 1, registrations: [] }, digest: null };
-    throw error;
-  }
 }
 
 /** Offline projection of recorded approvals only. Never imports drivers, reads auth, or probes CLIs.
@@ -935,21 +810,7 @@ export async function recordWorkerInstallation(instance, options) {
   await assertTrustedStore(filename, installation.workerWritableRoots);
   // Canonical workspace identity is an exact approval key, never a prefix.
   installation.cwd = await realpath(installation.cwd);
-  await mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
-  // Serialize read/modify/rename across qualifying CLI processes. A stale lock
-  // fails closed; qualification never steals another process's lock.
-  const lockPath = `${filename}.lock`;
-  let lock;
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try { lock = await open(lockPath, 'wx', 0o600); break; }
-    catch (error) {
-      if (error.code !== 'EEXIST' || attempt === 99) throw error;
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
-  }
-  try {
-    await assertTrustedStore(filename, installation.workerWritableRoots);
-    const { stored } = await readInstallationStore(filename);
+  return withWorkerInstallationStore(installation.workerWritableRoots, async ({ stored }) => {
     const environmentNames = Object.keys(installation.environment ?? {});
     delete installation.environment;
     delete installation.adapter;
@@ -966,26 +827,10 @@ export async function recordWorkerInstallation(instance, options) {
       if (checkSignature(keyring, signingKey.keyid, sig, qualificationPayloadType, payload, signedAt) !== 'ok') throw new Error('invalid signature');
       record.signature = { keyid: signingKey.keyid, sig, signedAt, projectDir: signingProjectDir, scope: keyring.scope };
     } catch { return { status: 'DISABLED', reason: keyRecoveryMessage }; }
-    const retained = [];
-    for (const entry of stored.registrations) {
-      const workspace = typeof entry.installation?.cwd === 'string'
-        ? await realpath(entry.installation.cwd).catch(() => entry.installation.cwd) : null;
-      if (entry.cli !== cli || workspace !== installation.cwd) retained.push(entry);
-    }
-    // Bound host authority without silently evicting another workspace approval.
-    if (retained.length >= 128) throw new Error('Worker installation store is full (128 workspace approvals); remove an obsolete approval before qualifying another workspace');
-    stored.registrations = retained;
-    stored.registrations.push(record);
-    await mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
-    await assertTrustedStore(filename, installation.workerWritableRoots);
-    const temporary = `${filename}.${process.pid}.${createHash('sha256').update(String(Math.random())).digest('hex')}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-    await rename(temporary, filename);
+    stored.registrations = await retainWorkerApprovals(stored.registrations, record);
+    await writeWorkerInstallationStore(filename, stored, installation.workerWritableRoots);
     return result;
-  } finally {
-    await lock.close();
-    await unlink(lockPath);
-  }
+  });
 }
 
 /** Read recorded host authority, validate installation bytes and the current CLI

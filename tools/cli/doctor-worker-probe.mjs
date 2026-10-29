@@ -112,3 +112,17 @@ export async function runWorkerProbe(projectDir, options, workerConfig) {
   }
   return exitCode;
 }
+
+// Approval maintenance is offline and independent of project configuration or CLI availability.
+export async function runWorkerApprovalManagement(projectDir, options) {
+  const { listWorkerApprovals, forgetWorkerApproval } = await importImpl(import.meta.url, 'models/worker-installation-store.mjs');
+  const payload = options.forgetApproval
+    ? { removed: await forgetWorkerApproval({ cwd: projectDir, workspace: options.forgetApproval, cli: options.cli, yes: options.yes }) }
+    : { approvals: await listWorkerApprovals({ cwd: projectDir, cli: options.cli }) };
+  if (options.json) console.log(JSON.stringify(payload, null, 2));
+  else if (payload.removed) {
+    for (const row of payload.removed) console.log(`Removed worker approval: ${row.cli} ${row.workspace}`);
+  } else if (!payload.approvals.length) console.log('No worker approvals recorded.');
+  else for (const row of payload.approvals) console.log(`${row.cli} ${row.workspace} (${row.workspaceExists ? 'exists' : 'deleted'})`);
+  return 0;
+}
