@@ -121,9 +121,10 @@ describe('corpus expand frontier and HTTP contract', () => {
     expect((await cli(['--all', '--write'])).data!.processed).toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(0);
     vi.advanceTimersByTime(181 * 86400000);
-    await cli(['--all', '--write']); expect(fetchMock).toHaveBeenCalledTimes(1);
+    const refreshed = await cli(['--all', '--write']); expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(rows('candidates.jsonl')[0].score_parts.convergence).toBe(1);
-    expect(rows('expansion-state.jsonl')).toHaveLength(2);
+    expect(rows('expansion-state.jsonl')).toHaveLength(1);
+    expect(rows('expansion-state.jsonl')[0]).toEqual(refreshed.data!.processed[0]);
   });
 
   it('resumes --max-seeds without repeating successful seeds and spaces unauthenticated calls', async () => {
@@ -146,7 +147,7 @@ describe('corpus expand frontier and HTTP contract', () => {
     for (let n = 1; n < state.calls.length; n++) expect(state.calls[n].time - state.calls[n - 1].time).toBeGreaterThanOrEqual(1000);
     fetchMock.mockClear(); state.recommendations['arXiv:2401.12345'] = [recommended('recovered')];
     expect((await cli(['--all', '--write'])).exitCode).toBe(0); expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(rows('expansion-state.jsonl')[1].status).toBe('explored');
+    expect(rows('expansion-state.jsonl')).toHaveLength(1); expect(rows('expansion-state.jsonl')[0].status).toBe('explored');
   });
 
   it('records no-id without HTTP and picks up an ID added later', async () => {

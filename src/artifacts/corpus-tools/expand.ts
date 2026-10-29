@@ -5,7 +5,7 @@ import { identityKeys } from '../../research/identity.js';
 import { ResearchError, ResearchErrorCode, type ResearchPaper } from '../../research/types.js';
 import { findInCorpus, loadCorpusIdentities, type CorpusIdentityRecord } from './resolve-corpus.js';
 import { ExpansionQueue, rankCandidates, type ExpansionCandidate } from './expand-queue.js';
-import { appendState, expansionPaths, readJsonl, writeQueue, type ExpansionState } from './expand-state.js';
+import { appendState, compactState, expansionPaths, readJsonl, writeQueue, type ExpansionState } from './expand-state.js';
 import type { ExpandOptions } from './expand-cli.js';
 import { expansionDates } from './expand-dates.js';
 
@@ -22,6 +22,13 @@ export interface ExpansionResult {
 }
 
 function seedId(record: CorpusIdentityRecord): string | null {
+  const preferred = record.fields.map(fields => {
+    const keys = identityKeys(fields);
+    return keys.find(key => key.startsWith('arxivId:')) ?? keys.find(key => key.startsWith('doi:'));
+  });
+  if (preferred[0] && preferred[1] && preferred[0] !== preferred[1]) {
+    process.stderr.write(`Warning: ${record.ref} primary and sidecar seed IDs differ (${preferred[0]} vs ${preferred[1]}); using primary.\n`);
+  }
   // Prefer the primary document and citation frontmatter IDs over body URL fallbacks.
   for (const fields of record.fields) {
     const keys = identityKeys(fields);
@@ -102,7 +109,10 @@ export async function expandCorpus(root: string, cwd: string, options: ExpandOpt
     }
     rankCandidates(result.candidates);
   }
-  if (options.write) writeQueue(paths, result.candidates, renderExpansion(result));
+  if (options.write) {
+    writeQueue(paths, result.candidates, renderExpansion(result));
+    compactState(paths);
+  }
   return result;
 }
 
@@ -111,7 +121,7 @@ export function renderExpansion(result: ExpansionResult): string {
   for (const row of result.processed) lines.push(`- ${row.ref}: ${row.status} (${row.seed_id ?? 'no ID'}), ${row.n_returned} returned${row.error ? ` — ${row.error}` : ''}`);
   lines.push('', 'Ranking: distinct seed convergence, then publication year, then optional in-corpus reference overlap.', '');
   for (const [index, row] of result.candidates.entries()) {
-    lines.push(`## ${index + 1}. ${row.paper.title}`, '', `Year: ${row.paper.year}; IDs: ${row.identity_keys.filter(key => !key.startsWith('title:')).join(', ')}`,
+    lines.push(`## ${index + 1}. ${row.paper.title}`, '', `Review: ${row.review?.status ?? 'pending'}`, `Year: ${row.paper.year}; IDs: ${row.identity_keys.filter(key => !key.startsWith('title:')).join(', ')}`,
       `Score components: convergence=${row.score_parts.convergence}, recency=${row.score_parts.recency}, overlap=${row.score_parts.overlap ?? 'not checked'}`,
       `Seed REFs: ${row.seed_refs.join(', ')}`, `Discovery: ${row.discovery.surface}; via: ${row.discovery.via}`, '');
   }

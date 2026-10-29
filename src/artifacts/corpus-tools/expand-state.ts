@@ -1,5 +1,5 @@
 // Read frontier/queue JSONL and checkpoint queue-before-ledger under the artifact path owner.
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { resolveProjectAiwgDirForWrite } from '../../config/project-artifacts.js';
@@ -31,6 +31,21 @@ export function readJsonl<T>(file: string): T[] {
   });
 }
 
+export function writeJsonl(file: string, rows: unknown[]): void {
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, rows.map(row => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), 'utf8');
+    renameSync(temporary, file);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+export function compactState(paths: ReturnType<typeof expansionPaths>): void {
+  const rows = readJsonl<ExpansionState>(paths.ledger);
+  if (rows.length) writeJsonl(paths.ledger, [...new Map(rows.map(row => [row.ref, row])).values()]);
+}
+
 export function writeQueue(paths: ReturnType<typeof expansionPaths>, rows: ExpansionCandidate[], report: string): void {
   mkdirSync(paths.directory, { recursive: true });
   for (const [file, content] of [[paths.queue, rows.map(row => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : '')], [paths.report, report]]) {
@@ -43,4 +58,5 @@ export function writeQueue(paths: ReturnType<typeof expansionPaths>, rows: Expan
 
 export function appendState(paths: ReturnType<typeof expansionPaths>, row: ExpansionState): void {
   appendFileSync(paths.ledger, JSON.stringify(row) + '\n', 'utf8');
+  compactState(paths);
 }

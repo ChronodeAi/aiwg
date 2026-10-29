@@ -70,6 +70,57 @@ describe('expansion date precedence', () => {
     expect(warning).not.toHaveBeenCalled();
   });
 
+  it('dates a seed first created by a no-ff merge instead of clone mtime', async () => {
+    seed('REF-015'); commit();
+    const base = String(git(['rev-parse', 'HEAD'])).trim();
+    const tree = String(git(['rev-parse', 'HEAD^{tree}'])).trim();
+    const side = String(git(['commit-tree', tree, '-p', base, '-m', 'side'])).trim();
+    git(['merge', '--no-ff', '--no-commit', side]);
+    const path = seed('REF-016'); commit('2026-02-01T12:00:00Z'); resetMtimes();
+    expect(expansionDates(root, loadCorpusIdentities(root)).get(path)).toBe(Date.parse('2026-02-01T12:00:00Z'));
+    expect((await expandCorpus(root, temporary, options)).scoped).toBe(0);
+    expect(warning).not.toHaveBeenCalled();
+  });
+
+  it('preserves the original branch addition rather than its later no-ff merge date', async () => {
+    seed('REF-015'); commit();
+    const base = String(git(['rev-parse', 'HEAD'])).trim();
+    const path = seed('REF-016'); git(['add', '.']);
+    const tree = String(git(['write-tree'])).trim();
+    const side = String(git(['commit-tree', tree, '-p', base, '-m', 'branch seed'])).trim();
+    // Build the side commit without switching branches or altering HEAD.
+    git(['read-tree', 'HEAD']); rmSync(path);
+    git(['-c', 'commit.gpgsign=false', 'merge', '--no-ff', '-m', 'merge branch seed', side], '2026-10-01T12:00:00Z');
+    resetMtimes();
+    expect(expansionDates(root, loadCorpusIdentities(root)).get(path)).toBe(Date.parse('2026-01-24T12:00:00Z'));
+    expect((await expandCorpus(root, temporary, options)).scoped).toBe(0);
+    expect(warning).not.toHaveBeenCalled();
+  });
+
+  it('names shallow history and falls back instead of trusting boundary additions', async () => {
+    seed('REF-016'); commit();
+    writeFileSync(join(repository, 'later.txt'), 'later change'); commit('2026-10-01T12:00:00Z');
+    const clone = join(temporary, 'shallow');
+    git(['clone', '-q', '--depth', '1', `file://${repository}`, clone]);
+    root = join(clone, 'nested-corpus'); resetMtimes();
+    const path = loadCorpusIdentities(root)[0].path;
+    expect(expansionDates(root, loadCorpusIdentities(root)).get(path)).toBe(now.getTime());
+    expect(warning).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/1 REFs used document mtime.*shallow/i));
+    expect(boundedExecFileSync).toHaveBeenCalledWith('git', ['rev-parse', '--is-shallow-repository'], 'quick', expect.any(Object));
+  });
+
+  it('skips a record deleted after corpus load and continues expanding with a warning', async () => {
+    const removed = seed('REF-016'); seed('REF-017'); resetMtimes();
+    const actual = await vi.importActual<typeof import('../../../src/process/bounded-child-process.mjs')>('../../../src/process/bounded-child-process.mjs');
+    vi.mocked(boundedExecFileSync).mockImplementationOnce((...args) => {
+      rmSync(removed);
+      return actual.boundedExecFileSync(...args);
+    });
+    const result = await expandCorpus(root, temporary, options);
+    expect(result.processed.map(row => row.ref)).toEqual(['REF-017']);
+    expect(warning).toHaveBeenCalledWith(expect.stringMatching(/REF-016.*(missing|disappeared|deleted).*skip/i));
+  });
+
   it('uses mtime for one untracked REF and emits exactly one summary warning', async () => {
     seed('REF-016'); commit();
     const untracked = seed('REF-018'); resetMtimes();
@@ -123,7 +174,7 @@ describe('expansion date precedence', () => {
     expect(warning).not.toHaveBeenCalled();
   });
 
-  it('batches 2,000 paths (including tabs and newlines) into three explicitly bounded Git calls', () => {
+  it('batches 2,000 paths (including tabs and newlines) into four explicitly bounded Git calls', () => {
     const records: CorpusIdentityRecord[] = [];
     for (let n = 0; n < 2000; n++) {
       const path = join(root, `seed ${n}${n === 0 ? '\t\n' : ''}.md`);
@@ -133,7 +184,7 @@ describe('expansion date precedence', () => {
     commit(); vi.mocked(boundedExecFileSync).mockClear();
     const dates = expansionDates(root, records);
     expect([...dates.values()]).toEqual(Array(2000).fill(Date.parse('2026-01-24T12:00:00Z')));
-    expect(boundedExecFileSync).toHaveBeenCalledTimes(3);
+    expect(boundedExecFileSync).toHaveBeenCalledTimes(4);
     for (const [command, , tier, controls] of vi.mocked(boundedExecFileSync).mock.calls) {
       expect(command).toBe('git'); expect(tier).toBe('quick');
       expect(controls).toMatchObject({ timeout: 30_000 });
@@ -144,6 +195,7 @@ describe('expansion date precedence', () => {
   it('falls back with a summary when the bounded Git history query fails', () => {
     const path = seed('REF-016'); commit(); resetMtimes();
     vi.mocked(boundedExecFileSync).mockImplementationOnce(() => repository)
+      .mockImplementationOnce(() => 'false')
       .mockImplementationOnce(() => 'nested-corpus/documentation/references/REF-016-fixture.md\0')
       .mockImplementationOnce(() => { throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }); });
     expect(expansionDates(root, loadCorpusIdentities(root)).get(path)).toBe(now.getTime());

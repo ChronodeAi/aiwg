@@ -40,6 +40,7 @@ import { extractPages, renderExtract, resolveAdapter, rasterizePdf } from './vis
 import { runSnapshot, type SnapshotOptions } from './snapshot.js';
 import { resolveCli, RESOLVE_USAGE } from './resolve-cli.js';
 import { expandCli, EXPAND_USAGE } from './expand-cli.js';
+import { reviewCli, REVIEW_USAGE } from './expand-review.js';
 import { exitCodeFor, isAiwgError } from '../../cli/errors.js';
 
 function flagValue(args: string[], name: string): string | undefined {
@@ -55,6 +56,7 @@ const HELP = `aiwg corpus — research-corpus tools
 
 Usage:
   aiwg corpus expand [--seeds REF-a,REF-b | --since YYYY-MM-DD | --all] [--per-seed N] [--from recent|all-cs] [--min-year YYYY] [--reexplore-after 180d] [--max-seeds N] [--overlap] [--write] [--json]
+  aiwg corpus review [list | accept <id> [--brief] | reject <id> [--reason TEXT] | defer <id>] [--write] [--json]
   aiwg corpus resolve "<title | URL | arXiv ID | DOI | bibliography line>" [--year YYYY] [--json]
   aiwg corpus resolve --from-file refs.txt [--year YYYY] [--json]
   aiwg corpus radar-init --ref REF-XXX [--cadence C] [--cluster T] [--write]
@@ -87,6 +89,7 @@ Usage:
 
 resolve verifies paper identities, refuses ambiguous matches (exit 2) and reports unresolved references (exit 3) or deferred incomplete lookups (exit 4; retry).
 expand queues similar papers by convergence and recency (dry-run unless --write; never inducts or files issues).
+review lists saved candidates and previews accept/reject/defer (persist with --write; optional accept --brief).
 radar-init scaffolds radar sidecars (dry-run unless --write; skips existing).
 radar-status reports overdue radars (most-overdue-first).
 radar-report aggregates corpus/cluster freshness.
@@ -273,14 +276,15 @@ export async function corpusMain(args: string[], cwd: string = process.cwd()): P
     process.stdout.write(HELP);
     return;
   }
-  if (sub === 'resolve' || sub === 'expand') {
+  if (sub === 'resolve' || sub === 'expand' || sub === 'review') {
     const json = hasFlag(rest, '--json');
     if (hasFlag(rest, '--help') || hasFlag(rest, '-h')) {
-      const usage = sub === 'resolve' ? RESOLVE_USAGE : EXPAND_USAGE;
+      const usage = sub === 'resolve' ? RESOLVE_USAGE : sub === 'expand' ? EXPAND_USAGE : REVIEW_USAGE;
       process.stdout.write(json ? JSON.stringify({ usage }) + '\n' : usage);
       return;
     }
     try {
+      if (sub === 'review') return await reviewCli(rest, cwd);
       const root = await resolveCorpusRoot(cwd);
       return await (sub === 'resolve' ? resolveCli(rest, root, cwd) : expandCli(rest, root, cwd));
     } catch (error) {
