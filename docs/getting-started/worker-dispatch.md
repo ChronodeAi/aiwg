@@ -23,6 +23,10 @@ parallelism caps and worker configuration before enabling it on a shared or mete
 
 ## How AIWG offers it
 
+> "Check which helper CLIs are installed. If two or more are ready, ask me whether to turn on dispatch."
+
+Your assistant runs a fast, local presence-only check — no network call, nothing spawned — and asks one yes/no question naming the detected CLIs. The default answer is no.
+
 `aiwg init` and `aiwg setup project` detect which supported worker CLIs are installed (a fast, local,
 presence-only check — no network call and nothing is spawned). When two or more are detected and dispatch
 is off, the setup step asks one yes/no question naming the detected CLIs. The default answer is **no**:
@@ -35,9 +39,15 @@ regenerate`, `aiwg refresh`, and `aiwg doctor --probe-workers` print a single re
 
 ### Answering headlessly
 
+> "Answer the dispatch question without a terminal: decline it for this script."
+
+Your assistant passes the headless answer directly, so the question is never asked and nothing waits on a terminal.
+
 `aiwg init` and `aiwg setup project` both accept `--worker-dispatch enable|decline` directly, so a script
 or agent running either command without a terminal can answer the question without waiting for the
 interactive prompt or leaving it unanswered:
+
+#### Command reference: answering headlessly
 
 ```bash
 aiwg init --non-interactive --worker-dispatch enable
@@ -72,6 +82,12 @@ decline, so there is no separate "undo the decline" step.
 
 ## How to turn it on
 
+> "Turn on worker dispatch and check the helpers are actually launchable."
+
+Your assistant enables `parallelism.worker_dispatch`, then probes the configured CLIs and qualifies them before any dispatch.
+
+### Command reference: turning it on
+
 ```bash
 aiwg config set --project parallelism.worker_dispatch true
 ```
@@ -102,6 +118,10 @@ When dispatch is disabled, JSON still includes every configured CLI with reason 
 and a message explaining that no probes ran. Unknown `aiwg doctor` flags exit non-zero naming the flag.
 
 ## Configure a worker group
+
+> "Set up a harness group with Codex for coding and Muse as fallback. Keep credentials out of both files."
+
+Your assistant writes the group and role guidance, then resolves a trial brief to check coverage before any real dispatch.
 
 Two files work together: **`.aiwg/aiwg.config`** declares the CLI installations and worker groups;
 **`models.json` at the project root** supplies role guidance. It is not `.aiwg/models.json`. Model
@@ -261,6 +281,10 @@ share project policy. Keep credentials out of both files.
 
 ### Choose models by role, then qualify
 
+> "Use the economy helper for inventory and the standard one for implementation. Check what my accounts actually support."
+
+Your assistant maps each task class to its role, checks current discovery for models and efforts, and only then qualifies.
+
 Use `efficiency` for inventory and bounded simple tasks, `coding` for implementation, and `reasoning` for
 architecture and review. The example uses the bundled catalog's Luna/Terra/Sol role mapping and Muse
 Spark as an alternate. Check the models and supported efforts actually available to your accounts with
@@ -276,6 +300,8 @@ selection.
 With both files in place, the built-in task classes are `inventory` → `efficiency`, `implementation` →
 `coding`, and `architecture`/`review` → `reasoning`. Additional mappings belong in
 `defaults.workerSelection.taskClasses`. A minimal check is:
+
+### Command reference: checking role coverage
 
 ```bash
 printf '%s\n' 'Inspect this project and report a bounded implementation plan.' > brief.txt
@@ -308,6 +334,10 @@ Versions below the minimum or at/above an exclusive upper bound remain not-ready
 still requires the existing qualification checks.
 
 ## Reusable group templates and project rubrics
+
+> "Give me two worker groups sharing one template, plus a maintenance role based on coding."
+
+Your assistant merges the template, validates that everything only narrows, and resolves a trial brief against the new role.
 
 Templates live in the same `parallelism` family. Groups and templates may reference one named
 `groupTemplates` entry with `template`; references may nest. Missing references and cycles fail
@@ -383,6 +413,8 @@ data-ineligible candidates stay excluded even if reordered. Direct health scalin
 Structured direct briefs retain that base role in `intent.role`; the request selects the alias and must
 match its configured task class.
 
+### Command reference: rubric check
+
 ```bash
 aiwg models resolve --role maintenance --task maintenance --group maintenance \
   --brief "$PWD/brief.txt" --workdir "$PWD" --final-output "$PWD/result.json" --format json
@@ -392,10 +424,15 @@ No Mission/MC state, daemon, scheduler or activation marker is needed for this d
 
 ## Qualify the installed CLIs
 
-See [Worker dispatch runtime](worker-dispatch-runtime.md#qualify-the-installed-clis) for the full
-procedure.
+> "Qualify the installed helpers in this worktree."
+
+Your assistant probes the configured CLIs, confirms the approvals, and records signed installation approval. Full procedure: [Worker dispatch runtime](worker-dispatch-runtime.md#qualify-the-installed-clis).
 
 ## Worker health windows and supervision
+
+> "The helper has gone quiet. Check whether it is stuck before stopping anything."
+
+Your assistant supervises by observer state, never by suspicion: quiet is not a stop, and only a hung worker this conductor owns is stopped, with the stop confirmed.
 
 The generated `AIWG.md` carries only a one-line summary of the configured worker health windows. The full
 explanation lives here (moved out of the startup context,
@@ -430,6 +467,10 @@ launches there and report cause and scope.
 
 ## Direct-path recovery evidence and status
 
+> "The worker failed. Check whether it is a real provider or quota outage, and show me what is safe to retry."
+
+Your assistant treats worker output as untrusted outage claims, checks the trusted upstream observation, and reads status that never launches probes or retries work.
+
 Direct recovery reuses the scoped breaker in the launcher and MCP worker owner. For both shell and MCP
 transports, stdout, stderr, structured worker errors, and worker-writable files are untrusted outage
 claims. They can request a diagnostic, but never establish a provider, quota, or host outage by
@@ -453,6 +494,8 @@ cancelled task cannot send another request. A successful probe admits one task c
 remaining task deadline and 300 seconds. Only its verified success closes the scope. Unknown termination
 blocks overlapping retries; unavailable qualified probes require operator intervention. No recovery path
 grants more attempts, budget, or permissions.
+
+### Command reference: recovery status
 
 Read status with the existing command:
 
@@ -485,6 +528,12 @@ or act on worker-authored remediation text. Fixed `startupCorrection` action, st
 in the existing process record, result and worker status.
 
 ## How to turn it off
+
+> "Turn worker dispatch off but keep my group setup for later."
+
+Your assistant flips the one setting off; per-CLI enablement and group configuration keep their values.
+
+### Command reference: turning it off
 
 ```bash
 aiwg config set --project parallelism.worker_dispatch false

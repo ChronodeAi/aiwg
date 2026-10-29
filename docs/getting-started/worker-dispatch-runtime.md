@@ -6,8 +6,14 @@ Continue from [Worker dispatch](worker-dispatch.md) after configuring groups and
 
 ## Qualify the installed CLIs
 
+> "Qualify the installed helpers in this worktree. Preview first without writing anything, then record."
+
+Your assistant probes the configured CLIs, asks one yes/no question listing what it will record, and records signed approval on explicit confirmation.
+
 After configuring `parallelism.clis`, `parallelism.groups`, and the matching
 `defaults.workerSelection.roleGuidance` in `models.json`, run:
+
+### Command reference: qualification
 
 ```bash
 aiwg doctor --probe-workers --qualify
@@ -174,8 +180,11 @@ aiwg models resolve --role coding --task implementation --group harness \
   --brief "$PWD/brief.txt" --workdir "$PWD" --final-output "$PWD/result.json" --format json
 ```
 
-
 ## Running outside the conductor sandbox
+
+> "Launch the resolved plan outside the sandbox and keep the run evidence."
+
+Your assistant saves the resolved JSON plan and launches it via `ralph-external` or the qualified MCP `worker-invoke` descriptor. The raw resolved shell command is for operators only.
 
 Conductors save the resolved JSON plan and run `aiwg ralph-external
 --launch-worker --invocation /absolute/plan.json --run-dir /absolute/private/run`,
@@ -223,6 +232,10 @@ replace those protections. Use this only for trusted tasks with the host access
 you intend to grant.
 
 ## Worker launch boundary on Linux
+
+> "Check the sandbox probe for this host before launching."
+
+Your assistant probes `bwrap` inside a bounded transient user unit. A blocked check warns without failing qualification, and the launcher re-probes and refuses at launch time.
 
 This section covers AIWG's own launcher: `aiwg ralph-external --launch-worker`
 and managed-tier launches. Tier 0 conductors use this attached one-shot launcher
@@ -307,6 +320,13 @@ pinned in the config digest and resolved invocation; changing it requires a fres
 
 ## Retrying and verifying a stopped worker
 
+> "Retry the stopped worker into fresh paths linked to the first attempt."
+> "Verify the stopped worker's artifact with protected checks before I integrate anything."
+
+Your assistant re-resolves the authorized retry into fresh paths linked to the predecessor, then runs the installed verifier with protected checks: `accepted` with digests, `rejected`, or `blocked`.
+
+### Command reference: retry and verify
+
 After confirmed termination, re-resolve the authorized retry into fresh plan,
 worktree, final and run paths. Link it with one launch command:
 
@@ -358,6 +378,10 @@ The `aiwg mcp serve` process stays up until stdin closes or it receives SIGINT/S
 so `worker-invoke` and later status calls share one live connection.
 
 ## Cross-family review evidence
+
+> "Get an independent review from a different model family and record where it disagrees."
+
+Your assistant checks observed lineage for the review, since different CLI names do not prove different families. Agreement is not proof, so consequential claims still need an executable check or your acceptance.
 
 The resolver's `reviewOf` and `requireDifferentFamily` check observed lineage.
 Different CLI names do not establish different families; different families do
