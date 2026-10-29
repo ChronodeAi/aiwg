@@ -2,6 +2,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { checkHeldoutSchema, heldoutDigest } from '../../../src/decision/heldout/contract.js';
 import type { HeldoutBundle } from '../../../src/decision/heldout/types.js';
+import * as publicGates from '../../../src/gates/index.js';
 import { evaluateGatesFromHeldoutFrozen, sealGateHoldoutFromFrozen } from '../../../src/gates/index.js';
 import { evaluateGates, sealGateHoldout, sealUpstream } from '../../../src/gates/evaluate.js';
 import { resolveProjectFloors } from '../../../src/gates/floors.js';
@@ -108,4 +109,10 @@ describe('HeldoutFrozen public evaluator boundary (#3730, #2319 slice)', () => {
     input.trustedAccessDigest = heldoutDigest(input.access);
     expect(() => evaluateGatesFromHeldoutFrozen(input)).toThrow('first-access timestamp');
   });
+});
+
+it('keeps the unverified sealGateHoldout off the public gates API', () => {
+  // Callers outside src/gates must seal through the verified HeldoutFrozen entry point (#3730).
+  expect('sealGateHoldout' in publicGates).toBe(false);
+  expect(typeof publicGates.sealGateHoldoutFromFrozen).toBe('function');
 });

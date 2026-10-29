@@ -26,7 +26,7 @@ export {
 } from './floors.js';
 export type { ProjectFloors, ProjectFloorSource } from './floors.js';
 export {
-  GateEvaluationError, maxOutcome, gateStatusOutcome, sealUpstream, sealGateHoldout,
+  GateEvaluationError, maxOutcome, gateStatusOutcome, sealUpstream,
   evaluateGates, type EvaluateGatesInput,
 } from './evaluate.js';
 export { sealGateHoldoutFromFrozen, evaluateGatesFromHeldoutFrozen } from './heldout.js';

@@ -150,8 +150,11 @@ D29 through the verified holdout entry point. The scorer pin changed from
 `sha256:5f7d99de6c72c8ef6eb0dcf686e75c7e11990db2d638b08c5e673e4da0ddfc47` to
 `sha256:90f899c3e6c02ae1107fef81ba2ff3992a5c3377a15c1e08ae2fb3e1b144fa49` in all three versions.
 It is the SHA-256 of the current `tools/decision/studies/d29.mjs` bytes for
-**every seed**. That entry embeds checked SHA-256 pins for `d29-gates.mjs`
-and `d29-provenance.mjs`, covering the extracted scoring logic as well.
+**every seed**. That entry embeds checked SHA-256 pins for the two modules extracted from it,
+`d29-gates.mjs` and `d29-provenance.mjs`. Other modules on the scoring path
+(the shortcut audits, calibration, generators and `src/decision/sdlc-screening.ts`)
+are not covered by this pin; the shortcut audits carry their own per-version
+`shortcutAudit.sourceDigest`.
 The exact current-byte assertion in `V8-07` remains enforced.
 
 Regeneration used the existing `prepare('d29-study-v6' | 'd29-study-v7' |
