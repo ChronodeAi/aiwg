@@ -109,9 +109,6 @@ export const d29SlowFiles = [
 // Root gate-script exceptions: one explicit owner/reason per non-main invocation.
 // `unwired` is census debt for the release conductor, not an approved manual policy.
 export const scriptLaneExemptions = [
-  { script: 'lint:claude-context', kind: 'unwired', owner: 'release-conductor', reason: '#2317: no main workflow invocation; decide whether to enforce the context inventory.' },
-  { script: 'lint:context-firewall', kind: 'unwired', owner: 'release-conductor', reason: '#2317: no main workflow invocation; decide CI policy for the context firewall.' },
-  { script: 'lint:plugin-links', kind: 'unwired', owner: 'release-conductor', reason: '#2317: no main workflow invocation; decide whether link validation needs a separate gate from lint:plugin-copies.' },
   { script: 'lint:context-sizes', kind: 'unwired', owner: 'release-conductor', reason: '#3740: wire into CI once AGENTS.md fits' },
   { script: 'lint:rule-triggers', kind: 'manual', owner: 'discovery-maintainers', reason: 'Advisory trigger coverage report; source explicitly defers --fail-on-missing until coverage closes.' },
   { script: 'lint:tarball', kind: 'release-only', owner: 'release-maintainers', reason: 'Release candidate routine/full profiles invoke the tarball audit in tools/release/release-candidate.mjs.' },

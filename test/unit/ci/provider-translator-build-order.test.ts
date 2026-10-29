@@ -33,8 +33,13 @@ describe('provider translator steps run after the CLI build', () => {
 
   it('keeps the declared npm consumer tied to its real entrypoint', () => {
     for (const entry of requiredCommands) {
-      expect(entry.reason).toContain('#3732');
-      expect(read(entry.nodeScript)).toMatch(/import .*providers\/(?:codex|omp)\.mjs/);
+      if (entry.npmScript === 'lint:context-firewall') {
+        expect(entry.reason).toContain('#3745');
+        expect(read(entry.nodeScript)).toContain("await importImpl(import.meta.url, 'memory/firewall-classification.mjs')");
+      } else {
+        expect(entry.reason).toContain('#3732');
+        expect(read(entry.nodeScript)).toMatch(/import .*providers\/(?:codex|omp)\.mjs/);
+      }
       if (entry.npmScript) expect(scripts[entry.npmScript]).toBe(`node ${entry.nodeScript}`);
     }
   });

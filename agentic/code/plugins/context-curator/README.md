@@ -162,6 +162,6 @@ Targets from the Unified Production Plan (unmeasured; no AIWG measurement yet):
 
 ## References
 
-- [REF-002: Roig (2025)](~/.local/share/ai-writing-guide/docs/references/REF-002-llm-failure-modes-agentic.md)
-- [Agent Design Bible - Rule 6](~/.local/share/ai-writing-guide/docs/AGENT-DESIGN.md#rule-6-scoped-context)
-- [Gap Analysis](~/.local/share/ai-writing-guide/.aiwg/planning/roig-2025-gap-analysis.md)
+- [REF-002: Roig (2025)](https://github.com/jmagly/aiwg/blob/main/docs/references/REF-002-llm-failure-modes-agentic.md)
+- [Agent Design Bible - Rule 6](https://github.com/jmagly/aiwg/blob/main/docs/frameworks/sdlc-complete/agent-design.md#rule-6-scoped-context)
+- Gap Analysis

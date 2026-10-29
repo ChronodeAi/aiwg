@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { rewritePublishedLinks, writeCanonicalScriptWrappers } from '../../../tools/plugin/package-plugins.mjs';
-import { checkPluginLinks, markdownLinks, reportPluginLinks } from '../../../tools/plugin/plugin-links.mjs';
+import { checkPluginLinks, markdownLinks, reportPluginLinks, rewritePublishedMarkdown } from '../../../tools/plugin/plugin-links.mjs';
 
 const temporary = [];
 afterEach(() => { for (const dir of temporary.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
@@ -70,7 +70,7 @@ describe('plugin payload links (#3204)', () => {
     const canonical = fs.readFileSync('agentic/code/frameworks/research-complete/docs/bibliographic-services.md', 'utf8');
     const packaged = fs.readFileSync(path.join(root, 'docs/bibliographic-services.md'), 'utf8');
     expect(packaged).toBe(canonical.replace('../../sdlc-complete/rules/token-security.md', 'https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/token-security.md'));
-    expect(fs.readFileSync(path.join(root, 'skills/induct-research/SKILL.md'), 'utf8')).toContain('](../../docs/bibliographic-services.md)');
+    expect(fs.readFileSync(path.join(root, 'skills/induct-research/SKILL.md'), 'utf8')).toContain('@$AIWG_ROOT/agentic/code/frameworks/research-complete/docs/bibliographic-services.md');
     expect(checkPluginLinks(root).filter(item => !item.file.includes('/examples/'))).toEqual([]);
   });
 
@@ -90,6 +90,18 @@ describe('plugin payload links (#3204)', () => {
     expect(result).toContain(`[sample](${shared})`);
     rewritePublishedLinks(root);
     expect(fs.readFileSync(skill, 'utf8')).toBe(result);
+  });
+
+  it('publishes AIWG_ROOT docs, preserves examples and rejects missing docs', () => {
+    const { parent, root, skill } = fixture();
+    fs.mkdirSync(path.join(parent, 'docs'));
+    fs.writeFileSync(path.join(parent, 'docs/guide.md'), 'shipped guide');
+    const target = '$AIWG_ROOT/docs/guide.md#heading';
+    const body = `[guide](${target})\n\`[example](${target})\``;
+    expect(rewritePublishedMarkdown(body, skill, root, parent)).toBe(
+      `[guide](https://github.com/jmagly/aiwg/blob/main/docs/guide.md#heading)\n\`[example](${target})\``);
+    expect(() => rewritePublishedMarkdown('[absent]($AIWG_ROOT/docs/absent.md)', skill, root, parent))
+      .toThrow('Published link source not found: docs/absent.md');
   });
 
   it('preserves executable paths in shell fences, inline code, and script files', () => {
@@ -123,13 +135,14 @@ describe('plugin payload links (#3204)', () => {
     expect(JSON.parse(result.stdout).verdict).toBe('safe');
   });
 
-  it('keeps the all-plugin unresolved inventory limited to reviewed cases', () => {
+  it('keeps the all-plugin unresolved inventory empty', () => {
     const root = path.resolve('agentic/code/plugins');
     const actual = fs.readdirSync(root, { withFileTypes: true })
       .filter(entry => entry.isDirectory())
       .flatMap(entry => checkPluginLinks(path.join(root, entry.name))
         .map(({ line, ...item }) => ({ plugin: entry.name, ...item })));
     const expected = JSON.parse(fs.readFileSync('test/fixtures/plugins/relative-link-offenders.json', 'utf8'));
+    expect(expected).toEqual([]);
     expect(actual).toEqual(expected);
   });
 
@@ -138,11 +151,23 @@ describe('plugin payload links (#3204)', () => {
     const good = spawnSync(process.execPath, [packager, '--plugin', 'sdlc', '--check-links'], { encoding: 'utf8', timeout: 120_000 });
     expect(good.status, good.stderr).toBe(0);
     const before = fs.readFileSync('agentic/code/plugins/research/skills/induct-research/SKILL.md', 'utf8');
-    const bad = spawnSync(process.execPath, [packager, '--all', '--check-links'], { encoding: 'utf8', timeout: 120_000 });
-    expect(bad.status).toBe(1);
-    // Match the known offender by file and target, not line: README edits shift line numbers.
-    expect(bad.stderr).toMatch(/agent-loop\/README\.md:\d+: missing-target: docs\/examples\/test-fix\.md/);
-    expect(bad.stderr).toContain('context-curator/README.md');
+    const all = spawnSync(process.execPath, [packager, '--all', '--check-links'], { encoding: 'utf8', timeout: 120_000 });
+    expect(all.status, all.stderr).toBe(0);
+    const { parent } = fixture();
+    for (const file of ['package.json', 'tools/_resolve-impl.mjs',
+      'tools/plugin/package-plugins.mjs', 'tools/plugin/plugin-links.mjs']) {
+      fs.mkdirSync(path.dirname(path.join(parent, file)), { recursive: true });
+      fs.copyFileSync(path.resolve(file), path.join(parent, file));
+    }
+    const payload = path.join(parent, 'agentic/code/plugins/sdlc');
+    fs.mkdirSync(payload, { recursive: true });
+    const broken = '[missing](missing.md)';
+    fs.writeFileSync(path.join(payload, 'README.md'), broken);
+    const bad = spawnSync(process.execPath, [path.join(parent, 'tools/plugin/package-plugins.mjs'),
+      '--plugin', 'sdlc', '--check-links'], { encoding: 'utf8', timeout: 10_000 });
+    expect(bad.status, bad.stderr).toBe(1);
+    expect(bad.stderr).toContain('sdlc/README.md:1: missing-target: missing.md');
+    expect(fs.readFileSync(path.join(payload, 'README.md'), 'utf8')).toBe(broken);
     expect(fs.readFileSync('agentic/code/plugins/research/skills/induct-research/SKILL.md', 'utf8')).toBe(before);
   });
 });
