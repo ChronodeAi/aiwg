@@ -219,7 +219,9 @@ async function handleRegenerate(args: string[], cwd: string): Promise<void> {
   if (legacy) {
     if (skipWorkspaceMd) console.log('  Note: --no-workspace-md is implicit in legacy mode.');
     const normalizedPath = path.join(target, 'AIWG.md');
-    const normalizedContent = await generateAiwgMd(target);
+    // Legacy startup files contain our previous output. Render independently
+    // of CLAUDE.md so neither the inline payload nor root context feeds it back.
+    const normalizedContent = await generateAiwgMd(target, null);
     const result = skipAgentsMd
       ? { targets: [], backups: [], changed: [], dryRun, warnings: [] }
       : await injectLegacyContext(provider as Platform, target, normalizedContent, { dryRun });
@@ -233,7 +235,7 @@ async function handleRegenerate(args: string[], cwd: string): Promise<void> {
       console.log('  Dry run complete — no changes made');
       return;
     }
-    if (!skipAiwgMd) await writeNormalizedAiwgMd(target);
+    if (!skipAiwgMd) await writeNormalizedAiwgMd(target, null);
     for (const changed of result.changed) console.log(`  OK Injected AIWG context into ${path.relative(target, changed)}`);
     for (const backup of result.backups) console.log(`  Backup created: ${backup}`);
     for (const warning of result.warnings) console.log(`  WARNING: ${warning}`);
