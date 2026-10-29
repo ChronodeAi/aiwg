@@ -80,13 +80,22 @@ describe('aiwg corpus resolve identifiers', () => {
     ['2024.acl-long.1', 'acl', '2024.acl-long.1', undefined],
     ['P19-1010', 'acl', 'P19-1010', undefined],
     ['ACL:P19-1010', 'acl', 'P19-1010', undefined],
-    ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 's2', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', undefined],
+    ['SemanticScholar:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 's2', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', undefined],
     ['S2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 's2', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', undefined],
     ['https://www.semanticscholar.org/paper/Example/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 's2', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', undefined],
     ['https://semanticscholar.org/paper/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 's2', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', undefined],
     ['CorpusId:12345', 's2', 'CorpusId:12345', undefined],
-  ])('verifies %s through the public handler', async (input, kind, id, version) => {
+    ['S2:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 's2', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', undefined, true],
+  ])('verifies %s through the public handler', async (input, kind, id, version, wrongId) => {
+    if (wrongId) fetchMock.mockResolvedValue(Response.json(s2Paper()));
     const result = await cli([input as string]);
+    if (wrongId) {
+      expect(result.exitCode).toBe(3);
+      expect(result.data!.candidates).toEqual([]);
+      expect(result.data!.findings).toContainEqual({ type: 'identifier_mismatch', supplied: id,
+        returned: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', candidate: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' });
+      return;
+    }
     expect(result.exitCode).toBe(0);
     expect(result.data).toMatchObject({ status: 'resolved', input, reference: { identifier: { kind, id } }, incomplete: false });
     expect(result.data!.paths_tried.length).toBeGreaterThan(0);
@@ -107,6 +116,40 @@ describe('aiwg corpus resolve identifiers', () => {
 });
 
 describe('aiwg corpus resolve title matching and findings', () => {
+  it.each(['error', 'empty', 'mismatch'])('caps a title match after an explicit ACL lookup returns %s', async mode => {
+    const fetchFixture = fixtureFetch(state);
+    fetchMock.mockImplementation(async input => {
+      const url = new URL(String(input));
+      if (url.pathname.includes('/paper/ACL:')) {
+        if (mode === 'mismatch') return Response.json(s2Paper({ externalIds: { ACL: 'P19-9999' } }));
+        return new Response('', { status: mode === 'error' ? 503 : 404 });
+      }
+      return fetchFixture(input);
+    });
+    const input = '"Attention Is All You Need". ACL:P19-1010';
+    state.s2 = [s2Paper({ title: 'Attention Is All You Need' })];
+    const result = await cli([input]);
+    expect(result.exitCode).toBe(2);
+    expect(result.data).toMatchObject({ status: 'ambiguous', incomplete: mode === 'error' });
+    expect(result.data).not.toHaveProperty('paper');
+    expect(result.data!.candidates[0].score).toBe(1);
+    const idPaths = result.data!.paths_tried.filter(path => path.method === 'id');
+    expect(idPaths).toHaveLength(1);
+    expect(idPaths[0].status).toBe(mode === 'mismatch' ? 'returned' : mode);
+    expect(result.data!.findings).toContainEqual(expect.objectContaining({ type: 'identifier_unresolved', supplied: 'P19-1010', paths: idPaths }));
+    const finding = result.data!.findings.find(item => item.type === 'identifier_unresolved')!;
+    expect(finding.returned).toContain(`semantic-scholar/id (ACL:P19-1010): ${mode === 'mismatch' ? 'returned (identifier mismatch)' : mode}`);
+    if (mode === 'mismatch') expect(finding.returned).toContain('P19-9999');
+  });
+
+  it('reports every failed ID path even when no title candidate is found', async () => {
+    state.errors = { crossref: 404, s2: 503 };
+    const result = await cli(['10.1234/missing']);
+    expect(result.exitCode).toBe(3);
+    expect(result.data!.findings).toContainEqual(expect.objectContaining({ type: 'identifier_unresolved', supplied: '10.1234/missing',
+      paths: [expect.objectContaining({ source: 'crossref', status: 'empty' }), expect.objectContaining({ source: 'semantic-scholar', status: 'error' })] }));
+  });
+
   it('normalizes hyphens and operators in arXiv ti queries and returns canonical S2 metadata', async () => {
     const result = await cli([title]);
     expect(result.exitCode).toBe(0);
@@ -130,6 +173,31 @@ describe('aiwg corpus resolve title matching and findings', () => {
     expect(result.data!.status).toBe('ambiguous');
     expect(result.data!.candidates).toHaveLength(2);
     expect(result.data).not.toHaveProperty('paper');
+  });
+
+  it('keeps an S2 record without externalIds separate from a same-title CrossRef DOI', async () => {
+    state.s2 = [s2Paper({ externalIds: {} })];
+    state.crossref = [crossrefPaper({ DOI: '10.1234/other' })];
+    const result = await cli([title]);
+    expect(result.exitCode).toBe(2);
+    expect(result.data!.status).toBe('ambiguous');
+    expect(result.data!.candidates).toHaveLength(2);
+    expect(result.data!.candidates.map(candidate => candidate.score)).toEqual([1, 1]);
+    expect(result.data).not.toHaveProperty('paper');
+  });
+
+  it('preserves title years in CLI queries while honoring --year', async () => {
+    const input = 'ImageNet 2021 challenge';
+    state.s2 = [s2Paper({ title: input })];
+    const withoutYear = await cli([input]);
+    expect(withoutYear.exitCode).toBe(0);
+    expect(withoutYear.data!.reference).toMatchObject({ title: input });
+    expect(withoutYear.data!.reference.year).toBeUndefined();
+    expect(withoutYear.data!.candidates[0].score_parts).toEqual({ title: 1 });
+    const explicitYear = await cli([input, '--year', '2024']);
+    expect(explicitYear.exitCode).toBe(0);
+    expect(explicitYear.data!.reference).toMatchObject({ title: input, year: 2024 });
+    expect(explicitYear.data!.candidates[0].score_parts).toEqual({ title: 1, year: 1 });
   });
 
   it('reports near-miss titles as findings and preserves the original reference', async () => {
@@ -183,8 +251,9 @@ describe('aiwg corpus resolve title matching and findings', () => {
     const result = await cli(['2401.12345']);
     expect(result.exitCode).toBe(3);
     expect(result.data!.candidates).toEqual([]);
-    expect(result.data!.findings).toHaveLength(2);
-    expect(result.data!.findings.every(finding => finding.type === 'identifier_mismatch')).toBe(true);
+    expect(result.data!.findings.filter(finding => finding.type === 'identifier_mismatch')).toHaveLength(2);
+    expect(result.data!.findings).toHaveLength(3);
+    expect(result.data!.findings[2]).toMatchObject({ type: 'identifier_unresolved', supplied: '2401.12345' });
   });
 
   it('tries arXiv title search after an empty S2 match and uses its metadata', async () => {
@@ -222,6 +291,15 @@ describe('aiwg corpus resolve title matching and findings', () => {
 
 describe('approved score boundaries through the CLI', () => {
   const words = Array.from({ length: 100 }, (_, i) => `token${i}`);
+  it('keeps a title score of 0.88 ambiguous despite matching year and author', async () => {
+    state.s2 = [s2Paper({ title: words.slice(0, 88).join(' '), externalIds: {} })];
+    const result = await cli([`Example, A. (2024). "${words.join(' ')}"`]);
+    expect(result.exitCode).toBe(2);
+    expect(result.data!.status).toBe('ambiguous');
+    expect(result.data!.candidates[0].score_parts).toEqual({ title: 0.88, year: 1, first_author: 1 });
+    expect(result.data!.candidates[0].score).toBeCloseTo(0.892, 12);
+    expect(result.data).not.toHaveProperty('paper');
+  });
   it.each([
     [92, 0, 0, 'resolved'], [92, 87, 0, 'resolved'], [92, 88, 2, 'ambiguous'], [92, 92, 2, 'ambiguous'],
     [91, 0, 2, 'ambiguous'], [60, 0, 2, 'ambiguous'], [59, 0, 3, 'unresolved'],

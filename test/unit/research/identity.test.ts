@@ -22,6 +22,20 @@ describe('research identities', () => {
     for (const input of ['2401.123', '2401.123456', 'A title', '2401.12345extra']) expect(parseArxivId(input)).toBeUndefined();
   });
 
+  it.each(['a'.repeat(40), `Example, A. (2024). A bibliography title. ${'a'.repeat(40)}`])('does not claim bare hex as an S2 identifier: %s', input => {
+    expect(parseResearchIdentifier(input)).toBeUndefined();
+  });
+
+  it.each(['ImageNet 2021 challenge', '2001 A Space Odyssey', 'Comparing 2020 and 2021 results'])('preserves title numbers without year cues: %s', input => {
+    expect(parsePartialReference(input)).toMatchObject({ title: input, year: undefined });
+    expect(parsePartialReference(input, 2024)).toMatchObject({ title: input, year: 2024 });
+  });
+
+  it('uses bibliographic year cues and keeps the explicit year authoritative', () => {
+    expect(parsePartialReference('Example et al. 2024. ImageNet 2021 challenge')).toMatchObject({ title: 'ImageNet 2021 challenge', year: 2024, firstAuthor: 'Example' });
+    expect(parsePartialReference('"ImageNet 2021 challenge" (2024)', 2025)).toMatchObject({ title: 'ImageNet 2021 challenge', year: 2025 });
+  });
+
   it('normalizes DOI URLs without losing balanced suffix parentheses', () => {
     expect(normalizeDoi('https://doi.org/10.1234/ABC(1).')).toBe('10.1234/abc(1)');
     expect(normalizeDoi('doi:10.1234/ABC).')).toBe('10.1234/abc');

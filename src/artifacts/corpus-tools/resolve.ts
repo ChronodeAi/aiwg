@@ -16,12 +16,17 @@ export interface ResolutionPath {
   error?: string;
 }
 
-export interface ResolutionFinding {
+export type ResolutionFinding = {
   type: 'title_mismatch' | 'identifier_mismatch';
   supplied: string;
   returned: string;
   candidate: string;
-}
+} | {
+  type: 'identifier_unresolved';
+  supplied: string;
+  returned: string;
+  paths: ResolutionPath[];
+};
 
 export interface ResolutionResult {
   input: string;
@@ -111,6 +116,17 @@ export async function resolveReference(input: string, root: string, year?: numbe
     await attempt('semantic-scholar', 'id', id, async () => [await clients.s2.getPaperById(id)], true);
   }
 
+  const identifierUnresolved = Boolean(identifier && verified.size === 0);
+  if (identifierUnresolved && identifier) {
+    const idPaths = paths.filter(path => path.method === 'id');
+    findings.push({ type: 'identifier_unresolved', supplied: identifier.id, paths: idPaths,
+      returned: idPaths.map(path => {
+        const detail = path.error ?? path.returned.map(paper => JSON.stringify(normalizeIdentity(paper))).join(', ');
+        const outcome = path.returned.length ? 'returned (identifier mismatch)' : path.status;
+        return `${path.source}/${path.method} (${path.query}): ${outcome}${detail ? `: ${detail}` : ''}`;
+      }).join('; ') });
+  }
+
   if (reference.title && (!identifier || papers.length === 0)) {
     await attempt('semantic-scholar', 'title-match', reference.title, () => clients.s2.matchTitle(reference.title!));
     const query = `ti:"${normalizeTitle(reference.title)}"`;
@@ -125,7 +141,8 @@ export async function resolveReference(input: string, root: string, year?: numbe
       findings.push({ type: 'title_mismatch', supplied: reference.title, returned: candidate.paper.title, candidate: candidate.paper.id });
     }
   }
-  const status = classifyCandidates(candidates);
+  const classified = classifyCandidates(candidates);
+  const status = identifierUnresolved && classified === 'resolved' ? 'ambiguous' : classified;
   const paper = status === 'resolved' ? candidates[0].paper : undefined;
   const corpusMatches = paper ? findInCorpus(root, paper) : [];
   return { input, reference, status, incomplete: paths.some(path => path.status === 'error'), candidates,

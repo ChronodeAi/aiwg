@@ -23,17 +23,19 @@ export function parsePartialReference(input: string, year?: number): PartialRefe
   const identifier = parseResearchIdentifier(input);
   let rest = identifier ? input.replace(identifier.matched, '') : input;
   rest = rest.replace(/^\s*\[\d+\]\s*/, '').trim();
-  const date = rest.match(/\b((?:18|19|20|21)\d{2})\b/);
   const quoted = rest.match(/["“]([^"”]+)["”]/);
   const apa = rest.match(/^(.+?)\s*\(((?:18|19|20|21)\d{2})\)\.?\s+(.+)$/);
   const authorYear = rest.match(/^(.+?(?:et al\.|,\s*[A-Z]\.))\s*((?:18|19|20|21)\d{2})\.?\s+(.+)$/);
   const bibliography = apa ?? authorYear;
+  // A number inside a title is not publication metadata; require citation cues.
+  const date = (quoted ? rest.replace(quoted[0], '') : rest).match(/\(((?:18|19|20|21)\d{2})\)/);
+  const inferredYear = bibliography?.[2] ?? date?.[1];
   const firstAuthor = bibliography?.[1].split(/,|\s+et al\.|\s+and\s+|\s+&\s+/)[0].trim();
   if (quoted) rest = quoted[1];
   else if (bibliography) rest = bibliography[3].split(/\.\s+/)[0];
   else if (date) rest = rest.replace(date[0], '');
   rest = rest.replace(/^[\s.,;:()[\]{}"']+|[\s.,;:()[\]{}"']+$/g, '').trim();
-  return { input, identifier, title: normalizeTitle(rest) ? rest : undefined, year: year ?? (date ? Number(date[1]) : undefined), firstAuthor };
+  return { input, identifier, title: normalizeTitle(rest) ? rest : undefined, year: year ?? (inferredYear ? Number(inferredYear) : undefined), firstAuthor };
 }
 
 /** Jaccard token-set similarity avoids substring matches scoring as exact titles. */
@@ -76,7 +78,7 @@ export function classifyCandidates(candidates: ScoredPaper[]): ResolutionStatus 
   return best + 1e-12 >= 0.92 && margin + 1e-12 >= 0.05 ? 'resolved' : 'ambiguous';
 }
 
-/** Merge corroborating records, retaining same-title papers with conflicting identifiers. */
+/** Merge only corroborated identifiers; title equality alone does not establish identity. */
 export function mergePapers(papers: ResearchPaper[]): ResearchPaper[] {
   const merged: ResearchPaper[] = [];
   for (const paper of papers) {
@@ -85,8 +87,7 @@ export function mergePapers(papers: ResearchPaper[]): ResearchPaper[] {
       const other = normalizeIdentity(existing);
       const ids = ['arxivId', 'doi', 's2PaperId', 'openReviewId', 'aclId'] as const;
       if (ids.some(key => identity[key] && other[key] && identity[key] !== other[key])) return false;
-      return ids.some(key => identity[key] && identity[key] === other[key]) ||
-        Boolean(identity.title && identity.title === other.title);
+      return ids.some(key => identity[key] && identity[key] === other[key]);
     });
     if (!previous) { merged.push({ ...paper }); continue; }
     // Source order determines metadata precedence; later sources only fill missing fields.

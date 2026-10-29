@@ -60,8 +60,8 @@ export function parseResearchIdentifier(input: string): ResearchIdentifier | und
   if (reviewId) return { kind: 'openreview', id: reviewId[1], matched: reviewId[0] };
   const acl = input.match(/https?:\/\/(?:www\.)?aclanthology\.org\/([\w.-]+)\/?(?:[?#][^\s<>]*)?|\bacl:\s*([\w.-]+)|\b((?:\d{4}\.[a-z][\w-]*\.\d+|[A-Z]\d{2}-\d{4}))\b/i);
   if (acl) return { kind: 'acl', id: (acl[1] ?? acl[2] ?? acl[3]).replace(/\.pdf$/i, ''), matched: acl[0] };
-  const s2 = input.match(/https?:\/\/(?:www\.)?semanticscholar\.org\/paper\/(?:[^\s/]+\/)?([a-f\d]{40})\b|\b(?:s2|semanticscholar):\s*([a-f\d]{40})\b|\b([a-f\d]{40})\b|\b(CorpusId:\d+)\b/i);
-  if (s2) return { kind: 's2', id: (s2[1] ?? s2[2] ?? s2[3] ?? s2[4]).toLowerCase().replace(/^corpusid:/, 'CorpusId:'), matched: s2[0] };
+  const s2 = input.match(/https?:\/\/(?:www\.)?semanticscholar\.org\/paper\/(?:[^\s/]+\/)?([a-f\d]{40})\b|\b(?:s2|semanticscholar):\s*([a-f\d]{40})\b|\b(CorpusId:\d+)\b/i);
+  if (s2) return { kind: 's2', id: (s2[1] ?? s2[2] ?? s2[3]).toLowerCase().replace(/^corpusid:/, 'CorpusId:'), matched: s2[0] };
   return undefined;
 }
 
