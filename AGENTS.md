@@ -33,7 +33,6 @@ Always applies to every task and agent. Overrides convenience, brevity and speed
 - On detecting avoidance, stop, name it, and resume the full task.
 
 Full rule (on demand, not an import): `aiwg show rule anti-laziness`
-
 <!-- AIWG:rule-core:end -->
 
 <!-- AIWG:rule-hook-muse:start -->
