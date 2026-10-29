@@ -10,15 +10,16 @@ import { freezeQualificationSplit, wilsonScoreInterval, pairedBinaryDifferenceIn
 import { qualificationIntegrityAllowlistProblems } from '../../../src/decision/qualification/release.ts';
 import { CalibrationRegistry } from '../../../src/decision/calibration/registry.ts';
 import { artifactDigest, artifactPin, validateDistribution } from '../../../src/decision/validate.ts';
-import { evaluateSdlcEvidenceScreening, sdlcScreeningPreflight, buildSdlcScreeningReleaseReport,
+import { evaluateSdlcEvidenceScreening, sdlcScreeningPreflight,
   SDLC_SCREENING_PREREGISTRATION_VERSION_V2 } from '../../../src/decision/sdlc-screening.ts';
-import { evaluateGates, sealGateHoldout, sealUpstream } from '../../../src/gates/evaluate.ts';
+import { d29ScorerDigest as currentScorerDigest } from './d29-provenance.mjs';
+import { buildReport } from './d29-gates.mjs';
+export { buildReport, evaluateStudyGates } from './d29-gates.mjs';
 import { resolveProjectFloors, validateGatesConfig } from '../../../src/gates/floors.ts';
 import { projectAiwgPath, projectControlPath } from '../../../src/config/project-artifacts-runtime.mjs';
 import { loadGatePackFile } from '../../../src/gates/discovery.ts';
 import { GateRegistry } from '../../../src/gates/registry.ts';
 import { createCoreProviderRegistry, screeningProvider } from '../../../src/gates/providers/index.ts';
-
 import { d29WorldV6 } from '../../../src/decision/heldout/d29-v6.ts';
 import { d29WorldV7, D29_V7_GENERATOR_ID } from '../../../src/decision/heldout/d29-v7.ts';
 import { d29WorldV8, D29_V8_GENERATOR_ID } from '../../../src/decision/heldout/d29-v8.ts';
@@ -29,7 +30,11 @@ import { d29PassageBaseline, d29PassageBaselineDigest } from '../../../src/decis
 import { shortcutAudit } from './d29-shortcuts.mjs';
 import { shortcutAuditV7 } from './d29-shortcuts-v7.mjs';
 import { shortcutAuditV8, SHORTCUT_AUDIT_V8_PARAMETERS } from './d29-shortcuts-v8.mjs';
-
+// The entry-byte scorer pin transitively binds both extracted modules.
+export const d29ScorerDigest = seed => currentScorerDigest(seed, {
+  './d29-gates.mjs': 'sha256:e8bd272daadd46a011bbf4472e8b11255bf15e2ee3805420892f55249ad5a80c',
+  './d29-provenance.mjs': 'sha256:3e88631a43e9ce0c3306c5fe865a514bad6710524d5b2e73c8a1318de43d9b50',
+});
 export const LABELS = ['supports', 'contradicts', 'unclear', 'does-not-support'];
 export const SLICES = Object.keys(D29_VARIANTS);
 export const FROZEN_AT = '2026-09-30T00:00:00.000Z';
@@ -53,7 +58,6 @@ export const GATE_PACK_ID = 'aiwg:decision-engine/absolute-screening';
 export const GATE_CEILING_PACK_ID = 'aiwg:decision-engine/integrity-ceiling';
 export const GATE_BLOCKING_SLICES = ['citation-injection', 'criterion-injection', 'missing-artifact', 'failed-test'];
 export const GATE_CALIBRATION_EVIDENCE_ID = 'staged-calibration-artifact';
-
 /** Registry with the shipped decision-engine gate packs; the default integrity-ceiling floor resolves from it. */
 export function gateRegistry() {
   const registry = new GateRegistry(createCoreProviderRegistry());
@@ -62,14 +66,12 @@ export function gateRegistry() {
   registry.registerPack(loadGatePackFile(`${dir}integrity-ceiling.gatepack.yaml`), { namespace: 'aiwg', bundle: 'decision-engine' });
   return registry;
 }
-
 const gatePackPin = registry => {
   const pack = registry.getPack(GATE_PACK_ID);
   const ceiling = registry.getPack(GATE_CEILING_PACK_ID);
   return [pack, ceiling].map(entry => ({ id: entry.metadata.id, version: entry.metadata.version,
     digest: artifactDigest(entry), resolvedDigest: artifactDigest(entry) }));
 };
-
 /**
  * The D29 GateBinding preregistered alongside the held-out preregistration: absolute
  * Wilson bounds, per-blocking-slice zero-event ROLLBACK, support floors, coverage and
@@ -319,7 +321,7 @@ export async function dryRun(prepared) {
 
 export async function prepareV6(seed) {
   if (typeof seed !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(seed)) refuse('seed');
-  const moduleDigest = byteDigest(await readFile(new URL(import.meta.url)));
+  const moduleDigest = await d29ScorerDigest(seed);
   const rows = [], goldRows = [];
   for (let ordinal = 0; ordinal < 2000; ordinal++) {
     const { world } = d29WorldV6(seed, ordinal);
@@ -347,7 +349,7 @@ export async function prepareV6(seed) {
 
 export async function prepareV7(seed) {
   if (typeof seed !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(seed)) refuse('seed');
-  const moduleDigest = byteDigest(await readFile(new URL(import.meta.url)));
+  const moduleDigest = await d29ScorerDigest(seed);
   const rows = [], goldRows = [];
   for (let ordinal = 0; ordinal < 2000; ordinal++) {
     const { world } = d29WorldV7(seed, ordinal);
@@ -382,7 +384,7 @@ export async function prepareV7(seed) {
  */
 export async function prepareV8(seed) {
   if (typeof seed !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(seed)) refuse('seed');
-  const moduleDigest = byteDigest(await readFile(new URL(import.meta.url)));
+  const moduleDigest = await d29ScorerDigest(seed);
   const rows = [], goldRows = [];
   for (let ordinal = 0; ordinal < 2000; ordinal++) {
     const { world } = d29WorldV8(seed, ordinal);
@@ -822,28 +824,6 @@ export function d29RecordAttestations({ binding, heldout, nowEpochMs }) {
     attest('d29-heldout-slices-registered', slicesOk), attest('d29-heldout-class-support', classOk)];
 }
 
-/**
- * Evaluates the preregistered absolute GateBinding over held-out samples. The binding,
- * pack and provider pins resolve inside `evaluateGates` (never trusted from the caller);
- * the holdout seal binds the frozen binding digest to the first test-access time, and the
- * upstream integrity record is sealed by digest. Missing calibration evidence fails closed,
- * as do missing record attestations. Project floors always load from the project
- * config under `projectRoot`; a caller-supplied `floors` value (including an opt-out)
- * refuses evaluation, so no caller can loosen the project ceiling.
- */
-export function evaluateStudyGates(args) {
-  if (Object.hasOwn(args, 'floors')) refuse('project-floors-caller-supplied');
-  const { binding, samples, heldout = null, integrity, firstTestAccessAt, calibrationAttestation = null, nowEpochMs,
-    projectRoot, requireProjectConfig = false } = args;
-  const trustedBindingDigest = artifactDigest(binding);
-  const records = [...screeningRecords(samples, calibrationAttestation),
-    ...d29RecordAttestations({ binding, heldout, nowEpochMs })];
-  const metrics = { providers: { [screeningProvider.id]: screeningProvider.compute(records) } };
-  return evaluateGates({ binding, registry: gateRegistry(), trustedBindingDigest,
-    holdout: sealGateHoldout({ frozenDigest: trustedBindingDigest, firstAccessedAt: firstTestAccessAt }),
-    metrics, upstream: sealUpstream(integrity), now: new Date(nowEpochMs).toISOString(),
-    floors: loadD29ProjectFloors(projectRoot, { requireConfig: requireProjectConfig }) });
-}
 
 function validateReviews(prepared, reviews) {
   validateStudyArtifact(reviews);
@@ -986,7 +966,7 @@ export async function score(input, context = null) {
     splits: analysis.splits, samples };
   const report = buildReport({ analysis, trustedAnalysisDigest: context.trustedAnalysisDigest, heldout: missing.length ? null : heldout,
     integrity: input.integrity, trustedIntegrityDigest: context.trustedIntegrityDigest, nowEpochMs: context.nowEpochMs,
-    firstTestAccessAt: access.firstTestAccessAt, calibrationAttestation, projectRoot: context.projectRoot, requireProjectConfig: true });
+    frozen: input.frozen, access, trustedAccessDigest: context.trustedAccessDigest, calibrationAttestation, projectRoot: context.projectRoot, requireProjectConfig: true });
   const { native, gateReport } = report;
   const groups = groupedMetrics(input.corpus, input.gold, samples, analysis.native.confidenceInterval.levelBps);
   const correct = row => (row.candidate.route === 'ADVISORY_READY') === row.gold.ready
@@ -1009,44 +989,4 @@ export async function score(input, context = null) {
     completeCase: { n: samples.length, correct: samples.filter(correct).length },
     failureAsError,
     limitations: ['Synthetic diagnostic only; no efficiency or publication claim.', 'One reviewer, 100 unique test audits; no inter-rater evidence.'] });
-}
-
-/**
- * Pure report endpoint also usable for offline fixtures; always advisory and digest-bound.
- * The native release report stays descriptive (v2 preregistration, no NI gate); the
- * preregistered GateBinding decides through `evaluateGates`, and any native
- * fail/insufficient verdict caps the outcome at HOLD (a gate ROLLBACK still
- * rolls back). `firstTestAccessAt` is a trusted caller input sourced from the
- * verified holdout access record; without it a split-declaring binding refuses
- * evaluation.
- *
- * Non-authoritative inputs: `calibrationAttestation` here is caller-asserted
- * (offline fixtures and reviewer probes). Only `score` is authoritative: it
- * derives the attestation from a D09 qualification of the trusted calibration
- * artifact and requires a project config under `context.projectRoot`. Floors
- * are never caller input on either path.
- */
-export function buildReport(args) {
-  if (Object.hasOwn(args, 'floors')) refuse('project-floors-caller-supplied');
-  const { analysis, trustedAnalysisDigest, heldout, integrity, trustedIntegrityDigest, nowEpochMs,
-    firstTestAccessAt = null, calibrationAttestation = null, projectRoot, requireProjectConfig = false } = args;
-  validateStudyArtifact(analysis);
-  if (heldoutDigest(analysis) !== trustedAnalysisDigest || heldoutDigest(integrity) !== trustedIntegrityDigest
-    || qualificationIntegrityAllowlistProblems(integrity).includes('integrity-invalid')) refuse('report-anchor');
-  const native = buildSdlcScreeningReleaseReport({ preregistration: analysis.native, trustedPreregistrationDigest: heldoutDigest(analysis.native),
-    heldout, integrity, nowEpochMs });
-  const samples = native.heldout && Array.isArray(heldout?.samples) ? heldout.samples : [];
-  const gateReport = evaluateStudyGates({ binding: analysis.gateBinding, samples, heldout, integrity,
-    firstTestAccessAt, calibrationAttestation, nowEpochMs, projectRoot, requireProjectConfig });
-  // The native verdict is descriptive, not a decision: rename it so no reader
-  // mistakes it for one. Its digest covered the signed envelope, so it is
-  // dropped with the renamed field rather than carried stale.
-  const nativeRest = { ...native };
-  const nativeDecision = nativeRest.decision;
-  delete nativeRest.decision;
-  delete nativeRest.digest;
-  const descriptive = { ...nativeRest, descriptiveVerdict: nativeDecision };
-  const decision = native.preregisteredDecision === 'pass' ? gateReport.decision
-    : gateReport.decision === 'ROLLBACK' ? 'ROLLBACK' : 'HOLD';
-  return { native: descriptive, gateReport, decision };
 }
