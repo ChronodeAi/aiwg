@@ -1,4 +1,5 @@
 // Exercise actual artifact controls independently of generated defaults.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { deployedWrapperEnforcement, isConcreteWrapperModel, wrapperEnforcementReport,
   wrapperModelRisks } from '../../../src/models/wrapper-enforcement.js';
@@ -41,13 +42,29 @@ describe('doctor wrapper enforcement', () => {
       .toEqual(['delegation.flagship-inheritance']);
   });
 
-  it.each(['gpt-6-astra', 'gpt-6.1-sol'])('flags unelected inherited expensive model %s', inheritedModel => {
+  it.each(['gpt-6-astra', 'gpt-6.1-sol'])('flags unelected inherited or pinned expensive model %s', inheritedModel => {
     expect(wrapperModelRisks('codex', { inheritedModel })).toEqual(['delegation.flagship-inheritance']);
-    expect(wrapperModelRisks('codex', { model: inheritedModel })).toEqual([]);
+    expect(wrapperModelRisks('codex', { model: inheritedModel })).toEqual(['delegation.flagship-inheritance']);
+    expect(wrapperModelRisks('codex', { model: inheritedModel, agentName: 'worker', flagshipAllowlist: ['worker'] })).toEqual([]);
+    expect(wrapperModelRisks('codex', { model: inheritedModel, election: 'user' })).toEqual([]);
     expect(wrapperModelRisks('codex', { inheritedModel, election: 'user' })).toEqual([]);
     expect(wrapperModelRisks('codex', { inheritedModel, agentName: 'worker', flagshipAllowlist: ['worker'] })).toEqual([]);
     expect(wrapperModelRisks('codex', { inheritedModel, agentName: 'other', flagshipAllowlist: ['worker'] }))
       .toEqual(['delegation.flagship-inheritance']);
+  });
+
+  it.each([
+    ['hermes', 'delegation.model', 'delegation.effort'],
+    ['warp', '--model', 'effort: unavailable'],
+    ['muse', '--model', '--reasoning-effort'],
+    ['grokbot', 'model: unavailable', 'effort: unavailable'],
+  ])('documents native global controls for %s', (provider, model, effort) => {
+    const docs = readFileSync(new URL('../../../docs/configuration/model-configuration.md', import.meta.url), 'utf8');
+    const row = docs.split('\n').find(line => line.startsWith(`| ${provider} |`));
+    expect(row).toContain(model);
+    expect(row).toContain(effort);
+    expect(wrapperEnforcementReport(provider)).toContain(model);
+    expect(wrapperEnforcementReport(provider)).toContain(effort);
   });
 
   it('accounts for forced Claude fallback, premium aliases and global-only inheritance', () => {

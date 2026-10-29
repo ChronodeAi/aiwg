@@ -6,7 +6,7 @@ import { importImpl } from '../_resolve-impl.mjs';
 import { readWrapperSettings } from './doctor-wrapper-settings.mjs';
 
 export async function collectWrapperEnforcement({ projectDir, config, packageRoot, provider: selectedProvider }) {
-  const { wrapperEnforcementReport, deployedWrapperEnforcement, wrapperModelRisks, wrapperControls } =
+  const { wrapperEnforcementReport, deployedWrapperEnforcement, wrapperModelRisks, wrapperControls, GLOBAL_WRAPPER_SETTINGS } =
     await importImpl(import.meta.url, 'models/wrapper-enforcement.js');
   const { readModelWrapperArtifacts } = await importImpl(import.meta.url, 'models/wrapper-deployment.js');
   const { MODEL_WRAPPER_DEFINITIONS } = await importImpl(import.meta.url, 'models/wrapper-definitions.js');
@@ -52,8 +52,11 @@ export async function collectWrapperEnforcement({ projectDir, config, packageRoo
         const electedModel = catalog.providers[provider]?.tiers?.[electedTier === 'max-quality' ? 'flagship' : electedTier]?.id;
         const artifact = { ...settings, model: string(fields?.[controls.model ?? 'model']),
           effort: string(fields?.[controls.effort]), agentName: wrapper.name,
-          ...(settings.inheritedModel && (override?.['model-override'] === settings.inheritedModel || electedModel === settings.inheritedModel)
-            ? { election: 'user' } : {}) };
+        };
+        const resolvedModel = deployedWrapperEnforcement(provider, artifact).effectiveModel;
+        if (resolvedModel && (override?.['model-override'] === resolvedModel || electedModel === resolvedModel)) {
+          artifact.election = 'user';
+        }
         const state = deployedWrapperEnforcement(provider, artifact);
         checks.push({ name: 'Wrapper enforcement', status: 'info', provider, wrapper: wrapper.name,
           file: file ? path.relative(projectDir, file) : null, modelEnforcement: state.model, effortEnforcement: state.effort,
@@ -61,10 +64,10 @@ export async function collectWrapperEnforcement({ projectDir, config, packageRoo
         for (const id of wrapperModelRisks(provider, artifact)) {
           const remediation = `aiwg models resolve --agent ${wrapper.name} --provider ${provider} --tier standard`;
           const reason = id === 'delegation.flagship-inheritance'
-            ? 'would inherit an unelected flagship or premium model'
+            ? 'resolves to an unelected flagship or premium model'
             : 'has a placeholder or unresolved model value';
           checks.push({ name: id, id, provider, wrapper: wrapper.name, status: 'warn', remediation,
-            message: `${provider} ${wrapper.name} ${reason}; run \`${remediation}\`, then set the concrete model in ${controls.model ? `${file} (${controls.model})` : 'the provider global delegation settings'}.` });
+            message: `${provider} ${wrapper.name} ${reason}; run \`${remediation}\`, then set the concrete model in ${controls.model ? `${file} (${controls.model})` : (GLOBAL_WRAPPER_SETTINGS[provider] ?? 'the provider session model settings')}.` });
         }
       }
     } catch {

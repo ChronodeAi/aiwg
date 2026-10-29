@@ -14,6 +14,12 @@ const NATIVE_CONTROLS: Record<string, WrapperControls> = {
   factory: { model: 'model', effort: 'reasoningEffort' },
   opencode: { model: 'model' }, omp: { model: 'model', effort: 'thinkingLevel' },
 };
+export const GLOBAL_WRAPPER_SETTINGS: Record<string, string> = {
+  hermes: 'Hermes config.yaml: delegation.model / delegation.effort',
+  warp: 'Warp agent run --model <MODEL_ID> (run/profile-wide); effort: unavailable',
+  muse: 'Muse --model / --reasoning-effort; $XDG_CONFIG_HOME/muse/settings.json model supplies the model fallback',
+  grokbot: 'Grok Bot model: unavailable; effort: unavailable (no verified native setting in the provider catalog)',
+};
 const GLOBAL_ONLY = new Set(['warp', 'hermes', 'grokbot', 'muse']);
 
 export function wrapperControls(provider: string): WrapperControls {
@@ -55,7 +61,7 @@ export function wrapperModelRisks(provider: string, artifact: DeployedWrapperCon
       [entry?.tiers?.flagship?.id, entry?.tiers?.premium?.id, entry?.roles.reasoning.id]
         .filter(isConcreteWrapperModel).some(id => state.effectiveModel === id || state.effectiveModel?.endsWith(`/${id}`)))
     || (provider === 'claude' && state.effectiveModel === 'opus'));
-  if (state.model !== 'pinned' && expensive && !flagshipElected(artifact)) findings.push('delegation.flagship-inheritance');
+  if (expensive && !flagshipElected(artifact)) findings.push('delegation.flagship-inheritance');
   return findings;
 }
 
@@ -113,6 +119,6 @@ export function wrapperEnforcementReport(provider: string, artifact?: DeployedWr
     muse: 'Session --model or settings.json model controls selection; per-agent pins are unverified.',
   };
   return `Tier enforcement (${artifact ? 'deployed wrapper' : 'generated wrapper defaults'}): ${state}; effort: ${effort}. `
-    + `${details[provider] ?? (known ? 'Native custom subagents carry explicit catalog model selectors.' : 'Provider wrapper controls are unverified.')} `
+    + `${GLOBAL_WRAPPER_SETTINGS[provider] ? `${GLOBAL_WRAPPER_SETTINGS[provider]}. ` : ''}${details[provider] ?? (known ? 'Native custom subagents carry explicit catalog model selectors.' : 'Provider wrapper controls are unverified.')} `
     + 'Explicit operator pins are preserved where supported. This is not a live resolved-model audit; provider/account policy may substitute models.';
 }

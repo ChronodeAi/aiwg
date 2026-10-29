@@ -142,20 +142,19 @@ provider-neutral; already-pinned ids, `inherit`, and explicit `sonnet[1m]` /
 
 ## Provider compilation examples
 
-Codex agents compile to standalone `.codex/agents/*.toml` files. Every file has
-the required `name`, `description`, and `developer_instructions` fields; native
-model controls use `model` and `model_reasoning_effort`. Codex skills have no
-documented per-skill model field, so AIWG reports that policy as `unsupported`
-and does not emit a pretend pin.
+Codex agents compile to standalone `.codex/agents/*.toml` files with required `name`, `description`, and `developer_instructions` fields. Native controls use `model` and `model_reasoning_effort`. Codex skill model policy is `unsupported`: no documented per-skill model field exists.
 
-Warp and Hermes can apply run-wide or global delegation policy but cannot
-enforce heterogeneous per-agent files. Their per-agent result is
-`global-only`. Windsurf currently has no supported portable child selector, so
-its per-agent result is `unsupported`.
+Global/run-wide providers cannot enforce heterogeneous wrapper pins (see `agentic/code/providers/model-{capabilities,catalog}.v1.json` and `tools/cli/doctor-wrapper-settings.mjs`):
 
-`aiwg doctor --provider <name>` reports canonical agent counts and the target
-surface separately. It does not describe skills as pinned when the provider
-cannot enforce skill-local model selection.
+| Provider | Wrapper class | Native model and effort controls |
+|---|---|---|
+| hermes | `global-only` | `config.yaml`: `delegation.model` / `delegation.effort` (shared by all workers). |
+| warp | `global-only` | `warp-terminal agent run --model <MODEL_ID>` (run/profile-wide); effort: unavailable. |
+| muse | `global-only` | `--model` / `--reasoning-effort`; `$XDG_CONFIG_HOME/muse/settings.json` `model` is the model fallback. Per-agent catalog support is unverified. |
+| grokbot | `global-only` | model: unavailable; effort: unavailable (no verified native setting in the catalog; routing is informational). |
+| windsurf | `inherited` (agent policy `unsupported`) | Main UI session model selection; no supported portable child model or effort setting. |
+
+`aiwg doctor --provider <name>` reports canonical agent counts and the target surface separately. It describes skills as pinned only when the provider enforces skill-local model selection.
 
 ## Model management CLI
 

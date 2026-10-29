@@ -69,6 +69,21 @@ describe('offline doctor wrapper checks', () => {
     expect(checks.find((c: any) => c.provider === 'windsurf').message).toContain('): inherited;');
   });
 
+  it.each([
+    ['hermes', 'delegation.model', 'delegation.effort'],
+    ['warp', '--model', 'effort: unavailable'],
+    ['muse', '--model', '--reasoning-effort'],
+    ['grokbot', 'model: unavailable', 'effort: unavailable'],
+  ])('names global native controls in %s remediation', async (provider, model, effort) => {
+    const checks = await collect([provider]);
+    const risks = checks.filter((c: any) => c.id);
+    expect(risks.length).toBeGreaterThan(0);
+    for (const risk of risks) {
+      expect(risk.message).toContain(model);
+      expect(risk.message).toContain(effort);
+    }
+  });
+
   it('flags shared flagship inheritance for each Hermes wrapper without standalone files', async () => {
     await put(path.join(root, '.hermes/config.yaml'), 'delegation:\n  model: gpt-6-astra\n');
     const checks = await collect(['hermes']);
@@ -83,6 +98,15 @@ describe('offline doctor wrapper checks', () => {
     await put(path.join(projectDir, '.codex/config.toml'), 'model = "gpt-6-astra"\n');
     await put(path.join(projectDir, 'models.json'), JSON.stringify({ agentOverrides: { [wrapper]: override } }));
     expect((await collect()).filter((c: any) => c.id)).toEqual([]);
+  });
+
+  it.each([{ 'model-override': 'gpt-6-astra' }, { 'model-tier': 'flagship' }])('matches a pinned flagship election %j against its resolved model', async override => {
+    await put(path.join(projectDir, `.codex/agents/${wrapper}.toml`), 'model = \"gpt-6-astra\"\n');
+    await put(path.join(projectDir, '.codex/config.toml'), 'model = \"gpt-6-luna\"\n');
+    await put(path.join(projectDir, 'models.json'), JSON.stringify({ agentOverrides: { [wrapper]: override } }));
+    expect((await collect()).filter((c: any) => c.id)).toEqual([]);
+    await put(path.join(projectDir, 'models.json'), JSON.stringify({ agentOverrides: { [wrapper]: { 'model-override': 'gpt-6-luna' } } }));
+    expect((await collect()).filter((c: any) => c.id).map((c: any) => c.id)).toEqual(['delegation.flagship-inheritance']);
   });
 
   it('ignores built-in premium metadata as election and honors a different project override over a user pin', async () => {
