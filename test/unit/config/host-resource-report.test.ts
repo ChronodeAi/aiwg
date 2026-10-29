@@ -15,7 +15,7 @@ describe('normalized host resource capacity', () => {
     const config = { parallelism: { max_parallel_subagents: 10, groups: { coding: { maxParallel: 4 } },
       admission: { cliCaps: { codex: 4 }, memberCaps: { primary: 4 }, groupCaps: { coding: 4 } } } } as any;
     const result = hostResourceReport({ config, readers });
-    expect(result).toMatchObject({ ok: true, slots: 3, measured: { workers: 1, workerUnits: 1,
+    expect(result).toMatchObject({ ok: true, slots: 4, measured: { workers: 1, workerUnits: 1,
       hostCliProcesses: { codex: 14, muse: 0 } } });
     for (const limit of result.limits.filter(limit => /max_parallel|groups\.|admission\./.test(limit.threshold))) {
       expect(limit.slots).toBe(limit.threshold === 'max_parallel_subagents' ? 9 : 3);
@@ -82,13 +82,13 @@ describe('normalized host resource capacity', () => {
     expect(report(undefined, { caps: [{ threshold: 'unused', limit: null }, { threshold: 'unset' }] }).slots).toBe(4);
   });
 
-  it('intersects configured scoped admission caps in the generic doctor report', () => {
+  it('reports groups separately and excludes tuple caps from the generic doctor verdict', () => {
     const config = { parallelism: { max_parallel_subagents: 8,
       groups: { on: { maxParallel: 5 }, off: { enabled: false, maxParallel: 0 } },
       admission: { cliCaps: { codex: 2 }, modelCaps: { model: 4 } } } } as any;
-    expect(report(undefined, { config }).slots).toBe(1);
+    expect(report(undefined, { config })).toMatchObject({ slots: 4, groups: [{ group: 'on', slots: 4 }, { group: 'off', slots: 0 }] });
     config.parallelism.admission.cliCaps.codex = 1;
-    expect(report(undefined, { config }).failures.map(f => f.signal)).toContain('admission.cliCaps.codex');
+    expect(report(undefined, { config }).failures).toEqual([]);
   });
 
   it('retains default/project/task origins and never widens a threshold', () => {

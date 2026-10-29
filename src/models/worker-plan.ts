@@ -366,8 +366,9 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
           ] as const;
           const caps = [...capEntries.map(([, value]) => value), snapshot.constraints?.maxParallel, request.maxParallel]
             .filter((value): value is number => value !== undefined);
-          const resources = snapshot.hostResources && hostResourceReport({ config: snapshot.config, live: snapshot.hostResources,
-            caps: [...capEntries.map(([threshold, limit]) => ({ threshold, limit })),
+          // The shared report owns project/group caps; the remaining entries scope the tuple.
+          const resources = snapshot.hostResources && hostResourceReport({ config: snapshot.config, live: snapshot.hostResources, group: groupId,
+            caps: [...capEntries.slice(3).map(([threshold, limit]) => ({ threshold, limit })),
               { threshold: 'constraints.maxParallel', limit: snapshot.constraints?.maxParallel, running: 0 },
               { threshold: 'request.maxParallel', limit: request.maxParallel, running: 0 }] });
           if (resources) {

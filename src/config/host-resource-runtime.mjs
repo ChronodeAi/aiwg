@@ -73,6 +73,7 @@ function countWorkerProcesses({
   readDir = readdirSync,
   readText = path => readFileSync(path, 'utf8'),
   uid = process.getuid?.(),
+  groupNames = [],
   listWorkerUnits: readUnitList,
   countWorkerUnits: readUnitCount,
 } = {}) {
@@ -85,11 +86,20 @@ function countWorkerProcesses({
     if (Number.isInteger(counted) && counted >= 0) units = counted;
   } catch { /* Owned-process scanning remains available. */ }
   const source = units === undefined ? 'owned-process-fallback' : 'systemd-units-and-marked-processes';
-  let entries;
+  // Reuse existing identities; UUID-only IDs carry no group evidence.
+  const identify = value => new Set(groupNames.filter(name => value === name || value.startsWith(`${name}-`)));
+  const unitGroups = new Map([...(unitNames ?? [])].map(unit =>
+    [unit, identify(unit.slice('aiwg-worker-'.length, -'.service'.length))]));
+  let entries, procUnavailable = false;
   try { entries = readDir('/proc'); }
-  catch { return units === undefined ? undefined : { total: units, units, source }; }
+  catch {
+    if (units === undefined) return undefined;
+    entries = []; procUnavailable = true;
+  }
   const hostCliProcesses = { codex: 0, muse: 0 };
   const invocations = new Set(), unitInvocations = new Set();
+  const invocationGroups = new Map();
+  const merge = (target, evidence) => { for (const name of evidence) target.add(name); };
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
     try {
@@ -106,12 +116,24 @@ function countWorkerProcesses({
       const invocation = marker?.slice(WORKER_INVOCATION_MARKER.length + 1);
       if (!invocation) continue;
       invocations.add(invocation);
+      if (!invocationGroups.has(invocation)) invocationGroups.set(invocation, identify(invocation));
       const cgroupUnits = optional('cgroup').match(/aiwg-worker-[^/\s]+\.service(?=\/|\s|$)/g) ?? [];
       if (cgroupUnits.some(unit => unitNames ? unitNames.has(unit) : units > 0)) unitInvocations.add(invocation);
+      for (const unit of cgroupUnits.filter(unit => unitGroups.has(unit))) {
+        merge(unitGroups.get(unit), invocationGroups.get(invocation));
+      }
     } catch { /* Processes may exit during the scan. */ }
   }
-  return { total: (units ?? 0) + [...invocations].filter(id => !unitInvocations.has(id)).length,
-    hostCliProcesses, units, source };
+  const byGroup = {};
+  for (const evidence of [...unitGroups.values(), ...[...invocationGroups]
+    .filter(([id]) => !unitInvocations.has(id)).map(([, evidence]) => evidence)]) {
+    if (evidence.size === 1) {
+      const [name] = evidence;
+      byGroup[name] = (byGroup[name] ?? 0) + 1;
+    }
+  }
+  return { ...(groupNames.length ? { byGroup } : {}), total: (units ?? 0) + [...invocations].filter(id => !unitInvocations.has(id)).length,
+    ...(procUnavailable ? {} : { hostCliProcesses }), units, source };
 }
 
 function defaultCountWorkers(options) {
@@ -210,7 +232,7 @@ function readLiveHostResources(readers = {}) {
     memPsiAvg300: psi?.avg300,
     workers: typeof workers === 'object' ? workers?.total : workers,
     ...(typeof workers === 'object' ? { hostCliProcesses: workers?.hostCliProcesses, workerUnits: workers?.units,
-      workerCountingSource: workers?.source } : {}),
+      workerCountingSource: workers?.source, workerGroups: workers?.byGroup } : {}),
     freeDiskGb: sampleFreeDiskGb(readers),
   };
 }

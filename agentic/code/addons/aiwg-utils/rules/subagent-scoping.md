@@ -195,8 +195,8 @@ and `rlm-context-management.md` Rule 8 — the smallest cap wins.
 Run immediately before each launch, from the target project directory:
 
 ```bash
-aiwg doctor --resources --json
-ssh host 'cd /absolute/project && aiwg doctor --resources --json'
+aiwg doctor --resources --group <group> --json
+ssh host 'cd /absolute/project && aiwg doctor --resources --group <group> --json'
 ```
 
 Require `ok: true` and `slots > 0`. Read `measured` (load, cores, available memory,
@@ -208,9 +208,13 @@ Admission counts current-user active `aiwg-worker-*` units plus distinct
 `AIWG_WORKER_INVOCATION_ID` markers outside those units, deduplicated by cgroup.
 Without systemd, the report states `owned-process-fallback`. Raw CLI process counts
 are informational and never used for admission. Self-count additional native/MCP
-workers. Configured scoped caps conservatively subtract the owned worker total because
-group/model ownership is unknown; request `maxParallel` already means remaining
-capacity. Without a selected tuple, doctor intersects all configured ceilings.
+workers. Existing invocation markers or unit names with unambiguous group prefixes
+attribute workers exactly; unattributed workers count against every group, as `counting`
+states. Other tuple caps conservatively subtract total owned workers. Request
+`maxParallel` already means remaining capacity. Without `--group`, doctor uses host
+and project caps only and reports every group separately in `groups` and text.
+With `--group <group>`, slots intersects host and that group's capacity;
+`limitingThreshold` names the binding threshold. Unknown names list configured groups.
 `aiwg models resolve` reports `resources` and `slots` in JSON and refuses to render
 a launch at zero, naming the binding threshold. Reports reserve nothing; recheck
 before every launch. SSH returns the same shape; scheduling stays with the conductor.

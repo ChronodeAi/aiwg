@@ -2,7 +2,7 @@
 import { argsTerminatorIndex, hasPositionalOrSwitch, requireFlagValue, valueTokenIndexes } from '../flag-parsing.js';
 
 export function parsePublicDoctorFlags(args: string[]) {
-  const valueFlags = ['--provider', '--bundle', '--scope', '--context-baseline', '--context-budget-tokens', '--cli', '--forget-approval'];
+  const valueFlags = ['--provider', '--bundle', '--scope', '--context-baseline', '--context-budget-tokens', '--cli', '--forget-approval', '--group'];
   const knownFlags = new Set([
     ...valueFlags, '--list-approvals', '--all-providers', '--probe-workers', '--qualify', '--yes', '--dry-run', '--no-budget-check', '--strict-context', '--json',
     '--resources', '--decision-offload', '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
@@ -21,6 +21,7 @@ export function parsePublicDoctorFlags(args: string[]) {
       throw new Error(`Unknown flag: ${name}`);
     }
   }
+  if (values.get('--group') !== undefined && !hasSwitch('--resources')) throw new Error('--group requires --resources');
   if (hasSwitch('--resources') && (['--probe-workers', '--decision-offload', '--deployment', '--user', '--project-local'].some(hasSwitch) || values.get('--scope') !== undefined)) {
     throw new Error('--resources must run separately from other doctor modes');
   }

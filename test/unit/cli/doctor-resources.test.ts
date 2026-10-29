@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { afterEach, expect, it, vi } from 'vitest';
 import { runResourceDoctor } from '../../../tools/cli/doctor-resources.mjs';
 import { parseDoctorArgsOrExit } from '../../../tools/cli/doctor-args.mjs';
@@ -53,4 +54,51 @@ it('reports owned-process fallback and labels raw CLI counts informational in te
   expect(await runResourceDoctor(root, { readers, config })).toBe(0);
   expect(log.mock.calls.flat().join('\n')).toContain('systemd unavailable: owned-process fallback');
   expect(log.mock.calls.flat().join('\n')).toContain('not used for admission');
+});
+
+it('parses group values strictly in both parsers and requires resource mode', () => {
+  for (const args of [['--resources', '--group', 'harness'], ['--resources', '--group=harness']]) {
+    expect(parsePublicDoctorFlags(args).values.get('--group')).toBe('harness');
+    expect(parseDoctorArgsOrExit(args)).toMatchObject({ group: 'harness' });
+  }
+  const exit = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('exit'); });
+  vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  for (const args of [['--group', 'harness'], ['--resources', '--group'], ['--resources', '--group=']]) {
+    expect(() => parsePublicDoctorFlags(args)).toThrow(/group/);
+    expect(() => parseDoctorArgsOrExit(args)).toThrow('exit');
+  }
+  expect(exit).toHaveBeenCalledWith(2);
+});
+
+it('prints every group separately and names each threshold once per diagnostic', async () => {
+  const config = { parallelism: { max_parallel_subagents: 10,
+    groups: { harness: { maxParallel: 3 }, muse: { maxParallel: 1 } } } } as any;
+  const readers = { ...hostResourceReaders(), statfsPath: () => ({ bavail: 32, bsize: 1024 ** 3 }) };
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  expect(await runResourceDoctor('/synthetic', { config, readers })).toBe(0);
+  expect(log.mock.calls.flat().join('\n')).toMatch(/Group harness:.*slots=2/);
+  expect(log.mock.calls.flat().join('\n')).toMatch(/Group muse:.*slots=0/);
+  log.mockClear();
+  expect(await runResourceDoctor('/synthetic', { config, readers, group: 'muse' })).toBe(1);
+  const lines = log.mock.calls.flat().map(String);
+  expect(lines).toContain('groups.muse.maxParallel: admission capacity exhausted or worker count unavailable');
+  expect(lines.join('\n')).not.toMatch(/(groups\.muse\.maxParallel): \1:/);
+  log.mockClear();
+  expect(await runResourceDoctor('/synthetic', { config, readers, group: 'harness', json: true })).toBe(0);
+  expect(JSON.parse(String(log.mock.calls[0][0]))).toMatchObject({ slots: 2, limitingThreshold: 'groups.harness.maxParallel' });
+  await expect(runResourceDoctor('/synthetic', { config, readers, group: 'missing' })).rejects.toThrow(/harness.*muse/);
+});
+
+it('documents the group resource gate before each launch', () => {
+  for (const filename of ['docs/orchestration/guide.md', 'agentic/code/addons/aiwg-utils/rules/subagent-scoping.md']) {
+    expect(readFileSync(filename, 'utf8')).toContain('aiwg doctor --resources --group <group>');
+  }
+});
+
+it('prints a blocking project threshold only once per diagnostic', async () => {
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const readers = { ...hostResourceReaders(), statfsPath: () => ({ bavail: 32, bsize: 1024 ** 3 }) };
+  expect(await runResourceDoctor('/synthetic', { readers, config: { parallelism: { max_parallel_subagents: 1 } } })).toBe(1);
+  expect(log.mock.calls.flat()).toContain('max_parallel_subagents: admission capacity exhausted or worker count unavailable');
+  expect(log.mock.calls.flat().join('\n')).not.toContain('max_parallel_subagents: max_parallel_subagents:');
 });

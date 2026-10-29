@@ -9,6 +9,7 @@ import { sampleWorkerHostResources } from '../../../src/cli/handlers/models-reso
 import { hostResourceReport } from '../../../src/config/host-resource-report.mjs';
 import { hostResourceReaders, healthyHostResources, ownedWorkerReaders } from '../../fixtures/host-resources.js';
 import { readLiveHostResources } from '../../../src/config/host-resource-runtime.mjs';
+import { runResourceDoctor } from '../../../tools/cli/doctor-resources.mjs';
 
 const roots: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -20,6 +21,33 @@ const fixture = () => {
 const resolve = (f: ReturnType<typeof fixture>) => resolveWorkerPlan(f.snapshot, f.request);
 
 describe('resolver host capacity', () => {
+  it.each([0, 1, 2, 3])('agrees with doctor for the selected group with %i workers', async workers => {
+    const f = fixture();
+    f.request.group = 'workers';
+    f.snapshot.config.parallelism!.groups!.unrelated = { ...structuredClone(f.snapshot.config.parallelism!.groups!.workers), maxParallel: 1 };
+    const readers = { ...hostResourceReaders(), countWorkers: () => workers,
+      statfsPath: () => ({ bavail: 32, bsize: 1024 ** 3 }) };
+    f.snapshot.hostResources = readLiveHostResources(readers);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const code = await runResourceDoctor('/synthetic', { config: f.snapshot.config, readers, group: 'workers', json: true });
+    const doctor = JSON.parse(String(log.mock.calls.at(-1)![0]));
+    const plan = resolve(f);
+    expect(plan.slots).toBe(doctor.slots);
+    expect(plan.status === 'eligible').toBe(code === 0);
+    expect(plan.resources!.limits).toEqual(doctor.limits);
+  });
+
+  it('uses exact group occupancy in both resolver and doctor', () => {
+    const f = fixture();
+    f.request.group = 'workers';
+    f.snapshot.config.parallelism!.groups!.other = { ...structuredClone(f.snapshot.config.parallelism!.groups!.workers), maxParallel: 1 };
+    f.snapshot.hostResources = readLiveHostResources({ ...ownedWorkerReaders(undefined, [
+      { invocation: 'other-one' }, { invocation: 'other-two' },
+    ]), groupNames: ['workers', 'other'] });
+    const doctor = hostResourceReport({ config: f.snapshot.config, live: f.snapshot.hostResources, group: 'workers' });
+    expect(doctor.slots).toBe(2);
+    expect(resolve(f)).toMatchObject({ status: 'eligible', slots: 2 });
+  });
   it('uses owned workers for project, group, CLI and member caps while retaining raw host process counts', () => {
     const f = fixture();
     const unit = 'aiwg-worker-one.service';

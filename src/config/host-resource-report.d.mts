@@ -10,8 +10,10 @@ export interface HostResourceReport {
   limits: Array<{ threshold: string; slots: number }>;
   failures: Array<{ signal: string; reason: string; actual?: number; threshold?: number }>;
   counting?: string;
+  limitingThreshold?: string;
+  groups: Array<{ group: string; maxParallel: number | null; slots: number | null; reason: string }>;
 }
 export function hostResourceReport(input?: {
-  config?: AiwgConfig; live?: HostResourceSample; readers?: HostResourceReaders; paths?: string[];
+  group?: string; config?: AiwgConfig; live?: HostResourceSample; readers?: HostResourceReaders; paths?: string[];
   thresholdOverlay?: DispatchHostThresholds; caps?: HostResourceCap[];
 }): HostResourceReport;

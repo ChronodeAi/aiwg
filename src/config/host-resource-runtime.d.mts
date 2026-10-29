@@ -1,10 +1,12 @@
 export interface HostResourceSample {
   supported: boolean; reason?: string; availMemGb?: number; load1?: number; cores?: number;
   loadRatio?: number; memPsiAvg10?: number; memPsiAvg60?: number; memPsiAvg300?: number;
+  workerGroups?: Record<string, number>;
   workers?: number; hostCliProcesses?: Record<string, number>; workerUnits?: number; freeDiskGb?: number;
   workerCountingSource?: 'systemd-units-and-marked-processes' | 'owned-process-fallback';
 }
 export interface WorkerCensus {
+  byGroup?: Record<string, number>;
   total: number; hostCliProcesses?: Record<string, number>; units?: number;
   source?: HostResourceSample['workerCountingSource'];
 }
@@ -12,6 +14,7 @@ export interface HostResourceReaders {
   readText?: (path: string) => string;
   readDir?: (path: string) => string[];
   uid?: number;
+  groupNames?: string[];
   coreCount?: () => number;
   countWorkers?: () => number | undefined | WorkerCensus;
   countWorkerUnits?: () => number | undefined;

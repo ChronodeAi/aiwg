@@ -1,0 +1,9 @@
+{
+  "T-OG-01": [
+    "test/unit/models/host-resource-admission.test.ts",
+    "test/unit/config/host-resource-report.test.ts",
+    "test/unit/config/host-resource-groups.test.ts",
+    "test/unit/config/host-resource-runtime.test.ts",
+    "test/unit/cli/doctor-resources.test.ts"
+  ]
+}

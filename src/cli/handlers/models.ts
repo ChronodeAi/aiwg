@@ -122,7 +122,7 @@ export async function loadWorkerInputs(ctx: HandlerContext, resourceReaders?: Ho
     }) };
   }
   return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
-    registry: qualifiedRegistry, installations, hostResources: sampleWorkerHostResources(ctx, resourceReaders) }, drivers };
+    registry: qualifiedRegistry, installations, hostResources: sampleWorkerHostResources(ctx, { ...resourceReaders, groupNames: Object.keys(config.parallelism?.groups ?? {}) }) }, drivers };
 }
 
 async function resolveDirect(ctx: HandlerContext, services: ModelsWorkerServices): Promise<HandlerResult> {

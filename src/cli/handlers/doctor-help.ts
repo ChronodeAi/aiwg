@@ -18,6 +18,7 @@ Options:
   --yes                 Confirm worker qualification or approval removal
   --dry-run             With --probe-workers, preview qualification without writes
   --cli NAME            Limit worker probes, qualification, or approvals to one CLI
+  --group <name>        Apply the named group cap (requires --resources)
   --resources           Report live host resources, threshold origins and remaining worker slots (supports --json)
   --decision-offload    Show offline advisory decision readiness and adoption report
   --probe-workers       Run bounded worker CLI version probes (default: config-only, no subprocess)
