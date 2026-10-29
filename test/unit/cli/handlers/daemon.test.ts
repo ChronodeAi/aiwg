@@ -172,3 +172,11 @@ describe('daemonHandler', () => {
     expect((await daemonHandler.execute(makeCtx(['stop']))).exitCode).toBe(1);
   });
 });
+
+describe('handlers barrel', () => {
+  it('re-exports daemonHandler alongside the other daemon handlers', async () => {
+    const barrel = await import('../../../../src/cli/handlers/index.js');
+    const daemon = await import('../../../../src/cli/handlers/daemon.js');
+    expect(barrel.daemonHandler).toBe(daemon.daemonHandler);
+  });
+});
