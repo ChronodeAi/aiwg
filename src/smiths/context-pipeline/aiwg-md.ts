@@ -121,6 +121,6 @@ export async function buildAiwgMdContent(
  * AIWG.local.md operator overrides, etc.) have a single entry point in the
  * surface API without callers reaching into the implementation.
  */
-export async function generateAiwgMd(projectPath: string): Promise<string> {
-  return buildAiwgMdContent(projectPath);
+export async function generateAiwgMd(projectPath: string, stagedClaudeMdContent?: string | null): Promise<string> {
+  return buildAiwgMdContent(projectPath, stagedClaudeMdContent);
 }

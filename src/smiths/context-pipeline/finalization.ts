@@ -186,13 +186,13 @@ export async function migrateAiwgOperatorNotes(projectPath: string): Promise<voi
 }
 
 /** Compatibility writer used by init: emit only the generated root context. */
-export async function writeNormalizedAiwgMd(projectPath: string): Promise<string> {
+export async function writeNormalizedAiwgMd(projectPath: string, stagedClaudeMdContent?: string | null): Promise<string> {
   const target = path.join(projectPath, 'AIWG.md');
   await assertSafeContextFile(target);
   const { isOverwriteSafe } = await import('./generator.js');
   if (!(await isOverwriteSafe(target))) return target;
   const { buildAiwgMdContent } = await import('./aiwg-md.js');
-  writeContextFileSync(target, await buildAiwgMdContent(projectPath), 'utf8');
+  writeContextFileSync(target, await buildAiwgMdContent(projectPath, stagedClaudeMdContent), 'utf8');
   await migrateAiwgOperatorNotes(projectPath);
   return target;
 }
