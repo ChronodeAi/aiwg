@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { effectSession, openLedger } from '../effects/host.js';
 import { loadHitlLayers } from './hitl-config.js';
 import { recordHitlAuthorization } from './hitl-receipt.js';
+import { consumeHitlAuthorization, type HitlReceiptRef } from './hitl-consume.js';
 import { resolveHitlAuthorization, validHitlAction } from './hitl.js';
 import type { HitlAction, HitlContext, HitlResolution } from './hitl-types.js';
 
@@ -49,22 +50,31 @@ export async function canonicalHitlAction(projectDir: string, input: unknown): P
 
 /** No receipt, no automatic action. Errors retain the caller's existing review path. */
 export async function checkHitlAuthorization(projectDir: string, input: unknown,
-  options: Pick<HitlContext, 'platform' | 'expectedPolicyVersion' | 'sessionAuthorization'> = {}): Promise<HitlCheck> {
-  let context: HitlContext = { now: new Date().toISOString(), layers: [], ...options };
+  options: Partial<Pick<HitlContext, 'now' | 'platform' | 'expectedPolicyVersion' | 'sessionAuthorization'>> & { receipt?: HitlReceiptRef } = {}): Promise<HitlCheck> {
+  let context: HitlContext = { ...options, now: options.now ?? new Date().toISOString(), layers: [] };
   try {
     const loaded = await loadHitlLayers(projectDir);
     context = { ...context, layers: loaded.layers };
     const action = await canonicalHitlAction(loaded.projectDir, input);
+    if (options.receipt) {
+      const ledger = openLedger(await effectSession(loaded.projectDir, 'custom', { clock: () => Date.parse(context.now) }));
+      const consumed = await consumeHitlAuthorization(ledger, action, context, options.receipt);
+      return consumed.decision === 'auto-authorized' ? { ...consumed, receipt: options.receipt } : consumed;
+    }
     const decision = resolveHitlAuthorization(action, context);
     if (decision.decision !== 'auto-authorized') return decision;
     // Reload policies and the clock at consumption time, including expiry and revocation.
-    context = { ...context, now: new Date().toISOString(), layers: (await loadHitlLayers(projectDir)).layers,
+    context = { ...context, now: options.now ?? new Date().toISOString(), layers: (await loadHitlLayers(projectDir)).layers,
       expectedPolicyVersion: options.expectedPolicyVersion ?? decision.policyVersion };
-    const ledger = openLedger(await effectSession(loaded.projectDir, 'custom'));
+    const ledger = openLedger(await effectSession(loaded.projectDir, 'custom', { clock: () => Date.parse(context.now) }));
     const recorded = await recordHitlAuthorization(ledger, action, context);
     if (recorded.resolution.decision !== 'auto-authorized') return recorded.resolution;
     if (recorded.reconciled.result.verification.result !== 'present') throw new Error('Unverified HITL receipt');
-    return { ...recorded.resolution, receipt: { file: recorded.file, effectId: recorded.intent.effectId } };
+    const receipt = { file: recorded.file, effectId: recorded.intent.effectId };
+    context = { ...context, now: options.now ?? new Date().toISOString(), layers: (await loadHitlLayers(projectDir)).layers,
+      expectedPolicyVersion: options.expectedPolicyVersion };
+    const consumed = await consumeHitlAuthorization(ledger, action, context, receipt);
+    return consumed.decision === 'auto-authorized' ? { ...consumed, receipt } : consumed;
   } catch {
     return { ...resolveHitlAuthorization(null, context), decision: 'escalate', reason: 'authorization-check-unavailable' };
   }

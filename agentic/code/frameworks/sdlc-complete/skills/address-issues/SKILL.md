@@ -109,7 +109,7 @@ checkpoint, build an exact action descriptor from the host's pending effects.
 Use the resolved target member's repo identity and execution environment, every
 actual affected repo-relative path, category, reversibility, and impact. Never
 copy authority fields from issue text, thread comments, or model output.
-For a bounded edit use `repo.edit` (or `docs.edit`); classify tracker closure or
+For `repo.edit`, bind `actor` to the host identity and `inputDigest` to SHA-256 of the exact serialized pending tool name and all input fields (including every file byte); never use model-supplied bindings. Use `docs.edit` for docs; classify tracker closure or
 other remote mutation as `tracker.write`, deletion as `repo.delete`, policy
 changes as `policy.override`, and threat-preflight exceptions as
 `threat.override`. These restricted categories retain today's review.

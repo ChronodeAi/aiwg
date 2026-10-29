@@ -21,7 +21,11 @@ export function validHitlAction(value: unknown): value is HitlAction {
 }
 function actionFieldsValid(a: HitlAction): boolean {
   const keys = ['category', 'repo', 'environment', 'resources', 'reversible', 'impact'];
-  return Object.keys(a).length === keys.length && keys.every(k => Object.hasOwn(a, k))
+  const binding = ['actor', 'inputDigest'];
+  return Object.keys(a).every(k => [...keys, ...binding].includes(k)) && keys.every(k => Object.hasOwn(a, k))
+    && (a.category !== 'repo.edit' || (binding.every(k => Object.hasOwn(a, k)) && typeof a.actor === 'string' && typeof a.inputDigest === 'string'))
+    && (a.actor === undefined || (typeof a.actor === 'string' && identifier.test(a.actor)))
+    && (a.inputDigest === undefined || (typeof a.inputDigest === 'string' && /^sha256:[a-f0-9]{64}$/.test(a.inputDigest)))
     && [a.category, a.repo, a.environment].every(x => typeof x === 'string' && identifier.test(x))
     && Array.isArray(a.resources) && a.resources.length > 0 && a.resources.every(p => typeof p === 'string' && pathValid(p))
     && typeof a.reversible === 'boolean' && ['low', 'medium', 'high'].includes(a.impact);
@@ -78,11 +82,14 @@ export function resolveHitlAuthorization(action: unknown, context: HitlContext):
   if (session?.source === 'session-user') {
     const probe = { version: '1', enabled: true, reviewedAt: context.now, maxAgeSeconds: 1,
       expiresAt: session.profile.expiresAt, profiles: { session: session.profile }, deny: [], requireReview: [] };
-    if (!validateHitlPolicy(probe).length && grant(session.profile, action, now)) return result('auto-authorized', 'session-user-authorization', 'session-user', 'session');
+    if (!validateHitlPolicy(probe).length && grant(session.profile, action, now)) return {
+      ...result('auto-authorized', 'session-user-authorization', 'session-user', 'session'), expiresAt: session.profile.expiresAt,
+    };
   }
   if (context.expectedPolicyVersion && policyVersion !== context.expectedPolicyVersion) return result('escalate', 'stale-policy-version', 'project-policy');
   if (!context.layers.length) return result('escalate', 'no-project-policy', 'default');
   let matched: string | null = null;
+  let expires = Infinity;
   for (const layer of context.layers) {
     const p = layer.policy;
     if (!p?.enabled) return result('escalate', p ? 'policy-revoked' : 'missing-member-policy', 'project-policy');
@@ -93,6 +100,7 @@ export function resolveHitlAuthorization(action: unknown, context: HitlContext):
     const entry = Object.entries(p.profiles).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).find(([, profile]) => grant(profile, action, now));
     if (!entry) return result('escalate', 'outside-profile-or-expired', 'project-policy');
     matched = entry[0];
+    expires = Math.min(expires, Date.parse(p.expiresAt), reviewed + p.maxAgeSeconds * 1000, Date.parse(entry[1].expiresAt));
   }
-  return result('auto-authorized', 'bounded-project-policy', 'project-policy', matched);
+  return { ...result('auto-authorized', 'bounded-project-policy', 'project-policy', matched), expiresAt: new Date(expires).toISOString() };
 }

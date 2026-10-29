@@ -162,6 +162,16 @@ describe('authorization check CLI', () => {
       expect(JSON.parse(String(output.mock.calls.at(-1)![0]))).toMatchObject({
         decision: 'auto-authorized', receipt: { effectId: expect.any(String) },
       });
+      const approved = JSON.parse(String(output.mock.calls.at(-1)![0]));
+      const reference = ['--receipt-file', approved.receipt.file, '--effect-id', approved.receipt.effectId];
+      await authorizationCli(['check', '--action-file', file, '--target', dir, ...reference], dir);
+      expect(JSON.parse(String(output.mock.calls.at(-1)![0]))).toMatchObject({ decision: 'auto-authorized', receipt: approved.receipt });
+      await writeFile(file, JSON.stringify({ ...action(), actor: 'other-user' }));
+      await authorizationCli(['check', '--action-file', file, ...reference], dir);
+      expect(JSON.parse(String(output.mock.calls.at(-1)![0]))).toMatchObject({ reason: 'approval-actor-mismatch' });
+      for (const incomplete of [['--receipt-file', approved.receipt.file], ['--effect-id', approved.receipt.effectId]]) {
+        await expect(authorizationCli(['check', '--action-file', file, ...incomplete], dir)).rejects.toThrow('required together');
+      }
       await writeFile(file, JSON.stringify({ ...action(), resources: ['../outside.ts'] }));
       await authorizationCli(['check', '--action-file', file, '--target', dir], dir);
       expect(JSON.parse(String(output.mock.calls.at(-1)![0]))).toMatchObject({ decision: 'escalate' });
