@@ -1,5 +1,9 @@
 # User-Level Project Memory
 
+> "Keep my private project notes outside the repo without changing how memory tools work."
+
+Your assistant registers user-level project memory under `~/.aiwg/projects/` so storage commands keep working with the relocated root.
+
 AIWG can keep private project memory outside a repository under the operator's
 AIWG home. This avoids git noise from personal agent memory while preserving the
 same effective `.aiwg` layout used by project-local AIWG artifacts.
@@ -29,6 +33,12 @@ scanning every memory directory.
 
 ## Commands
 
+> "Register this workspace in my private project memory and show me what resolved."
+
+Your assistant runs `aiwg memory project register`, then `list`, `inspect`, and `resolve` against the manifest index.
+
+### Command reference
+
 Register the current workspace:
 
 ```bash
@@ -57,6 +67,10 @@ All commands accept `--json` for automation.
 
 ## Resolution Order
 
+> "I have a local .aiwg/ and registered private memory. Which one wins?"
+
+Your assistant resolves explicit storage config first, then local `.aiwg/memory`, then registered user-level memory.
+
 Memory storage resolves in this order:
 
 1. Explicit `.aiwg/storage.config` memory root or backend.
@@ -79,6 +93,10 @@ rules. The memory contents still use the normal `.aiwg` subdirectories, which
 lets existing storage commands and memory tools work with the relocated root.
 
 ## Read-only memory audit
+
+> "Audit this workspace's memory without creating anything, and show findings as JSON."
+
+Your assistant runs `aiwg memory audit` with `--scope` and `--provider` filters; it writes nothing and omits secrets.
 
 `aiwg memory audit` inventories this workspace's memory, startup instructions,
 subtree instructions, eligible roles/rules/prompts/skills, static tool declarations,
@@ -119,6 +137,10 @@ and build directories are excluded. Durable size never establishes injected size
 provider ceiling findings are risks, not measured runtime truncation.
 
 ## Read-only cleanup and tier recommendations
+
+> "What memory should I demote or retire? Rank candidates but change nothing."
+
+Your assistant runs `aiwg memory recommend` over the audit inventory; ranks stay advisory with evidence and blocking reasons.
 
 `aiwg memory recommend` ranks advisory candidates from the audit inventory and
 `cost.ts` utility/footprint attribution. It writes nothing, including telemetry,
@@ -232,6 +254,10 @@ and resident-owner limitations below still apply. Review and apply remain
 separate commands.
 
 ## Reviewed placement and retirement
+
+> "Retire this obsolete decision with an operator-reviewed plan, then verify it."
+
+Your assistant plans with `aiwg memory plan --reviewer operator`, applies that exact plan, and checks it with `aiwg memory verify`.
 
 `aiwg memory plan`, `apply`, `verify` and `restore` coordinate the existing line-memory,
 compound-memory canonical context, and semantic-memory artifact-index owners.
@@ -356,6 +382,10 @@ running session; all effects remain next-session changes.
 
 ## Qualification
 
+> "Run the offline memory qualification and keep the full JSON evidence."
+
+Your assistant runs the default-lane vitest qualification with synthetic data and retains stdout as evidence.
+
 Run the offline provider qualification in the existing default test lane:
 
 ```bash
@@ -418,6 +448,10 @@ status `not-run`.
 
 ## Discover and verify maintenance
 
+> "Find the harness memory maintenance skill and show me only its audit section."
+
+Your assistant discovers `harness-memory-maintenance` and fetches one section; generic `aiwg memory` commands work without it.
+
 The `harness-memory-maintenance` skill is the natural-language entry point on
 supported providers. Discover the operation, then fetch only its section:
 
@@ -461,6 +495,10 @@ status. Opaque runtime surfaces remain reported limitations; exit `0` establishe
 only the static checks. A successful apply receipt alone does not establish native reload.
 
 ## Worked maintenance examples
+
+> "Walk me through demoting this rarely used checklist without granting it new authority."
+
+Your assistant refreshes the published index, reviews the conditional footprint, then plans, applies, and verifies the exact file.
 
 Run these commands from the intended project root. Each saved plan filename
 must be new, with an existing parent directory. The source examples assume

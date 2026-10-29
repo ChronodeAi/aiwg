@@ -4,6 +4,10 @@
 
 Author your first project-local AIWG bundle without forking anything.
 
+> "Create a project-local rule for my team without forking AIWG."
+
+Your assistant scaffolds an extension bundle with `aiwg new-bundle` and deploys it with `aiwg use`.
+
 ## What you'll build
 
 A project-local extension that adds a custom rule to your project — only
@@ -18,6 +22,12 @@ SDLC framework.
 ## Steps
 
 ### 1. Scaffold
+
+> "Scaffold a project-local extension called my-team-rules with a rule starter."
+
+Your assistant creates `.aiwg/extensions/my-team-rules/` with manifest, README, and starter rule.
+
+#### Command reference
 
 ```bash
 aiwg new-bundle my-team-rules --type extension --starter rule
@@ -63,6 +73,12 @@ fork. Don't edit in place.
 
 ### 3. Deploy
 
+> "Deploy my-team-rules to my providers and tell me where it landed."
+
+Your assistant validates the bundle, resolves shadows, and writes the provider files.
+
+#### Command reference
+
 ```bash
 aiwg use my-team-rules
 ```
@@ -73,6 +89,12 @@ resolution against the upstream registry, and writes
 configured providers).
 
 ### 4. Verify
+
+> "Verify my project-local bundle has no validation errors or drift."
+
+Your assistant reports bundle counts, validation, shadows, and drift from the registry plus filesystem.
+
+#### Command reference
 
 ```bash
 aiwg doctor --project-local
@@ -95,6 +117,12 @@ updated so a future `aiwg remove` can detect operator mutations.
 
 ### 6. Tidy up
 
+> "Remove the deployed my-team-rules files but keep my bundle source."
+
+Your assistant hash-checks the deployed files, deletes them, and drops the registry entry without touching the source.
+
+#### Command reference
+
 ```bash
 aiwg remove my-team-rules
 ```
@@ -104,6 +132,10 @@ is **never** deleted by `remove` — only `rm -rf` does that, and only
 when you ask for it explicitly.
 
 ## Share bundles with a nested project
+
+> "Let the billing-api member use my-team-rules from the workspace root bundle."
+
+Your assistant adds a `projectLocal.searchPaths` root and deploys with `aiwg use` from that member.
 
 In a member project's `.aiwg/aiwg.config`, add a search root whose children
 include `extensions/`, `addons/`, or the other bundle directories:
@@ -167,6 +199,10 @@ If you adopted project-local bundles before this self-heal landed, run `aiwg doc
 
 ## Skill support assets
 
+> "My skill references templates/. What gets deployed with it?"
+
+Your assistant deploys every referenced path under the recognized prefixes alongside the transformed skill.
+
 A `SKILL.md` can reference support files beside it — templates, references,
 scripts, assets. AIWG deploys every referenced path alongside the transformed
 skill, so the deployed instruction never points at something that isn't there.
@@ -210,6 +246,10 @@ A bundle whose deploy fails for any of these reasons records no deployment, and
 
 ## Script-backed skills
 
+> "Run my project check skill against src/ from the project root."
+
+Your assistant deploys the bundle with `aiwg use`, then runs `aiwg run skill` from the calling project root.
+
 For a per-repo skill that runs a script, put both the `SKILL.md` and its
 script inside the project-local bundle:
 
@@ -241,6 +281,8 @@ Run the project-specific check and report failures.
 ```
 
 Deploy the bundle, then run the skill:
+
+#### Command reference
 
 ```bash
 aiwg use my-team-tools

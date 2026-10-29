@@ -10,6 +10,10 @@ commands below for explicit migration or synchronization work.
 
 ## Layout
 
+> "Show me where local issues live in this project and what is canonical versus rebuildable."
+
+Your assistant points to `.aiwg/issues/items/` and `events/` as canonical and `index/` as rebuildable cache.
+
 ```text
 .aiwg/issues/
 ├── config.json
@@ -34,6 +38,12 @@ metadata are unchanged, preserving `rebuilt_at`. The cache records an optional
 are rebuilt automatically by the rebuild command.
 
 ## Basic Commands
+
+> "File this as a local issue titled 'Fix import flow' using issue.md as the body."
+
+Your assistant runs `aiwg issue plan` first for policy review, then `aiwg issue new` with the reviewed digest when required.
+
+### Command reference
 
 ```bash
 aiwg issue init --prefix PROJECT
@@ -75,6 +85,10 @@ semantics used by Gitea and GitHub.
 
 ## Fortemi Core Migration Note
 
+> "Do local issue commands change under the Fortemi Core migration preview?"
+
+Your assistant keeps issue operations on the local provider and uses `aiwg index` commands for Fortemi Core artifact queries.
+
 Local issue search remains served by the local issue provider in the Fortemi
 Core migration preview. The rebuildable `.aiwg/issues/index/issues.index.json`
 cache is still the source for `aiwg issue list --search` and related filters.
@@ -86,6 +100,12 @@ issues into the shared artifact index, but this does not change the local issue
 CLI contract or require a Fortemi backend for issue operations.
 
 ## Import And Export
+
+> "Import this Gitea snapshot into local issues, then export PROJECT-0001 back to Gitea."
+
+Your assistant uses `aiwg issue import` and `aiwg issue export` with snapshot files, adding `--live` only for direct API reads and writes.
+
+### Command reference
 
 Use snapshots to move issue state between local issues and external trackers:
 
@@ -147,6 +167,12 @@ aiwg issue sync map-comments PROJECT-0001 --map-file comment-map.json
 
 ## Conflict Reports
 
+> "Check PROJECT-0001 against this Gitea snapshot for conflicts before syncing."
+
+Your assistant runs `aiwg issue sync conflicts` and waits for you to choose the winner when the conflicts array is non-empty.
+
+### Command reference
+
 Before any two-way sync mutates either side, generate and inspect a conflict report:
 
 ```bash
@@ -156,6 +182,12 @@ aiwg issue sync conflicts PROJECT-0001 --snapshot-file gitea-1463.json --out con
 The report compares local and external title, body, status, labels, and mapped comment bodies. A non-empty `conflicts` array means an operator or higher-level sync policy must choose the winner before writing changes.
 
 ## Backup Guidance
+
+> "Back up local issues before this bulk sync so I can restore the canonical files."
+
+Your assistant commits or archives `items/`, `events/`, `config.json`, and `next-id` and skips transient locks.
+
+### Command reference
 
 For local-only issue work, commit or stash canonical issue files before bulk operations:
 
@@ -174,6 +206,10 @@ zip -r aiwg-issues-backup.zip .aiwg/issues -x ".aiwg/issues/locks/*"
 Do not store external tracker API tokens in `.aiwg/issues/`, `.aiwg/aiwg.config`, or snapshot files. Keep credentials in environment variables, the OS credential store, or provider-specific CLI configuration. Live sync reads `AIWG_GITEA_TOKEN` or `GITEA_TOKEN` for Gitea, and `AIWG_GITHUB_TOKEN` or `GITHUB_TOKEN` for GitHub. Use `--api-url` for non-default Gitea or GitHub Enterprise API endpoints.
 
 ## Git Conflict Guidance
+
+> "Merge left a conflict in ISSUE-0001. Keep the canonical records and tell me what to rebuild."
+
+Your assistant preserves `items/` frontmatter and every complete JSONL event line, then rebuilds the index.
 
 Resolve conflicts by preserving canonical records first:
 

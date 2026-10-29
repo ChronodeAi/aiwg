@@ -5,6 +5,16 @@
 Use the session catalog when you want one privacy-aware timeline across
 multiple AI providers.
 
+> "Import my AI session history for this project so I get one timeline across providers."
+
+Your assistant previews discovery with `--dry-run`, reviews the manifest, then imports with `--confirm`.
+
+> "Discovery found sessions outside this workspace. Only import this project's history."
+
+Your assistant narrows discovery with `--workspace` and `--exclude` entries and re-checks coverage before importing.
+
+### Command reference
+
 Install the catalog's SQLite runtime once and verify that its native module
 loads:
 
@@ -127,6 +137,16 @@ exclusion to include that source again.
 Use `aiwg sessions --help` for the complete command and JSON contracts.
 
 ## Ask questions about collected history
+
+> "Where did we decide the retry policy, and which tool kept failing last week?"
+
+Your assistant uses the `session-explore` skill for scoped FTS5 queries, timelines, and coverage gaps.
+
+> "That answer looks thin. Check whether coverage is partial and what is missing."
+
+Your assistant reports complete, partial, stale, or unknown coverage and names the missing sources.
+
+### Command reference
 
 Use `aiwg discover "spelunk session data"` and `aiwg show skill session-explore`
 for questions such as “where did we decide this?”, “which tool kept failing?”,
