@@ -85,7 +85,7 @@ Usage:
   aiwg corpus retrieval-lab --queries PATH --concepts PATH [--expected-scheme-hash SHA256] [--limit K] [--latency-ceiling MS] [--json] [--out PATH]
   aiwg corpus vision-extract --slug SLUG [--images DIR] [--out DIR] [--start N] [--end N] [--provider codex|command] [--command TMPL] [--model M] [--retries N] [--title T] [--force] [--rasterize PDF] [--dpi N]
 
-resolve verifies paper identities, refuses ambiguous matches (exit 2) and reports unresolved references (exit 3).
+resolve verifies paper identities, refuses ambiguous matches (exit 2) and reports unresolved references (exit 3) or deferred incomplete lookups (exit 4; retry).
 expand queues similar papers by convergence and recency (dry-run unless --write; never inducts or files issues).
 radar-init scaffolds radar sidecars (dry-run unless --write; skips existing).
 radar-status reports overdue radars (most-overdue-first).

@@ -221,15 +221,15 @@ describe('ArxivClient', () => {
   });
 
   describe('error handling', () => {
-    it('should throw on API error', async () => {
-      mockFetch.mockResolvedValueOnce({
+    it('should throw on API error after bounded retries', async () => {
+      mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
       });
 
-      await expect(client.getPaperById('test')).rejects.toMatchObject({
-        code: ResearchErrorCode.RF_200,
-      });
+      const check = expect(client.getPaperById('test')).rejects.toMatchObject({ code: ResearchErrorCode.RF_200 });
+      await vi.runAllTimersAsync(); await check;
+      expect(mockFetch).toHaveBeenCalledTimes(4);
     });
 
     it('should throw on timeout', async () => {
