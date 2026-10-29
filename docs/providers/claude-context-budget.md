@@ -20,7 +20,9 @@ surfaces as immediate `Context limit reached` after the first few actions.
 Claude Code inlines the following into every session before any user prompt:
 
 - the base Claude Code system prompt and tool definitions,
-- `CLAUDE.md` and its `@`-includes (`AIWG.md`, `.aiwg/AIWG.md`), plus `AGENTS.md`,
+- `CLAUDE.md` and its `@`-includes (`AIWG.md`, `.aiwg/AIWG.md`), plus the minimal
+  `AGENTS.md` hook (bootstrap, precedence, compact core where inline, and harness
+  rules entry points; kernel bodies and summary/path indexes stay in rule files),
 - every file in `.claude/rules/*.md` (full body),
 - **each ancestor directory's `CLAUDE.md` and `.claude/rules/*.md`** — a project
   nested under a workspace with its own deployment starts with both sets,

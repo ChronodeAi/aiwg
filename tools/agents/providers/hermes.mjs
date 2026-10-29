@@ -11,7 +11,7 @@ import { importImpl } from '../../_resolve-impl.mjs';
  *
  * What this provider SKIPS:
  *   - Commands: Hermes has no AIWG slash-command file surface
- *   - Rules: compressed directives are in AGENTS.md; full bodies via `aiwg show rule`
+ *   - Rules: .hermes/rules holds complete kernels and indexes, reached by startup hooks
  *
  * See: docs/integrations/hermes-quickstart.md
  */
@@ -115,7 +115,7 @@ export const paths = {
   // #2119: previously hardcoded os.homedir() — wrong for any operator running
   // Hermes under a non-default HERMES_HOME (multi-profile, hermes-role, etc.).
   skills: path.resolve(HERMES_HOME, 'skills', '.aiwg'),
-  rules: '',                                      // Inlined into AGENTS.md + reachable via `aiwg show rule`
+  rules: '.hermes/rules',                                      // Complete files reached through the startup hook
 };
 
 // Kernel skills (always-loaded) deploy to the platform-native dir.
@@ -133,7 +133,7 @@ export const support = {
   agents: 'aggregated',      // Agents aggregated into lean AGENTS.md
   commands: 'indexed',       // Full command bodies via aiwg discover/show; no native file loader
   skills: 'native',          // $HERMES_HOME/skills/ is the native skill location
-  rules: 'agents-md+cli',    // compressed in AGENTS.md; full bodies via CLI/MCP
+  rules: 'prose-hook',      // RULES-INDEX and complete local kernel files
 };
 
 export const capabilities = {
@@ -197,7 +197,7 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
  * Generate a lean AGENTS.md for Hermes
  *
  * Hermes reaches AGENTS.md through its startup pointer on every task. Reserve
- * the 19,000-character budget for CRITICAL kernel bodies and the kernel index.
+ * the 19,000-character budget for bootstrap, compact core and operator context.
  * See: docs/integrations/hermes-quickstart.md (Part 3)
  */
 // Hermes context cap is 20K chars (head-tail truncated above). Hard limit
@@ -205,21 +205,10 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
 const HERMES_AGENTS_MD_HARD_CAP = 19_000;
 const HERMES_AGENTS_MD_SOFT_WARN = 15_000;
 
-/** Never truncate CRITICAL bodies. Report each contribution before promotion. */
-export function assertContextBudget(content, name = 'AGENTS.md', rules = []) {
+/** Preserve the harness limit for operator context; kernel bodies live in rules files. */
+export function assertContextBudget(content, name = 'AGENTS.md') {
   if (content.length <= HERMES_AGENTS_MD_HARD_CAP) return;
-  const critical = rules.filter(rule => rule.tagged && rule.activation === 'kernel'
-    && String(rule.enforcement || '').trim().toLowerCase() === 'critical');
-  const sizes = critical.map(rule => ({ name: rule.name,
-    chars: `## Rule: ${rule.name}\n\n${rule.body.trim()}`.length }));
-  const total = sizes.reduce((sum, rule) => sum + rule.chars, 0) + Math.max(0, sizes.length - 1) * 2;
-  throw new Error(
-    `Hermes ${name} (${content.length} chars) exceeds hard cap of ${HERMES_AGENTS_MD_HARD_CAP}. ` +
-    `Hermes truncates above 20K. ` +
-    (total > HERMES_AGENTS_MD_HARD_CAP ? 'CRITICAL kernel set alone exceeds the cap. ' : 'Assembled context exceeds the cap; review wrappers and operator additions. ') +
-    `CRITICAL kernel total: ${total} chars (bodies and rule headings).\n` +
-    sizes.map(rule => `  ${rule.name}: ${rule.chars} chars`).join('\n')
-  );
+  throw new Error(`Hermes ${name} (${content.length} chars) exceeds hard cap of ${HERMES_AGENTS_MD_HARD_CAP}. Review wrappers and operator additions.`);
 }
 
 /**
@@ -353,7 +342,7 @@ MCP is optional; \`mcp_aiwg_rule_show\` exposes the same rule catalog.
   const destPath = path.join(targetDir, 'AGENTS.md');
   const output = mergeHermesContext(destPath, sections.join('\n\n'), 'context');
 
-  assertContextBudget(output, 'AGENTS.md', opts.ruleDelivery?.rules);
+  if (!opts.ruleDelivery && !opts.deferRuleProjection) assertContextBudget(output, 'AGENTS.md');
 
   if (dryRun) {
     console.log(`[dry-run] Would write AGENTS.md (${output.length} chars, ${Math.round(output.length / 4)} tokens estimated)`);
@@ -527,7 +516,7 @@ async function deploySelected(opts) {
   }
 
   // ── AGENTS.md + .hermes.md ─────────────────────────────────────────────────
-  // Generate AGENTS.md (with inlined CRITICAL rule priming, #1318/#1532)
+  // Generate the legacy scaffold; activation projection replaces it with the minimal hook.
   // AND .hermes.md thin pointer (resolves #1319 doc-debt, was claimed in
   // CHANGELOG but not previously implemented).
   if (opts.contextFiles !== false && !skillsOnly && !opts.commandsOnly && !opts.rulesOnly) {
@@ -557,7 +546,7 @@ async function deploySelected(opts) {
   if (!opts.quiet) {
     console.log('');
     console.log(`Skills root: ${kernelSkillsPath}`);
-    console.log('Rules are in AGENTS.md as compressed directives; full bodies via `aiwg show rule <name> --body`.');
+    console.log('Rules are in .hermes/rules; read RULES-INDEX.md and every listed kernel file before task work.');
     console.log('Optional: configure config.yaml to connect AIWG MCP server.');
     console.log('See: docs/integrations/hermes-quickstart.md (optional MCP setup)');
   }

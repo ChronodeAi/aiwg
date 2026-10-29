@@ -74,7 +74,7 @@ describe('muse provider registration (#225)', () => {
     // Only skills are written natively; other artifacts stay indexed.
     expect(muse?.paths.artifacts.agents).toBeNull();
     expect(muse?.paths.artifacts.commands).toBeNull();
-    expect(muse?.paths.artifacts.rules).toBeNull();
+    expect(muse?.paths.artifacts.rules).toBe('.muse/rules');
     expect(muse?.paths.artifacts.behaviors).toBeNull();
     // Never advertise ~/.muse as a default skill root; the user root resolves
     // from XDG_CONFIG_HOME at deploy time (#226).

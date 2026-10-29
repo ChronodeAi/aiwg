@@ -18,7 +18,7 @@ For runtime costs after a Claude Code skill or subagent is invoked, see
 | Codex (OpenAI) | `project_doc_max_bytes` for AGENTS.md | 32 KiB | Nest AGENTS.md per-subdir; do not raise blindly |
 | Codex | Skill listing cap (upstream) | ~2% of context / 8000 chars | Fixed by Codex; reduce skill count or split workspaces |
 | Codex | AIWG startup-listing cap | 8,000 chars | `--listing-cap <chars>` or `AIWG_CODEX_LISTING_CAP` (`0` disables) |
-| Cursor / Warp / Windsurf | Aggregated AGENTS.md | platform-defined | See "Reduce footprint" below |
+| Cursor / Warp / Windsurf | Startup hook (AGENTS.md or WARP.md) | 8 KiB AIWG bridge ceiling | Kernel and indexes live in harness rules files |
 
 ---
 
@@ -88,6 +88,12 @@ Codex's ceiling is not adjustable. AIWG's cap — the budget the deployer enforc
 so it never writes past that ceiling — is.
 
 When the AGENTS.md size limit is hit, **Codex stops adding files silently** ([openai/codex#7138](https://github.com/openai/codex/issues/7138), [#13386](https://github.com/openai/codex/issues/13386)). Instructions near the end of an oversized file are ignored without warning.
+
+AIWG's managed AGENTS.md block contains the WORKSPACE.md → AIWG.md bootstrap,
+precedence, compact core rules and one hook per deployed harness. Codex's hook
+requires reading `.codex/rules/RULES-INDEX.md` and every listed kernel file before
+every task and subagent task. Kernel bodies and summary/path indexes stay in
+rule files; this is prose-directed loading, not an automatic Codex rule loader.
 
 ### How to fix in Codex
 

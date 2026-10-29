@@ -12,7 +12,7 @@ import { importImpl } from '../../_resolve-impl.mjs';
  *   - Commands: WARP.md (aggregated only — Warp does not discover .warp/commands/)
  *   - Skills: .warp/skills/ (discrete — natively discovered by Warp)
  *   - Skills: .agents/skills/ (cross-agent compatibility path)
- *   - Rules: WARP.md (aggregated only — Warp does not discover .warp/rules/)
+ *   - Rules: .warp/rules/ (read through the mandatory WARP.md hook)
  *
  * Special features:
  *   - Aggregated WARP.md for agents, commands, and rules
@@ -71,7 +71,7 @@ export const support = {
   agents: 'aggregated',      // WARP.md primary; files mirrored for portability
   commands: 'conventional',  // .warp/commands/ mirror for slash-command parity
   skills: 'native',          // .warp/skills/ — natively discovered by Warp
-  rules: 'aggregated'        // WARP.md primary; rule files mirrored for portability
+  rules: 'prose-hook'        // WARP.md requires reading the complete rule files
 };
 
 export const capabilities = {

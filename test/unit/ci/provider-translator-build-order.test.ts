@@ -14,6 +14,11 @@ describe('provider translator steps run after the CLI build', () => {
     expect(lint).toBeGreaterThan(build);
   });
 
+  it('lints context bridge sizes after the CLI build (#3740)', () => {
+    const workflow = read('.gitea/workflows/ci.yml');
+    expect(workflow.indexOf('run: npm run lint:context-sizes')).toBeGreaterThan(workflow.indexOf('run: npm run build:cli'));
+  });
+
   it('builds the CLI before the OMP precedence probe deploys agents', () => {
     const workflow = read('.gitea/workflows/omp-conformance.yml');
     const build = workflow.indexOf('run: npm run build:cli');

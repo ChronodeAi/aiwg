@@ -197,17 +197,11 @@ describe('twin-file emission per ADR-1 §4', () => {
     const hermes = await fs.readFile(path.join(tmpDir, '.hermes.md'), 'utf8');
     const agents = await fs.readFile(path.join(tmpDir, 'AGENTS.md'), 'utf8');
 
-    // The twin diverges from AGENTS.md by appending the Hermes-MCP suffix.
-    // AGENTS.md must remain the cross-platform thin pointer (no Hermes-isms).
-    expect(hermes).not.toBe(agents);
-    expect(agents).not.toContain('## For Hermes Sessions');
-
-    // Hermes twin must start with the AGENTS.md body and append the suffix.
-    expect(hermes.startsWith(agents)).toBe(true);
-    expect(hermes).toContain('## For Hermes Sessions');
-    expect(hermes).toContain('artifact-read AIWG.md');
-    expect(hermes).toContain('aiwg discover');
-    expect(hermes).toContain('delegate_task');
+    expect(hermes).toBe(agents);
+    expect(hermes).not.toContain('## For Hermes Sessions');
+    expect(hermes).not.toContain('delegate_task');
+    expect(hermes).toContain('WORKSPACE.md');
+    expect(hermes).toContain('AIWG.md');
 
     // Finalized context is still compact enough for provider startup context.
     expect(Buffer.byteLength(hermes, 'utf8')).toBeLessThan(8 * 1024);
@@ -224,8 +218,8 @@ describe('twin-file emission per ADR-1 §4', () => {
     const agents = await fs.readFile(path.join(tmpDir, 'AGENTS.md'), 'utf8');
     expect(warp).toBe(agents);
     expect(warp.indexOf('WORKSPACE.md')).toBeLessThan(warp.indexOf('AIWG.md'));
-    expect(warp).toContain('aiwg discover');
-    expect(warp).toContain('aiwg show');
+    expect(warp).toContain('[AIWG.md](./AIWG.md)');
+    expect(warp).not.toContain('## Rule:');
   });
 
   it('writes .github/copilot-instructions.md alongside AGENTS.md for copilot provider', async () => {

@@ -34,11 +34,17 @@ describe('legacy provider core projection (#3457)', () => {
       const content = fs.readFileSync(path.join(target, surface), 'utf8');
       expect(content).toContain(core);
       expect(content).not.toMatch(/@\S*anti-laziness/);
-      const block = content.split('<!-- AIWG:rule-startup:start -->')[1];
-      expect(block.trimStart()).toMatch(/^<!-- AIWG:core-rules:start -->\n## Core rules/);
+      const block = content.split('<!-- AIWG:rule-core:start -->')[1];
+      expect(block.trimStart()).toMatch(/^## Core rules/);
+      expect(content.match(/<!-- AIWG:rule-core:start -->/g)).toHaveLength(1);
+      expect(block.split('<!-- AIWG:rule-core:end -->')[0]).not.toMatch(/<!-- AIWG:[\w-]+:(?:start|end) -->/);
       expect(content).not.toContain('agent-friendly-code');
-      expect(content).toContain('## Rule: skill-discovery');
-      expect(content.indexOf('## Core rules')).toBeLessThan(content.indexOf('## Rule: skill-discovery'));
+      const dir = provider === 'copilot' ? '.github/instructions' : provider === 'opencode' ? '.opencode/rule' : provider === 'grok-build' ? '.grok/rules' : `.${provider}/rules`;
+      expect(content).toContain(`${provider}: Before every task and subagent task, read and follow \`${dir}/RULES-INDEX.md\``);
+      const body = fs.readFileSync(path.join(repo, 'agentic/code/addons/aiwg-utils/rules/skill-discovery.md'), 'utf8').replace(/^---\n[\s\S]*?\n---\s*/, '').trim();
+      expect(fs.readFileSync(path.join(target, dir, 'skill-discovery.md'), 'utf8')).toContain('Run `aiwg discover');
+      expect(content).not.toContain(body);
+      expect(content.indexOf('## Core rules')).toBeLessThan(content.indexOf(`${provider}: Before every task`));
     }, 120_000);
   }
 
@@ -49,7 +55,10 @@ describe('legacy provider core projection (#3457)', () => {
         '--target', target, '--force'], { cwd: target, env, encoding: 'utf8', timeout: 900_000 });
       const startup = fs.readFileSync(path.join(target, surface), 'utf8');
       expect(startup).toContain(core);
-      expect(startup).toContain('## Rule: skill-discovery');
+      const dir = provider === 'copilot' ? '.github/instructions' : provider === 'opencode' ? '.opencode/rule' : provider === 'grok-build' ? '.grok/rules' : `.${provider}/rules`;
+      expect(startup).toContain(`${provider}: Before every task and subagent task, read and follow \`${dir}/RULES-INDEX.md\``);
+      expect(fs.readFileSync(path.join(target, dir, 'skill-discovery.md'), 'utf8')).toContain('Run `aiwg discover');
+      expect(startup).not.toContain('## Rule: skill-discovery');
       const config = JSON.parse(fs.readFileSync(path.join(target, '.aiwg/aiwg.config'), 'utf8'));
       expect(config.installed).not.toHaveProperty('sdlc-complete');
     }, 900_000);

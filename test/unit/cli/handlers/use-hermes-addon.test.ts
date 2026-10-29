@@ -229,8 +229,11 @@ describe('aiwg use decision-engine --provider hermes (#2873)', () => {
     console.info(`Hermes decision-engine addon: AGENTS.md=${agents.length}, .hermes.md=${routing.length} chars`);
     expect(agents.length).toBeLessThanOrEqual(19000);
     expect(routing.length).toBeLessThanOrEqual(19000);
-    expect(agents).toContain('# Critical probe\n\nCRITICAL_ADDON_BODY must remain verbatim.');
-    expect(agents).toContain('fetch-probe — Follow the addon fetch policy. Fetch and follow: `aiwg show rule fetch-probe --body`.');
+    expect(agents).toContain('hermes: Before every task and subagent task, read and follow `.hermes/rules/RULES-INDEX.md`');
+    expect(readFileSync(join(projectDir, '.hermes/rules/critical-probe.md'), 'utf8')).toContain('# Critical probe\n\nCRITICAL_ADDON_BODY must remain verbatim.');
+    expect(readFileSync(join(projectDir, '.hermes/rules/fetch-probe.md'), 'utf8')).toContain('NONCRITICAL_ADDON_BODY must be fetched.');
+    expect(readFileSync(join(projectDir, '.hermes/rules/RULES-INDEX.md'), 'utf8')).toContain('[fetch-probe.md](./fetch-probe.md)');
+    expect(agents).not.toContain('CRITICAL_ADDON_BODY');
     expect(agents).not.toContain('NONCRITICAL_ADDON_BODY');
     // Kernel-tier skill lands at the platform-native skills root...
     expect(existsSync(join(hermesHome, 'skills', 'kern-probe', 'SKILL.md'))).toBe(true);

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, statSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -27,12 +27,14 @@ function deploy(name, env = {}) {
 }
 
 describe('Windsurf aggregate rule budget', () => {
-  it('deploys the full agent aggregate under the strict CI budget', () => {
+  it('deploys full artifact definitions behind a minimal hook under the strict CI budget', () => {
     const result = deploy('aggregate');
     expect(result.status, result.output).toBe(0);
     expect(result.output).not.toContain('Rules startup budget exceeded');
-    // The aggregate itself is far larger than the 64,000-token rules budget.
-    expect(statSync(path.join(result.target, 'AGENTS.md')).size).toBeGreaterThan(256_000);
+    expect(statSync(path.join(result.target, 'AGENTS.md')).size).toBeLessThanOrEqual(4096);
+    expect(readFileSync(path.join(result.target, 'AGENTS.md'), 'utf8')).toContain('.windsurf/rules/RULES-INDEX.md');
+    const agents = path.join(result.target, '.windsurf/agents');
+    expect(readdirSync(agents).filter(file => file.endsWith('.md')).reduce((bytes, file) => bytes + statSync(path.join(agents, file)).size, 0)).toBeGreaterThan(256_000);
   }, 300_000);
 
   it('still budgets the rule content of AGENTS.md', () => {

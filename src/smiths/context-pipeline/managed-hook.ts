@@ -16,6 +16,7 @@ import * as path from 'path';
 import { buildProviderBootstrapBlock } from './workspace-context.js';
 import { dominantLineEnding, withLineEnding } from './line-endings.js';
 import { assertSafeContextFile, writeContextFileSync } from './context-file-safety.js';
+import { hasRuleStartup, normalizeRuleStartup } from './bridge-ownership.js';
 
 export const CONTEXT_HOOK_START = '<!-- AIWG:context-hook:start -->';
 export const CONTEXT_HOOK_END = '<!-- AIWG:context-hook:end -->';
@@ -75,6 +76,15 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
 
   const lineEnding = dominantLineEnding(existing);
   block = withLineEnding(block, lineEnding);
+
+  if (hasRuleStartup(existing)) {
+    const bootstrap = existing.match(/<!-- AIWG:provider-bootstrap:start -->[\s\S]*?<!-- AIWG:provider-bootstrap:end -->/)?.[0]
+      || buildProviderBootstrapBlock(opts.provider || 'codex');
+    const normalized = normalizeRuleStartup(existing, bootstrap, false, false);
+    result.action = normalized === existing ? 'unchanged' : 'updated';
+    if (normalized !== existing) writeContextFileSync(filePath, normalized, 'utf8');
+    return result;
+  }
 
   // Already has both bare includes (operator wired them by hand) — nothing to do.
   if (!existing.includes(CONTEXT_HOOK_START) && /^[ \t]*@WORKSPACE\.md[ \t]*$/m.test(existing) && /^[ \t]*@AIWG\.md[ \t]*$/m.test(existing)) {

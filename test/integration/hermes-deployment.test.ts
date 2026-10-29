@@ -54,33 +54,33 @@ describe('Hermes deployment', () => {
           ? sourceRules(REPO_ROOT, 'addons').filter(rule => rule.file.startsWith(source! + path.sep) && !rule.structural)
           : sdlcDeploymentRules(REPO_ROOT);
         const index = await fs.readFile(path.join(projectDir, '.hermes/rules/RULES-INDEX.md'), 'utf8');
-        const reached = agentsMd.includes('read and follow `.hermes/rules/RULES-INDEX.md`') ? agentsMd + '\n' + index : agentsMd;
+        expect(agentsMd).toContain('hermes: Before every task and subagent task, read and follow `.hermes/rules/RULES-INDEX.md`');
         for (const rule of rules) {
-          if (rule.activation === 'kernel' && rule.data.enforcement === 'critical') {
-            expect(agentsMd).toContain(`## Rule: ${rule.data.name || rule.name}`);
-            expect(agentsMd).toContain(rule.body);
-          } else if (['kernel', 'summary'].includes(rule.activation)) {
-            const context = rule.activation === 'kernel' ? agentsMd : reached;
-            expect(context).toContain(rule.data.summary || 'Fetch and follow the full rule before governed work.');
-            expect(context).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
+          if (rule.activation === 'kernel') {
+            expect(index).toContain(`[${rule.name}.md](./${rule.name}.md)`);
+            // Catalog-only companion links retain their existing explicit fetch projection.
+            const expectedBody = rule.body.replace(/\[[^\]\n]+\]\((?:\.\/)?([\w-]+)\.md\)[ \t]*\(`aiwg show rule \1(?: --body)?`, on-demand\)/g, '`aiwg show rule $1 --body` (on-demand)');
+            expect(await fs.readFile(path.join(projectDir, '.hermes/rules', `${rule.name}.md`), 'utf8')).toContain(expectedBody);
             expect(agentsMd).not.toContain(rule.body);
+          } else if (rule.activation === 'summary') {
+            expect(index).toContain(`- ${rule.data.name || rule.name}`);
+            if (rule.data.summary) expect(index).toContain(rule.data.summary);
+            expect(index).toContain(`aiwg show rule ${rule.data.name || rule.name} --body`);
           }
         }
       }
       const hermesMd = await fs.readFile(path.join(projectDir, '.hermes.md'), 'utf8');
       console.info(`Hermes ${mode}: AGENTS.md=${agentsMd.length}, .hermes.md=${hermesMd.length} chars`);
       expect(hermesMd.length).toBeLessThanOrEqual(19000);
-      if (mode !== 'all') expect(agentsMd).toContain('Before every task and subagent task, fetch and follow');
+      expect(agentsMd).toContain('Before every task and subagent task, read and follow');
       expect(agentsMd.length).toBeLessThanOrEqual(19000);
       expect(agentsMd).not.toContain('<!-- AIWG:bound-rules:start -->');
       if (mode === 'all') {
         expect(agentsMd).toContain('WORKSPACE.md');
         return;
       }
-      expect(agentsMd).toContain('aiwg show rule <name>');
-      expect(agentsMd).toContain('aiwg discover "rule <topic>" --type rule');
-      expect(agentsMd).toContain('MCP is optional');
-      expect(agentsMd).toContain('mcp_aiwg_rule_show');
+      expect(agentsMd).toContain('WORKSPACE.md');
+      expect(agentsMd).not.toContain('## Rule:');
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(homeDir, { recursive: true, force: true });
