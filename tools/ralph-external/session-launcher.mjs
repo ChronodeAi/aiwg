@@ -57,12 +57,12 @@ import { buildWorkerInvocationEnvironment, WORKER_INVOCATION_MARKER } from './li
 import { resolveRetryReference } from './lib/worker-launch-cli.mjs';
 import { launcherRecoveryEvidence, observeLauncherRecoveryOutcome, recordLauncherRecoveryHint } from './lib/launcher-recovery-evidence.mjs';
 export { observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence.mjs';
+import { publishWorkerUnitExit } from './lib/worker-unit-cleanup.mjs';
 import { workerNeedsNativeNamespaces, probeWorkerNativeSandbox, nativeSandboxFailure, nativeSandboxProbeMessage, NATIVE_SANDBOX_UNAVAILABLE, checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
 const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 // Resolve the same installation owner as CLI/MCP inputs in source and packaged layouts.
 const { getWorkerRecoveryCapabilities, workerVersionProbeEnvironment } = await importImpl(import.meta.url, 'models/worker-installation.mjs');
-
 /**
  * Kernel-verified containment gate for any candidate worker identity,
  * whether it came from a worker-writable disk record (`worker-identity.json`)
@@ -1269,7 +1269,7 @@ async function captureOneWorker(owner, ctx) {
     try { await recordProcess(); }
     catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
     finally {
-      try { await publish('exit.json', result); }
+      try { await publishWorkerUnitExit(publish, outcome, native, result); }
       catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
     }
     result.health = observer.finish({ ...result, finalValid: healthFinalValid });
@@ -1292,7 +1292,7 @@ async function captureOneWorker(owner, ctx) {
         ? (healthAttemptFinalValid && result.errorCode !== 'METADATA_WRITE' ? 'succeeded' : 'uncertain')
         : processLevelOutcome;
     }
-    try { await publish('exit.json', result); }
+    try { await publishWorkerUnitExit(publish, outcome, native, result); }
     catch {
       result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; result.health.termination = 'uncertain';
       // #2915 review 5 (finding 1b): the PRIOR round left this as a
@@ -1854,12 +1854,12 @@ async function captureOneWorkerBaseline(owner, ctx) {
     try { await recordProcess(); }
     catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
     finally {
-      try { await publish('exit.json', result); }
+      try { await publishWorkerUnitExit(publish, outcome, native, result); }
       catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
     }
     result.health = observer.finish({ ...result, finalValid: healthFinalValid });
     result.healthEvidence = observer.evidence();
-    try { await publish('exit.json', result); }
+    try { await publishWorkerUnitExit(publish, outcome, native, result); }
     catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; result.health.termination = 'uncertain'; }
     await reportHealth();
     owner.emit('complete', result);

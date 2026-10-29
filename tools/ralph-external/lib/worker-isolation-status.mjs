@@ -46,3 +46,22 @@ export function getWorkerIsolationStatus(unit, { spawn = spawnSync, timeoutMs = 
     ...(fields.ExecMainCode ? { execMainCode: Number(fields.ExecMainCode) } : {}),
   };
 }
+
+/**
+ * Read the kernel-reported `ControlGroup` systemd placed this unit's
+ * processes under. This is the containment authority for `systemd-unit`
+ * mode worker identity (#2895 round 2, MAJOR a): a candidate pid is only
+ * trustworthy if its own `/proc/<pid>/cgroup` matches this value, never
+ * because a worker-writable record merely names a pid that happens to
+ * resample successfully. Returns null (never a forged match) when the
+ * property is unavailable.
+ */
+export function readUnitControlGroup(unit, { spawn = spawnSync } = {}) {
+  if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) return null;
+  try {
+    const shown = spawn(resolveSystemdClient('systemctl'), ['--user', 'show', unit, '-p', 'ControlGroup', '--value'], { encoding: 'utf8', timeout: 10000, env: buildSystemdClientEnv({ envNames: [] }) });
+    if (shown.error || shown.status !== 0) return null;
+    const value = String(shown.stdout ?? '').trim();
+    return value || null;
+  } catch { return null; }
+}
