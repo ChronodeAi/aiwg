@@ -20,8 +20,8 @@ import {
 } from './taxonomies.js';
 import { normalizeSourceType, loadSourceTypeRegistry } from '../corpus-tools/source-types.js';
 
-import { refIdFromFilename as extractRefId } from '../../research/identity.js';
-const REF_ID_RE = /REF-\d{3,4}[a-z]?/g;
+import { refIdFromFilename as extractRefId, REF_ID_PATTERN } from '../../research/identity.js';
+const REF_ID_RE = new RegExp(REF_ID_PATTERN, 'g');
 const YEAR_RE = /\b(?:19|20)(\d{2})\b/;
 
 export interface RefRecord {

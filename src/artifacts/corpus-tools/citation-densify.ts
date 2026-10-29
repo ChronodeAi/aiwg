@@ -19,13 +19,14 @@
  */
 
 import * as fs from 'fs';
+import { REF_ID_PATTERN } from '../../research/identity.js';
 import { refFilesForId } from './ref-files.js';
 import * as path from 'path';
 import { refTitle } from './sidecar-lint.js';
 
 const CITES_DIR = ['documentation', 'citations'];
 const REFS_DIR = ['documentation', 'references'];
-const REF_ID_RE = /\bREF-\d+[a-z]?\b/g;
+const REF_ID_RE = new RegExp(REF_ID_PATTERN, 'g');
 
 function citesDir(root: string): string {
   return path.join(root, ...CITES_DIR);

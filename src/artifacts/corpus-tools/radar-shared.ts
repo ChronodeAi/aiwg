@@ -17,6 +17,7 @@
  */
 
 import * as fs from 'fs';
+import { isRefId, refSortKey } from '../../research/identity.js';
 import { refFilesForId } from './ref-files.js';
 import * as path from 'path';
 import { load as loadYaml } from 'js-yaml';
@@ -45,7 +46,7 @@ export function listRadarRefs(corpusRoot: string): string[] {
   try {
     return fs
       .readdirSync(radarDir(corpusRoot))
-      .filter((f) => /^REF-\d{3,4}[a-z]?-radar\.md$/.test(f))
+      .filter((f) => f.endsWith('-radar.md') && isRefId(f.slice(0, -9)))
       .map((f) => f.replace(/-radar\.md$/, ''))
       .sort();
   } catch {
@@ -58,7 +59,7 @@ export function listCitationRefs(corpusRoot: string): string[] {
   try {
     return fs
       .readdirSync(path.join(corpusRoot, ...CITES_DIR))
-      .filter((f) => /^REF-\d{3,4}[a-z]?-citations\.md$/.test(f))
+      .filter((f) => f.endsWith('-citations.md') && isRefId(f.slice(0, -13)))
       .map((f) => f.replace(/-citations\.md$/, ''))
       .sort();
   } catch {
@@ -104,9 +105,8 @@ export function loadClusterMap(corpusRoot: string): (refId: string) => string {
   }
 
   return (refId: string): string => {
-    const m = refId.match(/^REF-(\d+)/);
-    if (!m) return '';
-    const n = parseInt(m[1], 10);
+    if (!isRefId(refId)) return '';
+    const [n] = refSortKey(refId);
     for (const [low, high, tag] of rules) {
       if (n >= low && n <= high) return tag;
     }

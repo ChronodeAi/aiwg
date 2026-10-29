@@ -184,7 +184,7 @@ export class AcquisitionService {
       {
         id: 'F1',
         description: 'Assigned globally unique identifier (REF-XXX)',
-        met: !!source.refId && /^REF-\d{3}$/.test(source.refId),
+        met: isRefId(source.refId),
       },
       {
         id: 'F2',

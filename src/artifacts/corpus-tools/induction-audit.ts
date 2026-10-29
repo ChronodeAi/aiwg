@@ -16,6 +16,7 @@
  */
 
 import * as fs from 'fs';
+import { refIdFromFilename } from '../../research/identity.js';
 import { refFilesForId } from './ref-files.js';
 import * as path from 'path';
 import { createHash } from 'crypto';
@@ -49,12 +50,11 @@ function depthBand(lines: number): string {
 function refFiles(root: string): string[] {
   const dir = path.join(root, ...REFS_DIR);
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((f) => /^REF-\d{3,4}[a-z]?(-.*)?\.md$/.test(f)).sort();
+  return fs.readdirSync(dir, { withFileTypes: true }).filter(f => f.isFile() && refIdFromFilename(f.name)).map(f => f.name).sort();
 }
 
 function refIdOf(filename: string): string | null {
-  const m = filename.match(/^(REF-\d{3,4}[a-z]?)/);
-  return m ? m[1] : null;
+  return refIdFromFilename(filename);
 }
 
 function findAnalysis(root: string, refId: string): string | null {

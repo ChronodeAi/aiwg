@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { AcquiredSource } from '@/research/services/types.js';
 import { AcquisitionService } from '@/research/services/acquisition.js';
 
 describe('Acquisition REF identity scanning', () => {
@@ -13,6 +14,17 @@ describe('Acquisition REF identity scanning', () => {
     service = new AcquisitionService({ downloadDir: directory });
   });
   afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
+
+  it.each(['REF-02', 'REF-1021', 'REF-12345', 'REF-020a', 'REF-020A'])
+  ('awards full findability for valid ID %s', async refId => {
+    const source: AcquiredSource = {
+      refId, filePath: join(directory, 'paper.pdf'), checksum: 'fake',
+      acquiredAt: '2026-01-01T00:00:00Z', sizeBytes: 10,
+      paper: { id: 'paper', title: 'Paper', authors: [{ name: 'Author' }],
+        year: 2026, doi: '10.1234/paper', source: 'arxiv', retrievedAt: '2026-01-01T00:00:00Z' },
+    };
+    expect((await service.validateFAIR(source)).findable.score).toBe(1);
+  });
 
   it('does not truncate four-digit or suffixed PDF identities', async () => {
     await writeFile(join(directory, 'REF-1020a-paper.pdf'), 'fake PDF');

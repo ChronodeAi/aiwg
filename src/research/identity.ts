@@ -99,9 +99,19 @@ export function identityKeys(value: ResearchIdentity | Record<string, unknown>):
     .flatMap(key => identity[key] ? [`${key}:${identity[key]}`] : []);
 }
 
-/** Exact lexical REF identity: preserve zero padding and the optional letter suffix. */
+/** REF spelling is case-sensitive, including the optional legacy suffix letter. */
+export const REF_ID_SOURCE = 'REF-\\d+[a-zA-Z]?';
+/** Match whole tokens in prose and paths without accepting a malformed ID prefix. */
+export const REF_ID_PATTERN = `(?<![A-Za-z0-9_])${REF_ID_SOURCE}(?![A-Za-z0-9_])`;
+const REF_ID_FULL = new RegExp(`^${REF_ID_SOURCE}$`);
+
+export function refIdsInText(text: string): string[] {
+  return text.match(new RegExp(REF_ID_PATTERN, 'g')) ?? [];
+}
+
+/** Exact lexical REF identity: preserve zero padding and suffix case. */
 export function isRefId(value: string): boolean {
-  return value.trim() === value && /^REF-\d+[a-z]?$/.test(value);
+  return value.trim() === value && REF_ID_FULL.test(value);
 }
 
 /** Read the REF token before a slug or extension; never normalize its spelling. */
@@ -115,7 +125,7 @@ export function refIdFromFilename(filename: string, extension = '.md'): string |
 
 /** Sort key for REF ids: [numeric, alpha-suffix]. Mirrors build.py ref_sort_key. */
 export function refSortKey(refId: string): [number, string] {
-  const m = refId.match(/REF-(\d+)([a-z]?)/);
+  const m = isRefId(refId) ? refId.match(/^REF-(\d+)([a-zA-Z]?)$/) : null;
   return m ? [parseInt(m[1], 10), m[2]] : [999999, refId];
 }
 

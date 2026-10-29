@@ -165,3 +165,11 @@ describe('research packet-evidence induction (#2275)', () => {
     })).toThrow('exact, complete approval');
   });
 });
+
+// REF validation follows the shared corpus shape, including legacy suffix case.
+it.each(['REF-02', 'REF-12345', 'REF-020A', 'REF-020a'])
+('preserves exact packet research identity %s', async refId => {
+  const evidence = await evidenceFixture();
+  const source = inductPacketEvidenceSource({ refId, title: 'Identity', evidence, collection });
+  expect(source.refId).toBe(refId);
+});

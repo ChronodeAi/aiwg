@@ -1,3 +1,4 @@
+import { isRefId } from '../research/identity.js';
 import { formatEvidenceCitation, validateEvidenceReferences, type EvidenceCitation } from './citations.js';
 import { assertLocalOutputAllowed, type NetworkAnalysisPolicy } from './governance.js';
 import type { PacketEvidenceBundle } from './analyzer.js';
@@ -257,7 +258,7 @@ function validateResearchInput(input: {
   evidence: PacketEvidenceBundle;
   collection: PacketCollectionContext;
 }): void {
-  if (!/^REF-[0-9]{3,}$/.test(input.refId)) throw new Error('Packet evidence research source requires a REF-NNN identifier');
+  if (!isRefId(input.refId)) throw new Error('Packet evidence research source requires a REF-NNN identifier');
   requiredString(input.title, 'Research source title');
   if (input.evidence.kind !== 'PacketEvidenceBundle' || input.evidence.status === 'error') {
     throw new Error('Research induction requires a usable PacketEvidenceBundle');
