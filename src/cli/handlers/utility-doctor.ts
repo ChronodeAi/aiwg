@@ -254,7 +254,7 @@ export const doctorHandler: CommandHandler = {
       return await runUserScopeDoctor(hasSwitch('--verbose') || hasSwitch('-v'));
     }
 
-    const frameworkRoot = hasSwitch('--decision-offload') ? ctx.frameworkRoot : await getFrameworkRoot();
+    const frameworkRoot = (hasSwitch('--decision-offload') || hasSwitch('--resources')) ? ctx.frameworkRoot : await getFrameworkRoot();
     const runner = createScriptRunner(frameworkRoot);
 
     // Run core doctor diagnostics
@@ -263,7 +263,7 @@ export const doctorHandler: CommandHandler = {
     // printed exactly one JSON document (or a usage error) on its own
     // stdio — every section below writes human-readable text, so returning
     // here keeps stdout to the JSON document alone.
-    if (hasSwitch('--list-approvals') || values.get('--forget-approval') || hasSwitch('--decision-offload') || hasSwitch('--json') || hasSwitch('--qualify') || hasSwitch('--cli') || hasSwitch('--dry-run') || result.exitCode === 2) return result;
+    if (hasSwitch('--resources') || hasSwitch('--list-approvals') || values.get('--forget-approval') || hasSwitch('--decision-offload') || hasSwitch('--json') || hasSwitch('--qualify') || hasSwitch('--cli') || hasSwitch('--dry-run') || result.exitCode === 2) return result;
     let agentSkillsFailure = false;
 
     try {

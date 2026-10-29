@@ -1,3 +1,5 @@
+import { installedResourceModelsHandler, installedHostResourceReaders } from '../../helpers/host-resource-handler.js';
+import { idleHostResourceReaders } from '../../fixtures/host-resources.js';
 import { workerInstalledFixture } from '../../helpers/worker-installed-fixture.js';
 import { workerSigningFixture } from '../../helpers/worker-qualification-signing.js';
 import { mkdtempSync } from 'node:fs';
@@ -12,10 +14,10 @@ import { readAiwgConfig } from '../../../src/config/aiwg-config.js';
 import { buildDirectWorkerDoctorSection } from '../../../src/models/worker-direct-readiness.js';
 import { assertWorkerRoleEffort, loadProviderModelCapabilities, validateWorkerCatalogDiscovery } from '../../../src/models/provider-policy.js';
 import { writeExecutable } from '../../helpers/write-executable.js';
-import { modelsHandler } from '../../../src/cli/handlers/models.js';
+import { createModelsHandler, loadWorkerInputs } from '../../../src/cli/handlers/models.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { checkCodexWorkerSandbox, checkWorkerInvocationBuilds, checkRecordedWorkerInvocationBuilds, qualifyProbedWorkers } from '../../../tools/cli/worker-qualification.mjs';
-
+const modelsHandler = createModelsHandler({ load: ctx => loadWorkerInputs(ctx, idleHostResourceReaders()) });
 const terminal = vi.hoisted(() => ({ question: vi.fn(), close: vi.fn() }));
 vi.mock('node:readline/promises', () => ({ createInterface: () => terminal }));
 // In-process resolver and TTY cases need the same temp HOME as the spawned CLI cases.
@@ -23,7 +25,6 @@ vi.mock('node:os', async importOriginal => {
   const os = await importOriginal<typeof import('node:os')>();
   return { ...os, homedir: () => process.env.HOME || os.homedir() };
 });
-
 const exec = promisify(execFile);
 const repo = process.cwd();
 const roots: string[] = [];
@@ -36,7 +37,6 @@ afterEach(async () => {
   if (process.env.QUALIFICATION_PROFILE) await writeFile(process.env.QUALIFICATION_PROFILE, JSON.stringify(profile, null, 2));
 });
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
-
 let sharedInstalled: string;
 const installationRoots: string[] = [];
 
@@ -122,7 +122,7 @@ else process.exit(90);
   const entry = path.join(root, 'cli.mjs');
   await writeFile(entry, `const [command, ...args] = process.argv.slice(2);
 const handler = command === 'models'
-  ? (await import(${JSON.stringify(pathToFileURL(path.join(installed, 'dist/src/cli/handlers/models.js')).href)})).modelsHandler
+  ? ${installedResourceModelsHandler(installed)}
   : (await import(${JSON.stringify(pathToFileURL(path.join(installed, 'dist/src/cli/handlers/utilities.js')).href)})).doctorHandler;
 const result = await handler.execute({args, rawArgs: [command, ...args], cwd: process.cwd(), frameworkRoot: ${JSON.stringify(installed)}});
 if (result.message) console.error(result.message);
@@ -454,7 +454,7 @@ import { hasProvider } from ${JSON.stringify(pathToFileURL(path.join(f.installed
 const context = { cwd: process.cwd(), args: [], rawArgs: [], frameworkRoot: ${JSON.stringify(f.installed)} };
 if (process.argv[2] === 'seed') {
   if (hasProvider('codex')) throw new Error('Unexpected builtin registration before resolve');
-  const { snapshot } = await loadWorkerInputs(context);
+  const { snapshot } = await loadWorkerInputs(context, ${installedHostResourceReaders()});
   const directory = process.env.HOME + '/.cache/aiwg';
   await mkdir(directory, { recursive: true });
   await writeFile(directory + '/model-catalog.v1.json', JSON.stringify(snapshot.catalog));
@@ -466,7 +466,7 @@ if (process.argv[2] === 'seed') {
   let spawned = false;
   try {
     await new SessionLauncher().launchWorker({ invocationPath: ${JSON.stringify(planPath)}, runDir: process.cwd(),
-      loadInputs: async () => { const inputs = await loadWorkerInputs(context); loaded = true; return inputs; },
+      loadInputs: async () => { const inputs = await loadWorkerInputs(context, ${installedHostResourceReaders()}); loaded = true; return inputs; },
       launchIsolated: () => { spawned = true; throw new Error('Unexpected worker spawn'); } });
     throw new Error('Expected invalid run directory refusal');
   } catch (error) {

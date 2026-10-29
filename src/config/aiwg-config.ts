@@ -723,8 +723,8 @@ export interface BuildResourceRequirements {
 
 /**
  * Live host-resource thresholds gating worker dispatch and heavy verification
- * runs (FR-OG-107, #2954). Default thresholds apply to memory/load/pressure;
- * the optional worker-count cap is enforced only when configured. Defaults mirror the
+ * runs (FR-OG-107, #2954). The worker cap defaults to 5 and can be raised explicitly.
+ * Other defaults mirror the
  * titan oomd incident prototype (`resource-gate.sh`): load above core count,
  * single-digit free-memory headroom, and sustained memory pressure all queued
  * work instead of launching into them.
@@ -741,9 +741,8 @@ export interface DispatchHostThresholds {
   /** Minimum free disk (bavail) in GiB on the evidence/worktree filesystem. Default 2. */
   min_free_disk_gb?: number;
   /**
-   * Maximum running worker/test processes before dispatch queues. Unset by
-   * default: counts are reported but do not block unless configured, because
-   * count caps alone cannot bound memory/CPU/pressure (see #2954).
+   * Maximum running workers before dispatch queues. Default 5; configured layers
+   * replace the default and combine with one another by MIN (see #3744).
    */
   max_workers?: number;
 }

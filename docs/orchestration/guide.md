@@ -21,6 +21,32 @@ Your assistant qualifies the installed CLIs, resolves a worker for the job, and 
 
 Direct dispatch places work onto other AI CLIs installed on your machine. It is controlled by `parallelism.worker_dispatch` in `.aiwg/aiwg.config`, and it is off by default. Start with [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md) to enable it, then qualify the installed CLIs.
 
+### Check capacity before each launch
+
+> "Check this host before starting each worker or heavy test run. If no slots remain, show the binding threshold and wait. Check titan over SSH before placing work there."
+
+Your assistant runs the read-only check immediately before each launch:
+
+```bash
+aiwg doctor --resources --group <group> --json
+ssh titan 'aiwg doctor --resources --group <group> --json'
+```
+
+Run it from the target project directory so project thresholds and caps apply. Over SSH, use `ssh titan 'cd /absolute/project && aiwg doctor --resources --group <group> --json'` for the same project context. Both commands return the same report shape; selecting hosts and scheduling remain the conductor's work.
+
+Without `--group`, doctor uses only host resources and project-wide caps for its verdict. Every configured group has a separate `groups: [{group, maxParallel, slots, reason}]` entry and one text line. With `--group <group>`, slots is the minimum of host and that group’s capacity; `limitingThreshold` names the binding threshold. Unknown names are errors listing configured groups. The report contains `measured` load/cores, available memory, memory PSI avg10/avg60, free disk and AIWG-owned `workers`; `thresholds` and their `origins` (default, project, task); and `slots`, `ok`, `limits` and blocking `failures`. Admission counts active current-user `aiwg-worker-*` units plus distinct `AIWG_WORKER_INVOCATION_ID` markers outside those units. Descendants sharing a marker count once; cgroup membership prevents counting unit workers twice. When systemd is unavailable, `workerCountingSource` reports `owned-process-fallback`. `hostCliProcesses` retains exact current-user Codex/Muse process counts as information, never used for admission; `counting` explains the scope in JSON and text.
+
+`slots` is the minimum of available-memory/floor and free-disk/floor (rounded down), whole cores of load headroom, remaining `max_workers`, and applicable admission ceilings minus running workers. PSI breaches or unknown required signals give zero slots. Unambiguous configured group prefixes in existing invocation markers or unit names attribute workers exactly. Unattributed workers count against every group, as stated in `counting`. Group capacity includes its `maxParallel` and `admission.groupCaps`; disabled groups report zero. Other tuple caps conservatively subtract the AIWG-owned worker total; also self-count native/MCP workers the host cannot identify. Request `maxParallel` is already remaining capacity and is not decremented again. This snapshot reserves nothing: recheck before every launch.
+
+`max_workers` defaults to **5** with origin `default`. Raise it with
+`aiwg config set --project parallelism.admission.hostResources.max_workers 10`
+(replace `10` with an integer >= 1). A configured worker cap replaces the default,
+including values above 5; configured build dispatch, admission and task caps still
+combine by MIN. This is the sole exception to layers only tightening defaults;
+all other threshold defaults and tightening rules are unchanged.
+
+`aiwg models resolve` includes `resources` and the same `slots` verdict in JSON, applying the selected tuple's group/member/CLI/model/quota caps. At zero slots it returns a blocked plan and names the binding threshold; shell output contains no launch command. Doctor exits 1 when blocked, in text and JSON modes.
+
 ### Command reference — resolving a worker
 
 ```bash
