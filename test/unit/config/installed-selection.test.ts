@@ -35,6 +35,31 @@ describe('preserveInstalledSelection', () => {
     });
   });
 
+  it.each([
+    ['sdlc-complete', 'sdlc'], ['media-marketing-kit', 'marketing'],
+    ['research-complete', 'research'], ['forensics-complete', 'forensics'],
+    ['media-curator', 'media-curator'],
+  ])('refreshes %s through deploy alias %s without duplicating keys', async (id, name) => {
+    await withInstalledSelection('/p', { [id]: entry('1') }, async () => {
+      const guarded = preserveInstalledSelection('/p', config({ [id]: entry('1'), [name]: entry('2') }));
+      expect(guarded.installed).toEqual({ [id]: entry('2') });
+    });
+  });
+
+  it('accepts refreshed metadata written under the original registry key', async () => {
+    await withInstalledSelection('/p', { 'sdlc-complete': entry('1') }, async () => {
+      const guarded = preserveInstalledSelection('/p', config({ 'sdlc-complete': entry('2') }));
+      expect(guarded.installed).toEqual({ 'sdlc-complete': entry('2') });
+    });
+  });
+
+  it('preserves selected entries when a writer omits the entire installed block', async () => {
+    await withInstalledSelection('/p', { sdlc: entry('1') }, async () => {
+      const guarded = preserveInstalledSelection('/p', config(undefined));
+      expect(guarded.installed).toEqual({ sdlc: entry('1') });
+    });
+  });
+
   it('never adds an installed block to a legacy project that had none', async () => {
     await withInstalledSelection('/p', undefined, async () => {
       const guarded = preserveInstalledSelection('/p', config({ sdlc: entry('2026.10.15') }));

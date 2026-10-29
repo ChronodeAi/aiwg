@@ -8,16 +8,7 @@ import type { AiwgConfig } from '../../config/aiwg-config.js';
 import { getConfigPath } from '../../config/aiwg-config.js';
 import { withInstalledSelection } from '../../config/installed-selection.js';
 
-/**
- * Maps framework registry IDs (e.g. 'sdlc-complete') to `aiwg use` names (e.g. 'sdlc').
- */
-const REGISTRY_ID_TO_USE_NAME: Record<string, string> = {
-  'sdlc-complete': 'sdlc',
-  'media-marketing-kit': 'marketing',
-  'media-curator': 'media-curator',
-  'research-complete': 'research',
-  'forensics-complete': 'forensics',
-};
+import { REGISTRY_ID_TO_USE_NAME } from '../../config/framework-aliases.js';
 
 interface FrameworkRegistry {
   version: string;
@@ -51,7 +42,7 @@ function readFrameworkRegistry(cwd: string): FrameworkRegistry | null {
  * - Checks for npm/git updates first
  * - Uses aiwg.config installed; reports legacy fallback for old projects
  * - Re-deploys only those (preserving the user's current selection)
- * - Use --all to deploy everything (equivalent to `aiwg use all`)
+ * - Use --all to deploy and record everything (equivalent to `aiwg use all`)
  *
  * Usage:
  *   aiwg update                        # Update + re-deploy installed frameworks
@@ -125,7 +116,7 @@ export const updateHandler: CommandHandler = {
     const configured = installed === undefined ? undefined : Object.keys(installed);
     if (configured === undefined) {
       console.log('Legacy fallback: aiwg.config has no installed block; using .aiwg/frameworks/registry.json');
-    } else {
+    } else if (!deployAll) {
       const selected = new Set(configured.map(useName));
       const skipped = (registry?.frameworks ?? []).filter(item => !selected.has(useName(item.id)));
       if (skipped.length) console.log(`Skipped legacy registry frameworks: ${skipped.map(item => item.id).join(', ')}`);
@@ -155,10 +146,11 @@ export const updateHandler: CommandHandler = {
 
     for (const fw of installedFrameworks) {
       console.log(`Re-deploying ${fw}...`);
-      const result = await withInstalledSelection(ctx.cwd, installed, () => useFrameworkHandler.execute({
+      const deploy = () => useFrameworkHandler.execute({
         ...ctx,
         args: [fw, ...providerArgs],
-      }));
+      });
+      const result = await (deployAll ? deploy() : withInstalledSelection(ctx.cwd, installed, deploy));
       results.push({ framework: fw, exitCode: result.exitCode });
 
       if (result.exitCode !== 0) {
