@@ -7,7 +7,7 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { boundedExecFileSync } from '../process/bounded-child-process.mjs';
@@ -225,9 +225,17 @@ export async function relocateProjectMemory(id: string, newMemoryRoot: string): 
   if (!entry) throw new Error(`No project memory entry with id '${id}'`);
   const oldRoot = entry.memoryRoot;
   const nextRoot = expandUserPath(newMemoryRoot);
-  if (oldRoot !== nextRoot && existsSync(oldRoot) && !existsSync(nextRoot)) {
-    await mkdir(path.dirname(nextRoot), { recursive: true });
-    await rename(oldRoot, nextRoot);
+  if (oldRoot !== nextRoot) {
+    if (existsSync(nextRoot) && (await readdir(nextRoot)).length > 0) {
+      throw new Error(`Cannot relocate project memory from '${oldRoot}' to '${nextRoot}': destination is not empty`);
+    }
+    if (existsSync(oldRoot)) {
+      await mkdir(path.dirname(nextRoot), { recursive: true });
+      // Rename can replace an empty directory; do not remove it before a move that may fail.
+      await rename(oldRoot, nextRoot);
+    } else {
+      await ensureMemoryLayout(nextRoot);
+    }
   } else {
     await ensureMemoryLayout(nextRoot);
   }
