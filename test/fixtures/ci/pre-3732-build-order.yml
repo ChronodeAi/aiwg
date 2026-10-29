@@ -1,0 +1,15 @@
+# Relevant step sequences copied from 9b5b3640c^ (f23872235).
+# Other steps omitted; the OMP job had no build step at all before #3732.
+jobs:
+  test:
+    steps:
+      - name: Lint deployed agent definition sizes (#1602)
+        run: npm run lint:agent-sizes
+      - name: Run type check
+        run: npm run typecheck
+      - name: Build CLI (required by integration tests that spawn bin/aiwg.mjs)
+        run: npm run build:cli
+  omp-conformance:
+    steps:
+      - name: Native discovery precedence and conditional rule matching
+        run: node tools/providers/omp-precedence-conformance.mjs --binary /tmp/aiwg-omp-conformance --source /tmp/aiwg-omp-source --output artifacts/omp-precedence-conformance.json

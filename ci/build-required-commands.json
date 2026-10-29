@@ -1,0 +1,11 @@
+[
+  {
+    "npmScript": "lint:agent-sizes",
+    "nodeScript": "tools/lint/agent-def-sizes.mjs",
+    "reason": "Imports codex.mjs -> model-wrapper.mjs -> compiled models via importImpl (#2649, #3732)."
+  },
+  {
+    "nodeScript": "tools/providers/omp-precedence-conformance.mjs",
+    "reason": "Imports omp.mjs -> model-wrapper.mjs -> compiled models via importImpl (#2649, #3732)."
+  }
+]
