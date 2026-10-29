@@ -1,3 +1,4 @@
+import { preserveInstalledSelection } from './installed-selection.js';
 import { validateHitlPolicy } from '../policy/hitl-validation.js';
 import { normalizeAiwgConfigCandidate } from './config-normalization.js';
 import { atomicConfigWrite, withWorkerWriteLock } from './worker-write.js';
@@ -20,7 +21,6 @@ import { validateDecisionConfig, type DecisionConfig } from './decision-config.j
  */
 
 import { validateImportExclusions } from '../sessions/import-exclusions.js';
-
 export { DEFAULT_DISPATCH_HOST_THRESHOLDS, resolveDispatchHostThresholds } from './dispatch-thresholds-runtime.mjs';
 
 import { validateIndexGraphOverrides, type IndexBuiltinGraphOverride } from './index-graph-overrides.js';
@@ -1924,7 +1924,7 @@ export async function readAiwgConfig(projectDir: string, options?: { aiwgHome?: 
  * sync so split-root health remains deterministic.
  */
 export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): Promise<void> {
-  return withWorkerWriteLock(projectDir, () => writeAiwgConfigUnlocked(projectDir, config));
+  return withWorkerWriteLock(projectDir, () => writeAiwgConfigUnlocked(projectDir, preserveInstalledSelection(projectDir, config)));
 }
 async function writeAiwgConfigUnlocked(projectDir: string, config: AiwgConfig): Promise<void> {
   // Uninstall is an explicit capability change. Retire project selectors for
