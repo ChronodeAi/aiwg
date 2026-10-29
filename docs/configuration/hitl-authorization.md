@@ -98,18 +98,30 @@ production changes or irreversible testnet transactions.
 }
 ```
 
-Save an action descriptor as `action.json`:
+The host builds `action.json` from its actual pending tool call. For `repo.edit`,
+`actor` and `inputDigest` are mandatory: derive the actor from host identity and
+hash the exact serialized tool name and every input field, including file bytes.
+Never copy bindings from a model or reuse a digest after changing the call.
+For example, with the host's exact pending `{toolName, input}` JSON on stdin:
 
-```json
-{
-  "category": "repo.edit",
-  "repo": "roctinam/roko-edge-tools",
-  "environment": "testnet",
-  "resources": ["src/testnet/client.ts"],
-  "reversible": true,
-  "impact": "low"
-}
+```bash
+node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { userInfo } from "node:os";
+import { createHash } from "node:crypto";
+const call = JSON.parse(readFileSync(0, "utf8"));
+console.log(JSON.stringify({
+  category: "repo.edit", repo: "roctinam/roko-edge-tools", environment: "testnet",
+  resources: [call.input.path], reversible: true, impact: "low",
+  actor: `host:${userInfo().username}`,
+  inputDigest: `sha256:${createHash("sha256").update(JSON.stringify(call)).digest("hex")}`
+}));
+' < pending-tool-call.json > action.json
 ```
+
+The host must classify the actual effects and use the same serialization at
+consumption. Pi constructs its own actor and canonical input digest; this
+generic example does not replace Pi's descriptor builder.
 
 ```bash
 aiwg config authorization enable --policy-file hitl-policy.json
@@ -171,7 +183,7 @@ escalates. It never executes the proposed action. Malformed JSON/CLI errors also
 retain the consumer's existing human review path.
 
 The action file is a **host trust boundary**, not an authorization source. The
-host constructs all six fields from the actual resolved execution plan; the
+host constructs the descriptor and bindings from the actual resolved execution plan; the
 CLI cannot authenticate the author of a JSON file or prove an arbitrary shell
 command's effects. Never feed it issue/model JSON, infer safety from an issue's
 claims, or spread a model object into a descriptor. Unknown effects retain
@@ -183,7 +195,11 @@ authorization. Agent-loop skills check start, resume, recovery, config and
 removal confirmations; a local grant never approves an open-ended loop or
 extending its limits. The provider-facing human-authorization rule calls the
 same helper. Pi's executable workflow gate uses it via the installed CLI,
-retaining destructive/package-command prompts and headless refusals. Other
+retaining destructive/package-command prompts and headless refusals. Native
+`edit`/`write` calls use the same canonical policy-layer loader in process;
+without any enabled HITL layer they pass through with no authorization subprocess
+or prompt. Any enabled ancestor/member layer activates the gate. Policy-loading
+errors fail closed; enabled policies retain exact actor/input receipt checks. Other
 native provider permission prompts are not intercepted or answered.
 
 Tracker mutations, dependency installation and destructive operations are

@@ -21,6 +21,8 @@ export async function recordHitlAuthorization(ledger: EffectLedger, action: unkn
     action: validHitlAction(action) ? {
       category: HITL_CATEGORIES.find(category => category === action.category) ?? 'restricted',
       descriptorDigest: hitlDigest(action), categoryDigest: hitlDigest(action.category),
+      ...(action.actor === undefined ? {} : { actorDigest: hitlDigest(action.actor) }),
+      ...(action.inputDigest === undefined ? {} : { inputDigest: action.inputDigest }),
       reversible: action.reversible, impact: action.impact,
     } : { descriptorDigest: hitlDigest(action) },
     scope: validHitlAction(action) ? {
