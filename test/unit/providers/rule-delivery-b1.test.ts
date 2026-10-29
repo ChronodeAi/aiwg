@@ -61,7 +61,7 @@ describe('B1 rule delivery regressions', () => {
       expect(fs.readFileSync(path.join(rules, `fixture-kernel.${ext}`), 'utf8')).toContain('FIXTURE_KERNEL_BODY');
       expect(fs.readFileSync(path.join(rules, `RULES-INDEX.${ext}`), 'utf8')).toContain('fixture-summary');
       const coreFile = ['claude', 'cursor'].includes(provider) ? path.join(rules, `core-core-policy.${ext}`)
-        : path.join(target, provider === 'copilot' ? '.github/copilot-instructions.md' : ['hermes', 'factory', 'opencode'].includes(provider) ? 'AGENTS.md' : provider === 'warp' ? 'WARP.md' : 'AIWG.md');
+        : path.join(target, provider === 'copilot' ? '.github/copilot-instructions.md' : provider === 'warp' ? 'WARP.md' : 'AGENTS.md');
       expect(fs.readFileSync(coreFile, 'utf8')).toContain('CORE_POLICY');
       const agents = provider === 'opencode' ? '.opencode/agent' : provider === 'factory' ? '.factory/droids' : provider === 'copilot' ? '.github/agents' : `.${provider}/agents`;
       expect(fs.existsSync(path.join(target, agents, 'fixture-agent.md'))).toBe(false);
@@ -115,6 +115,31 @@ describe('B1 rule delivery regressions', () => {
       expect(index.match(/^- /gm)).toHaveLength(3);
       for (const rule of rules) expect(index).toContain(`- ${rule.name}`);
     }
+  });
+
+  it('states the shared fetch obligation once and preserves every name and summary verbatim', () => {
+    const rules = [
+      { name: 'unsummarized', tagged: true, activation: 'kernel' },
+      { name: 'safety', tagged: true, activation: 'kernel', summary: 'Keep `literal` wording — including punctuation!' },
+      { name: 'guide', tagged: true, activation: 'summary', summary: 'Read guidance.' },
+    ];
+    expect(renderRuleKernelIndex(rules)).toBe([
+      '# Rule kernel index', '',
+      "Fetch and follow each rule's full body before governed work: `aiwg show rule <name> --body`.", '',
+      '- unsummarized', '', '- safety — Keep `literal` wording — including punctuation!', '',
+      '- guide — Read guidance.', '',
+    ].join('\n'));
+  });
+
+  it('preserves receipt command entries for deployment accounting consumers', () => {
+    expect(renderRuleKernelIndex([
+      { name: 'safety', tagged: true, activation: 'kernel' },
+      { name: 'guide', tagged: true, activation: 'summary', summary: 'Read guidance.' },
+    ], false, true)).toBe([
+      '# Rule kernel index', '',
+      '- safety — Fetch and follow the full rule before governed work. Fetch and follow: `aiwg show rule safety --body`.', '',
+      '- guide — Read guidance. Fetch and follow: `aiwg show rule guide --body`.', '',
+    ].join('\n'));
   });
 
   it('missing activation stays on demand at every enforcement level; shipped lint rejects it', () => {

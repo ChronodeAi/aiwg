@@ -27,7 +27,10 @@ describe('root gate script lane parity', () => {
     expect(report.errors).toEqual([]);
     expect(report.records.length).toBe(Object.keys(scripts).filter(name => /^(lint|test|check):/.test(name)).length);
     expect(report.records.find(row => row.script === 'test:release-slow')).toMatchObject({ workflows: [], exemption: { kind: 'release-only' } });
-    expect(report.records.find(row => row.script === 'lint:context-sizes').exemption.reason).toBe('#3740: wire into CI once AGENTS.md fits');
+    // #3740 wired the bridge-size guard into main CI; it must run there with no exemption.
+    const contextSizes = report.records.find(row => row.script === 'lint:context-sizes');
+    expect(contextSizes.workflows.length).toBeGreaterThan(0);
+    expect(contextSizes.exemption).toBeUndefined();
   });
 
   it('rejects an unlisted unwired script and accepts a reasoned exception', () => {

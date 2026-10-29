@@ -93,4 +93,9 @@ describe('provider translator steps run after the CLI build', () => {
     const files = globSync(defaultConfig.test.include, { cwd: root, ignore: defaultConfig.test.exclude });
     expect(files).toContain('test/unit/ci/provider-translator-build-order.test.ts');
   });
+
+  it('lints context bridge sizes after the CLI build (#3740)', () => {
+    const workflow = read('.gitea/workflows/ci.yml');
+    expect(workflow.indexOf('run: npm run lint:context-sizes')).toBeGreaterThan(workflow.indexOf('run: npm run build:cli'));
+  });
 });

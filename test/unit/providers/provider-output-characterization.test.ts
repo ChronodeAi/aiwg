@@ -141,7 +141,7 @@ const USE_PATH_GOLDENS = {
       agents: null,
       commands: null,
       skills: '.agents/skills',
-      rules: null,
+      rules: '.muse/rules',
       behaviors: null,
     },
     kernelSkills: '.agents/skills',

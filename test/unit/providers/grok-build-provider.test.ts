@@ -100,7 +100,7 @@ describe('grok-build provider definition', () => {
     expect(def?.paths.artifacts.skills).toBe('.grok/skills');
     expect(def?.paths.kernelSkills).toBe('.grok/skills');
     expect(def?.paths.artifacts.agents).toBe('.grok/agents');
-    expect(def?.paths.artifacts.rules).toBeNull();
+    expect(def?.paths.artifacts.rules).toBe('.grok/rules');
     expect(def?.upstream?.revision).toBe('2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8');
     expect(def?.upstream?.revision).not.toBe('0'.repeat(40));
   });
@@ -207,7 +207,7 @@ describe('grok-build writer dry-run', () => {
     expect(String(grokBuildPaths.skills)).toContain('.grok');
     expect(String(grokBuildPaths.skills)).not.toContain('.cursor');
     expect(grokBuildSupport.agents).toBe('native');
-    expect(grokBuildSupport.rules).toBe('indexed');
+    expect(grokBuildSupport.rules).toBe('native');
     expect(resolveFromWriter()).toMatch(/\.grok$/);
   });
 

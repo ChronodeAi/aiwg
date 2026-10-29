@@ -501,7 +501,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
     paths: {
       deployTarget: 'project',
       artifacts: {
-        agents: '.agents/agents', commands: null, skills: '.agents/.aiwg/skills', rules: null, behaviors: null,
+        agents: '.agents/agents', commands: null, skills: '.agents/.aiwg/skills', rules: '.antigravity/rules', behaviors: null,
       },
       kernelSkills: '.agents/skills',
       contextDiscovery: { agents: '.agents/agents', skills: '.agents/skills', rules: null, behaviors: null },
@@ -509,7 +509,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
       contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
     },
     smithPaths: {
-      agents: '.agents/agents', commands: null, skills: '.agents/skills', rules: null,
+      agents: '.agents/agents', commands: null, skills: '.agents/skills', rules: '.antigravity/rules',
       fileExtension: '.md', configFile: 'AGENTS.md', aggregated: false,
     },
     skillNamespace: {
@@ -869,7 +869,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
         agents: '.grok/agents',
         commands: null,
         skills: '.grok/skills',
-        rules: null,
+        rules: '.grok/rules',
         behaviors: null,
       },
       kernelSkills: '.grok/skills',
@@ -886,7 +886,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
       agents: '.grok/agents',
       commands: null,
       skills: '.grok/skills',
-      rules: null,
+      rules: '.grok/rules',
       fileExtension: '.md',
       configFile: '.grok/config.toml',
       aggregated: false,
@@ -933,7 +933,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
       agents: null,
       commands: null,
       skills: resolveHermesHomePath('skills'),
-      rules: null,
+      rules: '.hermes/rules',
       fileExtension: '.md',
       configFile: 'AGENTS.md',
       aggregated: false,
@@ -975,12 +975,12 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
     paths: {
       deployTarget: 'mixed',
       artifacts: {
-        // Skills are written natively; agents, commands, and rules stay
-        // indexed (aiwg discover/show) behind the AGENTS.md bridge.
+        // Skills are native; rule files are reached through the AGENTS.md
+        // hook. Agents and commands remain indexed through discover/show.
         agents: null,
         commands: null,
         skills: '.agents/skills',
-        rules: null,
+        rules: '.muse/rules',
         behaviors: null,
       },
       kernelSkills: '.agents/skills',
@@ -997,7 +997,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
       agents: null,
       commands: null,
       skills: '.agents/skills',
-      rules: null,
+      rules: '.muse/rules',
       fileExtension: '.md',
       configFile: null,
       aggregated: false,
@@ -1264,7 +1264,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
       agents: '.agents/skills',
       commands: '.pi/prompts',
       skills: '.pi/skills',
-      rules: null,
+      rules: '.pi/rules',
       fileExtension: '.md',
       configFile: 'AGENTS.md',
       aggregated: false,

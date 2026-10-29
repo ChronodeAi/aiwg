@@ -1,3 +1,4 @@
+import { readRuleDeliveryContext } from '../../helpers/rule-delivery-context.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync, cpSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
@@ -44,7 +45,7 @@ describe('operator pinned provider projections', () => {
     it(`${provider}: full native bodies, bindings, summaries, and canonical restoration`, () => {
       const root = setup();
       const pinned = JSON.parse(deploy(root, provider).split('REPORT:')[1].trim());
-      const startup = pinned.contributors.map((file: any) => readFileSync(file.path, 'utf8')).join('\n');
+      const startup = readRuleDeliveryContext(pinned, provider);
       for (const mode of ['BOUND', 'SUMMARY', 'PATHS', 'ON_DEMAND']) expect(startup).toContain(`FIXTURE_${mode}_BODY`);
       for (const name of ['bound', 'summary', 'paths', 'on-demand']) {
         const body = readFileSync(join(root, `source/rules/fixture-${name}.md`), 'utf8').replace(/^---\n[\s\S]*?\n---\n/, '').trim();
@@ -63,7 +64,7 @@ describe('operator pinned provider projections', () => {
       expect(contents(root)).toEqual(first);
       const config = { installed: { fixture: {} }, rules: { always_load: [] } };
       const unpinned = JSON.parse(deploy(root, provider, { config }).split('REPORT:')[1].trim());
-      const normal = unpinned.contributors.map((file: any) => readFileSync(file.path, 'utf8')).join('\n');
+      const normal = readRuleDeliveryContext(unpinned, provider);
       expect(normal).not.toContain('FIXTURE_BOUND_BODY');
       expect(normal).not.toContain('FIXTURE_SUMMARY_BODY');
       expect(normal).not.toContain('FIXTURE_ON_DEMAND_BODY');
@@ -88,7 +89,7 @@ describe('operator pinned provider projections', () => {
     const root = setup();
     const file = join(root, 'source/rules/fixture-on-demand.md');
     writeFileSync(file, readFileSync(file, 'utf8') + 'x'.repeat(40000));
-    if (provider === 'codex') writeFileSync(join(root, 'target/AGENTS.md'), 'x'.repeat(33000));
+    writeFileSync(join(root, 'target/AGENTS.md'), 'x'.repeat(provider === 'codex' ? 33000 : 20000));
     expect(() => deploy(root, provider)).toThrow(/hard cap/);
     const report = JSON.parse(deploy(root, provider, { allowOverBudget: true }).split('REPORT:')[1].trim());
     const startup = report.contributors.map((file: any) => readFileSync(file.path, 'utf8')).join('\n');
@@ -105,11 +106,13 @@ describe('operator pinned provider projections', () => {
     const report = JSON.parse(deploy(root, 'codex', { ruleSources, rulesOnly: true, deploySkills: false, deployCommands: false }).split('REPORT:')[1].trim());
     const startup = report.contributors.map((file: any) => readFileSync(file.path, 'utf8')).join('\n');
     expect(startup).toContain('PERSISTENT_BEHAVIOR_BODY');
-    expect(readFileSync(join(root, 'target/AIWG.md'), 'utf8').match(/<!-- AIWG:rule-startup:start -->[\s\S]*?<!-- AIWG:rule-startup:end -->/)?.[0]).toContain('PERSISTENT_BEHAVIOR_BODY');
+    expect(readFileSync(join(root, 'target/AGENTS.md'), 'utf8')).toContain('.codex/rules/RULES-INDEX.md');
+    expect(readFileSync(join(root, 'target/.codex/rules/behaviors/fixture-behavior.md'), 'utf8')).toContain('PERSISTENT_BEHAVIOR_BODY');
     const config = { installed: { fixture: {} }, rules: { always_load: [] } };
     const restored = JSON.parse(deploy(root, 'codex', { ruleSources, config, rulesOnly: true, deploySkills: false, deployCommands: false }).split('REPORT:')[1].trim());
     expect(restored.contributors.map((file: any) => readFileSync(file.path, 'utf8')).join('\n')).toContain('PERSISTENT_BEHAVIOR_BODY');
-    expect(readFileSync(join(root, 'target/AIWG.md'), 'utf8').match(/<!-- AIWG:rule-startup:start -->[\s\S]*?<!-- AIWG:rule-startup:end -->/)?.[0]).toContain('PERSISTENT_BEHAVIOR_BODY');
+    expect(readFileSync(join(root, 'target/AGENTS.md'), 'utf8')).toContain('.codex/rules/RULES-INDEX.md');
+    expect(readFileSync(join(root, 'target/.codex/rules/behaviors/fixture-behavior.md'), 'utf8')).toContain('PERSISTENT_BEHAVIOR_BODY');
   }, 90_000);
   it('uses user config pins during ordinary redeployment', () => {
     const root = setup();

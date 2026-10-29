@@ -1,3 +1,4 @@
+import { readRuleDeliveryContext } from '../../helpers/rule-delivery-context.js';
 import { showBindingEnvelopes } from '../../helpers/show-binding-envelopes.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
@@ -157,7 +158,7 @@ describe('Wave 3 canonical orchestration rule delivery (#2943)', () => {
       AIWG_ROOT: source, XDG_DATA_HOME: path.join(home, '.local/share'), CI: '1' },
     encoding: 'utf8', timeout: 60_000, stdio: 'pipe' });
     const report = JSON.parse(deployed.split('REPORT:')[1].trim());
-    const startup = report.contributors.map((file: any) => read(file.path)).join('\n');
+    const startup = readRuleDeliveryContext(report, provider);
     for (const { name, data } of rules) {
       if (name === 'anti-laziness') {
         // Core delivery (#3450): the compact body is in startup context; the full rule is not.
@@ -167,6 +168,7 @@ describe('Wave 3 canonical orchestration rule delivery (#2943)', () => {
         continue;
       }
       expect(startup).toContain(data.summary);
+      expect(startup).toContain(data.activation === 'paths' ? `aiwg show rule ${name} --body` : `- ${name} — ${data.summary}`);
       expect(startup).toContain(`aiwg show rule ${name} --body`);
       const heading = read(path.join(bundle, 'rules', `${name}.md`)).split('\n').find(line => line.startsWith('# '));
       expect(startup).not.toContain(heading);

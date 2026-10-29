@@ -30,7 +30,7 @@ export const paths = {
   agents: '',
   commands: '.pi/prompts',
   skills: '.pi/.aiwg/skills',
-  rules: '',
+  rules: '.pi/rules',
 };
 
 export const extensionBridge = 'agentic/code/providers/pi/aiwg-bridge.ts';

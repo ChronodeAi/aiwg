@@ -6,7 +6,7 @@ import { withModelWrapper } from './model-wrapper.mjs';
  *
  * Native agent compilation is deliberately limited to the three AIWG model
  * workers until the wider corpus has a qualified Grok tool mapping (#2577).
- * Rules remain indexed; Grok loads AGENTS.md and native .grok/rules itself.
+ * Rules are written to .grok/rules and loaded by Grok alongside AGENTS.md.
  *
  * @issue #2575
  */
@@ -36,7 +36,7 @@ export const aliases = [];
 export const paths = {
   agents: '.grok/agents',
   skills: '.grok/skills',
-  rules: '',
+  rules: '.grok/rules',
   hooks: '.grok/hooks',
   config: '.grok/config.toml',
 };
@@ -48,12 +48,15 @@ export const support = {
   agents: 'native',
   commands: 'indexed', // discoverable through the AIWG index; no native command writer
   skills: 'native',
-  rules: 'indexed', // deferred native writer until #2577; host still loads AGENTS.md + .grok/rules hierarchically
+  // CONTEXT_CONTRACTS: https://docs.x.ai/build/features/project-rules
+  // .grok/rules/*.md loads hierarchically on every task; no frontmatter marker
+  // is required for always-on rules (unlike Windsurf's trigger field).
+  rules: 'native', // always-on Markdown rules discovered root-to-cwd by Grok Build
 };
 
 export const capabilities = {
   skills: true,
-  rules: false, // indexed/deferred — do not claim native rule transforms yet
+  rules: true, // Native Markdown; path activation uses the index
   yamlFormat: false,
   aggregatedOutput: false,
   homeDirectoryDeploy: true,
@@ -347,7 +350,7 @@ export async function postDeploy(target, opts = {}) {
     console.log(
       `Grok Build (experimental): kernel skills → ${kernelSkillsPath}; ` +
         `standard skills index-driven (opt-in mirror → ${standardSkillsPath} with --copy-all); ` +
-        `model-worker agents → ${paths.agents}; rules indexed; user home → ${home || '(unresolved GROK_HOME)'}. ` +
+        `model-worker agents → ${paths.agents}; rules → ${paths.rules}; user home → ${home || '(unresolved GROK_HOME)'}. ` +
         'Distinct from grokbot.',
     );
   }

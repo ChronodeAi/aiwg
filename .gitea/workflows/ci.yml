@@ -84,6 +84,9 @@ jobs:
       - name: Build CLI (required by integration tests that spawn bin/aiwg.mjs)
         run: npm run build:cli
 
+      - name: Lint provider context bridge sizes (#3740)
+        run: npm run lint:context-sizes
+
       - name: Lint deployed agent definition sizes (#1602)
         # Hard gate for the 16 KiB subagent dispatch ceiling. The script scans
         # deployed provider agent defs and allows only the documented

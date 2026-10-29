@@ -55,14 +55,14 @@ export const name = 'muse';
 export const aliases = []; // ADR: no aliases (no muse-spark, muse-code, spark, meta)
 
 // Project-relative paths. Skills deploy into the Muse-native project skills
-// root; agents/commands/rules have no file surface in this wave (indexed via
-// aiwg discover / aiwg show). The discover-first AGENTS.md bridge renders
+// root; agents/commands stay indexed via discover/show, while rules use
+// .muse/rules through the mandatory AGENTS.md hook. The bootstrap renders
 // via createAgentsMd below.
 export const paths = {
   agents: '',
   commands: '',
   skills: '.agents/skills',
-  rules: '',
+  rules: '.muse/rules',
 };
 
 // Kernel skills land at the project skills root itself.
