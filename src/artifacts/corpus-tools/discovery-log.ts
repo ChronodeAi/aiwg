@@ -41,8 +41,9 @@ export interface DiscoveryLogResult {
 
 /** Render the `discovery:` YAML block (2-space indented under the key). */
 export function renderDiscoveryBlock(f: DiscoveryFields, today: string): string {
-  // Keep legacy scalar styles, but let YAML quote and escape unsafe values.
+  // Quote and escape strings for YAML 1.1 readers, including date-like values.
   const scalar = (value: string | null, quoted = false): string => stringify(value, {
+    schema: 'yaml-1.1',
     defaultStringType: quoted ? 'QUOTE_DOUBLE' : 'PLAIN',
     blockQuote: false,
     doubleQuotedAsJSON: true,
@@ -58,7 +59,7 @@ export function renderDiscoveryBlock(f: DiscoveryFields, today: string): string 
 
 /** Replace discovery in place, preserving surrounding frontmatter and blank lines. */
 function spliceDiscovery(fmLines: string[], block: string): string {
-  const start = fmLines.findIndex(line => /^discovery:\s*$/.test(line));
+  const start = fmLines.findIndex(line => /^discovery:\s*(?:#.*)?$/.test(line));
   if (start < 0) return [...fmLines, block].join('\n');
   let end = start + 1;
   while (end < fmLines.length && (/^\s/.test(fmLines[end]) || fmLines[end] === '')) end++;
