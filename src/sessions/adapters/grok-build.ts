@@ -91,6 +91,8 @@ export class GrokBuildSessionAdapter implements SessionSourceAdapter {
 
   async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
     if (source.locatorClass === GROK_BUILD_NATIVE_LOCATOR_CLASS) {
+      // The experimental gate answers first, so a disabled gate never reports a locator error.
+      assertGrokBuildNativeEnabled();
       const sessionId = grokBuildNativeSessionId(source.locator);
       if (!sessionId) {
         throw new SessionContractError(

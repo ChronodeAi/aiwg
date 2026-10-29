@@ -51,6 +51,11 @@ it.each(['discover', 'inspect', 'stream'] as const)('blocks adapter %s of native
   await expect(pending).rejects.toMatchObject(denied);
 });
 
+it('reports the experimental gate before a malformed native stream locator', async () => {
+  const malformed = { ...source, locator: resolve(nativeRoot, 'not-a-uuid', 'chat_history.jsonl') };
+  await expect(collect(new GrokBuildSessionAdapter().stream(malformed))).rejects.toMatchObject(denied);
+});
+
 it('explains the experimental gate before checking discovery root grants', async () => {
   await expect(collect(new GrokBuildSessionAdapter().discover({
     workspaceId: 'synthetic', allowedRoots: [],
