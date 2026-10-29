@@ -2,6 +2,8 @@
 import { compileModelPolicy, loadProviderModelCatalog, type ProviderModelCatalog, type ModelPolicyProvider } from './catalog-policy.js';
 import { MODEL_WRAPPER_DEFINITIONS, type ModelWrapperDefinition } from './wrapper-definitions.js';
 import type { ModelEffort, ModelTier } from './types.js';
+import { flagshipElected, isFlagshipModel, type FlagshipAuthority } from './tiers.js';
+import { loadProviderModelCapabilities } from './provider-policy.js';
 
 export type WrapperTierEnforcement = 'pinned' | 'inherited' | 'global-only';
 export interface WrapperControls { model?: string; effort?: string }
@@ -19,7 +21,42 @@ export function wrapperControls(provider: string): WrapperControls {
 }
 
 export function isConcreteWrapperModel(model: string | undefined): model is string {
-  return Boolean(model && !/^(?:configured\/|Hint\(|auto$|inherit(?:ed)?$|default$|profile-selected$|global-delegation-model$)/i.test(model));
+  return Boolean(model?.trim() && !/^(?:configured\/|Hint\(|auto$|inherit(?:ed)?$|default$|profile-selected$|global-delegation-model$|unknown$|unresolved$|placeholder$|todo$)|\$\{|<[^>]+>/i.test(model.trim()));
+}
+
+export interface DeployedWrapperControls extends FlagshipAuthority {
+  model?: string;
+  effort?: string;
+  inheritedModel?: string;
+  inheritedEffort?: string;
+  forceInheritedModel?: boolean;
+}
+
+/** Observed artifact controls, never a claim about an active provider session. */
+export function deployedWrapperEnforcement(provider: string, artifact: DeployedWrapperControls) {
+  const controls = wrapperControls(provider);
+  const globalOnly = GLOBAL_ONLY.has(provider);
+  const pinned = Boolean(controls.model && isConcreteWrapperModel(artifact.model) && !artifact.forceInheritedModel);
+  const model: WrapperTierEnforcement = globalOnly ? 'global-only' : pinned ? 'pinned' : 'inherited';
+  const effort: WrapperTierEnforcement = globalOnly ? 'global-only'
+    : controls.effort && artifact.effort && loadProviderModelCapabilities().providers[provider as ModelPolicyProvider]?.effortValues?.includes(artifact.effort as ModelEffort) ? 'pinned' : 'inherited';
+  return { model, effort, effectiveModel: pinned ? artifact.model : artifact.inheritedModel,
+    effectiveEffort: effort === 'pinned' ? artifact.effort : artifact.inheritedEffort };
+}
+
+export function wrapperModelRisks(provider: string, artifact: DeployedWrapperControls,
+  catalog = loadProviderModelCatalog()): string[] {
+  const state = deployedWrapperEnforcement(provider, artifact);
+  const findings: string[] = [];
+  if ((artifact.model !== undefined && !isConcreteWrapperModel(artifact.model))
+    || !isConcreteWrapperModel(state.effectiveModel)) findings.push('delegation.unresolved-model');
+  const expensive = state.effectiveModel && (isFlagshipModel(state.effectiveModel)
+    || Object.values(catalog.providers).some(entry =>
+      [entry?.tiers?.flagship?.id, entry?.tiers?.premium?.id, entry?.roles.reasoning.id]
+        .filter(isConcreteWrapperModel).some(id => state.effectiveModel === id || state.effectiveModel?.endsWith(`/${id}`)))
+    || (provider === 'claude' && state.effectiveModel === 'opus'));
+  if (state.model !== 'pinned' && expensive && !flagshipElected(artifact)) findings.push('delegation.flagship-inheritance');
+  return findings;
 }
 
 export function resolveWrapperPin(provider: ModelPolicyProvider, wrapper: ModelWrapperDefinition,
@@ -49,15 +86,16 @@ export function resolveWrapperPin(provider: ModelPolicyProvider, wrapper: ModelW
 }
 
 /** Static artifact defaults; this does not inspect live sessions or assert runtime enforcement. */
-export function wrapperEnforcementReport(provider: string): string {
+export function wrapperEnforcementReport(provider: string, artifact?: DeployedWrapperControls): string {
   const catalog = loadProviderModelCatalog();
   const controls = wrapperControls(provider);
   const known = provider in catalog.providers;
   const states = known ? MODEL_WRAPPER_DEFINITIONS.map(wrapper =>
     resolveWrapperPin(provider as ModelPolicyProvider, wrapper, { catalog }).enforcement) : [];
-  const state: WrapperTierEnforcement = GLOBAL_ONLY.has(provider) ? 'global-only'
-    : states.length > 0 && states.every(value => value === 'pinned') ? 'pinned' : 'inherited';
-  const effort = state === 'pinned' && controls.effort
+  const observed = artifact ? deployedWrapperEnforcement(provider, artifact) : undefined;
+  const state: WrapperTierEnforcement = observed?.model ?? (GLOBAL_ONLY.has(provider) ? 'global-only'
+    : states.length > 0 && states.every(value => value === 'pinned') ? 'pinned' : 'inherited');
+  const effort = observed ? `${observed.effort}${observed.effort === 'pinned' ? ` via ${controls.effort}` : ''}` : state === 'pinned' && controls.effort
     ? `pinned via ${controls.effort} (high/medium/low by wrapper)` : 'not enforced per wrapper';
   const details: Record<string, string> = {
     claude: 'Use AIWG wrappers or an explicit invocation model. Unpinned general-purpose agents inherit; CLAUDE_CODE_SUBAGENT_MODEL supplies a fallback and CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 can override pins.',
@@ -74,7 +112,7 @@ export function wrapperEnforcementReport(provider: string): string {
     grokbot: 'No verified AIWG-owned per-worker model setting is available.',
     muse: 'Session --model or settings.json model controls selection; per-agent pins are unverified.',
   };
-  return `Tier enforcement (generated wrapper defaults): ${state}; effort: ${effort}. `
+  return `Tier enforcement (${artifact ? 'deployed wrapper' : 'generated wrapper defaults'}): ${state}; effort: ${effort}. `
     + `${details[provider] ?? (known ? 'Native custom subagents carry explicit catalog model selectors.' : 'Provider wrapper controls are unverified.')} `
     + 'Explicit operator pins are preserved where supported. This is not a live resolved-model audit; provider/account policy may substitute models.';
 }
