@@ -51,6 +51,9 @@ function copyChecker(root) {
   const destination = path.join(root, 'tools/testing/check-test-registration.mjs');
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.copyFileSync(fileURLToPath(checker), destination);
+  for (const name of ['check-script-lanes.mjs', 'workflow-commands.mjs']) {
+    fs.copyFileSync(path.join(repo, 'tools/testing', name), path.join(root, 'tools/testing', name));
+  }
   expect(fs.readFileSync(destination)).toEqual(fs.readFileSync(fileURLToPath(checker)));
   fs.symlinkSync(path.join(repo, 'node_modules'), path.join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   return destination;
@@ -319,7 +322,7 @@ describe('test runner registration gate', () => {
         ...(mode === 'missing-script' ? {} : { 'test:release-slow': `vitest run --config ${releaseConfig}` }),
       },
       files: {
-        'config/test-lanes.mjs': `export const nodeFiles = []; export const releaseLaneWorkflows = ${JSON.stringify({ [releaseConfig]: '.gitea/workflows/release-slow.yml' })};`,
+        'config/test-lanes.mjs': `export const nodeFiles = []; export const releaseLaneWorkflows = ${JSON.stringify({ [releaseConfig]: '.gitea/workflows/release-slow.yml' })}; export const scriptLaneExemptions = ${JSON.stringify(mode === 'missing-script' ? [] : [{ script: 'test:release-slow', owner: 'release-maintainers', kind: 'release-only', reason: 'Manual release matrix.' }])};`,
         [releaseConfig]: `export default ${JSON.stringify({ test: { include: [file] } })};`,
         '.gitea/workflows/release-slow.yml': JSON.stringify({ jobs: { release: { steps: [{ run: mode === 'unreachable' ? 'node --version' : 'npm run test:release-slow' }] } } }),
         ...(mode === 'duplicate' ? { 'config/vitest.config.js': `export default ${JSON.stringify({ test: { include: [baseline, file] } })};` } : {}),
@@ -334,6 +337,19 @@ describe('test runner registration gate', () => {
     if (mode === 'valid') expect(report.files.find(row => row.file === file).lanes).toEqual([{ id: releaseConfig, live: false }]);
   });
 
+
+  it('enforces unwired and stale script exemptions through the registration CLI', () => {
+    const root = project({ scripts: { test: 'vitest run --config config/vitest.config.js', 'lint:unwired': 'node lint.mjs' } });
+    const unwiredResult = run(root);
+    expect(unwiredResult.child.status).toBe(1);
+    expect(unwiredResult.report.errors).toEqual(['Script has no main CI lane or exemption: lint:unwired']);
+    const stale = project({ files: {
+      'config/test-lanes.mjs': `export const nodeFiles = []; export const scriptLaneExemptions = [{ script: 'lint:gone', owner: 'testing-maintainers', kind: 'manual', reason: 'Deleted script.' }];`,
+    } });
+    const staleResult = run(stale);
+    expect(staleResult.child.status).toBe(1);
+    expect(staleResult.report.errors).toEqual(['Stale script exemption: lint:gone']);
+  });
   it('rejects a workspace package test script invoked by no CI job', () => {
     const { child, report } = run(project({
       packages: { 'apps/widget': { name: '@scope/widget', scripts: { test: 'node --test test/*.test.mjs' } } },
