@@ -3,6 +3,7 @@ import { ensureCoreStartup } from '../../rules/core-startup.mjs';
 import { preserveBridgeOperatorText } from './bridge-ownership.js';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
 import type {
   ContextPipelineOptions,
   ContextPipelineResult,
@@ -24,6 +25,14 @@ import {
   registerProviderContext,
 } from './workspace-context.js';
 import { buildAgentsMd } from './agents-md.js';
+/** True when deployed native Claude rules already carry the compact core set. */
+function hasNativeClaudeCore(projectDir: string): boolean {
+  try {
+    return readdirSync(path.join(projectDir, '.claude', 'rules'))
+      .some(name => /^core-.+\.md$/.test(name) && /aiwg:managed/.test(readFileSync(path.join(projectDir, '.claude', 'rules', name), 'utf8')));
+  } catch { return false; }
+}
+
 export { buildAgentsMd } from './agents-md.js';
 
 const SECTION_TITLES: Record<IndexedArtifactType, string> = {
@@ -186,7 +195,11 @@ async function atomicWrite(filePath: string, content: string, provider?: string)
     const managed = existing.match(new RegExp(`<!-- AIWG:${owner}:start -->[\\s\\S]*?<!-- AIWG:${owner}:end -->`));
     if (managed) content = `${content.trimEnd()}\n\n${managed[0]}\n`;
   }
-  if (provider) content = ensureCoreStartup(content);
+  // Claude loads core natively from .claude/rules/core-*.md once deployed; inject into CLAUDE.md
+  // only when those native files are absent (for example a regenerate before any `aiwg use`).
+  const nativeCore = provider === 'claude' && hasNativeClaudeCore(path.dirname(filePath));
+  if (provider && !nativeCore) content = ensureCoreStartup(content);
+  else if (nativeCore) content = content.replace(/\n*<!-- AIWG:rule-core:start -->[\s\S]*?<!-- AIWG:rule-core:end -->\n?/, '\n');
   const bytes = Buffer.byteLength(content, 'utf8');
   if (provider === 'codex' && path.basename(filePath) === 'AGENTS.md' && bytes >= 32768) {
     throw new Error('Codex AGENTS.md exceeds its 32 KB hard cap');

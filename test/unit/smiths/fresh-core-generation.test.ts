@@ -41,4 +41,13 @@ describe('fresh core generation (#3740 F3)', () => {
       expect(content).toContain('AIWG:rule-core:start');
     }
   });
+
+  it('does not duplicate core in CLAUDE.md when native .claude/rules core files are deployed', async () => {
+    const projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-claude-native-core-')); roots.push(projectPath);
+    await fs.mkdir(path.join(projectPath, '.claude', 'rules'), { recursive: true });
+    await fs.writeFile(path.join(projectPath, '.claude', 'rules', 'core-anti-laziness.md'), '<!-- aiwg:managed test -->\n# Core: Anti-Laziness\n');
+    const result = await generate({ provider: 'claude', projectPath, sections: [], detectExistingFiles: true });
+    const file = result.claudeMdHookPath ?? path.join(projectPath, 'CLAUDE.md');
+    expect(await fs.readFile(file, 'utf8')).not.toContain('AIWG:rule-core:start');
+  });
 });
