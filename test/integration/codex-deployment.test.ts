@@ -1,3 +1,4 @@
+import { assertStartupRuleDelivery } from '../helpers/rule-delivery-context.js';
 /**
  * Codex Integration Tests
  *
@@ -155,9 +156,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Codex Integration', () => {
         'utf-8'
       );
 
-      expect(agentsMd).toContain('AIWG SDLC Framework');
-      expect(agentsMd).toContain('Install Skills');
-      expect(agentsMd).toContain('~/.codex/skills/');
+      expect(assertStartupRuleDelivery(TEST_PROJECT_DIR, 'codex', agentsMd)).toContain('.codex/agents/');
     });
 
     it('respects 32KB size limit', async () => {
@@ -198,7 +197,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Codex Integration', () => {
 
       expect(agentsMd).toContain('# My Project');
       expect(agentsMd).toContain('Existing content here');
-      expect(agentsMd).toContain('AIWG SDLC Framework');
+      assertStartupRuleDelivery(TEST_PROJECT_DIR, 'codex', agentsMd);
 
       // Run again - should not duplicate
       runScript('tools/agents/deploy-agents.mjs', [
@@ -214,9 +213,8 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Codex Integration', () => {
         'utf-8'
       );
 
-      // Count only the ## heading, not the HTML comment marker
-      const matches = agentsMd2.match(/## AIWG SDLC Framework/g);
-      expect(matches?.length).toBe(1);
+      assertStartupRuleDelivery(TEST_PROJECT_DIR, 'codex', agentsMd2);
+      expect(agentsMd2).toBe(agentsMd);
     });
   });
 
@@ -536,13 +534,12 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Codex Integration', () => {
         '--target', TEST_PROJECT_DIR
       ]);
 
-      // Should create AGENTS.md for Codex
       const agentsMd = await fs.readFile(
         path.join(TEST_PROJECT_DIR, 'AGENTS.md'),
         'utf-8'
       );
 
-      expect(agentsMd).toContain('~/.codex/skills/');
+      expect(assertStartupRuleDelivery(TEST_PROJECT_DIR, 'codex', agentsMd)).toContain('.codex/agents/');
     });
   });
 });
