@@ -1852,8 +1852,10 @@ wrapper rereads and verifies recorded journals/traces, prior runs, approval,
 gold, source-module and integrity pins. The context contains independently
 anchored analysis/integrity/access/mapping/calibration/review digests, the
 mapping and registry compatibility request/policy, completed reviews and a
-clock. The access record is `decision-d29-access/v1` with `analysisDigest`,
-`anchoredAt`, `firstTestAccessAt`, and an external immutable `reference`.
+clock and the independently selected effect-ledger keyring. The signed
+`decision-d29-access/v2` record binds `analysisDigest`, `frozenBundleDigest`,
+`runId`, `anchoredAt`, `firstTestAccessAt` and `reference`; see the
+[signed access boundary](heldout-gate-boundary.md).
 Recording a future evaluation time is not proof of access history.
 `studyModule(context)` verifies the collector's test-only corpus projection
 against the full frozen corpus before scoring. It consumes the pinned frozen

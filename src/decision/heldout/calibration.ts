@@ -92,7 +92,7 @@ export async function readHeldoutCalibrationPhase(run: string, trustedApprovalDi
 }
 /** Test access is bound to a separately approved artifact and the terminal calibration lineage. */
 export async function validateHeldoutPhaseAccess(bundle: HeldoutBundle, runsRoot: string,
-  priorRuns: readonly HeldoutPriorRun[], accessAt: string | null): Promise<void> {
+  priorRuns: readonly HeldoutPriorRun[], accessAt: string | null): Promise<string | undefined> {
   const calibration = bundle.approval.calibration;
   if (calibration.mode !== 'staged') return;
   try {
@@ -122,5 +122,6 @@ export async function validateHeldoutPhaseAccess(bundle: HeldoutBundle, runsRoot
       if (prior.mode === 'staged' && prior.phase === 'test' && heldoutDigest(prior) !== heldoutDigest(calibration)) throw new HeldoutError('calibration-phase-binding');
       if (calibrationApproval(frozen.bundle) && !record.lineage.some(item => item.runId === frozen.bundle.approval.runId)) throw new HeldoutError('calibration-phase-lineage');
     }
+    return record.sealedAt;
   } catch { throw new HeldoutError('calibration-phase-access'); }
 }

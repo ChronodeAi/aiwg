@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D29Study.v10.schema.json",
+  "title": "D29 signed first-access record",
+  "description": "Signed v2 first-access variant; unsigned v1 remains historical and cannot authorize evaluation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "analysisDigest",
+    "frozenBundleDigest",
+    "anchoredAt",
+    "firstTestAccessAt",
+    "reference",
+    "signature"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-d29-access/v2"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "analysisDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "frozenBundleDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "anchoredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "firstTestAccessAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reference": {
+      "type": "string",
+      "minLength": 1
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "keyid",
+        "sig"
+      ],
+      "properties": {
+        "keyid": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "sig": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
