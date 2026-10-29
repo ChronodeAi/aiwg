@@ -132,14 +132,14 @@ describe('ArxivClient', () => {
       const mockXml = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <entry>
-    <id>http://arxiv.org/abs/2024.001</id>
+    <id>http://arxiv.org/abs/2024.0001</id>
     <title>Paper 1</title>
     <summary>Summary 1</summary>
     <published>2024-01-01T00:00:00Z</published>
     <author><name>Author 1</name></author>
   </entry>
   <entry>
-    <id>http://arxiv.org/abs/2024.002</id>
+    <id>http://arxiv.org/abs/2024.0002</id>
     <title>Paper 2</title>
     <summary>Summary 2</summary>
     <published>2024-01-02T00:00:00Z</published>
@@ -166,7 +166,7 @@ describe('ArxivClient', () => {
       const mockXml = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <entry>
-    <id>http://arxiv.org/abs/2024.011</id>
+    <id>http://arxiv.org/abs/2024.0011</id>
     <title>Paper 11</title>
     <summary>Summary</summary>
     <published>2024-01-11T00:00:00Z</published>
@@ -192,7 +192,7 @@ describe('ArxivClient', () => {
       const mockXml = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <entry>
-    <id>http://arxiv.org/abs/2024.001</id>
+    <id>http://arxiv.org/abs/2024.0001</id>
     <title>
       Multi
       Line

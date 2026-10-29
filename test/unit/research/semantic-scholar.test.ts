@@ -64,7 +64,7 @@ describe('SemanticScholarClient', () => {
 
       expect(mockFetch.mock.calls[0][0]).toBe(
         'https://api.semanticscholar.org/graph/v1/paper/DOI:10.1234%2Ftest.2024' +
-        '?fields=paperId%2Ctitle%2Cabstract%2Cyear%2Cauthors%2CcitationCount%2Cvenue%2CexternalIds%2CopenAccessPdf'
+        '?fields=paperId%2Ctitle%2Cabstract%2Cyear%2Cauthors%2CcitationCount%2Cvenue%2CpublicationDate%2CpublicationVenue%2CexternalIds%2CopenAccessPdf'
       );
       expect(paper.id).toBe('123abc');
       expect(paper.title).toBe('Test Paper');
@@ -140,7 +140,7 @@ describe('SemanticScholarClient', () => {
 
       expect(mockFetch.mock.calls[0][0]).toBe(
         'https://api.semanticscholar.org/graph/v1/paper/ARXIV:2024.12345' +
-        '?fields=paperId%2Ctitle%2Cabstract%2Cyear%2Cauthors%2CcitationCount%2Cvenue%2CexternalIds%2CopenAccessPdf'
+        '?fields=paperId%2Ctitle%2Cabstract%2Cyear%2Cauthors%2CcitationCount%2Cvenue%2CpublicationDate%2CpublicationVenue%2CexternalIds%2CopenAccessPdf'
       );
       expect(paper.id).toBe('123abc');
       expect(paper.title).toBe('arXiv Paper');

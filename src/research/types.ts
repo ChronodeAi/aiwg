@@ -22,6 +22,16 @@ export interface ResearchPaper {
   doi?: string;
   /** arXiv ID if available */
   arxivId?: string;
+  /** Version returned by arXiv; requested versions stay in the parsed reference. */
+  arxivVersion?: number;
+  /** Semantic Scholar graph identifier. */
+  s2PaperId?: string;
+  openReviewId?: string;
+  aclId?: string;
+  /** ISO publication date (precision may be year or month). */
+  publicationDate?: string;
+  /** Structured publication venue supplied by Semantic Scholar. */
+  publicationVenue?: { id?: string; name?: string; type?: string; url?: string; alternate_names?: string[] };
   /** Publication venue */
   venue?: string;
   /** Citation count */
@@ -62,9 +72,13 @@ export interface SemanticScholarResponse {
   }>;
   citationCount?: number;
   venue?: string;
+  publicationDate?: string | null;
+  publicationVenue?: ResearchPaper['publicationVenue'] | null;
   externalIds?: {
     DOI?: string;
     ArXiv?: string;
+    ACL?: string;
+    OpenReview?: string;
   };
   openAccessPdf?: {
     url: string;

@@ -4,7 +4,7 @@ name: research-acquire
 platforms: [all]
 description: Download research papers and extract metadata
 commandHint:
-  argumentHint: "[DOI or arXiv ID] [--output path] [--extract-text]"
+  argumentHint: "[DOI, arXiv ID, title, URL or bibliography line] [--output path] [--extract-text]"
   category: research-acquisition
 ---
 
@@ -19,7 +19,17 @@ Download research papers from public repositories and extract metadata.
 When invoked, perform automated paper acquisition:
 
 1. **Identify Source**
-   - Parse DOI, arXiv ID, or URL
+   - Accept a clean DOI/arXiv ID directly. For other input (ACL/OpenReview/S2 IDs,
+     bare title, title plus year, bibliography line, or URL), run
+     `aiwg corpus resolve "<reference>" --json` before downloading anything;
+     pass `--year YYYY` when supplied.
+   - Continue only on `status: resolved` (exit 0), using canonical metadata and IDs.
+     On `ambiguous` (exit 2) or `unresolved` (exit 3), stop acquisition and show every
+     candidate, finding and `paths_tried`; request a more specific reference.
+     Never select the first candidate or guess an identifier.
+   - Preserve the original reference and report title mismatch findings for review;
+     never silently replace the supplied title. Check `already_in_corpus` and
+     `corpus_matches` for the existing REF before assigning a new one.
    - Determine paper hosting location
    - Check if paper already exists in `.aiwg/research/sources/`
 
@@ -61,7 +71,8 @@ When invoked, perform automated paper acquisition:
 
 ## Arguments
 
-- `[identifier]` - DOI, arXiv ID, or URL (required)
+- `[identifier]` - DOI, arXiv ID, title, URL, or bibliography line (required)
+- `--year [YYYY]` - Optional publication year passed to identity resolution
 - `--output [path]` - Custom output location (default: auto-generate)
 - `--ref-id [REF-XXX]` - Specific REF-XXX identifier (default: auto-assign)
 - `--extract-text` - Extract full text to `.txt` file for analysis (default: enabled; use `--no-extract-text` to skip)
@@ -71,6 +82,9 @@ When invoked, perform automated paper acquisition:
 ## Examples
 
 ```bash
+# Acquire a bare title (resolve first; stop if ambiguous or unresolved)
+/research-acquire "Self-supervised representation learning" --year 2024
+
 # Acquire by DOI
 /research-acquire 10.48550/arXiv.2308.08155
 

@@ -18,6 +18,8 @@ import {
 
 export type SemanticScholarNamespace = 'graph' | 'recommendations';
 
+const IDENTITY_FIELDS = 'paperId,title,abstract,year,authors,citationCount,venue,publicationDate,publicationVenue,externalIds,openAccessPdf';
+
 /**
  * Semantic Scholar API client
  */
@@ -85,48 +87,31 @@ export class SemanticScholarClient extends BaseClient {
    * Get paper by DOI
    */
   async getPaperByDoi(doi: string): Promise<ResearchPaper> {
-    const fields = [
-      'paperId',
-      'title',
-      'abstract',
-      'year',
-      'authors',
-      'citationCount',
-      'venue',
-      'externalIds',
-      'openAccessPdf',
-    ];
-
-    const url = this.buildUrl(`/paper/DOI:${encodeURIComponent(doi)}`, {
-      fields: fields.join(','),
-    });
-
-    const response = await this.request<SemanticScholarResponse>(url);
-    return this.transformResponse(response);
+    return this.getPaperById(`DOI:${doi}`);
   }
 
   /**
    * Get paper by arXiv ID
    */
   async getPaperByArxivId(arxivId: string): Promise<ResearchPaper> {
-    const fields = [
-      'paperId',
-      'title',
-      'abstract',
-      'year',
-      'authors',
-      'citationCount',
-      'venue',
-      'externalIds',
-      'openAccessPdf',
-    ];
+    return this.getPaperById(`ARXIV:${arxivId}`);
+  }
 
-    const url = this.buildUrl(`/paper/ARXIV:${encodeURIComponent(arxivId)}`, {
-      fields: fields.join(','),
-    });
-
-    const response = await this.request<SemanticScholarResponse>(url);
+  /** Graph lookup by paperId, DOI:, ARXIV:, ACL:, CorpusId: or URL: identifier. */
+  async getPaperById(identifier: string): Promise<ResearchPaper> {
+    const colon = identifier.indexOf(':');
+    const encoded = colon < 0 ? encodeURIComponent(identifier)
+      : `${identifier.slice(0, colon + 1)}${encodeURIComponent(identifier.slice(colon + 1))}`;
+    const response = await this.requestApi<SemanticScholarResponse>('graph', `/paper/${encoded}`, { fields: IDENTITY_FIELDS });
     return this.transformResponse(response);
+  }
+
+  /** Title matching uses the graph match endpoint, retaining every returned candidate. */
+  async matchTitle(query: string): Promise<ResearchPaper[]> {
+    const response = await this.requestApi<{ data: SemanticScholarResponse[] }>('graph', '/paper/search/match', {
+      query, fields: IDENTITY_FIELDS,
+    });
+    return response.data.map(paper => this.transformResponse(paper));
   }
 
   /**
@@ -139,17 +124,7 @@ export class SemanticScholarClient extends BaseClient {
     const {
       limit = 10,
       offset = 0,
-      fields = [
-        'paperId',
-        'title',
-        'abstract',
-        'year',
-        'authors',
-        'citationCount',
-        'venue',
-        'externalIds',
-        'openAccessPdf',
-      ],
+      fields = IDENTITY_FIELDS.split(','),
     } = options;
 
     const url = this.buildUrl('/paper/search', {
@@ -185,12 +160,17 @@ export class SemanticScholarClient extends BaseClient {
 
     return {
       id: response.paperId,
+      s2PaperId: response.paperId,
       title: response.title,
       authors,
       year: response.year || 0,
       abstract: response.abstract,
       doi: response.externalIds?.DOI,
       arxivId: response.externalIds?.ArXiv,
+      aclId: response.externalIds?.ACL,
+      openReviewId: response.externalIds?.OpenReview,
+      publicationDate: response.publicationDate ?? undefined,
+      publicationVenue: response.publicationVenue ?? undefined,
       venue: response.venue,
       citationCount: response.citationCount,
       pdfUrl: response.openAccessPdf?.url,
