@@ -28,6 +28,8 @@ import { releaseSkillOwnership, type SkillRemovalPlanEntry } from "../../provide
 import { formatDeployedWorkspaceSignalPlan, readWorkspaceSignalPlan } from "../workspace-signals.js";
 import * as path from "node:path";
 import * as fsSync from "node:fs";
+import { removeClaudeAttribution } from "../../extensions/claude-hooks-installer.js";
+import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 
 /** Generate or deploy the canonical project quickref. */
@@ -769,6 +771,7 @@ async function removeUserScopeDeploy(args: ReadonlyArray<string>): Promise<Handl
     } else {
       await removeUserDeploy({ framework: positional });
     }
+    if (providersToRevert.includes('claude') && !Object.values((await readUserRegistry()).installed).some(item => item.deployedTo.claude)) await removeClaudeAttribution(os.homedir());
     linesOut.push('');
     if (conservativeFallbackUsed) {
       linesOut.push('Registry updated. Some providers had no per-artifact manifest (pre-Cycle-3 deploys); inspect the dirs listed above and clean up manually if needed.');
@@ -969,6 +972,7 @@ export const removeHandler: CommandHandler = {
           if (!dryRun && !ctx.args.includes('--keep-registry')) {
             if (Object.keys(entry.deployedTo).length === 0) delete config.installed[positionalArg];
             await writeAiwgConfig(projectDir, config);
+            if (providers.includes('claude') && !Object.values(config.installed).some(item => item.deployedTo.claude)) await removeClaudeAttribution(projectDir);
           }
           if (dryRun) {
             lines.push(ctx.args.includes('--keep-registry')
@@ -1005,6 +1009,7 @@ export const removeHandler: CommandHandler = {
 
           if (!dryRun) {
             await writeAiwgConfig(projectDir, config);
+            if (result.revertedProviders.includes('claude') && !Object.values(config.installed).some(item => item.deployedTo.claude)) await removeClaudeAttribution(projectDir);
           }
 
           // Note: source under .aiwg/<type>/<name>/ is intentionally NOT

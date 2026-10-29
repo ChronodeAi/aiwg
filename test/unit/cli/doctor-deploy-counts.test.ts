@@ -67,6 +67,15 @@ async function doctor(project: string, provider?: string) {
 }
 
 describe('doctor deployed agent counts (#3462, #3465)', () => {
+  it('prints effective Claude attribution warnings and the fix command (#3750)', async () => {
+    const project = fixture('claude');
+    put(project, '.claude/settings.json', JSON.stringify({ attribution: { commit: '', pr: '', sessionUrl: false } }));
+    put(project, '.claude/settings.local.json', JSON.stringify({ attribution: { pr: 'Operator PR' } }));
+    const out = await doctor(project, 'claude');
+    expect(out).toContain('Claude attribution: Effective Claude attribution enabled: pr.');
+    expect(out).toContain('aiwg use all --provider claude');
+  }, 150_000);
+
   it.each(['claude', 'codex'])('treats empty %s agents as healthy for kernel-only receipts', async provider => {
     const project = fixture(provider);
     mkdirSync(join(project, `.${provider}/agents`), { recursive: true });
