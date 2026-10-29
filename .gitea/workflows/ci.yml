@@ -166,6 +166,12 @@ jobs:
         # Offline, read-only regeneration into a temporary directory.
         run: npm run lint:plugin-copies
 
+      - name: Lint plugin links and provider context (#3745)
+        run: |
+          npm run lint:plugin-links
+          npm run lint:claude-context
+          npm run lint:context-firewall
+
       - name: Verify vault CI migration
         # Local-only gate: validates workflow secret references, vault fetch
         # specs, the AppRole policy, and migration docs without reading live

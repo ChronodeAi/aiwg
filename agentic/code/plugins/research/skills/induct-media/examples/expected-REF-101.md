@@ -109,7 +109,7 @@ checked the segment.
 In-corpus connections:
 - (none recorded yet)
 
-Citation network: [REF-101-citations.md](../citations/REF-101-citations.md)
+Citation network: `../citations/REF-101-citations.md`
 
 ## 11. External References
 
