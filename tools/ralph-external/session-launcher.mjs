@@ -57,7 +57,7 @@ import { buildWorkerInvocationEnvironment, WORKER_INVOCATION_MARKER } from './li
 import { resolveRetryReference } from './lib/worker-launch-cli.mjs';
 import { launcherRecoveryEvidence, observeLauncherRecoveryOutcome, recordLauncherRecoveryHint } from './lib/launcher-recovery-evidence.mjs';
 export { observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence.mjs';
-import { publishWorkerUnitExit } from './lib/worker-unit-cleanup.mjs';
+import { publishWorkerUnitExit, readRecordedWorkerUnitStop } from './lib/worker-unit-cleanup.mjs';
 import { workerNeedsNativeNamespaces, probeWorkerNativeSandbox, nativeSandboxFailure, nativeSandboxProbeMessage, NATIVE_SANDBOX_UNAVAILABLE, checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
 const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
@@ -1135,7 +1135,7 @@ async function captureOneWorker(owner, ctx) {
     // Prefer the unit's retained state whenever a unit name is recorded
     // (#3674 round 4): launch-mode selection is unchanged, but unit (cgroup)
     // evidence is used wherever it is available.
-    const native = outcome.unit ? readNative() : null;
+    const native = outcome.unit ? readNative() ?? readRecordedWorkerUnitStop(outcome, { native: true }) : null;
     const members = identity ? sampleWorkerGroup(identity.pgid) : null;
     // Require positive kernel evidence of owned containment being empty.
     const confirmed = (outcome.mode !== 'systemd-unit' && child.pid === undefined) || observeWorkerTermination({ mode: outcome.mode, native,
@@ -1805,7 +1805,7 @@ async function captureOneWorkerBaseline(owner, ctx) {
     // Prefer the unit's retained state whenever a unit name is recorded
     // (#3674 round 4): launch-mode selection is unchanged, but unit (cgroup)
     // evidence is used wherever it is available.
-    const native = outcome.unit ? readNative() : null;
+    const native = outcome.unit ? readNative() ?? readRecordedWorkerUnitStop(outcome, { native: true }) : null;
     const members = identity ? sampleWorkerGroup(identity.pgid) : null;
     const confirmed = (outcome.mode !== 'systemd-unit' && child.pid === undefined) || observeWorkerTermination({ mode: outcome.mode, native,
       workerExited: sawExit, identity, supervisor, invocationId }).confirmed;

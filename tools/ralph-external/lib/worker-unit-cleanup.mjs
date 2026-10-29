@@ -21,17 +21,20 @@ export function resetRecordedWorkerUnit(outcome, native, { spawn = spawnSync, lo
   const owner = owners.get(outcome?.child ?? outcome);
   if (!owner || native?.active !== false || typeof native.result !== 'string'
     || !Number.isInteger(native.execMainStatus)) return;
-  // One cleanup attempt per launch; polling and caller-supplied unit names never authorize reset.
-  owners.delete(outcome?.child ?? outcome);
+  // Retain retry authority on transient failures; caller-supplied names never authorize reset.
   try {
     const client = resolveSystemdClient('systemctl');
     const options = { encoding: 'utf8', timeout: 500, killSignal: 'SIGKILL', env: buildSystemdClientEnv({ envNames: [] }) };
     const shown = spawn(client, ['--user', 'show', '-p', 'Description', '--value', '--', owner.unit], options);
     if (shown.error || shown.status !== 0) throw new Error(shown.error?.message ?? (String(shown.stderr ?? '').trim() || 'ownership query failed'));
     // A failed submission may have collided with somebody else's existing unit.
-    if (String(shown.stdout ?? '').trim() !== owner.description) throw new Error('unit ownership does not match this launch');
+    if (String(shown.stdout ?? '').trim() !== owner.description) {
+      owners.delete(outcome?.child ?? outcome);
+      throw new Error('unit ownership does not match this launch');
+    }
     const reset = spawn(client, ['--user', 'reset-failed', '--', owner.unit], options);
     if (reset.error || reset.status !== 0) throw new Error(reset.error?.message ?? (String(reset.stderr ?? '').trim() || 'reset-failed failed'));
+    owners.delete(outcome?.child ?? outcome);
     return true;
   } catch (error) {
     try { log(`Worker unit cleanup failed for ${owner.unit}: ${error.message}`); } catch { /* diagnostics cannot replace the result */ }
@@ -39,7 +42,7 @@ export function resetRecordedWorkerUnit(outcome, native, { spawn = spawnSync, lo
 }
 
 function recordRawStatus(outcome, native, result) {
-  if (native && owners.has(outcome?.child ?? outcome)) {
+  if (native && (owners.has(outcome?.child ?? outcome) || readRecordedWorkerUnitStop(outcome))) {
     result.nativeResult = native.result;
     result.nativeExecMainStatus = native.execMainStatus ?? null;
   }
@@ -48,14 +51,17 @@ function recordRawStatus(outcome, native, result) {
 export function recordWorkerUnitStop(outcome, native, result, options) {
   recordRawStatus(outcome, native, result);
   if (resetRecordedWorkerUnit(outcome, native, options) === true) {
-    recordedStops.set(outcome?.child ?? outcome, Object.freeze({ ...result }));
+    recordedStops.set(outcome?.child ?? outcome, {
+      result: Object.freeze({ ...result }), native: Object.freeze({ ...native }),
+    });
   }
   return result;
 }
 
 // A repeated teardown must not lose positive stop evidence when reset unloads the unit.
-export function readRecordedWorkerUnitStop(outcome) {
-  const result = recordedStops.get(outcome?.child ?? outcome);
+export function readRecordedWorkerUnitStop(outcome, { native = false } = {}) {
+  const recorded = recordedStops.get(outcome?.child ?? outcome);
+  const result = native ? recorded?.native : recorded?.result;
   return result ? { ...result } : null;
 }
 

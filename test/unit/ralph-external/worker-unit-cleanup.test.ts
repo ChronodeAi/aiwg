@@ -107,6 +107,67 @@ describe('owned unit result cleanup', () => {
     expect(f.log).toHaveBeenCalledWith(expect.stringContaining('Worker unit cleanup failed'));
   });
 
+  it.each(['query', 'reset'])('retries cleanup after a transient %s failure', failure => {
+    const f = setup();
+    const successful = f.spawn.getMockImplementation()!;
+    let failed = false;
+    f.spawn.mockImplementation((binary, args) => {
+      if (!failed && args.includes(failure === 'query' ? 'show' : 'reset-failed')) {
+        failed = true;
+        return { status: 1, stdout: '', stderr: 'temporary failure' };
+      }
+      return successful(binary, args);
+    });
+    expect(resetRecordedWorkerUnit(f.outcome, native, f)).toBeUndefined();
+    expect(resetRecordedWorkerUnit(f.outcome, native, f)).toBe(true);
+    const calls = f.spawn.mock.calls.length;
+    resetRecordedWorkerUnit(f.outcome, native, f);
+    expect(f.spawn).toHaveBeenCalledTimes(calls);
+    expect(f.log).toHaveBeenCalledTimes(1);
+  });
+
+  it('retires ownership after a confirmed mismatch', () => {
+    const f = setup();
+    f.spawn.mockReturnValueOnce({ status: 0, stdout: 'foreign description', stderr: '' });
+    resetRecordedWorkerUnit(f.outcome, native, f);
+    resetRecordedWorkerUnit(f.outcome, native, f);
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('finish preserves overflow stop evidence after unit unload with recovery disabled=%s', async disabled => {
+    const f = await workerInvocationFixture({}, { roots, breakers });
+    const cleanup = setup();
+    const child = Object.assign(new EventEmitter(), { pid: 2147483646,
+      stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(), unref() {} });
+    const outcome = cleanup.owner.track({ ...cleanup.outcome, child });
+    let unloaded = false;
+    const isolationStatus = vi.fn(() => {
+      if (unloaded) {
+        if (disabled) throw new Error('unit unloaded');
+        return null;
+      }
+      return native;
+    });
+    const launched = new Promise<void>(resolve => f.launcher.once('launched', () => resolve()));
+    const done = f.launch({ isolation: { mode: 'systemd-unit' }, isolationStatus,
+      ...(disabled ? { scopedBreaker: null } : {}), launchIsolated: () => outcome });
+    await launched;
+    const stopped = await stopOverflowWorker(outcome, { stopUnit: () => ({ ok: true }),
+      unitStatus: isolationStatus,
+      recordUnitResult: (launch: any, status: any, result: any) => recordWorkerUnitStop(launch, status, result, cleanup) });
+    expect(stopped.termination).toBe('confirmed');
+    expect(cleanup.spawn.mock.calls[1][1]).toContain('reset-failed');
+    unloaded = true;
+    // The wrapper wait status deliberately disagrees with the native SIGKILL.
+    child.stdout.end(); child.stderr.end(); child.emit('exit', 0, null); child.emit('close');
+    const result = await done;
+    expect(isolationStatus.mock.results.at(-1)).toMatchObject(disabled ? { type: 'throw' } : { value: null });
+    for (const record of [result, JSON.parse(await readFile(path.join(f.runDir, 'exit.json'), 'utf8'))]) {
+      expect(record).toMatchObject({ nativeResult: 'signal', nativeExecMainStatus: 9,
+        exitCode: null, signal: 'SIGKILL', termination: 'confirmed' });
+    }
+  });
+
   it('uses a literal pinned unit rather than a mutated outcome name and handles zero status', async () => {
     const f = setup(); f.outcome.unit = 'foreign.service';
     await publishWorkerUnitExit(async () => {}, f.outcome, { ...native, execMainStatus: 0 }, {}, f);
@@ -158,6 +219,11 @@ describe('owned unit result cleanup', () => {
     expect(repeated).toEqual({ termination: 'confirmed', delivered: true, nativeResult: 'signal', nativeExecMainStatus: 9 });
     repeated.termination = 'uncertain';
     expect(readRecordedWorkerUnitStop(launch)?.termination).toBe('confirmed');
+    const snapshot = readRecordedWorkerUnitStop(launch, { native: true });
+    expect(snapshot).toEqual(native);
+    snapshot.execMainStatus = 0;
+    expect(readRecordedWorkerUnitStop(launch, { native: true })).toEqual(native);
+    expect(readRecordedWorkerUnitStop({}, { native: true })).toBeNull();
     expect(stopUnit).toHaveBeenCalledTimes(1);
     expect(unitStatus).toHaveBeenCalledTimes(1);
     expect(readRecordedWorkerUnitStop({ ...launch, child: new EventEmitter() })).toBeNull();
