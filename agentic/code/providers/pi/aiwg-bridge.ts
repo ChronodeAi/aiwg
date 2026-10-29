@@ -88,7 +88,11 @@ export default function aiwgBridge(pi: ExtensionAPI): void {
         // Reuse the check's canonical ancestor/member resolution, without a subprocess or cache.
         if (!(await loadHitlLayers(context.cwd)).layers.some(layer => layer.policy?.enabled)) return undefined;
       } catch { return { block: true, reason: 'authorization-check-unavailable' }; }
-      return evaluateAiwgPiAction(context.cwd, describeAiwgPiEdit(context.cwd, event.toolName, event.input), context.hasUI, async () => {
+      let action: Action;
+      // The host identity is part of the approval; without it, fail closed instead of throwing.
+      try { action = describeAiwgPiEdit(context.cwd, event.toolName, event.input); }
+      catch { return { block: true, reason: 'authorization-check-unavailable' }; }
+      return evaluateAiwgPiAction(context.cwd, action, context.hasUI, async () => {
         const choice = await context.ui.select('AIWG policy requires explicit approval for this edit.', ['Deny', 'Allow once']);
         return choice === 'Allow once';
       });

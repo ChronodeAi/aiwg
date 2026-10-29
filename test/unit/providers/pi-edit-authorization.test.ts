@@ -8,6 +8,14 @@ import { checkHitlAuthorization } from '../../../src/policy/hitl-check.js';
 import { policy } from '../../fixtures/policy/hitl.js';
 
 const { execute } = vi.hoisted(() => ({ execute: vi.fn() }));
+const os = vi.hoisted(() => ({ userInfoFails: false }));
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, userInfo: (...args: Parameters<typeof actual.userInfo>) => {
+    if (os.userInfoFails) throw new Error('no passwd entry');
+    return actual.userInfo(...args);
+  } };
+});
 vi.mock('node:child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   const { promisify } = await import('node:util');
@@ -31,7 +39,7 @@ beforeEach(async () => {
     return { stdout: JSON.stringify(await checkHitlAuthorization(dir, action, { now: '2026-10-27T01:00:00Z', receipt })) };
   });
 });
-afterEach(async () => { vi.unstubAllEnvs(); await rm(dir, { recursive: true, force: true }); });
+afterEach(async () => { os.userInfoFails = false; vi.unstubAllEnvs(); await rm(dir, { recursive: true, force: true }); });
 
 it.each(['edit', 'write'].flatMap(toolName => [false, true].flatMap(hasUI =>
   ['absent', 'unconfigured', 'disabled'].map(state => ({ toolName, hasUI, state })),
@@ -133,4 +141,13 @@ it('blocks an unreadable CLI result and a failed receipt verification', async ()
   expect(await hook(event, { cwd: dir, hasUI: false })).toMatchObject({ block: true });
   execute.mockResolvedValueOnce({ stdout: JSON.stringify({ decision: 'auto-authorized', receipt: { file: 'absent', effectId: 'absent' } }) });
   expect(await hook(event, { cwd: dir, hasUI: true })).toMatchObject({ block: true, reason: 'authorization-check-unavailable' });
+});
+
+it.each(['edit', 'write'])('fails %s closed when the host identity is unavailable', async toolName => {
+  let hook: any;
+  bridge({ on: (_name: string, handler: any) => { hook = handler; } } as any);
+  os.userInfoFails = true;
+  expect(await hook({ toolName, input: { path: 'src/index.ts', content: 'bytes' } }, { cwd: dir, hasUI: true, ui: { select: vi.fn() } }))
+    .toEqual({ block: true, reason: 'authorization-check-unavailable' });
+  expect(execute).toHaveBeenCalledTimes(0);
 });
