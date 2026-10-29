@@ -12,6 +12,9 @@ import {
   ResearchErrorCode,
 } from '../types.js';
 
+// Bound server-directed cooldowns for both retries and later shared-client requests.
+const MAX_RETRY_AFTER_MS = 30_000;
+
 /**
  * Token bucket rate limiter
  */
@@ -174,7 +177,7 @@ export abstract class BaseClient {
 
       // A throttle cooldown survives exhaustion so the next batch line also waits.
       const delay = Math.max(this.calculateBackoff(attempt),
-        error instanceof ResearchError ? error.retryAfterMs ?? 0 : 0);
+        error instanceof ResearchError ? Math.min(error.retryAfterMs ?? 0, MAX_RETRY_AFTER_MS) : 0);
       if (error instanceof ResearchError && error.code === ResearchErrorCode.RF_103) {
         this.rateLimiter.defer(delay);
       }

@@ -1,6 +1,6 @@
 // Exercise retryable outcomes, paced batches, conservative titles and canonical metadata offline.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveReference, type ResolutionResult } from '../../../src/artifacts/corpus-tools/resolve.js';
@@ -29,6 +29,27 @@ async function run(input: string) {
 }
 
 describe('retryable resolution', () => {
+  it('bounds a huge Retry-After, defers the exhausted line and continues the shared-client batch', async () => {
+    writeFileSync(join(root, 'refs.txt'), 'throttle this distinctive reference\nSelf-supervised representation learning');
+    const base = fixtureFetch(state), start = Date.now();
+    fetchMock.mockImplementation(async input => decodeURIComponent(String(input)).includes('throttle')
+      ? new Response('', { status: 429, headers: { 'Retry-After': '3600' } }) : base(input));
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation(chunk => { output += String(chunk); return true; });
+    const check = expect(resolveCli(['--from-file', 'refs.txt', '--json'], root, root)).rejects.toMatchObject({ exitCode: 4 });
+    await vi.runAllTimersAsync(); await check;
+    expect(JSON.parse(output).map((result: ResolutionResult) => result.status)).toEqual(['deferred', 'resolved']);
+    expect(Date.now() - start).toBeLessThanOrEqual(30000 * 12);
+  });
+  it('surfaces local corpus I/O as an error instead of a retryable result', async () => {
+    // A directory named like a reference produces EISDIR on read, even as root.
+    mkdirSync(join(root, 'documentation', 'references', 'REF-0001-broken.md'), { recursive: true });
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const pending = resolveCli(['Self-supervised representation learning', '--json'], root, root).catch(error => error);
+    await vi.runAllTimersAsync();
+    expect(await pending).toMatchObject({ code: 'EISDIR' });
+    expect(output).not.toHaveBeenCalled();
+  });
   it.each([429, 503])('defers an unsuccessful lookup after source error %s', async status => {
     state.errors = { s2: status, arxiv: status };
     const result = await run('Hamiltonian Generative Networks');
@@ -93,6 +114,22 @@ describe('retryable resolution', () => {
 });
 
 describe('conservative title resolution', () => {
+  it.each(['Hamiltonian Generative Networks', 'Distinctive Graph Diffusion Models'])('resolves distinctive complete title: %s', async title => {
+    state.s2 = [s2Paper({ title })];
+    const result = await run(title);
+    expect(result).toMatchObject({ status: 'resolved', incomplete: false, paper: { title } });
+    expect(result.paths_tried.map(path => path.status)).toEqual(['returned', 'empty', 'empty']);
+  });
+  it('keeps a misattributed S2 DOI separate from the true CrossRef work', async () => {
+    const base = fixtureFetch(state);
+    fetchMock.mockImplementation(async input => String(input).includes('semanticscholar')
+      ? Response.json(s2Paper({ title: 'Quantum Error Correction Codes', externalIds: { DOI: '10.1234/real' } }))
+      : base(input));
+    const result = await run('DOI:10.1234/real');
+    expect(result.status).toBe('ambiguous');
+    expect(result.candidates).toHaveLength(2);
+    expect(result).not.toHaveProperty('paper');
+  });
   it.each(['Deep Learning', 'Scaling Laws', 'Theory of Ordinary Differential Equations', 'Distinctive four word title'])('caps incomplete %s at ambiguous', async title => {
     state.errors.s2 = 503;
     state.crossref = [crossrefPaper({ title: [title] })];

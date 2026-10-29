@@ -86,8 +86,8 @@ export function normalizeIdentity(value: ResearchIdentity | Record<string, unkno
     ...(arxiv ? { arxivId: arxiv.id, arxivVersion: arxiv.version ?? (typeof fields.arxivVersion === 'number' ? fields.arxivVersion : undefined) } : {}),
     doi: normalizeDoi(str('doi', 'DOI') ?? ''),
     s2PaperId: str('s2PaperId', 's2_paper_id', 'paperId')?.toLowerCase(),
-    openReviewId: str('openReviewId', 'openreview_id'),
-    aclId: str('aclId', 'acl_id'),
+    openReviewId: str('openReviewId', 'openreview_id')?.toLowerCase(),
+    aclId: str('aclId', 'acl_id')?.toLowerCase(),
     title: str('title') ? normalizeTitle(str('title')!) : undefined,
   };
 }

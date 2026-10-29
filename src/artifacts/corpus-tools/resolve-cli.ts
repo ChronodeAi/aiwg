@@ -2,9 +2,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { AiwgError } from '../../cli/errors.js';
+import { ResearchError, ResearchErrorCode } from '../../research/types.js';
 import { createResolverClients, resolveReference, type ResolutionResult } from './resolve.js';
 
-export const RESOLVE_USAGE = 'aiwg corpus resolve "<title | URL | arXiv ID | DOI | bibliography line>" [--year YYYY] [--json]\naiwg corpus resolve --from-file refs.txt [--year YYYY] [--json]\nExit codes: 0 resolved, 2 ambiguous, 3 unresolved, 4 deferred (incomplete lookup; retry), 1 usage error (batch: worst line).\n';
+export const RESOLVE_USAGE = 'aiwg corpus resolve "<title | URL | arXiv ID | DOI | bibliography line>" [--year YYYY] [--json]\naiwg corpus resolve --from-file refs.txt [--year YYYY] [--json]\nExit codes: 0 resolved, 2 ambiguous, 3 unresolved, 4 deferred (incomplete lookup; retry), 1 usage or storage error (batch: worst line).\n';
 
 function usage(message: string): never {
   throw new AiwgError({ code: 'ERR_CORPUS_RESOLVE_USAGE', message, exitCode: 1, hint: RESOLVE_USAGE.trim() });
@@ -60,6 +61,12 @@ export async function resolveCli(args: string[], root: string, cwd: string): Pro
     try {
       results.push({ ...await resolveReference(reference.input, root, year, clients), ...reference });
     } catch (error) {
+      // Storage, validation and programming errors keep the corpus error/exit convention.
+      if (!(error instanceof ResearchError) || ![
+        ResearchErrorCode.RF_103, ResearchErrorCode.RF_104,
+        ResearchErrorCode.RF_200, ResearchErrorCode.RF_201, ResearchErrorCode.RF_202,
+        ResearchErrorCode.RF_500, ResearchErrorCode.RF_501, ResearchErrorCode.RF_502,
+      ].includes(error.code)) throw error;
       results.push({ ...reference, reference: { input: reference.input }, status: 'deferred', incomplete: true,
         error: error instanceof Error ? error.message : String(error), candidates: [], findings: [], paths_tried: [],
         already_in_corpus: false, corpus_matches: [] });

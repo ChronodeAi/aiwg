@@ -234,6 +234,25 @@ describe('BaseClient', () => {
       await expect(pending).resolves.toEqual({ success: true });
     });
 
+    it.each(['seconds', 'date'])('caps huge Retry-After in %s form at 30 seconds across retries and the next request', async form => {
+      vi.setSystemTime(new Date('2026-10-29T12:00:00Z'));
+      client = new TestClient({ ...config, retry: { ...config.retry, maxRetries: 1 },
+        rateLimit: { ...config.rateLimit, lastRefill: Date.now() } });
+      const start = Date.now(), times: number[] = [];
+      const value = form === 'seconds' ? '3600' : new Date(start + 3600000).toUTCString();
+      mockFetch.mockImplementation(async () => {
+        times.push(Date.now() - start);
+        return times.length <= 2 ? new Response('', { status: 429, headers: { 'Retry-After': value } })
+          : Response.json({ success: true });
+      });
+      const check = expect(client.testRequest('https://api.example.com/test')).rejects.toMatchObject({ code: ResearchErrorCode.RF_103 });
+      await vi.runAllTimersAsync(); await check;
+      const next = client.testRequest('https://api.example.com/next');
+      await vi.runAllTimersAsync();
+      await expect(next).resolves.toEqual({ success: true });
+      expect(times).toEqual([0, 30000, 60000]);
+    });
+
     it('backs off exponentially on repeated throttles without Retry-After', async () => {
       const start = Date.now(), times: number[] = [];
       mockFetch.mockImplementation(async () => {

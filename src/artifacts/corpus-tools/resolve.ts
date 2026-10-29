@@ -60,7 +60,9 @@ function canonicalPaper(paper: ResearchPaper): ResearchPaper {
   const validYear = (value: number) => Number.isInteger(value) && value >= 1000 && value <= 2199;
   const year = validYear(paper.year) ? paper.year : Number(paper.publicationDate?.slice(0, 4));
   if (!validYear(year)) throw new ResearchError(ResearchErrorCode.RF_301, 'Response lacks a valid publication year');
-  return { ...paper, year, ...Object.fromEntries(Object.entries(identity).filter(([key, value]) => key !== 'title' && value !== undefined)) };
+  // Keep source spelling in results; normalizeIdentity supplies case-insensitive keys.
+  return { ...paper, year, ...Object.fromEntries(Object.entries(identity)
+    .filter(([key, value]) => !['title', 'openReviewId', 'aclId'].includes(key) && value !== undefined)) };
 }
 
 function s2Identifier(identifier: ResearchIdentifier): string {
@@ -128,7 +130,8 @@ export async function resolveReference(input: string, root: string, year?: numbe
     const idPaths = paths.filter(path => path.method === 'id');
     findings.push({ type: 'identifier_unresolved', supplied: identifier.id, paths: idPaths,
       returned: idPaths.map(path => {
-        const detail = path.error ?? path.returned.map(paper => JSON.stringify(normalizeIdentity(paper))).join(', ');
+        const detail = path.error ?? path.returned.map(paper => JSON.stringify({ ...normalizeIdentity(paper),
+          openReviewId: paper.openReviewId, aclId: paper.aclId })).join(', ');
         const outcome = path.returned.length ? 'returned (identifier mismatch)' : path.status;
         return `${path.source}/${path.method} (${path.query}): ${outcome}${detail ? `: ${detail}` : ''}`;
       }).join('; ') });

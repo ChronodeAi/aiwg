@@ -103,12 +103,13 @@ export function classifyCandidates(candidates: ScoredPaper[]): ResolutionStatus 
   return best + 1e-12 >= 0.92 && margin + 1e-12 >= 0.05 ? 'resolved' : 'ambiguous';
 }
 
-/** Merge only corroborated identifiers; title equality alone does not establish identity. */
+/** Shared IDs require title similarity >= 0.5; title agreement never establishes identity. */
 export function mergePapers(papers: ResearchPaper[]): ResearchPaper[] {
   const ids = ['arxivId', 'doi', 's2PaperId', 'openReviewId', 'aclId'] as const;
   const published = (paper: ResearchPaper) => Boolean(paper.doi && !parseArxivId(paper.doi));
   const linked = (left: ResearchPaper, right: ResearchPaper) => {
     const a = normalizeIdentity(left), b = normalizeIdentity(right);
+    if (titleSimilarity(a.title ?? '', b.title ?? '') < 0.5) return false;
     if (ids.some(key => a[key] && b[key] && a[key] !== b[key] &&
       !(key === 'doi' && a.arxivId && a.arxivId === b.arxivId && (parseArxivId(a.doi!) || parseArxivId(b.doi!))))) return false;
     return ids.some(key => a[key] && a[key] === b[key]);
@@ -129,7 +130,8 @@ export function mergePapers(papers: ResearchPaper[]): ResearchPaper[] {
   };
   const merged: ResearchPaper[] = [];
   for (const paper of papers) {
-    const { title: _title, ...identity } = normalizeIdentity(paper);
+    // Comparison keys are canonical; OpenReview/ACL spelling remains source metadata.
+    const { title: _title, openReviewId: _review, aclId: _acl, ...identity } = normalizeIdentity(paper);
     let work = { ...paper, ...Object.fromEntries(Object.entries(identity).filter(([, value]) => value !== undefined)) };
     // A late S2 bridge may join two components already encountered in source order.
     for (let i = 0; i < merged.length;) {

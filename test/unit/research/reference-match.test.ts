@@ -1,6 +1,6 @@
 // Guard ordered title scoring and identifier-backed work deduplication.
 import { describe, expect, it } from 'vitest';
-import { mergePapers, titleSimilarity } from '../../../src/research/reference-match.js';
+import { classifyCandidates, mergePapers, needsTitleDisambiguation, parsePartialReference, scorePaper, titleSimilarity } from '../../../src/research/reference-match.js';
 import type { ResearchPaper } from '../../../src/research/types.js';
 
 const paper = (overrides: Partial<ResearchPaper>): ResearchPaper => ({
@@ -45,4 +45,26 @@ describe('one work with preprint and published identifiers', () => {
   it('never merges on title, year and author alone', () => {
     expect(mergePapers([paper({ arxivId: undefined }), published])).toHaveLength(2);
   });
+  it.each(['doi', 'arxivId'] as const)('vetoes a misattributed shared %s when titles strongly disagree', key => {
+    const real = paper({ arxivId: undefined, [key]: key === 'doi' ? '10.1234/real' : '2303.12077', source: 'crossref' });
+    const wrong = paper({ ...real, id: 'wrong-s2', source: 'semantic-scholar', title: 'Quantum Error Correction Codes' });
+    for (const records of [[real, wrong], [wrong, real]]) {
+      expect(mergePapers(records)).toHaveLength(2);
+    }
+  });
+  it.each([['openReviewId', 'AbC-123'], ['aclId', 'P19-1010']] as const)('merges case variants of %s', (key, id) => {
+    expect(mergePapers([paper({ arxivId: undefined, [key]: id }),
+      paper({ arxivId: undefined, [key]: id.toLowerCase() })])).toHaveLength(1);
+  });
+  it('permits normalized title agreement at the inclusive 0.5 veto boundary', () => {
+    expect(titleSimilarity('Quantum Graph!', 'quantum graph models networks')).toBe(0.5);
+    expect(mergePapers([paper({ title: 'Quantum Graph!' }), paper({ title: 'quantum graph models networks' })])).toHaveLength(1);
+  });
+});
+
+it.each(['Hamiltonian Generative Networks', 'Distinctive Graph Diffusion Models'])('resolves complete distinctive title: %s', title => {
+  const reference = parsePartialReference(title);
+  const candidates = [scorePaper(reference, paper({ title }))];
+  expect(needsTitleDisambiguation(reference, candidates, false)).toBe(false);
+  expect(classifyCandidates(candidates)).toBe('resolved');
 });
