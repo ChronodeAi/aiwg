@@ -110,7 +110,8 @@ describe('T-OG-14 published package installed adapter paths', () => {
       npm_config_userconfig: path.join(root, 'empty.npmrc'), npm_config_globalconfig: path.join(root, 'empty-global.npmrc'),
       npm_config_update_notifier: 'false' };
     await exec('npm', ['install', path.join(root, packed.filename), '--ignore-scripts', '--no-audit', '--no-fund',
-      '--fetch-retries=0', '--fetch-timeout=10000', ...(process.env.AIWG_PACKAGE_TEST_NPM_CACHE ? ['--offline'] : [])], {
+      // A transient registry 5xx (seen on main CI, 2026-10-29) must not fail the package check; retries stay inside the 90 s cap.
+      '--fetch-retries=2', '--fetch-retry-mintimeout=1000', '--fetch-retry-maxtimeout=5000', '--fetch-timeout=10000', ...(process.env.AIWG_PACKAGE_TEST_NPM_CACHE ? ['--offline'] : [])], {
       cwd: root, timeout: 90_000, maxBuffer: 65536, env: npmEnv,
     });
     const installed = path.join(root, 'node_modules', target);
