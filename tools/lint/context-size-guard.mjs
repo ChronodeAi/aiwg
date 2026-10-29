@@ -50,7 +50,8 @@ function formatSize(bytes) {
 
 export function formatContextBridgeSizeReport(result) {
   const lines = [];
-  lines.push(`Context bridge ceiling: ${formatSize(result.ceilingBytes)}.`);
+  lines.push(`Bridge-bytes ceiling (per file): ${formatSize(result.ceilingBytes)}.`);
+  lines.push('Measures generated bridge files only — not the startup skill listing, not skill bodies.');
   for (const record of result.records) {
     if (!record.exists) {
       lines.push(`  - ${record.path}: missing`);
@@ -61,12 +62,12 @@ export function formatContextBridgeSizeReport(result) {
   }
   if (result.violations.length > 0) {
     lines.push('');
-    lines.push('Oversized default-loaded context bridge(s):');
+    lines.push('Oversized default-loaded bridge file(s) (bridge-bytes budget):');
     for (const record of result.violations) {
       lines.push(`  - ${record.path} (${formatSize(record.size)})`);
     }
     lines.push('');
-    lines.push('Move long-form content to Tier 3 and expose it through Tier 2 discover/show pointers.');
+    lines.push('Move long-form content to Tier 3 and expose it through Tier 2 discover/show pointers (bridge-bytes budget; the startup skill listing and on-demand skill bodies are measured separately).');
   }
   return lines.join('\n');
 }
