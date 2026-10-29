@@ -13,6 +13,7 @@
  */
 
 import * as fs from 'fs';
+import { refFilesForId } from './ref-files.js';
 import * as path from 'path';
 
 const REF_ID_RE = /\bREF-\d+[a-z]?\b/g;
@@ -165,9 +166,7 @@ export interface Orphan {
 export function refTitle(root: string, ref: string): string {
   const refsDir = path.join(root, ...REFS_DIR);
   if (!fs.existsSync(refsDir)) return '?';
-  const match = fs
-    .readdirSync(refsDir)
-    .find((f) => f === `${ref}.md` || f.startsWith(`${ref}-`));
+  const match = refFilesForId(refsDir, ref)[0];
   if (!match) return '?';
   const text = fs.readFileSync(path.join(refsDir, match), 'utf-8');
 

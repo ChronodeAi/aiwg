@@ -7,6 +7,7 @@
 import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import { createHash } from 'crypto';
+import { isRefId, refIdFromFilename, refSortKey } from '../identity.js';
 import { ResearchPaper } from '../types.js';
 import { UnpaywallClient } from '../clients/unpaywall.js';
 import { ArxivClient } from '../clients/arxiv.js';
@@ -123,8 +124,8 @@ export class AcquisitionService {
 
     // Extract numbers from REF-XXX format
     const refNumbers = refs
-      .filter((ref) => /^REF-\d{3}$/.test(ref))
-      .map((ref) => parseInt(ref.substring(4), 10))
+      .filter(isRefId)
+      .map((ref) => refSortKey(ref)[0])
       .filter((n) => !isNaN(n));
 
     // Find next available number
@@ -356,13 +357,12 @@ export class AcquisitionService {
     const refs: string[] = [];
 
     try {
-      const files = await fs.readdir(this.downloadDir);
+      const files = await fs.readdir(this.downloadDir, { withFileTypes: true });
 
       for (const file of files) {
-        if (file.startsWith('REF-') && file.endsWith('.pdf')) {
-          const refId = file.substring(0, 7); // REF-XXX
-          refs.push(refId);
-        }
+        if (!file.isFile()) continue;
+        const refId = refIdFromFilename(file.name, '.pdf');
+        if (refId) refs.push(refId);
       }
     } catch (error) {
       // Directory doesn't exist yet

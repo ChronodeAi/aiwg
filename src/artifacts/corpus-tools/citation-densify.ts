@@ -19,6 +19,7 @@
  */
 
 import * as fs from 'fs';
+import { refFilesForId } from './ref-files.js';
 import * as path from 'path';
 import { refTitle } from './sidecar-lint.js';
 
@@ -46,7 +47,7 @@ function hasSidecar(root: string, ref: string): boolean {
 function analysisDoc(root: string, ref: string): string | null {
   const dir = path.join(root, ...REFS_DIR);
   if (!fs.existsSync(dir)) return null;
-  const m = fs.readdirSync(dir).find((f) => f === `${ref}.md` || f.startsWith(`${ref}-`));
+  const m = refFilesForId(dir, ref)[0];
   return m ? path.join(dir, m) : null;
 }
 

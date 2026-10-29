@@ -98,3 +98,30 @@ export function identityKeys(value: ResearchIdentity | Record<string, unknown>):
   return (['arxivId', 'doi', 's2PaperId', 'openReviewId', 'aclId', 'title'] as const)
     .flatMap(key => identity[key] ? [`${key}:${identity[key]}`] : []);
 }
+
+/** Exact lexical REF identity: preserve zero padding and the optional letter suffix. */
+export function isRefId(value: string): boolean {
+  return value.trim() === value && /^REF-\d+[a-z]?$/.test(value);
+}
+
+/** Read the REF token before a slug or extension; never normalize its spelling. */
+export function refIdFromFilename(filename: string, extension = '.md'): string | null {
+  if (!filename.endsWith(extension)) return null;
+  const stem = filename.slice(0, -extension.length);
+  const slug = stem.indexOf('-', 4);
+  const ref = slug === -1 ? stem : stem.slice(0, slug);
+  return isRefId(ref) ? ref : null;
+}
+
+/** Sort key for REF ids: [numeric, alpha-suffix]. Mirrors build.py ref_sort_key. */
+export function refSortKey(refId: string): [number, string] {
+  const m = refId.match(/REF-(\d+)([a-z]?)/);
+  return m ? [parseInt(m[1], 10), m[2]] : [999999, refId];
+}
+
+/** Compare two REF ids by (numeric, suffix). */
+export function compareRefId(a: string, b: string): number {
+  const [an, as_] = refSortKey(a);
+  const [bn, bs] = refSortKey(b);
+  return an !== bn ? an - bn : as_ < bs ? -1 : as_ > bs ? 1 : 0;
+}

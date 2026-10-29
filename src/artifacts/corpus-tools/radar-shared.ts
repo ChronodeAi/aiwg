@@ -17,6 +17,7 @@
  */
 
 import * as fs from 'fs';
+import { refFilesForId } from './ref-files.js';
 import * as path from 'path';
 import { load as loadYaml } from 'js-yaml';
 import { parseFrontmatter, extractRadar, type RadarMeta } from '../corpus-views/ref-parser.js';
@@ -144,10 +145,7 @@ export function readAnalysisGrade(corpusRoot: string, refId: string): string {
 function analysisFiles(corpusRoot: string, refId: string): string[] {
   const dir = path.join(corpusRoot, ...REFS_DIR);
   try {
-    return fs
-      .readdirSync(dir)
-      .filter((f) => f.startsWith(`${refId}-`) && f.endsWith('.md') && !f.startsWith('TEMPLATE'))
-      .sort()
+    return refFilesForId(dir, refId)
       .map((f) => path.join(dir, f));
   } catch {
     return [];
