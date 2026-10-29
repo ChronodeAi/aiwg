@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { load as loadYaml } from 'js-yaml';
+import { getStaticTOMLValue, parseTOML } from 'toml-eslint-parser';
 import { MODEL_WRAPPER_DEFINITIONS, type ModelRole, type ModelWrapperDefinition } from './wrapper-definitions.js';
 import { isFlagshipModel } from './tiers.js';
 
@@ -48,15 +49,9 @@ async function collectFiles(root: string): Promise<string[]> {
   return files.sort();
 }
 
-function tomlFields(content: string): Record<string, unknown> {
-  const fields: Record<string, string> = {};
-  for (const line of content.split(/\r?\n/)) {
-    const match = line.match(/^([A-Za-z0-9_.-]+)\s*=\s*"((?:\\.|[^"\\])*)"\s*$/);
-    if (!match) continue;
-    try { fields[match[1]] = JSON.parse(`"${match[2]}"`) as string; }
-    catch { fields[match[1]] = match[2]; }
-  }
-  return fields;
+function tomlFields(content: string): Record<string, unknown> | null {
+  try { return getStaticTOMLValue(parseTOML(content)) as Record<string, unknown>; }
+  catch { return null; }
 }
 
 function markdownFields(content: string): Record<string, unknown> | null {
@@ -76,6 +71,21 @@ function artifactFields(file: string, content: string): Record<string, unknown> 
   }
   if (/\.(?:md|yaml|yml)$/i.test(file)) return markdownFields(content);
   return null;
+}
+
+/** Read the same deployed artifacts used by verification, without repairing them. */
+export async function readModelWrapperArtifacts(agentsPath: string | null) {
+  const artifacts: { wrapper: ModelWrapperDefinition; file: string; fields: Record<string, unknown> | null }[] = [];
+  if (!agentsPath) return artifacts;
+  for (const file of await collectFiles(agentsPath)) {
+    const name = path.basename(file).replace(/(?:\.agent)?\.(?:md|toml|json|yaml|yml)$/i, '');
+    const wrapper = MODEL_WRAPPER_DEFINITIONS.find(item => item.name === name);
+    if (!wrapper) continue;
+    let fields = null;
+    try { fields = artifactFields(file, await fs.readFile(file, 'utf8')); } catch { /* unresolved metadata */ }
+    artifacts.push({ wrapper, file, fields });
+  }
+  return artifacts;
 }
 
 function fieldValue(fields: Record<string, unknown>, ...names: string[]): string | undefined {
