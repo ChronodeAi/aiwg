@@ -154,6 +154,27 @@ describe('file.digest', () => {
     expect((await check(verifier, 'sub')).observation).toMatchObject({ result: 'unknown', reason: 'evidence-conflict' });
     expect((await runVerifier(verifier, request('file.digest', 'file:sub/out.txt'))).observation).toMatchObject({ result: 'unknown', reason: 'malformed-response' });
   });
+
+  it('replay checks distinguish intended, unchanged, missing and foreign bytes', async () => {
+    const { verifier } = setup();
+    const target = `file:sub/out.txt@${sha('replacement')}`;
+    const checkReplay = (previousDigest: string | null) => runVerifier(verifier, request('file.digest', target, { previousDigest }));
+    expect((await checkReplay(sha('expected bytes\n'))).observation).toMatchObject({ result: 'absent', complete: true });
+    for (const previous of [null, sha('foreign original')]) {
+      expect((await checkReplay(previous)).observation).toMatchObject({ result: 'unknown', reason: 'evidence-conflict' });
+    }
+    expect((await runVerifier(verifier, request('file.digest', `file:sub/out.txt@${sha('expected bytes\n')}`, { previousDigest: null }))).observation.result).toBe('present');
+    expect((await runVerifier(verifier, request('file.digest', `file:missing.txt@${sha('replacement')}`, { previousDigest: null }))).observation.result).toBe('absent');
+  });
+
+  it('treats dangling symlinks and obstructed paths as unknown rather than absent', async () => {
+    const { root, verifier } = setup();
+    symlinkSync(join(h.dir, 'outside', 'missing.txt'), join(root, 'dangling.txt'));
+    symlinkSync(join(h.dir, 'outside', 'missing-dir'), join(root, 'dangling-dir'));
+    for (const path of ['dangling.txt', 'dangling-dir/file.txt', 'sub/out.txt/child.txt']) {
+      expect((await check(verifier, path)).observation).toMatchObject({ result: 'unknown', reason: 'container-unreadable' });
+    }
+  });
 });
 
 describe('decision.receipt', () => {
