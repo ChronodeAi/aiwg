@@ -7,6 +7,8 @@ to the target project.
 Use the research framework when you want an AI assistant to keep sources,
 summaries, claims, and gaps tied to reviewable research artifacts.
 
+Each section below starts with what you can ask your assistant, then gives the command reference. Every command is kept exactly as shipped.
+
 ## Installation
 
 ```bash
@@ -24,21 +26,25 @@ artifacts are written under `.aiwg/research/`.
 
 ## First Literature Review
 
-Start with a prompt that asks for a concrete research artifact:
+> "Use AIWG's research framework to scope a literature review on LLM agent safety. Produce a search strategy, inclusion criteria, a first result set, and the gaps or risks I should review before acquisition."
 
-```text
-Use AIWG's research framework to scope a literature review on LLM agent safety.
-Produce a search strategy, inclusion criteria, a first result set, and the
-gaps or risks I should review before acquisition.
-```
+Your assistant returns or saves a search strategy with source selection criteria, cites the result files it created, and identifies the next review decision.
 
-Success means the agent returns or saves a search strategy with source
-selection criteria, cites the result files it created, and identifies the next
-review decision.
+> "Scope it to open-access papers since 2022 and exclude preprints I already reviewed."
+
+Your assistant narrows the result set and names what still needs review.
+
+Start with a prompt that asks for a concrete research artifact. Success means the agent returns or saves a search strategy with source selection criteria, cites the result files it created, and identifies the next review decision.
 
 ### Step 1: Discover Papers
 
+> "Discover papers on LLM agent safety alignment since 2022. Return the ranked list and the acquisition queue for review."
+
+Your assistant searches using natural language and ranks results for review.
+
 Search using natural language:
+
+### Command reference — discover
 
 ```bash
 aiwg research search "LLM agent safety alignment" --year 2022-2024 --limit 50
@@ -60,7 +66,13 @@ aiwg research search "retrieval augmented generation" --citation-network
 
 ### Step 2: Acquire Papers
 
+> "Acquire the queued papers. Flag paywalled items for review instead of skipping them."
+
+Your assistant downloads available PDFs, assigns identifiers, and flags the rest.
+
 Download papers from the acquisition queue:
+
+### Command reference — acquire
 
 ```bash
 aiwg research acquire --from-queue
@@ -90,6 +102,12 @@ aiwg research acquire --retry-failed
 
 ### Step 3: Summarize Papers
 
+> "Summarize the acquired papers from their PDF content. Flag claims that need source review."
+
+Your assistant extracts summaries and structured data against the actual PDF content.
+
+### Command reference — summarize
+
 ```bash
 aiwg research summarize --from-acquired
 ```
@@ -114,6 +132,10 @@ aiwg research summarize REF-025
 
 ### Step 4: Review the Gap Analysis
 
+> "Show me the gap report and tell me which topic clusters need more papers."
+
+Your assistant identifies topic clusters with few papers and suggests refined search terms.
+
 ```bash
 cat .aiwg/research/discovery/gap-report-latest.md
 ```
@@ -132,6 +154,25 @@ cat .aiwg/research/discovery/gap-report-latest.md
 Use the resulting files as a review queue. Acquisition coverage and summary
 quality depend on source access, paper format, and configured review gates.
 
+## Resolving and Expanding the Corpus
+
+> "What paper does this reference mean: Vaswani et al. 2017, Attention Is All You Need? Resolve it and do not guess."
+
+Your assistant runs `aiwg corpus resolve` and reports ambiguous or unresolved instead of guessing.
+
+> "Find papers similar to my recent corpus entries. Preview the plan first and write nothing yet."
+
+Your assistant runs `aiwg corpus expand` as a dry run. It needs a scope and writes nothing unless you pass `--write`.
+
+### Command reference — resolve and expand
+
+```bash
+aiwg corpus resolve "Vaswani et al. 2017, Attention Is All You Need" --json
+aiwg corpus expand --since 2024-01-01 --per-seed 20 --min-year 2018
+```
+
+`resolve` takes one quoted reference (title, URL, arXiv ID, DOI, or bibliography line) with optional `--year YYYY` and `--json` (exit 0 resolved, 2 ambiguous, 3 unresolved). `expand` needs a scope (`--seeds`, `--since`, or `--all`); the default is a dry run and `--write` saves results.
+
 ## Citation Management
 
 Format a citation for a specific paper:
@@ -146,6 +187,10 @@ The citation agent supports common citation styles. For systematic reviews, it
 can also build citation networks showing which papers cite each other.
 
 ## Quality Assessment
+
+> "Assess the evidence quality of REF-025 and tell me how to use it honestly."
+
+Your assistant produces a GRADE assessment with justification.
 
 Assess a paper's evidence quality:
 
