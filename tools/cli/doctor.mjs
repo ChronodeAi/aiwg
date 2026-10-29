@@ -1006,6 +1006,12 @@ export async function runDoctor() {
     if (!providersToCheck.includes('claude')) providersToCheck.unshift('claude');
   }
 
+  if (providersToCheck.includes('claude')) {
+    const { checkClaudeAttribution } = await importImpl(import.meta.url, 'extensions/claude-attribution.js');
+    const attribution = await checkClaudeAttribution(process.cwd());
+    check('Claude attribution', attribution.status, attribution.message);
+  }
+
   // Compare deployed agent findings with the package that this Doctor process
   // is actually running. Deployment size alone cannot establish an upstream
   // package defect: a non-target provider may still contain older managed bytes.

@@ -37,3 +37,44 @@ Success means Claude Code names the intended project, follows the AIWG bootstrap
 the provider-specific adapter, and produces a concrete review you can inspect. For advanced flags, compatibility
 notes, and recovery details, see the [Claude operational
 reference](https://github.com/jmagly/aiwg/blob/main/docs/agents/providers/claude.md).
+
+## Keep commits and PRs free of attribution
+
+Ask your assistant:
+
+```text
+Connect this project to Claude Code with AIWG's default no-attribution settings. Preserve my other Claude settings and any attribution I explicitly configured. Verify the resulting settings with aiwg doctor and explain any remaining attribution warning.
+```
+
+Claude deployments fill unset keys in `.claude/settings.json` with
+`"attribution": { "commit": "", "pr": "", "sessionUrl": false }`. This disables
+Claude's default commit and PR attribution reminders and session links. Existing
+values are preserved; non-empty commit or PR values produce a warning. To disable
+an explicit value, ask the assistant to clear that key in the settings file that
+supplies it, then rerun doctor. Reload Claude Code after changing settings.
+
+For machines where project settings are not committed, ask:
+
+```text
+Apply the same no-attribution defaults at user scope so they cover my other projects. Preserve any explicit values and show me which settings were added.
+```
+
+`--scope user` also merges the defaults into `~/.claude/settings.json`. AIWG records
+only the keys it adds under the top-level `aiwg` block. Removing the last Claude
+deployment or restoring the settings backup removes those keys while preserving
+existing attribution and later operator edits. Unmarked settings files are backed
+up before merging. `--no-hooks` still applies attribution defaults; use
+`--no-attribution` to leave attribution untouched for that deployment. This opt-out
+does not undo defaults from an earlier deployment.
+
+Command reference:
+
+```bash
+aiwg use all --provider claude
+aiwg use all --provider claude --scope user
+aiwg use all --provider claude --no-attribution
+aiwg doctor --provider claude
+```
+
+Doctor checks user, project, project-local and platform managed settings. Session
+flags and server-managed policies are outside this offline check.

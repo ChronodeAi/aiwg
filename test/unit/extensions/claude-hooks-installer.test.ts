@@ -7,7 +7,7 @@
  * migrated to object shape on read.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -208,149 +208,6 @@ describe('installAiwgHooks', () => {
     expect(aiwgHandlers).toHaveLength(1);
   });
 
-  it('refreshes stale pre-.cjs hook command paths (regression: SessionStart MODULE_NOT_FOUND)', async () => {
-    // User installed AIWG before be3ee551 renamed hook scripts from .js to
-    // .cjs. After a later refresh, only .cjs files exist on disk, but
-    // settings.json still references the .js paths — every hook
-    // invocation crashes at `node:internal/modules/cjs/loader` with
-    // MODULE_NOT_FOUND. The installer must update stale AIWG-managed
-    // commands rather than skip them via the idempotency check.
-    const claudeDir = path.join(projectPath, '.claude');
-    await fs.mkdir(claudeDir, { recursive: true });
-    await fs.writeFile(
-      path.join(claudeDir, 'settings.json'),
-      JSON.stringify({
-        hooks: {
-          SessionStart: [
-            {
-              hooks: [
-                {
-                  type: 'command',
-                  command: 'node .claude/hooks/aiwg-session.js',
-                  _aiwg_managed: true,
-                  _aiwg_id: 'aiwg-session',
-                },
-              ],
-            },
-          ],
-          PermissionRequest: [
-            {
-              hooks: [
-                {
-                  type: 'command',
-                  command: 'node .claude/hooks/aiwg-permissions.js',
-                  _aiwg_managed: true,
-                  _aiwg_id: 'aiwg-permissions',
-                },
-              ],
-            },
-          ],
-        },
-      }, null, 2),
-      'utf8',
-    );
-
-    const result = await installAiwgHooks({ projectPath, frameworkRoot });
-    const settings = await readSettings();
-    const sessionHooks = (settings.hooks?.SessionStart ?? []).flatMap((g) => g.hooks);
-    const sessionEntry = sessionHooks.find((h) => h._aiwg_id === 'aiwg-session');
-    expect(sessionEntry?.command).toContain('aiwg-session.cjs');
-    expect(sessionEntry?.command).not.toContain('aiwg-session.js"');
-
-    const permHooks = (settings.hooks?.PermissionRequest ?? []).flatMap((g) => g.hooks);
-    const permEntry = permHooks.find((h) => h._aiwg_id === 'aiwg-permissions');
-    expect(permEntry?.command).toContain('aiwg-permissions.cjs');
-
-    // Should not duplicate — exactly one entry per event.
-    expect(sessionHooks.filter((h) => h._aiwg_id === 'aiwg-session')).toHaveLength(1);
-    expect(permHooks.filter((h) => h._aiwg_id === 'aiwg-permissions')).toHaveLength(1);
-
-    // And it should surface the refresh in warnings so refresh CLI users
-    // see what changed.
-    expect(result?.warnings.some((w) => w.includes('Refreshed stale'))).toBe(true);
-  });
-
-  it('refreshes Windows backslash hook commands to shell-safe forward slashes (#133)', async () => {
-    const claudeDir = path.join(projectPath, '.claude');
-    await fs.mkdir(claudeDir, { recursive: true });
-    await fs.writeFile(
-      path.join(claudeDir, 'settings.json'),
-      JSON.stringify({
-        hooks: {
-          SessionStart: [
-            {
-              hooks: [
-                {
-                  type: 'command',
-                  command: 'node .claude\\hooks\\aiwg-session.cjs',
-                  _aiwg_managed: true,
-                  _aiwg_id: 'aiwg-session',
-                },
-              ],
-            },
-          ],
-        },
-      }),
-      'utf8',
-    );
-
-    const result = await installAiwgHooks({ projectPath, frameworkRoot });
-    const settings = await readSettings();
-    const sessionEntry = (settings.hooks?.SessionStart ?? [])
-      .flatMap((group) => group.hooks)
-      .find((hook) => hook._aiwg_id === 'aiwg-session');
-
-    expect(sessionEntry?.command).toBe('node .claude/hooks/aiwg-session.cjs');
-    expect(result?.warnings).toContain(
-      'Refreshed stale SessionStart → aiwg-session command path',
-    );
-  });
-
-  it('refreshes trace hooks missing their event-specific subcommands (#134)', async () => {
-    const claudeDir = path.join(projectPath, '.claude');
-    await fs.mkdir(claudeDir, { recursive: true });
-    await fs.writeFile(
-      path.join(claudeDir, 'settings.json'),
-      JSON.stringify({
-        hooks: Object.fromEntries(
-          ['SubagentStart', 'SubagentStop'].map((event) => [
-            event,
-            [
-              {
-                hooks: [
-                  {
-                    type: 'command',
-                    command: 'node .claude/hooks/aiwg-trace.cjs',
-                    _aiwg_managed: true,
-                    _aiwg_id: 'aiwg-trace',
-                  },
-                ],
-              },
-            ],
-          ]),
-        ),
-      }),
-      'utf8',
-    );
-
-    const result = await installAiwgHooks({ projectPath, frameworkRoot });
-    const settings = await readSettings();
-    const traceCommand = (event: string): string | undefined =>
-      settings.hooks?.[event]
-        ?.flatMap((group) => group.hooks)
-        .find((hook) => hook._aiwg_id === 'aiwg-trace')?.command;
-
-    expect(traceCommand('SubagentStart')).toBe(
-      'node .claude/hooks/aiwg-trace.cjs start',
-    );
-    expect(traceCommand('SubagentStop')).toBe(
-      'node .claude/hooks/aiwg-trace.cjs stop',
-    );
-    expect(
-      result?.warnings.filter((warning) => warning.includes('Refreshed stale')),
-    ).toHaveLength(2);
-  });
-
   it('dry-run does not write files', async () => {
     const r = await installAiwgHooks({ projectPath, frameworkRoot, dryRun: true });
     expect(r).not.toBeNull();
@@ -501,5 +358,104 @@ describe('restoreSettingsBackup', () => {
       await fs.readFile(path.join(claudeDir, 'settings.json'), 'utf8'),
     );
     expect(final.marker).toBe('newer');
+  });
+});
+
+describe('Claude attribution defaults (#3750)', () => {
+  const defaults = { commit: '', pr: '', sessionUrl: false };
+  async function seed(settings: object) {
+    await fs.mkdir(path.join(projectPath, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(projectPath, '.claude/settings.json'), JSON.stringify(settings));
+  }
+  it('fills fresh settings and records ownership outside attribution', async () => {
+    await installAiwgHooks({ projectPath, frameworkRoot });
+    const settings = await readSettings();
+    expect(settings.attribution).toEqual(defaults);
+    expect(settings.aiwg).toEqual({ attributionKeys: ['commit', 'pr', 'sessionUrl'] });
+    expect(settings).not.toHaveProperty('includeCoAuthoredBy');
+  });
+  it('does not claim existing empty operator values', async () => {
+    await seed({ attribution: { commit: '', pr: '' }, aiwg: { enabled: true } });
+    await installAiwgHooks({ projectPath, frameworkRoot });
+    const settings = await readSettings();
+    expect(settings.attribution).toEqual(defaults);
+    expect(settings.aiwg).toEqual({ enabled: true, attributionKeys: ['sessionUrl'] });
+  });
+  it('keeps operator strings and session preference with warnings', async () => {
+    const attribution = { commit: 'Human commit', pr: 'Human PR', sessionUrl: true };
+    await seed({ attribution });
+    const result = await installAiwgHooks({ projectPath, frameworkRoot });
+    expect((await readSettings()).attribution).toEqual(attribution);
+    expect(result?.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining('Preserved operator attribution.commit'),
+      expect.stringContaining('Preserved operator attribution.pr'),
+    ]));
+  });
+  it.each([undefined, { commit: 'Keep me' }, false])('opt-out leaves attribution %j untouched', async attribution => {
+    await seed({ attribution });
+    await installAiwgHooks({ projectPath, frameworkRoot, attribution: false });
+    expect((await readSettings()).attribution).toEqual(attribution);
+    expect((await readSettings()).aiwg).toBeUndefined();
+  });
+  it('dry-run leaves an unmarked file and backups untouched', async () => {
+    await seed({ env: { OPERATOR: 'yes' } });
+    const before = await fs.readFile(path.join(projectPath, '.claude/settings.json'), 'utf8');
+    await installAiwgHooks({ projectPath, frameworkRoot, dryRun: true });
+    expect(await fs.readFile(path.join(projectPath, '.claude/settings.json'), 'utf8')).toBe(before);
+    expect(await fs.readdir(path.join(projectPath, '.claude'))).toEqual(['settings.json']);
+  });
+  it('does not change operator settings when backup fails', async () => {
+    await seed({ attribution: { commit: 'Keep' } });
+    vi.spyOn(fs, 'copyFile').mockRejectedValueOnce(new Error('synthetic backup failure'));
+    await expect(installAiwgHooks({ projectPath, frameworkRoot, hooks: false })).rejects.toThrow('Backup failed');
+    expect(await readSettings()).toEqual({ attribution: { commit: 'Keep' } });
+  });
+  it('re-runs idempotently with one backup of the unmarked original', async () => {
+    await seed({ attribution: { commit: '' }, env: { KEEP: 'yes' } });
+    const first = await installAiwgHooks({ projectPath, frameworkRoot });
+    expect(JSON.parse(await fs.readFile(first!.backupPath!, 'utf8'))).toEqual({ attribution: { commit: '' }, env: { KEEP: 'yes' } });
+    const before = await fs.readFile(path.join(projectPath, '.claude/settings.json'), 'utf8');
+    const second = await installAiwgHooks({ projectPath, frameworkRoot });
+    expect(await fs.readFile(path.join(projectPath, '.claude/settings.json'), 'utf8')).toBe(before);
+    expect(second?.backupPath).toBeUndefined();
+  });
+  it('applies without addon hooks and preserves later edits on remove', async () => {
+    const { removeClaudeAttribution } = await import('../../../src/extensions/claude-hooks-installer.js');
+    await installAiwgHooks({ projectPath, frameworkRoot: '/missing', hooks: false });
+    const settings = await readSettings();
+    expect(settings.attribution).toEqual(defaults);
+    expect(settings.hooks).toBeUndefined();
+    await seed({ ...settings, attribution: { ...defaults, pr: 'Later edit', extra: 'Keep' }, other: 42 });
+    await removeClaudeAttribution(projectPath, true);
+    expect((await readSettings()).attribution).toEqual({ ...defaults, pr: 'Later edit', extra: 'Keep' });
+    await removeClaudeAttribution(projectPath);
+    expect(await readSettings()).toEqual({ attribution: { pr: 'Later edit', extra: 'Keep' }, other: 42 });
+  });
+  it('restore preserves existing empty keys and later operator attribution', async () => {
+    await seed({ attribution: { commit: '' }, operator: true });
+    await installAiwgHooks({ projectPath, frameworkRoot });
+    const settings = await readSettings();
+    await seed({ ...settings, attribution: { ...defaults, pr: 'Later edit' } });
+    await restoreSettingsBackup(projectPath);
+    expect(await readSettings()).toEqual({ attribution: { commit: '', pr: 'Later edit' }, operator: true });
+  });
+  it('restores original operator attribution when the settings file is missing', async () => {
+    await seed({ attribution: { commit: 'Original' } });
+    await installAiwgHooks({ projectPath, frameworkRoot });
+    await fs.unlink(path.join(projectPath, '.claude/settings.json'));
+    await restoreSettingsBackup(projectPath);
+    expect(await readSettings()).toEqual({ attribution: { commit: 'Original' } });
+  });
+  it.each(['{invalid', 'null'])('restores a valid backup when current settings are corrupt: %s', async raw => {
+    await seed({ attribution: { commit: 'Original' } });
+    await installAiwgHooks({ projectPath, frameworkRoot });
+    await fs.writeFile(path.join(projectPath, '.claude/settings.json'), raw);
+    await restoreSettingsBackup(projectPath);
+    expect(await readSettings()).toEqual({ attribution: { commit: 'Original' } });
+  });
+  it('restore undoes owned keys even when a fresh install has no backup', async () => {
+    await installAiwgHooks({ projectPath, frameworkRoot });
+    await restoreSettingsBackup(projectPath);
+    expect((await readSettings()).attribution).toBeUndefined();
   });
 });

@@ -21,7 +21,15 @@ function inventory(dir) {
   const visit = (current, rel = '') => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const name = path.join(rel, entry.name), file = path.join(current, entry.name);
-      result[name] = entry.isDirectory() ? 'directory' : createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+      // Required settings backups retain timestamps; compare all bytes and counts
+      // while validating the nondeterministic timestamp rather than dropping files.
+      let key = name;
+      if (entry.name.startsWith('settings.json.bak.')) {
+        expect(entry.name).toMatch(/^settings\.json\.bak\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/);
+        expect(entry.isFile()).toBe(true);
+        key = path.join(rel, `settings.json.bak.${Object.keys(result).filter(item => item.startsWith(path.join(rel, 'settings.json.bak.'))).length}`);
+      }
+      result[key] = entry.isDirectory() ? 'directory' : createHash('sha256').update(fs.readFileSync(file)).digest('hex');
       if (entry.isDirectory()) visit(file, name);
     }
   };
