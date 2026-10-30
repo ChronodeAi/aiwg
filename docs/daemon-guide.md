@@ -28,7 +28,7 @@ The daemon provides:
 
 Your assistant routes conversational, agent-driven work to the daemon and deterministic maintenance to the housekeeper, and explains the boundary in one sentence.
 
-`aiwg housekeeper` is the deterministic maintenance profile of the same daemon. It reuses the daemon binary (`tools/daemon/daemon-main.mjs`) but loads only the scheduler, file watcher, and minimal IPC — it never constructs the agent supervisor, behaviors, messaging, or web server, and it runs zero model calls. The default profile runs the conversational daemon described in this guide. Full boundary: [housekeeper daemon reuse boundary](architecture/housekeeper-daemon-boundary.md) and the [Housekeeper operator guide](housekeeper-operator-guide.md).
+`aiwg housekeeper` is the deterministic maintenance profile of the same daemon. It reuses the daemon binary (`tools/daemon/daemon-main.mjs`) but loads only the scheduler, file watcher, and minimal IPC — it never constructs the agent supervisor, behaviors, messaging, or web server, and it runs zero model calls. The default profile runs the conversational daemon described in this guide. Full boundary: [housekeeper daemon reuse boundary](https://github.com/jmagly/aiwg/blob/main/docs/architecture/housekeeper-daemon-boundary.md) and the [Housekeeper operator guide](https://github.com/jmagly/aiwg/blob/main/docs/housekeeper-operator-guide.md).
 
 | Profile | Command | Runs |
 |---|---|---|
@@ -957,7 +957,7 @@ Tiers 1–3 run in CI. Tier 4 is operator-driven before releases that touch the 
 - [Messaging Guide](messaging-guide.md) — Platform integration
 - [Agent Loop Guide](agent-loop-guide.md) — Iterative task loops via daemon
 - [Behaviors Guide](behaviors-guide.md) — Attaching capabilities to daemon and long-running agents
-- [Housekeeper operator guide](housekeeper-operator-guide.md) — Deterministic maintenance profile
+- [Housekeeper operator guide](https://github.com/jmagly/aiwg/blob/main/docs/housekeeper-operator-guide.md) — Deterministic maintenance profile
 - `agentic/code/providers/capability-matrix.yaml` — Authoritative `daemon_tier` and feature data
 - `agentic/code/behaviors/concierge/BEHAVIOR.md` — Concierge behavior definition
 - `src/cli/handlers/mc.ts` — Mission Control with `--mode pty-orchestrator`
