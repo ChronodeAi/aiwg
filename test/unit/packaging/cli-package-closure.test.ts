@@ -103,6 +103,8 @@ describe('CLI package dependency closure (default lane)', () => {
     const result = inspectCliPackageClosure(root, manifest.files);
     expect(result.visited).toContain('tools/ralph-external/lib/worker-context.mjs');
     expect(result.visited).toContain('dist/src/cli/router.js');
+    expect(result.visited).toContain('tools/providers/pi-bridge-policy.mjs');
+    expect(result.visited).toContain('dist/src/policy/hitl-config.js');
     for (const module of ['index', 'daemon-main', 'ipc-client', 'tmux-manager']) {
       expect(result.visited).toContain(`tools/daemon/${module}.mjs`);
     }

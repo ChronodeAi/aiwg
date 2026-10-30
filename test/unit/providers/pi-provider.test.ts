@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { resolveImpl } from '../../../tools/_resolve-impl.mjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAgentsMd, deployCommands, deployExtensionBridge, postDeploy, transformCommand } from '../../../tools/agents/providers/pi.mjs';
 import aiwgBridge, { evaluateAiwgPiCommand } from '../../../agentic/code/providers/pi/aiwg-bridge.js';
@@ -102,8 +101,8 @@ describe('Pi provider prompt projection', () => {
     const bridge = readFileSync(join(project, '.pi/extensions/aiwg-bridge.ts'), 'utf8');
     expect(bridge).toMatch(/!hasUI/);
     expect(bridge).toMatch(/block: true/);
-    expect(bridge).toContain(`from ${JSON.stringify(pathToFileURL(resolveImpl(import.meta.url, 'policy/hitl-config.js')).href)}`);
-    expect(bridge).not.toContain("from '../../../../src/");
+    expect(bridge).toContain(`from ${JSON.stringify(pathToFileURL(join(repoRoot, 'tools/providers/pi-bridge-policy.mjs')).href)}`);
+    expect(bridge).not.toContain("from '../../../../");
     expect(readFileSync(join(project, '.pi/extensions/operator.ts'), 'utf8')).toBe('operator-owned\n');
     // Exercise the copied extension outside the checkout with no authorization CLI available.
     const result = execFileSync(process.execPath, ['--input-type=module', '-e', `

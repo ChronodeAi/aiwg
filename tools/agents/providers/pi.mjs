@@ -9,8 +9,6 @@
 
 import path from 'path';
 import fs from 'fs';
-import { pathToFileURL } from 'node:url';
-import { resolveImpl } from '../../_resolve-impl.mjs';
 import {
   collectFrameworkArtifacts,
   withRuleDeployment,
@@ -120,9 +118,9 @@ export function deployExtensionBridge(targetDir, opts) {
   if (!fs.existsSync(source)) return 0;
   const destination = path.join(targetDir, '.pi/extensions');
   ensureDir(destination, opts.dryRun);
-  const loader = pathToFileURL(resolveImpl(import.meta.url, 'policy/hitl-config.js')).href;
+  const loader = new URL('../../providers/pi-bridge-policy.mjs', import.meta.url).href;
   return deployFiles([source], destination, opts, (_file, content) =>
-    content.replace("'../../../../src/policy/hitl-config.js'", JSON.stringify(loader)));
+    content.replace("'../../../../tools/providers/pi-bridge-policy.mjs'", JSON.stringify(loader)));
 }
 
 export function createAgentsMd(target, srcRoot, dryRun) {

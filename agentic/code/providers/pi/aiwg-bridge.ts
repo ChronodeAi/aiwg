@@ -7,7 +7,7 @@ import { tmpdir, userInfo } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 // Deployment binds this import to the installed implementation, including packed dist/src.
-import { loadHitlLayers } from '../../../../src/policy/hitl-config.js';
+import { loadHitlLayers } from '../../../../tools/providers/pi-bridge-policy.mjs';
 
 const execute = promisify(execFile);
 type Action = { category: string; repo: string; environment: string; resources: string[]; reversible: boolean; impact: 'low' | 'medium' | 'high'; actor?: string; inputDigest?: string };
