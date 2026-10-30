@@ -7,6 +7,267 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.16] - 2026-10-30
+
+### Added
+
+- `aiwg doctor --resources [--json]` gives one read-only check before
+  launching helper workers: measured load, available memory, memory pressure
+  (PSI), free disk, running AIWG workers, resolved thresholds with their
+  origins, and a `slots` verdict. This user's aiwg-worker units and distinct
+  AIWG_WORKER_INVOCATION_ID markers outside them count once each; raw
+  interactive codex/muse process counts are informational. `aiwg models
+  resolve` carries the same verdict and refuses to render a launch at zero
+  slots, naming the reason. The same command over SSH checks another host.
+  Without `--group`, host resources and project-wide caps determine the
+  verdict; each group's verdict is reported separately. `--group <name>`
+  combines that group's slots with host slots; unknown groups are errors
+  listing configured names. Workers with unambiguous group markers count in
+  that group; otherwise they count against every group and the report says
+  so. The orchestration guide and subagent-scoping rule direct assistants to
+  check before each launch (#3744).
+- `aiwg corpus review` lists expansion candidates with score components
+  (`--json` supported); `accept`, `reject [--reason]` and `defer` act on one
+  candidate by a full key, paper ID or documented alias, never a bare suffix.
+  Actions are dry runs unless `--write` is passed. Rejection survives later
+  expansions; accept/defer state survives queue merges. `accept --brief`
+  emits an induction brief with title, identifiers, seed REFs and scores
+  only on request; it never inducts papers or files issues. The existing
+  frontier ledger is compacted atomically to the latest row per REF, and
+  conflicting primary-file/sidecar seed IDs produce one warning per
+  expansion. A rejection remains persisted if compaction fails, and a re-run
+  converges. The research-expand skill documents the flow (#3764, refs #3735).
+- Offline `aiwg doctor` reports model-wrapper enforcement per configured
+  provider: pinned, inherited or global-only model and effort controls,
+  placeholder/unresolved model values, and effort values checked against the
+  provider catalog. Unelected or unallowlisted flagship models are warned
+  about whether pinned or inherited; premium is a normal ladder tier and is
+  flagged only when inherited. Text groups common explanations and warnings,
+  listing individual wrappers only when their states differ. Existing JSON
+  fields stay unchanged. Doctor reads settings without rewriting them and
+  names provider-specific remedies, including native settings on global-only
+  harnesses (#2649).
+
+### Changed
+
+- Getting-started tasks now lead with example prompts and the assistant's
+  expected response, with commands, tables, checks and limits retained under
+  "Command reference" headings. Nine guides are updated; team setup also
+  includes a labelled handoff. The documentation-style rule requires a prompt or brief, a
+  refinement prompt, then commands without losing approval boundaries
+  (#3751).
+- Ten README-linked provider quickstarts (Claude Code, Codex, Copilot,
+  Cursor, Factory, Warp, Hermes, Muse, OpenClaw and Pi) put prompts before
+  commands while retaining reload, scope, trust and experimental limits
+  (#3752).
+- Six framework guides (SDLC, forensics, research, marketing, media curator
+  and key add-ons), plus the research and ops quickstarts and their canonical
+  originals, open tasks with prompts or labelled handoff briefs. Research
+  examples retain resolve's refusal to guess and expand's required scope and
+  dry-run default (#3753).
+- Everyday guides for local issues, memory, session history, customization,
+  project-local setup, workspaces, messaging and dataset tasks now lead with
+  prompts; canonical and collected copies remain identical. The daemon guide
+  follows the same style and documents the real commands: `aiwg daemon
+  task …`, `aiwg daemon chat "<message>"` and `aiwg behavior apply` replace
+  unsupported forms. Nonexistent commands and flags are removed; SIGTERM's
+  10-second grace period, daemon.yaml-before-daemon.json config order and
+  the bundled `node:24-slim` Docker base match the runtime. Existing topology,
+  capability, PTY, Mission Control, supervisor, concierge and web UI reference
+  sections remain. The broken Hermes CLI-reference anchor now links to the
+  provider page (#3754, refs #3758).
+- `aiwg use --provider claude` clears Claude Code commit/PR attribution by
+  default through the hooks installer, merging `attribution: {commit: "",
+  pr: "", sessionUrl: false}` into project settings, or user settings for a
+  user-scope deployment. The merge is idempotent and requires a successful
+  backup. Operator non-empty commit/PR values and `sessionUrl: true` are
+  preserved with warnings. `--no-attribution` opts out of this settings
+  change. AIWG tracks the keys it set; removal undoes only tracked values
+  that still equal its defaults. A non-object top-level `aiwg` value is
+  preserved with a warning and prevents the defaults merge. A manually
+  re-entered identical default cannot be distinguished on undo. Neither
+  `attribution: false` nor deprecated `includeCoAuthoredBy` is written.
+  Doctor checks effective user, project, local and managed attribution and
+  warns when it remains enabled (#3750).
+- Root AIWG.md is the single generated framework-context file across create,
+  init, use and regenerate. Optional .aiwg/AIWG.md operator notes are folded
+  into the root file after generated sections; fresh projects without notes
+  do not create the notes file. Migration preserves unrecognised operator
+  lines, strips only recognised generated sections and journals an empty
+  notes file for a generated-only legacy copy. Fenced marker examples,
+  quoted wrapper text, a leading BOM and lone START/END markers survive;
+  generated-file signatures count only in the file head. Init preserves an
+  existing unsigned root AIWG.md. Doctor, regeneration, deployment checks and
+  rule delivery use the same root file. Existing OpenCode projects listing
+  only WORKSPACE.md report registration drift until `aiwg regenerate`
+  registers AIWG.md. Editing guidance now points to WORKSPACE.md Project
+  Context or optional notes (#3762).
+- `max_workers` defaults to 5, with origin `default` in resource reports,
+  slots and model admission. An explicit configured value replaces that
+  default, including values above 5; configured layers still combine by
+  MIN. Other threshold defaults are unchanged. Post-commit index refresh
+  checks memory, load and disk but is not a worker launch and ignores the
+  worker cap, including when workers cannot be counted (#3744).
+- The orchestration guide adds background reading: four papers on routing,
+  multi-agent failures and scaling, plus two engineering posts on
+  orchestrator-worker design and context. All four papers were verified
+  with corpus resolve; three are already inducted and one remains outside
+  the corpus. Public links use arXiv identities without numeric claims
+  (#2652).
+- The model-configuration guide now explains AIWG model choices through
+  `aiwg use`, `aiwg models resolve` and `aiwg doctor`, and links supported
+  harnesses and the wrapper enforcement matrix (#2649).
+- Grok Build native session discovery, transcript reads and active-registry
+  reads are experimental and off by default behind explicit opt-in. Adapter
+  capabilities, CLI explanations, the provider matrix and prompt-first
+  guide agree; documented CLI export remains available. The disabled native
+  gate reports UNSUPPORTED_OPERATION before checking malformed locators
+  (#2578).
+
+### Fixed
+
+- REF lookup uses exact identity throughout citation validation, densify,
+  sidecar lint/repair, radar, induction audit, graph/hybrid queries, parsing,
+  retrieval lab, integrity scans, network analysis, query options and shipped
+  lint rules. REF-02 never matches REF-020; empty/non-REF IDs, directories
+  and non-Markdown files do not match. Variable-width IDs and legacy
+  uppercase suffixes are supported; suffix case remains significant and
+  filename lint retains its three-digit minimum. Acquisition allocation and
+  findability work past REF-999 without truncating IDs (#3742).
+- Discovery provenance uses YAML scalar serialization, preserving quotes,
+  backslashes, colons, comments, newlines and reserved words without
+  frontmatter injection. YAML 1.1 boolean-like and date-like values stay
+  strings, including the quoted discovery date. A top-level discovery block,
+  including one with a trailing comment, is replaced in place; nested keys
+  and all unrelated frontmatter bytes, comments and blank lines remain
+  unchanged (#3743).
+- `aiwg corpus resolve` paces batch requests and retries 429 rate limits
+  through the shared client limiters. Deciding-source throttle/network
+  failures return `deferred`, exit 4, instead of `unresolved`;
+  research-acquire and induct-research treat it as retry later. Retry-After
+  waits and limiter deferrals have a 30-second ceiling; beyond it the line
+  is deferred. Local corpus I/O and other non-transient failures remain
+  errors. Exit codes are 0 resolved, 2 ambiguous, 3 unresolved, 4 deferred,
+  1 usage; batches exit with their worst line (#3765).
+- Linked preprint/proceedings identifiers, including S2 externalIds and
+  10.48550 arXiv DOIs, resolve as one work carrying both IDs. Shared IDs merge
+  only when normalized title similarity is at least 0.5; title agreement
+  alone never merges records. Title scoring respects word order; incomplete
+  lookups cannot resolve short/generic titles without verified identifiers;
+  records lacking a valid year are malformed. OpenReview and ACL IDs compare
+  case-insensitively while retaining original spelling (#3765).
+- `aiwg corpus expand --since` uses frontmatter/sidecar dates first, then
+  rename-aware git first-add history, including merge-added seeds, instead
+  of clone-time mtime. Files outside git fall back to mtime with a counted
+  warning; shallow history is named in fallback warnings. Seeds deleted
+  between loading and date resolution are skipped with a warning (#3766).
+- Memory relocation refuses non-empty directories, files and symlinks,
+  including dangling targets, before changing either tree or registry. An
+  empty destination is replaced by rename without deleting it first; failed
+  moves preserve the old root and registry and remove only empty parent
+  directories created by that call. Errors name both paths (#3741).
+- `aiwg update` follows aiwg.config `installed`, reporting skipped stale
+  legacy-registry entries; legacy fallback applies only when `installed` is
+  absent. Plain updates preserve installed keys while refreshing metadata.
+  Explicit `--all` records the full expansion, as `aiwg use all` does.
+  Shared alias handling preserves registry-form keys, writes without an
+  installed block work, and `--dry-run` prints the plan and disagreements
+  without writes even without `--skip-check` (#3767).
+- `aiwg daemon` routes to tools/daemon/index.mjs through the existing script
+  runner. Both tarballs include daemon, messaging, Docker-manager and
+  supervisor dependencies so help and status work offline. The handler
+  barrel exports daemonHandler. MCP's source-checkout allow-list also scans
+  sibling modules imported by definitions.ts, keeping daemon, behavior,
+  daemon-init and housekeeper callable (#3758).
+- A mission cycle declaring a single file effect records intent before
+  dispatch and reconciles it before replay on resume. An already-matching
+  digest records completion without running the worker again; a missing file
+  or unchanged pre-write digest allows one run followed by verification.
+  Foreign edits, unreadable/obstructed paths, dangling symlinks and terminal
+  or tombstoned effects block replay with a reason. This extends the existing
+  conductor, effect ledger and file-digest verifier (#3755).
+- Worker launchers reset only their own failed systemd units after durably
+  recording exit status. Cleanup is bounded and logged without blocking the
+  result, covers both capture paths and MCP overflow stops, and retries
+  transient query failures while ownership remains. Captured nativeResult
+  and nativeExecMainStatus survive cleanup when a later live query cannot
+  find the unit. New split isolation modules ship in @aiwg/cli (#3757).
+- Legacy `aiwg regenerate --full-inject` renders AIWG.md independently of
+  the freshly written CLAUDE.md, preventing repeated runs from nesting their
+  own generated blocks (#3762).
+
+### Security
+
+- `repo.edit` approvals bind the actor and SHA-256 of the exact tool input
+  into the action descriptor and persist only their digests; successful
+  receipts also record effective expiry. Authorization consumption verifies
+  the persisted receipt against the pending edit and refuses changed actors
+  or inputs, expired approvals, revoked/changed policies after restart, and
+  legacy edit receipts without bindings. Pi native edit/write tools enforce
+  this only under an enabled HITL policy; otherwise edits pass through
+  without a subprocess or prompt. Missing host user identity refuses the
+  gated edit with `authorization-check-unavailable`. Bash gating is
+  unchanged. Pi loads policy through a shipped installed-runtime loader
+  instead of importing an unshipped src file (#3756).
+- Holdout collection writes a signed access/v2 first-access record before
+  dispatch, using the existing host effect-ledger keyring over the timestamp,
+  analysis digest and frozen-bundle digest. HeldoutFrozen sealing verifies
+  the signature and key validity at access time, refusing unsigned,
+  mis-signed, unknown-key and mismatched records; the access digest remains
+  an additional check. Historical unsigned access/v1 records are refused at
+  evaluation. Re-pinning a forged earlier timestamp no longer passes.
+  D29 preparation/scoring extraction changes scorer bytes, so frozen v6-v8
+  fixtures re-pin only scorerDigest and derived digests, with a field-level
+  disposition; corpus, gold labels, analysis and assertions are unchanged
+  (#3747, refs #3730).
+
+### Testing
+
+- Packed production-path checks drive the real CLI and registered MCP
+  handlers for skill, agent and flow rule identity, including same-name
+  components in different bundles. They compare discover, show and emitted
+  rule-fetch commands. A discovered tightened-kernel-pin parity defect
+  remains open as #3768: discover omits a rule that show retains. That one
+  case is skipped with the issue link; production code is unchanged by this
+  testing slice (#2313).
+- Synthetic /proc/systemd fixtures cover resource admission, group isolation,
+  counting and configurable/default worker caps; mutations of the default
+  and replace-then-MIN behavior fail tests. An index-refresh regression
+  covers 12 running workers (#3744).
+- Research regressions use real services against temporary corpora for exact
+  REF identity, production-parser YAML round trips, CLI candidate review,
+  persisted rejection after compaction failure, git-date scoping and
+  rate-limit/identity resolution (#3742, #3743, #3764, #3765, #3766).
+- File/ledger recovery tests exercise crash-before-write, crash-after-write
+  and foreign-edit resumes with a fixed clock. Approval tests reject actor,
+  input, expiry and restart-policy substitutions and unavailable host identity
+  (#3755, #3756).
+- Signed-access tests use throwaway keys, reproduce forged-time re-pinning,
+  and assert the committed shape-only signature never verifies. The fixture
+  provenance manifest pins updated D29 v6-v8 digests and lists six new
+  signed-access fixtures with origin, permission and sanitization metadata
+  (#3747).
+- Packaging checks pin the Pi policy loader and installed deploy URL, daemon
+  dependency closure and offline routing. Global-install wiring asserts no
+  generated .aiwg/AIWG.md in a fresh project, and a unit regression guards
+  repeated legacy full-inject regeneration. Worker real-unit tests check
+  cleanup only for their own units (#3756, #3758, #3762, #3757).
+- The integration fix reports 145 UAT, 263 release-slow, 29 deployment and
+  109 selected integration passes. Four sessions-export-packaged failures
+  still require optional better-sqlite3, as on main (#3762).
+
+### Dependencies
+
+- Vite 6.4.4 -> 6.4.5 in Cockpit's web workspace and standalone lockfile,
+  and apps/web, applying the Vite part of GitHub Dependabot #391. The commit
+  records clean installs, Cockpit web build, 138 web test passes and smoke,
+  and the apps/web build. A follow-up restores original Cockpit bin file modes
+  accidentally changed by npm ci; no content change (#3763).
+- serialize-javascript 7.1.4 for vscode-extension (GitHub Dependabot #392)
+  is deferred to the next release. It did not clear the seven-day release-age
+  policy when the dependency update was prepared; the policy was not
+  overridden (#3763).
+
 ## [2026.10.15] - 2026-10-29
 
 ### Added
